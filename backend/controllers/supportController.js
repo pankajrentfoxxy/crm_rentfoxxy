@@ -761,7 +761,10 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id),
             ADD COLUMN IF NOT EXISTS technician_esign_name VARCHAR(255),
             ADD COLUMN IF NOT EXISTS warehouse_esign_name VARCHAR(255),
-            ADD COLUMN IF NOT EXISTS processor VARCHAR(200)
+            ADD COLUMN IF NOT EXISTS processor VARCHAR(200),
+            ADD COLUMN IF NOT EXISTS gate_inward_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS gate_inward_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS gate_inward_session_id UUID
     `);
 };
 
@@ -2893,6 +2896,12 @@ exports.warehouseReceivedPickup = async (req, res) => {
         if (item.item_type !== 'pickup') {
             throw Object.assign(new Error('Only pickup items can be received at warehouse'), { status: 400 });
         }
+        if (item.return_dc_number && !item.gate_inward_at) {
+            throw Object.assign(
+                new Error('Guard must scan this Return DC inward before warehouse e-sign.'),
+                { status: 400 }
+            );
+        }
         const isRepair = isRepairPickupItem(item);
         const terminalStatus = isRepair ? AWAITING_SDC_STATUS : 'inventory_updated';
 
@@ -3029,7 +3038,7 @@ exports.markVisited = exports.logVisit;
 // Phase 20 — Pickup flow redesign
 // Type selection (repair/return) -> dispatch (technician/courier/porter)
 // -> Return DC auto-created -> Reached -> POD -> Customer OTP ->
-// Warehouse receipt (e-sign).
+// Guard inward scan -> Warehouse receipt (e-sign).
 // ============================================================
 
 // Support lead creates a pickup item, generates the Return DC and a customer
@@ -3592,6 +3601,12 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         if (isInhouse && !s.customer_otp_verified_at && !isDelivered) {
             throw Object.assign(
                 new Error('Customer OTP must be verified for all units before warehouse can confirm receipt'),
+                { status: 400 }
+            );
+        }
+        if (s.return_dc_number && !s.gate_inward_at) {
+            throw Object.assign(
+                new Error('Guard must scan this Return DC inward before warehouse e-sign.'),
                 { status: 400 }
             );
         }

@@ -1,28 +1,40 @@
-#!/usr/bin/env node
-require('dotenv').config();
+/**
+ * Run migration 207 — Guard Gate Checking.
+ * Usage: node scripts/run-migration-207.js
+ */
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+process.env.DB_SSL = process.env.DB_SSL || 'false';
+
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
+const MIGRATION_NAME = '207_guard_gate_checking.sql';
+
 async function main() {
-  const sqlPath = path.join(__dirname, '../migrations/207_diagnosis_failed_permission.sql');
+  const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);
   const sql = fs.readFileSync(sqlPath, 'utf8');
-  console.log('Running 207_diagnosis_failed_permission.sql …');
-  await pool.query(sql);
-  const r = await pool.query(
-    `SELECT role, can_view, can_create, can_edit
-       FROM role_permissions
-      WHERE section = 'diagnosis_failed'
-      ORDER BY role`
-  );
-  console.log('Done. role grants:');
-  r.rows.forEach((row) => {
-    console.log(`  ${row.role}: view=${row.can_view} create=${row.can_create} edit=${row.can_edit}`);
-  });
-  process.exit(0);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(sql);
+    await client.query(
+      `INSERT INTO schema_migrations (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING`,
+      [MIGRATION_NAME]
+    );
+    await client.query('COMMIT');
+    console.log('Migration 207 applied:', sqlPath);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
-main().catch((err) => {
-  console.error('Migration 207 failed:', err.message);
+main().catch((e) => {
+  console.error(e);
   process.exit(1);
 });

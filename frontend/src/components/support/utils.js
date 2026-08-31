@@ -224,23 +224,34 @@ export const getItemStepperV3Pickup = (item) => {
       { key: 'reached', label: 'Reached' },
       { key: 'pod', label: 'POD Photo' },
       { key: 'customer_otp', label: 'Customer OTP' },
+      { key: 'gate_inward', label: 'Gate Inward' },
       { key: 'warehouse_confirmed', label: 'Warehouse' },
       { key: 'service_return', label: 'Send Back' },
       { key: 'closed', label: 'Done' },
     ];
     const idxMap = {
       ...sharedIdx,
-      awaiting_service_return: 5,
-      service_dc_pending: 5,
-      warehouse_confirmed: 6,
-      reached_warehouse: 4,
-      inventory_updated: 6,
-      resolved: 6,
-      otp_verified: 6,
-      closed: 6,
+      gate_inward: 4,
+      gate_inward_done: 5,
+      awaiting_service_return: 6,
+      service_dc_pending: 6,
+      dispatch_ready: 6,
+      in_transit: 6,
+      shipped: 6,
+      warehouse_confirmed: 7,
+      reached_warehouse: 5,
+      inventory_updated: 7,
+      resolved: 7,
+      otp_verified: 7,
+      closed: 7,
     };
     let currentIndex = idxMap[es] ?? 0;
-    if (isClosed(item)) currentIndex = steps.length - 1;
+    if (isClosed(item)) {
+      const sdcOpen = Boolean(item.service_dc_number)
+        && item.service_dc_status !== 'delivered'
+        && !item.service_dc_delivered_at;
+      currentIndex = sdcOpen ? 6 : steps.length - 1;
+    }
     return { steps, currentIndex, completedThrough: Math.max(0, currentIndex - 1) };
   }
 
@@ -249,17 +260,20 @@ export const getItemStepperV3Pickup = (item) => {
     { key: 'reached', label: 'Reached' },
     { key: 'pod', label: 'POD Photo' },
     { key: 'customer_otp', label: 'Customer OTP' },
+    { key: 'gate_inward', label: 'Gate Inward' },
     { key: 'warehouse_confirmed', label: 'Warehouse' },
     { key: 'closed', label: 'Done' },
   ];
   const idxMap = {
     ...sharedIdx,
-    warehouse_confirmed: 4,
-    reached_warehouse: 4,
-    inventory_updated: 5,
-    resolved: 5,
-    otp_verified: 5,
-    closed: 5,
+    gate_inward: 4,
+    gate_inward_done: 5,
+    warehouse_confirmed: 6,
+    reached_warehouse: 5,
+    inventory_updated: 6,
+    resolved: 6,
+    otp_verified: 6,
+    closed: 6,
   };
   let currentIndex = idxMap[es] ?? 0;
   if (isClosed(item)) currentIndex = steps.length - 1;

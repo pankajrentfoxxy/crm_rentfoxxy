@@ -275,6 +275,16 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/sales-documents/${fileName}`;
 
+  let gateQrPng = null;
+  if (docType === 'delivery_challan') {
+    try {
+      const { ensureGateQrPng } = require('./gateQrService');
+      const purpose = String(header.dc_purpose || '').toLowerCase();
+      const qrType = purpose === 'service_return' ? 'sdc' : 'dc';
+      gateQrPng = (await ensureGateQrPng({ docType: qrType, docNumber })).png;
+    } catch (_) { /* gate tokens table may not exist yet */ }
+  }
+
   const qtype = await resolveQuotationType(docType, header);
   const isSale = qtype === 'sale' || qtype === 'sales';
   const isDemo = qtype === 'demo';
@@ -348,7 +358,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     };
     num('DC Number', docType === 'delivery_challan' ? docNumber : (header.dc_number || 'N/A'), 250, C.docNum);
     num('Sales Order Number', docType === 'sales_order' ? docNumber : (header.sales_order_number || 'N/A'), 360, C.ink);
-    num('Quotation Number', docType === 'quotation' ? docNumber : (header.quotation_number || 'N/A'), 470, C.ink);
+    if (gateQrPng) {
+      const { drawGateQr } = require('./gateQrService');
+      drawGateQr(doc, gateQrPng, { x: R - 40, y: 38, size: 36, caption: 'Gate scan' });
+    } else {
+      num('Quotation Number', docType === 'quotation' ? docNumber : (header.quotation_number || 'N/A'), 470, C.ink);
+    }
     y += 50;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
@@ -612,6 +627,12 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
   const pickupTypeLabel = header.pickup_type === 'repair' ? 'Repair Pickup' : 'Return Pickup';
   const addr = normalizeDeliveryAddress(header.pickup_address) || {};
 
+  let gateQrPng = null;
+  try {
+    const { ensureGateQrPng } = require('./gateQrService');
+    gateQrPng = (await ensureGateQrPng({ docType: 'rdc', docNumber: returnDcNumber })).png;
+  } catch (_) { /* optional */ }
+
   const resolveSign = (url) => {
     if (!url) return null;
     const abs = path.join(__dirname, '..', String(url).replace(/^\//, ''));
@@ -633,8 +654,15 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code || 'rentfoxxy', L, y + 4);
     }
 
-    doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 250, y, { width: 273, align: 'right' });
-    doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(pickupTypeLabel, 250, y + 20, { width: 273, align: 'right' });
+    if (gateQrPng) {
+      const { drawGateQr } = require('./gateQrService');
+      drawGateQr(doc, gateQrPng, { x: R - 40, y: 36, size: 36, caption: 'Gate scan' });
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 220, y, { width: 250, align: 'right' });
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(pickupTypeLabel, 220, y + 20, { width: 250, align: 'right' });
+    } else {
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 250, y, { width: 273, align: 'right' });
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(pickupTypeLabel, 250, y + 20, { width: 273, align: 'right' });
+    }
     y += 46;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
@@ -815,6 +843,12 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
   const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
   const addr = normalizeDeliveryAddress(header.shipping_address) || {};
 
+  let gateQrPng = null;
+  try {
+    const { ensureGateQrPng } = require('./gateQrService');
+    gateQrPng = (await ensureGateQrPng({ docType: 'sdc', docNumber: serviceDcNumber })).png;
+  } catch (_) { /* optional */ }
+
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 36, size: 'A4' });
     const stream = fs.createWriteStream(filePath);
@@ -826,10 +860,19 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     if (!logo.drawn) {
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code || 'rentfoxxy', L, y + 4);
     }
-    doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
-      .text('SERVICE DELIVERY CHALLAN', 230, y, { width: 293, align: 'right' });
-    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-      .text('Repaired unit return to customer', 230, y + 20, { width: 293, align: 'right' });
+    if (gateQrPng) {
+      const { drawGateQr } = require('./gateQrService');
+      drawGateQr(doc, gateQrPng, { x: R - 40, y: 36, size: 36, caption: 'Gate scan' });
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
+        .text('SERVICE DELIVERY CHALLAN', 200, y, { width: 270, align: 'right' });
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+        .text('Repaired unit return to customer', 200, y + 20, { width: 270, align: 'right' });
+    } else {
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
+        .text('SERVICE DELIVERY CHALLAN', 230, y, { width: 293, align: 'right' });
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+        .text('Repaired unit return to customer', 230, y + 20, { width: 293, align: 'right' });
+    }
     y += 46;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;

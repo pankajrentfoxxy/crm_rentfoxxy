@@ -23,6 +23,7 @@ const BLOCKED_INVENTORY_STATUSES = new Set([
   'rented',
   'sold',
   'in_transit',
+  'dispatch_ready',
   'on_demo',
   'reserved',
 ]);

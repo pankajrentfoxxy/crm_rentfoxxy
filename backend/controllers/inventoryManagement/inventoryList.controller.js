@@ -553,7 +553,7 @@ async function customerAssets(req, res) {
        GROUP BY s.inventory_status`,
       breakdownParams
     );
-    const counts = { reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
+    const counts = { reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
     breakdownR.rows.forEach((r) => {
       const key = displayDeployedStatus(r.inventory_status);
       if (counts[key] !== undefined) counts[key] += r.c;

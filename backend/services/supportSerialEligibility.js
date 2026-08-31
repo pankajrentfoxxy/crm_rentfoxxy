@@ -17,6 +17,7 @@ const SUPPORT_TICKET_ELIGIBLE_STATUSES = Object.freeze([
 const OUTBOUND_UNDELIVERED_DC_STATUSES = Object.freeze([
   'pending',
   'processing',
+  'dispatch_ready',
   'shipped',
   'in_transit',
   'reached',

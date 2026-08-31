@@ -4,20 +4,48 @@ import toast from 'react-hot-toast';
 import { FileText, Loader2, PackageCheck, Truck } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
+import SdcTrackingTimeline from './SdcTrackingTimeline';
 import { uploadAssetUrl } from '../utils';
-import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
+import { replacementSalesOrderDetailPath, SO_PERMISSION_SECTIONS } from '../../../features/sales-pipeline/salesOrderScope';
+import { deliveryChallanDetailPath } from '../../../features/sales-pipeline/salesPipelineUtils';
+import CourierTrackingModal from '../../../features/sales-pipeline/components/CourierTrackingModal';
+import usePermission from '../../../hooks/usePermission';
 
 function dcPurposeLabel(purpose) {
   if (purpose === 'service_return') return 'Service Return';
-  if (purpose === 'replacement') return 'Replace  ment';
+  if (purpose === 'replacement') return 'Replacement';
   return 'Standard';
 }
 
+function statusLabel(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'dispatch_ready') return 'Dispatch ready';
+  if (s === 'in_transit') return 'In transit';
+  if (s === 'shipped') return 'Shipped';
+  if (s === 'reached') return 'Reached';
+  if (s === 'delivered') return 'Delivered';
+  if (s === 'rejected') return 'Rejected';
+  if (s === 'cancelled') return 'Cancelled';
+  if (s === 'pending') return 'Pending';
+  return s.replace(/_/g, ' ');
+}
+
+function dispatchLabel(mode) {
+  const m = String(mode || '').toLowerCase();
+  if (m.includes('courier')) return 'Courier';
+  if (m.includes('porter')) return 'Porter';
+  if (m.includes('inhouse') || m.includes('hand') || m.includes('technician')) return 'In-house';
+  return mode || null;
+}
+
 export default function ServiceDcPanel({ ticket, pickups, replacementOrders = [], ticketId, isLead, onRefresh }) {
+  const { canView } = usePermission();
+  const canOpenDc = ['delivery_challans', ...SO_PERMISSION_SECTIONS].some((s) => canView(s));
   const [ctx, setCtx] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [trackDc, setTrackDc] = useState(null);
 
   const repairPickups = (pickups || []).filter(
     (p) => (p.pickup_type === 'repair' || p.source_item_id) && p.warehouse_received_at
@@ -84,6 +112,7 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
   };
 
   return (
+    <>
     <div className="rounded-xl border border-teal-200 bg-teal-50/40 p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -126,22 +155,63 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
         <div className="space-y-2">
           {serviceDcs.map((sdc) => {
             const pdfUrl = uploadAssetUrl(sdc.pdf_path);
-            const dcPath = `/sales-pipeline/delivery-challans/${encodeURIComponent(sdc.dc_number)}`;
+            const dcTo = {
+              pathname: deliveryChallanDetailPath(sdc.dc_number),
+              state: { from: `/support/tickets/${ticketId}` },
+            };
+            const mode = dispatchLabel(sdc.dispatch_mode);
             return (
               <div key={sdc.dc_number} className="rounded-lg border border-white bg-white/80 px-3 py-2 text-xs">
                 <div className="flex flex-wrap items-center gap-2">
                   <Truck className="w-3.5 h-3.5 text-teal-700" />
-                  <span className="font-mono font-semibold text-slate-900">{sdc.dc_number}</span>
+                  {canOpenDc ? (
+                    <Link
+                      to={dcTo}
+                      className="font-mono font-semibold text-teal-800 hover:underline"
+                    >
+                      {sdc.dc_number}
+                    </Link>
+                  ) : (
+                    <span className="font-mono font-semibold text-slate-900">{sdc.dc_number}</span>
+                  )}
                   <span className="rounded-full bg-teal-100 text-teal-800 px-2 py-0.5">{dcPurposeLabel(sdc.dc_purpose)}</span>
-                  <span className="text-slate-500 capitalize">{sdc.status || 'pending'}</span>
+                  <span className="text-slate-600">{statusLabel(sdc.status)}</span>
                 </div>
+                {(mode || sdc.awb_number || sdc.porter_tracking_id) && (
+                  <p className="mt-1.5 text-slate-600">
+                    {mode ? `${mode}` : null}
+                    {sdc.courier_name ? ` · ${sdc.courier_name}` : ''}
+                    {sdc.awb_number ? ` · AWB ${sdc.awb_number}` : ''}
+                    {sdc.porter_tracking_id ? ` · Porter ${sdc.porter_tracking_id}` : ''}
+                  </p>
+                )}
+                <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Tracking history
+                </p>
+                <SdcTrackingTimeline sdc={sdc} />
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Link to={dcPath} className="text-teal-700 hover:underline">View DC</Link>
+                  {canOpenDc ? (
+                    <Link to={dcTo} className="text-teal-700 hover:underline">View DC</Link>
+                  ) : null}
                   {pdfUrl && (
                     <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-teal-700 hover:underline">
                       <FileText className="w-3.5 h-3.5" /> PDF
                     </a>
                   )}
+                  {sdc.awb_number ? (
+                    <button
+                      type="button"
+                      onClick={() => setTrackDc(sdc)}
+                      className="text-teal-700 hover:underline"
+                    >
+                      Track courier
+                    </button>
+                  ) : null}
+                  {sdc.courier_tracking_url ? (
+                    <a href={sdc.courier_tracking_url} target="_blank" rel="noreferrer" className="text-teal-700 hover:underline">
+                      Carrier page
+                    </a>
+                  ) : null}
                   {sdc.sales_order_number && (
                     <Link
                       to={replacementSalesOrderDetailPath(sdc.sales_order_number)}
@@ -163,5 +233,15 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
         </p>
       )}
     </div>
+    {trackDc ? (
+      <CourierTrackingModal
+        dcNumber={trackDc.dc_number}
+        awbNumber={trackDc.awb_number}
+        courierName={trackDc.courier_name}
+        trackingUrl={trackDc.courier_tracking_url}
+        onClose={() => setTrackDc(null)}
+      />
+    ) : null}
+    </>
   );
 }

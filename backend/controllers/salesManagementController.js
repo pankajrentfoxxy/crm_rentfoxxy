@@ -2916,7 +2916,7 @@ exports.storeDeliveryChallan = async (req, res) => {
               OR serial_id = ANY($2::int[])`,
           [serialNumbers, serialIds.length ? serialIds : [-1]]
         );
-        // Creating the DC dispatches the unit: in_stock/reserved -> in_transit.
+        // DC created: reserved/in_stock -> dispatch_ready (in_transit is set at gate submit).
         for (let k = 0; k < serialList.length; k += 1) {
           const parts = String(serialList[k]).split('|');
           const sId = (parts[0] && /^\d+$/.test(parts[0])) ? Number(parts[0]) : null;
@@ -2927,7 +2927,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           const { resolveSerialRentRate } = require('../services/serialRentRateService');
           const rentMonthlyRate = await resolveSerialRentRate(client, serialId, dcNumber);
           try {
-            await inventorySM.markDispatched(client, serialId, {
+            await inventorySM.markDispatchReady(client, serialId, {
               dcNumber,
               customerId: body.customer_id || null,
               entityCode,
@@ -2937,10 +2937,9 @@ exports.storeDeliveryChallan = async (req, res) => {
               actorName: req.user?.name,
             });
           } catch (rErr) {
-            // Non-canonical current state: fallback so the DC still forms.
             await client.query(
-              `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
-                      dispatch_mode = $3, dispatched_at = NOW(),
+              `UPDATE vendor_serial_numbers SET inventory_status = 'dispatch_ready', current_dc_number = $2,
+                      dispatch_mode = $3,
                       rent_monthly_rate = COALESCE($4, rent_monthly_rate),
                       updated_at = NOW()
                WHERE serial_id = $1`,
@@ -2983,13 +2982,10 @@ exports.storeDeliveryChallan = async (req, res) => {
       );
     }
 
-    // DC created with delivery info = dispatched. Mark the lines in_transit so
-    // there is no separate "dispatch" re-entry step. Courier/Porter then get
-    // "Mark Delivered"; technician DCs surface in the delivery-register bucket.
+    // DC created: waiting at warehouse gate. Guard submit sets in_transit + dispatched_at.
     await client.query(
       `UPDATE delivery_challan_lines
-         SET status = 'in_transit', dispatch_mode = $2,
-             dispatched_at = COALESCE(dispatched_at, NOW()), updated_at = NOW()
+         SET status = 'dispatch_ready', dispatch_mode = $2, updated_at = NOW()
        WHERE dc_number = $1 AND status = 'pending'`,
       [dcNumber, dispatchMode]
     );
@@ -2997,11 +2993,6 @@ exports.storeDeliveryChallan = async (req, res) => {
     const dispatchWf = require('../services/dispatchWorkflowService');
     if (body.sales_order_number) {
       await dispatchWf.onDcGenerated(client, {
-        salesOrderNumber: body.sales_order_number,
-        dcNumber,
-        user: req.user,
-      });
-      await dispatchWf.onDispatched(client, {
         salesOrderNumber: body.sales_order_number,
         dcNumber,
         user: req.user,
@@ -3026,20 +3017,8 @@ exports.storeDeliveryChallan = async (req, res) => {
       console.error('DC PDF generation failed:', pdfErr.message);
     }
 
-    // Post-commit: first rental invoice at DC generate (dispatch → month-end).
-    // Delivery path is a no-op safety net once rent_billed_until is set.
-    if (String(quotationType).toLowerCase() === 'rental' && body.customer_id) {
-      try {
-        const { maybeInvoiceOnRentalDcCreate } = require('../services/billingSchedulerService');
-        await maybeInvoiceOnRentalDcCreate({
-          customerId: body.customer_id,
-          dcNumber,
-          quotationType,
-        });
-      } catch (billingErr) {
-        console.error('storeDeliveryChallan on-DC-create invoice:', billingErr.message);
-      }
-    }
+    // Post-commit: first rental invoice starts when the laptop actually leaves
+    // the warehouse (guard gate submit → in_transit). DC create is dispatch_ready.
 
     // Post-commit: auto BlueDart AWB + label PDF when courier is BlueDart.
     let bluedartAwb = null;
@@ -3320,8 +3299,8 @@ exports.createDcsByAddress = async (req, res) => {
           remarks, status, created_by, hsn_code
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,NOW(),
-          $31,'in_transit',$32,$33
+          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,NULL,
+          $31,'dispatch_ready',$32,$33
         )`,
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
@@ -3378,7 +3357,7 @@ exports.createDcsByAddress = async (req, res) => {
           `INSERT INTO dc_shipment_units (
              dc_number, allocation_id, serial_id, serial_number, ttspl_id,
              courier_name, awb_number, weight, remarks, status
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'in_transit')`,
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'dispatch_ready')`,
           [
             dcNumber,
             s.allocation_id || null,
@@ -3413,13 +3392,13 @@ exports.createDcsByAddress = async (req, res) => {
         );
       }
 
-      // Dispatch each unit through the inventory state machine (fallback: direct).
+      // DC created: reserved -> dispatch_ready. Guard submit sets in_transit.
       for (const s of groupSerials) {
         if (!s.serial_id) continue;
         const { resolveSerialRentRate } = require('../services/serialRentRateService');
         const rentMonthlyRate = await resolveSerialRentRate(client, s.serial_id, dcNumber);
         try {
-          await inventorySM.markDispatched(client, s.serial_id, {
+          await inventorySM.markDispatchReady(client, s.serial_id, {
             dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
             rentMonthlyRate,
             actorUserId: req.user?.user_id, actorName: req.user?.name,
@@ -3427,8 +3406,8 @@ exports.createDcsByAddress = async (req, res) => {
         } catch (rErr) {
           await client.query(
             `UPDATE vendor_serial_numbers
-                SET inventory_status = 'in_transit', current_dc_number = $1,
-                    dispatch_mode = $2, dispatched_at = NOW(),
+                SET inventory_status = 'dispatch_ready', current_dc_number = $1,
+                    dispatch_mode = $2,
                     rent_monthly_rate = COALESCE($4, rent_monthly_rate),
                     updated_at = NOW()
               WHERE serial_id = $3`,
@@ -3452,6 +3431,12 @@ exports.createDcsByAddress = async (req, res) => {
 
       createdDcNumbers.push(dcNumber);
       await replacementFlow.tagReplacementOutboundDc(client, dcNumber, sales_order_number);
+      const dispatchWf = require('../services/dispatchWorkflowService');
+      await dispatchWf.onDcGenerated(client, {
+        salesOrderNumber: sales_order_number,
+        dcNumber,
+        user: req.user,
+      });
     }
 
     if (!createdDcNumbers.length) {
@@ -3474,22 +3459,7 @@ exports.createDcsByAddress = async (req, res) => {
       }
     }
 
-    // Post-commit: first rental invoice per DC at generate time.
-    const soQt = String(soLines[0]?.quotation_type || 'rental').toLowerCase();
-    if (soQt === 'rental' && soLines[0]?.customer_id) {
-      const { maybeInvoiceOnRentalDcCreate } = require('../services/billingSchedulerService');
-      for (const dcNumber of createdDcNumbers) {
-        try {
-          await maybeInvoiceOnRentalDcCreate({
-            customerId: soLines[0].customer_id,
-            dcNumber,
-            quotationType: soQt,
-          });
-        } catch (billingErr) {
-          console.error(`createDcsByAddress on-DC-create invoice (${dcNumber}):`, billingErr.message);
-        }
-      }
-    }
+    // First rental invoice starts when guard submits (in_transit), not at DC create.
 
     // Post-commit: auto BlueDart AWB + label PDF for courier BlueDart DCs without AWB.
     const bluedartResults = [];
@@ -3523,15 +3493,7 @@ exports.createDcsByAddress = async (req, res) => {
         salesOrderNumber: sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'dc_created',
-        description: `${dcNumber} was generated for this Sales Order.`,
-        metadata: { dc_number: dcNumber },
-        user: req.user,
-      });
-      await safeLogSalesOrderActivity({
-        salesOrderNumber: sales_order_number,
-        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
-        action: 'dispatch_started',
-        description: `Dispatch started for ${dcNumber}.`,
+        description: `${dcNumber} was generated — dispatch ready for warehouse gate.`,
         metadata: { dc_number: dcNumber },
         user: req.user,
       });
@@ -5142,7 +5104,7 @@ exports.updateDcDispatch = async (req, res) => {
         [dcNumber]
       );
       const statuses = cur.rows.map((r) => r.status);
-      if (statuses.some((s) => ['delivered', 'in_transit', 'shipped', 'reached'].includes(s))) {
+      if (statuses.some((s) => ['delivered', 'in_transit', 'shipped', 'reached', 'dispatch_ready'].includes(s))) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, message: `DC already ${statuses.join('/')}` });
       }

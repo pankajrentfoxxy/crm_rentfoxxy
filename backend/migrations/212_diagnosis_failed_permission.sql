@@ -1,4 +1,4 @@
--- Migration: 207_diagnosis_failed_permission.sql
+-- Migration: 212_diagnosis_failed_permission.sql
 -- Dedicated RBAC so Diagnosis Failed (Out for Repair) can be granted per role/user.
 
 INSERT INTO permission_sections (section, description, sort_order)

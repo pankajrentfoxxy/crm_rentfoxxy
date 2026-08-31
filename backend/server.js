@@ -31,7 +31,9 @@ const allowedOrigins = [
   'http://vendor.rentfoxxy.com',
   'https://vendor.rentfoxxy.com',
   'http://staging.rentfoxxy.com',
-  'https://staging.rentfoxxy.com'
+  'https://staging.rentfoxxy.com',
+  'http://qa.rentfoxxy.com',
+  'https://qa.rentfoxxy.com'
 ];
 
 if (process.env.FRONTEND_URL) {
@@ -130,6 +132,7 @@ app.use('/api/vendor-repair', require('./routes/vendorRepair'));
 app.use('/api/part-vendor-repair', require('./routes/partVendorRepair'));
 app.use('/api/scrap-challans', require('./routes/scrapChallan'));
 app.use('/api/utils', require('./routes/utils'));
+app.use('/api/guard-gate', require('./routes/guardGate'));
 
 // Health check
 app.get('/health', (req, res) => {

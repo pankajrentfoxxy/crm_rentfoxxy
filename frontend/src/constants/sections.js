@@ -97,6 +97,8 @@ export const APPLICATION_SECTIONS = [
   'user_permissions',
   'company_settings',
   'asset_configuration',
+  'guard_gate_checking',
+  'gate_dashboard',
 ];
 
 export const SECTION_LABELS = {
@@ -197,6 +199,8 @@ export const SECTION_LABELS = {
   user_permissions: 'User Permissions',
   company_settings: 'Company Settings',
   asset_configuration: 'Asset Configuration',
+  guard_gate_checking: 'Guard Scanner',
+  gate_dashboard: 'Gate Dashboard',
 };
 
 export const SECTION_GROUPS = {
@@ -228,6 +232,7 @@ export const SECTION_GROUPS = {
     'support_part_requests',
     'parts',
   ],
+  'Warehouse Gate': ['guard_gate_checking', 'gate_dashboard'],
   'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders'],
   'Finance & Billing': [
     'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes',
@@ -261,6 +266,7 @@ export const GROUP_COLORS = {
   'Floor & Quality': 'text-indigo-600 border-indigo-200',
   Inventory: 'text-teal-600 border-teal-200',
   'Part Management': 'text-orange-600 border-orange-200',
+  'Warehouse Gate': 'text-teal-600 border-teal-200',
   'Warehouse & Dispatch': 'text-sky-600 border-sky-200',
   'Finance & Billing': 'text-amber-600 border-amber-200',
   Support: 'text-pink-600 border-pink-200',

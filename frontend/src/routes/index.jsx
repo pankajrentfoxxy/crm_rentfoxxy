@@ -12,11 +12,13 @@ import { financeRoutes } from './financeRoutes';
 import { reportingRoutes } from './reportingRoutes';
 import { assetConfigurationRoutes } from './assetConfigurationRoutes';
 import { dispatchRoutes } from './dispatchRoutes';
+import { guardRoutes } from './guardRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
   ...salesRoutes,
   ...dispatchRoutes,
+  ...guardRoutes,
   ...supportRoutes,
   ...warehouseRoutes,
   ...teamRoutes,
@@ -34,6 +36,7 @@ export {
   publicRoutes,
   salesRoutes,
   dispatchRoutes,
+  guardRoutes,
   supportRoutes,
   warehouseRoutes,
   teamRoutes,

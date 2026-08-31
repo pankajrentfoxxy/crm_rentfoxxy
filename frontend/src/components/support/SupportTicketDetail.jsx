@@ -23,6 +23,7 @@ import RepairSwapPanel from './components/RepairSwapPanel';
 import ResendLaptopPanel from './components/ResendLaptopPanel';
 import NewReplacementOrderPanel from './components/NewReplacementOrderPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
+import ReturnDcNumberLink from './components/ReturnDcNumberLink';
 import { replacementSalesOrderDetailPath } from '../../features/sales-pipeline/salesOrderScope';
 import {
   formatItemId,
@@ -616,7 +617,10 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
           {units.length > 1 ? ` · ${units.length} laptops` : ''}
         </p>
         {ticket.return_dc_number && (
-          <p>Return pickup DC: <span className="font-mono">{ticket.return_dc_number}</span></p>
+          <p>
+            Return pickup DC:{' '}
+            <ReturnDcNumberLink rdcNumber={ticket.return_dc_number} className="font-mono" />
+          </p>
         )}
         {pendingPickup && (
           <p className="text-xs rounded-lg border border-amber-200 bg-amber-50 text-amber-900 px-2 py-1.5">
@@ -785,12 +789,16 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-semibold text-sm">Pickup &amp; Return DC</h3>
         {ticket.return_dc_number && (
-          <span className="support-pill progress font-mono">{ticket.return_dc_number}</span>
+          <ReturnDcNumberLink
+            rdcNumber={ticket.return_dc_number}
+            className="support-pill progress font-mono"
+          />
         )}
       </div>
       {pendingAssign ? (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
           Return DC <b>{ticket.return_dc_number}</b> created. Assign a technician, courier, or porter on the Pickup card (Assign pickup).
+          Return DC <ReturnDcNumberLink rdcNumber={ticket.return_dc_number} className="font-semibold" /> created. Assign technician or courier from the replacement order section above when details are available.
         </p>
       ) : active ? (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
@@ -801,7 +809,7 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
         </p>
       ) : (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-          Return DC <b>{ticket.return_dc_number}</b> — pickup completed or closed.
+          Return DC <ReturnDcNumberLink rdcNumber={ticket.return_dc_number} className="font-semibold" /> — pickup completed or closed.
         </p>
       )}
       {canForceVoidPickup && (

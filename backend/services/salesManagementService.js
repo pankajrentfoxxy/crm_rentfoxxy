@@ -790,6 +790,8 @@ function buildDeliveryChallanListWhere({
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
+  } else if (status === 'dispatch_ready') {
+    where += ` AND d.status = 'dispatch_ready'`;
   } else if (status === 'in_transit') {
     where += ` AND d.status IN ('in_transit', 'shipped', 'reached')`;
   } else if (status && status !== 'all') {
@@ -839,6 +841,7 @@ async function listDeliveryChallansGrouped({
        SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE dc_status = 'pending')::int AS pending,
+         COUNT(*) FILTER (WHERE dc_status = 'dispatch_ready')::int AS dispatch_ready,
          COUNT(*) FILTER (WHERE dc_status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
          COUNT(*) FILTER (WHERE dc_status = 'delivered')::int AS delivered,
          COUNT(*) FILTER (WHERE dc_status = 'rejected')::int AS rejected
@@ -884,6 +887,7 @@ async function listDeliveryChallansGrouped({
       total_laptops: laptopResult.rows[0]?.total_laptops || 0,
       total: statusRow.total || countResult.rows[0]?.total || 0,
       pending: statusRow.pending || 0,
+      dispatch_ready: statusRow.dispatch_ready || 0,
       in_transit: statusRow.in_transit || 0,
       delivered: statusRow.delivered || 0,
       rejected: statusRow.rejected || 0,
@@ -910,7 +914,24 @@ async function getDeliveryChallanLines(dcNumber) {
      ORDER BY dcl.id ASC`,
     [dcNumber]
   );
-  return result.rows;
+  const rows = result.rows;
+  if (rows.length && !rows.some((r) => r.support_ticket_id)) {
+    try {
+      const t = await pool.query(
+        `SELECT ticket_id
+           FROM support_ticket_items
+          WHERE service_dc_number = $1 OR return_dc_number = $1
+          ORDER BY id DESC
+          LIMIT 1`,
+        [dcNumber]
+      );
+      const ticketId = t.rows[0]?.ticket_id || null;
+      if (ticketId) {
+        for (const row of rows) row.support_ticket_id = ticketId;
+      }
+    } catch (_) { /* support tables may be missing on very old DBs */ }
+  }
+  return rows;
 }
 
 async function healReturnDcPickupLinks() {
@@ -1067,12 +1088,18 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
     const isInhouse = i.pickup_method !== 'courier' && i.pickup_method !== 'porter';
     return isInhouse && !i.customer_otp_verified_at && !isDelivered;
   });
+  const gateBlocked = itemsToCheck.some((i) => i.return_dc_number && !i.gate_inward_at);
+
+  let warehouse_block_reason = null;
+  if (otpBlocked) {
+    warehouse_block_reason = 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).';
+  } else if (gateBlocked) {
+    warehouse_block_reason = 'Guard must scan this Return DC inward before warehouse e-sign.';
+  }
 
   return {
-    can_warehouse_confirm: !otpBlocked,
-    warehouse_block_reason: otpBlocked
-      ? 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).'
-      : null,
+    can_warehouse_confirm: !otpBlocked && !gateBlocked,
+    warehouse_block_reason,
     warehouse_receive_pending: true,
   };
 }
@@ -1637,6 +1664,9 @@ async function getReturnDcDetail(rdcNumber) {
     customer_otp_verified_at: pickupItems.length && pickupItems.every((i) => i.customer_otp_verified_at)
       ? pickupItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
       : null,
+    gate_inward_at: pickupItems.length && pickupItems.every((i) => i.gate_inward_at)
+      ? pickupItems.find((i) => i.gate_inward_at)?.gate_inward_at
+      : null,
     pickup_items: pickupItems.map((i) => ({
       id: i.id,
       serial_number: i.serial_number,
@@ -1654,6 +1684,7 @@ async function getReturnDcDetail(rdcNumber) {
       warehouse_received_at: i.warehouse_received_at,
       warehouse_receiver_name: i.warehouse_receiver_name,
       customer_otp_verified_at: i.customer_otp_verified_at,
+      gate_inward_at: i.gate_inward_at,
       floor_ticket_id: i.floor_ticket_id,
     })),
     floor_ticket_ids: pickupItems.map((i) => i.floor_ticket_id).filter(Boolean),
@@ -1881,7 +1912,7 @@ async function searchAvailableInventory({
   // Legacy ERP rows may still have inventory_status = in_repair after repair even
   // though qc_status is passed — treat any non-deployed QC-passed unit as pickable.
   const OFF_SHELF_INVENTORY_STATUSES = [
-    'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
+    'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold',
     'returned', 'scrapped', 'out_stock', 'qc_failed',
     'out_for_repare', 'out_for_return',
   ];

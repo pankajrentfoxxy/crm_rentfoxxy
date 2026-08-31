@@ -13,6 +13,7 @@ const PAGE_SIZE = 25;
 const STATUS_TABS = [
   { key: '', label: 'All' },
   { key: 'reserved', label: 'Allocated' },
+  { key: 'dispatch_ready', label: 'Dispatch Ready' },
   { key: 'in_transit', label: 'In Transit' },
   { key: 'rented', label: 'On Rent' },
   { key: 'on_demo', label: 'On Demo' },
@@ -21,6 +22,7 @@ const STATUS_TABS = [
 
 const STATUS_STYLES = {
   reserved: 'bg-slate-100 text-slate-700',
+  dispatch_ready: 'bg-sky-100 text-sky-800',
   in_transit: 'bg-amber-100 text-amber-800',
   rented: 'bg-blue-100 text-blue-800',
   on_demo: 'bg-violet-100 text-violet-800',
@@ -34,7 +36,7 @@ export default function CustomerAssetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = searchParams.get('status') || '';
   const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
+  const [counts, setCounts] = useState({ all: 0, reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);

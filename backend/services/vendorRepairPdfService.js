@@ -113,7 +113,7 @@ function formatVendorShippingFromRow(vendor) {
   return lines.join('\n');
 }
 
-function drawCompanyHeader(doc, company, { docTitle, docNumber, rightLabel, rightValue, yStart = 40 } = {}) {
+function drawCompanyHeader(doc, company, { docTitle, docNumber, rightLabel, rightValue, yStart = 40, qrPng = null } = {}) {
   const L = 40;
   const R = 555;
   const W = R - L;
@@ -131,12 +131,21 @@ function drawCompanyHeader(doc, company, { docTitle, docNumber, rightLabel, righ
     doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(20).text(company.code || 'rentfoxxy', L, y + 6);
   }
 
+  if (qrPng) {
+    try {
+      const { drawGateQr } = require('./gateQrService');
+      drawGateQr(doc, qrPng, { x: R - 40, y, size: 36, caption: 'Gate scan' });
+    } catch (_) { /* ignore */ }
+  }
+
   if (rightValue) {
+    const rightWidth = qrPng ? 160 : 210;
+    const rightX = qrPng ? R - 40 - 10 - rightWidth : R - 210;
     doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(13)
-      .text(rightValue, R - 210, y, { width: 210, align: 'right' });
+      .text(rightValue, rightX, y, { width: rightWidth, align: 'right' });
     if (rightLabel) {
       doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-        .text(rightLabel, R - 210, y + 18, { width: 210, align: 'right' });
+        .text(rightLabel, rightX, y + 18, { width: rightWidth, align: 'right' });
     }
   }
 
@@ -469,6 +478,12 @@ async function generateVendorRepairPdf(dcNumber) {
   const rel = `vendor-repair/VRDC_${safe}.pdf`;
   const abs = path.join(__dirname, '../uploads', rel);
 
+  let gateQrPng = null;
+  try {
+    const { ensureGateQrPng } = require('./gateQrService');
+    gateQrPng = (await ensureGateQrPng({ docType: 'vrdc', docNumber: dc.dc_number })).png;
+  } catch (_) { /* optional */ }
+
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(abs);
@@ -479,6 +494,7 @@ async function generateVendorRepairPdf(dcNumber) {
       docNumber: dc.dc_number,
       rightLabel: 'Dispatch DC',
       rightValue: dc.dc_number,
+      qrPng: gateQrPng,
     });
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
@@ -568,6 +584,12 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   const rel = `vendor-repair/VRDC_RECEIVE_${safe}.pdf`;
   const abs = path.join(__dirname, '../uploads', rel);
 
+  let gateQrPng = null;
+  try {
+    const { ensureGateQrPng } = require('./gateQrService');
+    gateQrPng = (await ensureGateQrPng({ docType: 'vrdc', docNumber: dc.dc_number })).png;
+  } catch (_) { /* optional */ }
+
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(abs);
@@ -578,6 +600,7 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
       docNumber: receiveDcNumber,
       rightLabel: 'Receive DC',
       rightValue: receiveDcNumber,
+      qrPng: gateQrPng,
     });
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);

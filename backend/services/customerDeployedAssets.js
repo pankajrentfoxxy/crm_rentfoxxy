@@ -9,6 +9,7 @@ const DEPLOYED_WITH_CUSTOMER_STATUSES = Object.freeze([
   'on_demo',
   'sold',
   'reserved',
+  'dispatch_ready',
   'in_transit',
   'out_stock', // ERP legacy — deployed with customer
 ]);

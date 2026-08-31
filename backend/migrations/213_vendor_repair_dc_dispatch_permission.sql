@@ -1,4 +1,4 @@
--- Migration: 208_vendor_repair_dc_dispatch_permission.sql
+-- Migration: 213_vendor_repair_dc_dispatch_permission.sql
 -- Dedicated RBAC for signing, confirming dispatch, and marking delivered on laptop VRDC.
 
 INSERT INTO permission_sections (section, description, sort_order)

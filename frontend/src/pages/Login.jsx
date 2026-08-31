@@ -119,7 +119,7 @@ export default function Login() {
     try {
       const { data } = await api.post('/auth/login-barcode', { barcode });
       setNormalAuthToken(data.token);
-      window.location.href = '/dashboard';
+      window.location.href = '/';
     } catch (err) {
       setError(err.response?.data?.message || 'Invalid barcode');
       setBarcode('');

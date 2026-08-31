@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
+import ReturnDcNumberLink from './ReturnDcNumberLink';
 
 function specLine(item) {
   return [item.brand, item.model, item.processor, item.generation, item.ram, item.storage]
@@ -150,7 +151,11 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
               Adds SO lines and pickup items to existing order{' '}
               <span className="font-mono">{activeOrder?.sales_order_number || ticket.sales_order_number}</span>
               {' '}and return DC{' '}
-              <span className="font-mono">{activeOrder?.return_dc_number || ticket.return_dc_number}</span>.
+              <ReturnDcNumberLink
+                rdcNumber={activeOrder?.return_dc_number || ticket.return_dc_number}
+                className="font-mono"
+              />
+              .
             </>
           ) : (
             <>
