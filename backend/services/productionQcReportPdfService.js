@@ -43,7 +43,8 @@ function ensureSpace(doc, y, need = 40) {
   return 40;
 }
 
-function buildProductionQcListPdf(rows, filters = {}) {
+function buildProductionQcListPdf(rows, filters = {}, options = {}) {
+  const includeCustomerVendor = options.includeCustomerVendor !== false;
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -70,7 +71,7 @@ function buildProductionQcListPdf(rows, filters = {}) {
       if (filters.serial) filterBits.push(`Serial ${filters.serial}`);
       if (filters.brand) filterBits.push(`Brand ${filters.brand}`);
       if (filters.model) filterBits.push(`Model ${filters.model}`);
-      if (filters.customer) filterBits.push(`Customer ${filters.customer}`);
+      if (filters.customer && includeCustomerVendor) filterBits.push(`Customer ${filters.customer}`);
       doc.text(
         `${rows.length} record(s)${filterBits.length ? ` · ${filterBits.join(' · ')}` : ''}`,
         28,
@@ -82,7 +83,7 @@ function buildProductionQcListPdf(rows, filters = {}) {
         { key: 'ttspl_id', label: 'TTSPL', w: 70 },
         { key: 'serial_number', label: 'Serial', w: 72 },
         { key: 'technician_name', label: 'Technician', w: 78 },
-        { key: 'customer_vendor', label: 'Customer/Vendor', w: 100 },
+        ...(includeCustomerVendor ? [{ key: 'customer_vendor', label: 'Customer/Vendor', w: 100 }] : []),
         { key: 'qc_stage', label: 'QC Stage', w: 50 },
         { key: 'current_stage', label: 'Stage', w: 70 },
         { key: 'when', label: 'QC Date/Time', w: 90 },
@@ -143,7 +144,8 @@ function buildProductionQcListPdf(rows, filters = {}) {
   });
 }
 
-function buildProductionQcDetailPdf(detail) {
+function buildProductionQcDetailPdf(detail, options = {}) {
+  const includeCustomerVendor = options.includeCustomerVendor !== false;
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -170,7 +172,7 @@ function buildProductionQcDetailPdf(detail) {
       const meta = [
         ['Technician', detail.technician_name],
         ['Checked By', detail.checked_by_name],
-        ['Customer / Vendor', detail.customer_vendor],
+        ...(includeCustomerVendor ? [['Customer / Vendor', detail.customer_vendor]] : []),
         ['Brand / Model', [detail.brand, detail.model].filter(Boolean).join(' · ') || null],
         ['Current Stage', detail.current_stage],
         ['QC Date & Time', fmtDateTime(detail.submitted_at)],

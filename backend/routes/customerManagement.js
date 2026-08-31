@@ -45,6 +45,7 @@ router.put('/customers/:customerId/verify-kyc', cp('kyc_management', 'edit'), ct
 router.patch('/customers/:customerId/portal-access', cp('customers', 'edit'), ctrl.enableCustomerPortal);
 // Impersonation: super admin only, never delegated through the permission matrix.
 router.post('/customers/:customerId/portal-login-as', checkRole('super_admin'), ctrl.loginAsCustomerPortal);
+router.get('/customers/:customerId/laptops/export.xlsx', cp('customer_assets', 'view'), ctrl.exportCustomerLaptopsExcel);
 router.get('/customers/:customerId/laptops', cp('customer_assets', 'view'), ctrl.getCustomerLaptops);
 router.get('/customers/:customerId/assets/activity', cp('customer_assets', 'view'), ctrl.getCustomerAssetActivity);
 router.get('/customers/:customerId/tickets', cp('customers', 'view'), ctrl.getCustomerTickets);

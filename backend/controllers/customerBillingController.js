@@ -441,10 +441,15 @@ exports.listCreditNotes = async (req, res) => {
       where.push(`cn.status = $${params.length}`);
     }
     const result = await pool.query(
-      `SELECT cn.*, c.company_name AS customer_name, ci.invoice_number
+      `SELECT cn.*,
+              c.company_name AS customer_name,
+              ci.invoice_number,
+              COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
+              COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
        FROM customer_credit_notes cn
        LEFT JOIN customers c ON c.customer_id = cn.customer_id
        LEFT JOIN customer_invoices ci ON ci.invoice_id = cn.invoice_id
+       LEFT JOIN support_tickets st ON st.id = COALESCE(cn.support_ticket_id, cn.return_ticket_id)
        WHERE ${where.join(' AND ')}
        ORDER BY cn.created_at DESC`,
       params

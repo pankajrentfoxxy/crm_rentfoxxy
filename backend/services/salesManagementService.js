@@ -941,6 +941,7 @@ async function healReturnDcPickupLinks() {
       FROM delivery_challan_lines dcl
      WHERE sti.item_type = 'pickup'
        AND sti.return_dc_number IS NULL
+       AND COALESCE(sti.status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')
        AND dcl.movement_type = 'return'
        AND dcl.support_ticket_id = sti.ticket_id
   `).catch(() => {});
@@ -978,7 +979,9 @@ async function ensureReturnDcPickupItems(db, dcl) {
     await db.query(
       `UPDATE support_ticket_items
           SET return_dc_number = $1, updated_at = NOW()
-        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+        WHERE ticket_id = $2 AND item_type = 'pickup'
+          AND return_dc_number IS NULL
+          AND COALESCE(status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')`,
       [rdcNumber, ticketId]
     );
   }
@@ -1005,6 +1008,7 @@ async function ensureReturnDcPickupItems(db, dcl) {
   const existingRes = await db.query(
     `SELECT * FROM support_ticket_items
       WHERE return_dc_number = $1 AND item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
       ORDER BY id ASC`,
     [rdcNumber]
   );
@@ -1063,6 +1067,9 @@ function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
 }
 
 function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
+  if (String(dcl?.status || '').toLowerCase() === 'cancelled') {
+    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+  }
   const returnCustomerId = dcl?.customer_id ?? null;
   const pendingItems = (pickupItems || []).filter(
     (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId)
@@ -1103,6 +1110,69 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
 
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
+/** Assigned-only Return DC: match ticket pickup user or RDC delivery person (user id or technician id). */
+function appendReturnDcAssignedFilter(alias, userId, params) {
+  if (!userId) return '';
+  params.push(userId);
+  const i = params.length;
+  return ` AND (
+    ${alias}.delivery_person_id = $${i}
+    OR EXISTS (
+      SELECT 1 FROM delivery_technicians dt
+       WHERE dt.user_id = $${i}
+         AND dt.technician_id = ${alias}.delivery_person_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM support_ticket_items sti_a
+       WHERE sti_a.item_type = 'pickup'
+         AND (
+           sti_a.return_dc_number = ${alias}.dc_number
+           OR (sti_a.return_dc_number IS NULL AND sti_a.ticket_id = ${alias}.support_ticket_id)
+         )
+         AND (sti_a.pickup_assigned_to = $${i} OR sti_a.assigned_to = $${i})
+    )
+  )`;
+}
+
+const RETURN_DC_STATUS_CLAUSES = {
+  pending: `COALESCE(rl.status, 'pending') IN ('pending', 'processing')`,
+  in_transit: `rl.status IN ('in_transit', 'shipped', 'reached')`,
+  reached: `rl.status = 'reached'`,
+  delivered: `rl.status = 'delivered'`,
+  cancelled: `rl.status = 'cancelled'`,
+};
+
+function parseReturnDcStatusKeys(status) {
+  const raw = Array.isArray(status) ? status : String(status || '').split(',');
+  return [...new Set(raw.map((s) => String(s).trim().toLowerCase().replace(/-/g, '_')).filter(Boolean))];
+}
+
+function returnDcStatusFilterSql(status) {
+  const keys = parseReturnDcStatusKeys(status);
+  if (!keys.length || keys.includes('all')) return '';
+  const clauses = keys.map((k) => RETURN_DC_STATUS_CLAUSES[k]).filter(Boolean);
+  if (!clauses.length) return '';
+  const mainKeys = ['pending', 'in_transit', 'delivered', 'cancelled'];
+  if (mainKeys.every((k) => keys.includes(k))) return '';
+  return ` AND (${clauses.join(' OR ')})`;
+}
+
+async function userCanAccessReturnDc(rdcNumber, userId) {
+  if (!rdcNumber || !userId) return false;
+  const params = [rdcNumber];
+  const assignedSql = appendReturnDcAssignedFilter('rl', userId, params);
+  const r = await pool.query(
+    `SELECT 1
+       FROM delivery_challan_lines rl
+      WHERE rl.dc_number = $1
+        AND rl.movement_type = 'return'
+        ${assignedSql}
+      LIMIT 1`,
+    params
+  );
+  return r.rows.length > 0;
+}
+
 async function listReturnDeliveryChallans({
   page = 1,
   limit = 25,
@@ -1110,6 +1180,7 @@ async function listReturnDeliveryChallans({
   dateFrom,
   dateTo,
   status = 'all',
+  assignedUserId = null,
 } = {}) {
   const params = [];
   let searchSql = '';
@@ -1141,16 +1212,10 @@ async function listReturnDeliveryChallans({
     )`;
   }
 
-  const statusKey = String(status || 'all').toLowerCase().replace(/-/g, '_');
-  let statusSql = '';
-  if (statusKey === 'delivered') {
-    statusSql = ` AND rl.status = 'delivered'`;
-  } else if (statusKey === 'in_transit') {
-    // Active return pickups — not yet completed at warehouse as delivered RDC
-    statusSql = ` AND COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled')`;
-  }
+  const statusSql = returnDcStatusFilterSql(status);
 
-  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}`;
+  const assignedSql = appendReturnDcAssignedFilter('rl', assignedUserId, params);
+  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}${assignedSql}`;
 
   const countResult = await pool.query(
     `SELECT COUNT(*)::int AS total
@@ -1163,8 +1228,11 @@ async function listReturnDeliveryChallans({
   const statsResult = await pool.query(
     `SELECT
        COUNT(*)::int AS total,
-       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled'))::int AS in_transit,
-       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered
+       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') IN ('pending', 'processing'))::int AS pending,
+       COUNT(*) FILTER (WHERE rl.status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
+       COUNT(*) FILTER (WHERE rl.status = 'reached')::int AS reached,
+       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered,
+       COUNT(*) FILTER (WHERE rl.status = 'cancelled')::int AS cancelled
        FROM delivery_challan_lines rl
        LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
       WHERE ${baseWhere}`,
@@ -1251,23 +1319,26 @@ async function listReturnDeliveryChallans({
        COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
        (
-         COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
-         OR (
-           COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
-           AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
-           AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+         LOWER(COALESCE(rl.status, '')) <> 'cancelled'
+         AND (
+           COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
+           OR (
+             COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
+             AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
+             AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+           )
+           OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
+           OR EXISTS (
+             SELECT 1 FROM vendor_serial_numbers v_pending
+              WHERE v_pending.deleted_at IS NULL
+                AND (
+                  v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
+                  OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
+                )
+                AND v_pending.current_customer_id = rl.customer_id
+                AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+            )
          )
-         OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
-         OR EXISTS (
-           SELECT 1 FROM vendor_serial_numbers v_pending
-            WHERE v_pending.deleted_at IS NULL
-              AND (
-                v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
-                OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
-              )
-              AND v_pending.current_customer_id = rl.customer_id
-              AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
-          )
        ) AS warehouse_receive_pending,
        COALESCE(
          sti_rdc.ttspl_id,
@@ -1299,8 +1370,11 @@ async function listReturnDeliveryChallans({
     return_dcs: result.rows,
     stats: {
       total: statsRow.total || 0,
+      pending: statsRow.pending || 0,
       in_transit: statsRow.in_transit || 0,
+      reached: statsRow.reached || 0,
       delivered: statsRow.delivered || 0,
+      cancelled: statsRow.cancelled || 0,
     },
     pagination: {
       page,
@@ -1379,6 +1453,7 @@ async function listReturnDcLaptopExportRows({
   dateFrom,
   dateTo,
   status = 'in_transit',
+  assignedUserId = null,
 } = {}) {
   const params = [];
   const dateClauses = appendDateRangeClauses({
@@ -1401,13 +1476,7 @@ async function listReturnDcLaptopExportRows({
     )`;
   }
 
-  const statusKey = String(status || 'in_transit').toLowerCase().replace(/-/g, '_');
-  let statusSql = '';
-  if (statusKey === 'delivered') {
-    statusSql = ` AND rl.status = 'delivered'`;
-  } else if (statusKey === 'in_transit') {
-    statusSql = ` AND COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled')`;
-  }
+  const statusSql = returnDcStatusFilterSql(status);
 
   const { rows } = await pool.query(
     `SELECT
@@ -1469,7 +1538,7 @@ async function listReturnDcLaptopExportRows({
             OR (p.return_dc_number IS NULL AND p.ticket_id = rl.support_ticket_id)
           )
      ) pd ON TRUE
-     WHERE rl.movement_type = 'return'${searchSql}${dateSql}${statusSql}
+     WHERE rl.movement_type = 'return'${searchSql}${dateSql}${statusSql}${appendReturnDcAssignedFilter('rl', assignedUserId, params)}
      ORDER BY rl.created_at DESC NULLS LAST, rl.dc_number, sti.id NULLS LAST`,
     params
   );
@@ -1533,6 +1602,7 @@ async function getReturnDcDetail(rdcNumber) {
           LIMIT 1
        ) vsn ON TRUE
       WHERE sti.item_type = 'pickup'
+        AND COALESCE(sti.status, '') NOT IN ('cancelled')
         AND (
           sti.return_dc_number = $1
           OR (sti.return_dc_number IS NULL AND sti.ticket_id = $2)
@@ -1544,11 +1614,17 @@ async function getReturnDcDetail(rdcNumber) {
   if (pickupItems.some((i) => !i.return_dc_number)) {
     await pool.query(
       `UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW()
-        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+        WHERE ticket_id = $2 AND item_type = 'pickup'
+          AND return_dc_number IS NULL
+          AND COALESCE(status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')`,
       [rdcNumber, dcl.support_ticket_id]
     );
-    pickupItems = pickupItems.map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
+    pickupItems = pickupItems
+      .filter((i) => i.status !== 'cancelled')
+      .map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
   }
+
+  pickupItems = pickupItems.filter((i) => i.status !== 'cancelled');
 
   const { buildUnitsForRdc } = require('./returnDcPdfService');
   const units = await buildUnitsForRdc(pool, dcl, pickupItems);
@@ -2519,6 +2595,7 @@ module.exports = {
   listReturnDeliveryChallans,
   listReturnDcLaptopExportRows,
   getReturnDcDetail,
+  userCanAccessReturnDc,
   healReturnDcPickupLinks,
   ensureReturnDcPickupItems,
   evaluateReturnDcWarehouseConfirm,

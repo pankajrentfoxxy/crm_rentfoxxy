@@ -590,7 +590,10 @@ async function sendGeneratedCustomerInvoice(invoiceId, actorUserId = null) {
   return Boolean(sent);
 }
 
-async function createReturnCreditNote(client, { serialId, returnDate, returnTicketId = null, actorUserId = null }) {
+async function createReturnCreditNote(client, {
+  serialId, returnDate, returnTicketId = null, actorUserId = null,
+  supportTicketId = null, returnDcNumber = null,
+}) {
   const r = await client.query(
     `SELECT serial_id, current_customer_id,
             COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id,
@@ -620,8 +623,8 @@ async function createReturnCreditNote(client, { serialId, returnDate, returnTick
     `INSERT INTO customer_credit_notes
       (credit_note_number, customer_id, reason, description, amount,
        quantity, unit_rate, from_date, to_date, ttspl_ids, status, created_by,
-       serial_id, return_ticket_id, source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,'return_pickup')
+       serial_id, return_ticket_id, source, support_ticket_id, return_dc_number)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,'return_pickup',$14,$15)
      RETURNING *`,
     [
       cnNumber, s.current_customer_id,
@@ -632,6 +635,7 @@ async function createReturnCreditNote(client, { serialId, returnDate, returnTick
       toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
       JSON.stringify([s.ttspl_id].filter(Boolean)), actorUserId,
       serialId, returnTicketId,
+      supportTicketId, returnDcNumber,
     ]
   );
   billingLog.info({ cnNumber, amount: calc.amount, customerId: s.current_customer_id, serialId }, 'Return credit note created');

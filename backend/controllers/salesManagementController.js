@@ -26,6 +26,7 @@ const {
   listReturnDeliveryChallans,
   listReturnDcLaptopExportRows,
   getReturnDcDetail,
+  userCanAccessReturnDc,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
   getSalesOrderFulfillmentCounts,
@@ -3761,8 +3762,26 @@ exports.assignReturnDcNumber = async (req, res) => {
   }
 };
 
+async function resolveReturnDcAssignedUserId(req) {
+  const assignedOnly = await isRestrictedToAssigned(req, 'return_dc');
+  return assignedOnly ? scopeUserId(req.user) : null;
+}
+
+async function assertReturnDcAssignedAccess(req, rdcNumber) {
+  const assignedUserId = await resolveReturnDcAssignedUserId(req);
+  if (!assignedUserId) return true;
+  const ok = await userCanAccessReturnDc(rdcNumber, assignedUserId);
+  if (!ok) {
+    const err = new Error('This Return DC is not assigned to you');
+    err.status = 403;
+    throw err;
+  }
+  return true;
+}
+
 exports.listReturnDeliveryChallans = async (req, res) => {
   try {
+    const assignedUserId = await resolveReturnDcAssignedUserId(req);
     const data = await listReturnDeliveryChallans({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 25, 100),
@@ -3770,6 +3789,7 @@ exports.listReturnDeliveryChallans = async (req, res) => {
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
       status: req.query.status || req.query.tab || 'all',
+      assignedUserId,
     });
     res.json({
       success: true,
@@ -3784,12 +3804,14 @@ exports.listReturnDeliveryChallans = async (req, res) => {
 
 exports.exportReturnDcLaptops = async (req, res) => {
   try {
-    const status = req.query.status || req.query.tab || 'in_transit';
+    const status = req.query.status || req.query.tab || 'all';
+    const assignedUserId = await resolveReturnDcAssignedUserId(req);
     const rows = await listReturnDcLaptopExportRows({
       search: req.query.search || '',
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
       status,
+      assignedUserId,
     });
 
     const fmtDate = (d) => {
@@ -3872,6 +3894,7 @@ exports.exportReturnDcLaptops = async (req, res) => {
 exports.getReturnDcDetail = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
+    await assertReturnDcAssignedAccess(req, rdcNumber);
     const detail = await getReturnDcDetail(rdcNumber);
     if (!detail) {
       return res.status(404).json({ success: false, message: 'Return DC not found' });
@@ -3879,13 +3902,14 @@ exports.getReturnDcDetail = async (req, res) => {
     res.json({ success: true, ...detail });
   } catch (error) {
     console.error('getReturnDcDetail:', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to load Return DC detail' });
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to load Return DC detail' });
   }
 };
 
 exports.regenerateReturnDcPdf = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
+    await assertReturnDcAssignedAccess(req, rdcNumber);
     const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
     const pdfPath = await regenerateReturnDcPdfByRdc(pool, rdcNumber);
     if (!pdfPath) {
@@ -3894,7 +3918,7 @@ exports.regenerateReturnDcPdf = async (req, res) => {
     res.json({ success: true, pdf_path: pdfPath, return_dc_number: rdcNumber });
   } catch (error) {
     console.error('regenerateReturnDcPdf:', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to regenerate PDF' });
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to regenerate PDF' });
   }
 };
 
@@ -3914,6 +3938,7 @@ const resolveUploadAbsolutePath = (relativePath) => {
 exports.downloadReturnDcPdf = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
+    await assertReturnDcAssignedAccess(req, rdcNumber);
     const row = await pool.query(
       `SELECT pdf_path FROM delivery_challan_lines
         WHERE dc_number = $1 AND movement_type = 'return'
@@ -3936,7 +3961,7 @@ exports.downloadReturnDcPdf = async (req, res) => {
     return res.sendFile(abs);
   } catch (error) {
     console.error('downloadReturnDcPdf:', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to download PDF' });
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to download PDF' });
   }
 };
 

@@ -3,7 +3,7 @@
  */
 const { cacheGet, cacheSet, cacheDelPattern, CACHE_TTL } = require('../utils/cacheService');
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v5';
 const PREFIX = `master_data:${CACHE_VERSION}:`;
 const KPI_PREFIX = `master_data_kpi:${CACHE_VERSION}:`;
 
@@ -38,14 +38,15 @@ function stableQueryKey(query = {}, keys) {
 
 const DASHBOARD_KEYS = [
   'tab', 'page', 'limit', 'search', 'status', 'location', 'stage', 'entity',
-  'customer_id', 'vendor_id', 'from_vendor', 'ready', 'qc_process',
-  'date_from', 'date_to', 'dateFrom', 'dateTo',
+  'customer_id', 'vendor_id', 'from_vendor', 'ready', 'qc_process', 'pricing_type', 'pricingType',
+  'date_mode', 'dateMode', 'month', 'date_from', 'date_to', 'dateFrom', 'dateTo',
   'brand', 'model', 'processor', 'generation', 'ram', 'storage', 'screen_size', 'gpu',
 ];
 
 /** KPI query ignores list drill-downs — keep key aligned with getKpis(). */
 const KPI_KEYS = [
-  'search', 'date_from', 'date_to', 'dateFrom', 'dateTo',
+  'search', 'pricing_type', 'pricingType',
+  'date_mode', 'dateMode', 'month', 'date_from', 'date_to', 'dateFrom', 'dateTo',
   'brand', 'model', 'processor', 'generation', 'ram', 'storage', 'screen_size', 'gpu',
 ];
 

@@ -459,8 +459,21 @@ export default function GuardScannerPage() {
                             {label}
                           </p>
                           {row?.message ? (
-                            <p className="text-[11px] text-slate-500">{row.message}</p>
-                          ) : status === 'pending' ? (
+                            <p className={`text-[11px] ${status === 'fail' ? 'text-red-600' : 'text-slate-500'}`}>
+                              {row.message}
+                            </p>
+                          ) : null}
+                          {status === 'fail' && row?.expected ? (
+                            <p className="text-[11px] text-red-600 truncate" title={row.expected}>
+                              Expected: {row.expected}
+                            </p>
+                          ) : null}
+                          {status === 'fail' && row?.scanned ? (
+                            <p className="text-[11px] text-red-600 truncate" title={row.scanned}>
+                              Scanned: {row.scanned}
+                            </p>
+                          ) : null}
+                          {!row?.message && status === 'pending' ? (
                             <p className="text-[11px] text-slate-400">
                               {pendingCheckHint(laptop, key)}
                             </p>

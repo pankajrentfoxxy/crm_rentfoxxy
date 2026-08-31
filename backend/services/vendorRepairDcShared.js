@@ -5,8 +5,66 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { stripBrandFromModel } = require('../utils/assetConfigNormalize');
 
 const EWAY_VALUE_THRESHOLD = 50000;
+
+function isBlankSpecValue(value) {
+  const s = String(value ?? '').trim();
+  return !s || s === '-';
+}
+
+/** Infer Apple when model text clearly indicates a Mac (common bad brand=Dell data). */
+function inferBrandFromModel(brand, model) {
+  const combined = `${brand || ''} ${model || ''}`.toLowerCase();
+  if (/macbook|mac book|\bimac\b|mac mini|mac studio|\bmac pro\b/.test(combined)) {
+    return 'Apple';
+  }
+  const b = String(brand || '').trim();
+  if (/^apple$/i.test(b)) return 'Apple';
+  return b;
+}
+
+/** Resolve laptop specs for VRDC display/creation — prefers inventory extra over stale ticket fields. */
+function resolveVrdcItemSpecs(source = {}) {
+  const extra = source.extra && typeof source.extra === 'object' ? source.extra : {};
+  let brand = extra.brand || source.brand || '';
+  let model = extra.model || extra.model_name || source.model || '';
+  const processor = extra.processor || source.processor || '';
+  const generation = extra.generation || source.generation || '';
+  const ram = extra.ram || source.ram || '';
+  const storage = extra.storage || source.storage || '';
+
+  brand = inferBrandFromModel(brand, model);
+  model = stripBrandFromModel(brand, model);
+  if (/^dell\s+/i.test(model) && /apple|macbook/i.test(model)) {
+    model = model.replace(/^dell\s+/i, '');
+    brand = 'Apple';
+    model = stripBrandFromModel(brand, model);
+  }
+
+  return { brand, model, processor, generation, ram, storage };
+}
+
+function buildVrdcConfigurationString(specs = {}) {
+  const resolved = resolveVrdcItemSpecs(specs);
+  return [
+    resolved.brand,
+    resolved.model,
+    resolved.processor,
+    resolved.generation,
+    resolved.ram,
+    resolved.storage,
+  ].filter((v) => !isBlankSpecValue(v)).join(' · ');
+}
+
+function enrichVrdcItemRow(row = {}) {
+  const extra = typeof row.serial_extra === 'string'
+    ? (() => { try { return JSON.parse(row.serial_extra); } catch { return {}; } })()
+    : (row.serial_extra || {});
+  const configuration = buildVrdcConfigurationString({ ...row, extra });
+  return { ...row, configuration };
+}
 
 function currentFinancialYearLabel(date = new Date()) {
   const year = date.getFullYear();
@@ -33,12 +91,16 @@ function normalizeEwayBillNumber(raw) {
   return s;
 }
 
-function validateEwayForConsignment({ totalValue, ewayBillNumber, ewayBillDate }) {
-  const needsEway = Number(totalValue || 0) >= EWAY_VALUE_THRESHOLD;
+function requiresVrdcEway(totalValue) {
+  return Number(totalValue || 0) > EWAY_VALUE_THRESHOLD;
+}
+
+function validateEwayForConsignment({ totalValue, ewayBillNumber, ewayBillDate, requireEway = true }) {
+  const needsEway = requiresVrdcEway(totalValue);
   const num = normalizeEwayBillNumber(ewayBillNumber);
   const date = ewayBillDate ? String(ewayBillDate).trim() || null : null;
-  if (needsEway && !num) {
-    throw new Error(`E-way Bill number is required when consignment value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more`);
+  if (requireEway && needsEway && !num) {
+    throw new Error(`E-way Bill number is required when consignment value is above ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}`);
   }
   if (num && date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error('E-way Bill date must be YYYY-MM-DD');
@@ -133,6 +195,7 @@ module.exports = {
   currentFinancialYearLabel,
   parseItemPrice,
   normalizeEwayBillNumber,
+  requiresVrdcEway,
   validateEwayForConsignment,
   saveEsign,
   saveDispatchPod,
@@ -141,4 +204,8 @@ module.exports = {
   validateDispatchDetails,
   dispatchPayloadFromBody,
   nextVendorRepairDcNumber,
+  inferBrandFromModel,
+  resolveVrdcItemSpecs,
+  buildVrdcConfigurationString,
+  enrichVrdcItemRow,
 };

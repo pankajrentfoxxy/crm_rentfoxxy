@@ -38,7 +38,7 @@ export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders', section: 'vendor_management' },
   { label: 'Serial Numbers', path: '/vendor-management/serial-numbers', section: 'vendor_management' },
   { label: 'Replaced Products', path: '/vendor-management/replaced-products', section: 'vendor_management' },
-  { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc' },
+  { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc', sections: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'] },
 ];
 
 /** Production accordion (formerly Floor & Quality).
@@ -50,7 +50,7 @@ export const floorPipelineAccordionChildren = [
   { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'qc_management', countKey: 'qc_queue' },
   { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
-  { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'floor_pipeline', countKey: 'diagnosis_failed' },
+  { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'diagnosis_failed', countKey: 'diagnosis_failed' },
   { label: 'QC Ready', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
 ];
 
@@ -293,7 +293,7 @@ export const MENU_GROUPS = [
     key: 'vendor',
     label: 'Vendor Management',
     items: [
-      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
     ],
   },
   {
@@ -432,6 +432,7 @@ export function isMenuItemVisible(item, canView) {
 }
 
 export function isVendorChildVisible(child, canView) {
+  if (child.sections?.length) return child.sections.some((section) => canView(section));
   if (child.section) return canView(child.section);
   return canView('vendor_management');
 }

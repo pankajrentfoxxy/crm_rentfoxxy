@@ -47,6 +47,20 @@ export function vendorRepairPdfUrl(dcNumber) {
   return `${origin}${base}/dc/${encodeURIComponent(dcNumber)}/pdf`;
 }
 
+async function parseBlobError(err) {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      const json = JSON.parse(text);
+      return json.message || text;
+    } catch {
+      return 'Download failed';
+    }
+  }
+  return err?.response?.data?.message || err?.message || 'Download failed';
+}
+
 function downloadBlobResponse(response, fallbackName) {
   const blob = new Blob([response.data], {
     type: response.headers['content-type'] || 'application/octet-stream',
@@ -64,11 +78,23 @@ function downloadBlobResponse(response, fallbackName) {
 }
 
 export async function downloadVendorRepairPdf(dcNumber) {
-  const response = await api.get(`${base}/dc/${encodeURIComponent(dcNumber)}/pdf`, {
-    responseType: 'blob',
-  });
-  const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
-  downloadBlobResponse(response, `VRDC_${safe}.pdf`);
+  try {
+    const response = await api.get(`${base}/dc/${encodeURIComponent(dcNumber)}/pdf`, {
+      responseType: 'blob',
+    });
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    downloadBlobResponse(response, `VRDC_${safe}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
+export function sendAccountsVrdcEwayMail(dcNumber) {
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/send-accounts-eway-mail`);
+}
+
+export function uploadVrdcEway(dcNumber, body) {
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/vrdc-eway`, body);
 }
 
 export async function downloadVendorRepairReceivePdf(dcNumber) {

@@ -24,6 +24,7 @@ const SECTION_ALIASES = {
   sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
   sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
   sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
+  vendor_repair_dc: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'],
   sales_orders_replacement: ['sales_orders_replacement'],
   replacement_so_laptop_qc: ['replacement_so_laptop_qc'],
   so_laptop_qc: ['so_laptop_qc'],

@@ -40,8 +40,11 @@ export const TYPE_STYLES = {
 
 export const DC_STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-700',
+  processing: 'bg-gray-100 text-gray-700',
   dispatch_ready: 'bg-sky-100 text-sky-800',
   in_transit: 'bg-amber-100 text-amber-800',
+  shipped: 'bg-amber-100 text-amber-800',
+  reached: 'bg-blue-100 text-blue-800',
   delivered: 'bg-emerald-100 text-emerald-800',
   rejected: 'bg-red-100 text-red-800',
   cancelled: 'bg-slate-200 text-slate-700 line-through',
@@ -89,35 +92,94 @@ export function deliveryChallanDetailPath(dcNumber) {
 /** Router state when opening a DC from a sales order detail page. */
 export const DC_NAV_SOURCE_SALES_ORDER = 'sales-order';
 
-export function salesOrderDcNavState({ salesOrderNumber, soScope, returnTab = 'dcs' } = {}) {
+const DC_BACK_STORAGE_KEY = 'sales-pipeline:dc-back';
+
+export function persistDcBackContext(dcNumber, navState) {
+  if (!navState?.salesOrderNumber) return;
+  try {
+    sessionStorage.setItem(DC_BACK_STORAGE_KEY, JSON.stringify({
+      ...navState,
+      dcNumber: dcNumber || navState.dcNumber || null,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+export function readDcBackContext(dcNumber) {
+  try {
+    const raw = sessionStorage.getItem(DC_BACK_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.salesOrderNumber) return null;
+    if (parsed.dcNumber && dcNumber && parsed.dcNumber !== dcNumber) return null;
+    if (parsed.savedAt && Date.now() - parsed.savedAt > 7 * 24 * 60 * 60 * 1000) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function salesOrderDcNavState({ salesOrderNumber, soScope, returnTab = 'dcs', dcNumber } = {}) {
   if (!salesOrderNumber) return undefined;
-  return {
+  const state = {
     from: DC_NAV_SOURCE_SALES_ORDER,
     salesOrderNumber,
     soScope: soScope || null,
     returnTab: returnTab || 'dcs',
+    dcNumber: dcNumber || null,
   };
+  if (dcNumber) persistDcBackContext(dcNumber, state);
+  return state;
 }
 
 /** Link target for DC detail — optional SO back-navigation state. */
 export function deliveryChallanDetailTo(dcNumber, navState) {
   const pathname = deliveryChallanDetailPath(dcNumber);
   if (!navState) return pathname;
+  if (navState.salesOrderNumber) {
+    persistDcBackContext(dcNumber, navState);
+  }
   return { pathname, state: navState };
 }
 
 /** Resolve Back target from DC detail when opened via sales order. */
-export function resolveDcBackNavigation(locationState) {
+export function resolveDcBackNavigation(locationState, { dcNumber, salesOrderNumber, soScope } = {}) {
   const nav = locationState || {};
-  if (nav.from === DC_NAV_SOURCE_SALES_ORDER && nav.salesOrderNumber) {
+
+  const fromSalesOrder = (ctx) => {
+    if (!ctx?.salesOrderNumber) return null;
     return {
-      path: salesOrderDetailPath(nav.salesOrderNumber, nav.soScope),
-      state: nav.returnTab ? { tab: nav.returnTab } : undefined,
+      path: salesOrderDetailPath(ctx.salesOrderNumber, ctx.soScope || soScope),
+      state: ctx.returnTab ? { tab: ctx.returnTab } : undefined,
     };
+  };
+
+  if (nav.from === DC_NAV_SOURCE_SALES_ORDER && nav.salesOrderNumber) {
+    return fromSalesOrder(nav);
   }
+
+  const stored = readDcBackContext(dcNumber);
+  if (stored) {
+    const target = fromSalesOrder(stored);
+    if (target) return target;
+  }
+
   if (typeof nav.from === 'string' && nav.from.startsWith('/')) {
     return { path: nav.from };
   }
+
+  // DC list → detail uses listReturnState; without that, prefer parent SO over DC list.
+  const fromDcList = String(nav.from || '').includes('/delivery-challans');
+  if (!fromDcList && salesOrderNumber) {
+    return fromSalesOrder({
+      salesOrderNumber,
+      soScope,
+      returnTab: stored?.returnTab || nav.returnTab || 'dcs',
+    });
+  }
+
   return null;
 }
 

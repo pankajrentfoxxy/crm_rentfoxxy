@@ -68,8 +68,8 @@ export default function VendorRepairDcListPage() {
     setPdfBusy(dcNumber);
     try {
       await downloadVendorRepairPdf(dcNumber);
-    } catch {
-      toast.error('PDF download failed');
+    } catch (err) {
+      toast.error(err?.message || 'PDF download failed');
     } finally {
       setPdfBusy(null);
     }

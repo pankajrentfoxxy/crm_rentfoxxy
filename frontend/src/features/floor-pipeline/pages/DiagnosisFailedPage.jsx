@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, Truck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { DateRangeFilter } from '../../../components/ui/primitives';
 import VendorSearchSelect from '../../vendor-management/components/VendorSearchSelect';
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
@@ -20,8 +21,6 @@ import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilt
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import { checkTtsplAndSerial } from '../../../utils/machineIdentityVerify';
 
-const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
-
 function fmtDate(v) {
   if (!v) return '—';
   return new Date(v).toLocaleDateString('en-IN');
@@ -38,8 +37,9 @@ function withStateLabel(vendor) {
 
 export default function DiagnosisFailedPage() {
   const { user } = useAuth();
+  const { canView, canCreate, canEdit } = usePermission();
   const navigate = useNavigate();
-  const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canProcess = canCreate('diagnosis_failed') || canEdit('diagnosis_failed');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
@@ -72,8 +72,6 @@ export default function DiagnosisFailedPage() {
     remarks: '',
     warehouse_name: '',
     warehouse_address: '',
-    eway_bill_number: '',
-    eway_bill_date: '',
   });
 
   const load = useCallback(async () => {
@@ -142,7 +140,7 @@ export default function DiagnosisFailedPage() {
     setItemPrices(pricesInit);
     setItemHsnCodes(hsnInit);
     setItemVerifications(verifyInit);
-    setForm((f) => ({ ...f, eway_bill_number: '', eway_bill_date: '' }));
+    setForm((f) => ({ ...f }));
     setModalOpen(true);
   };
 
@@ -153,7 +151,7 @@ export default function DiagnosisFailedPage() {
     }, 0),
     [selectedRows, itemPrices]
   );
-  const ewayRequired = totalDeclaredValue >= ewayThreshold;
+  const ewayInfoRequired = totalDeclaredValue > ewayThreshold;
 
   const onVendorChange = async (vendorId) => {
     if (!vendorId) {
@@ -196,10 +194,6 @@ export default function DiagnosisFailedPage() {
     const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
-      return;
-    }
-    if (ewayRequired && !form.eway_bill_number.trim()) {
-      toast.error(`E-way Bill is required when consignment value is ₹${ewayThreshold.toLocaleString('en-IN')} or more`);
       return;
     }
     for (const r of selectedRows) {
@@ -247,8 +241,6 @@ export default function DiagnosisFailedPage() {
         item_prices: itemPrices,
         item_hsn_codes: canOverrideHsn ? itemHsnCodes : undefined,
         item_verifications: itemVerifications,
-        eway_bill_number: form.eway_bill_number.trim() || undefined,
-        eway_bill_date: form.eway_bill_date || undefined,
         ship_by: shipBy,
         courier_name: dispatchFields.courier_name,
         awb_number: dispatchFields.awb_number,
@@ -258,9 +250,15 @@ export default function DiagnosisFailedPage() {
         porter_booking_url: dispatchFields.porter_booking_url,
         delivery_person_id: dispatchFields.delivery_person_id || undefined,
       });
-      toast.success(data.message || 'Vendor DC created');
+      toast.success(data.message || (data.eway_required
+        ? 'VRDC created — E-way Bill required before PDF download'
+        : 'Vendor DC created'));
       setModalOpen(false);
-      navigate(`/vendor-management/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
+      if (canView('vendor_repair_dc')) {
+        navigate(`/vendor-management/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
+      } else {
+        load();
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create DC');
     } finally {
@@ -418,31 +416,11 @@ export default function DiagnosisFailedPage() {
               <label className="block text-xs font-medium text-slate-600 mb-1">Expected return date</label>
               <input type="date" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  E-way Bill number{ewayRequired ? ' *' : ''}
-                </label>
-                <input
-                  className="w-full border rounded-lg px-3 py-2 text-sm uppercase"
-                  value={form.eway_bill_number}
-                  onChange={(e) => setForm({ ...form, eway_bill_number: e.target.value.toUpperCase() })}
-                  placeholder={ewayRequired ? 'Required (≥ ₹50,000)' : 'Optional'}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">E-way Bill date</label>
-                <input
-                  type="date"
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                  value={form.eway_bill_date}
-                  onChange={(e) => setForm({ ...form, eway_bill_date: e.target.value })}
-                />
-              </div>
-            </div>
             <p className="text-[11px] text-slate-500">
               Declared value: ₹{totalDeclaredValue.toLocaleString('en-IN')}
-              {ewayRequired ? ' — E-way Bill required' : ` — E-way Bill optional below ₹${ewayThreshold.toLocaleString('en-IN')}`}
+              {ewayInfoRequired
+                ? ` — E-way Bill will be required before PDF download (above ₹${ewayThreshold.toLocaleString('en-IN')})`
+                : ` — E-way Bill not required at or below ₹${ewayThreshold.toLocaleString('en-IN')}`}
             </p>
             <div className="rounded-lg border p-3 bg-slate-50/80">
               <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Send to vendor</p>

@@ -221,23 +221,25 @@ async function rejectOpenOrPending(res, client, ttsplCode) {
   return res.status(status).json({ success: false, ...body });
 }
 
-function parsePickupAddress(body, customerName, contactMobile) {
-  const src = body.pickup_address && typeof body.pickup_address === 'object' ? body.pickup_address : body;
+function parseVisitAddress(body, customerName, contactMobile, options = {}) {
+  const nestedKey = options.nestedKey || 'pickup_address';
+  const addressLabel = options.addressLabel || 'Address';
+  const nested = body[nestedKey] && typeof body[nestedKey] === 'object' ? body[nestedKey] : body;
   const mobileIsPoc = body.mobile_is_poc !== false && body.mobile_is_poc !== 'false';
-  const pocRaw = mobileIsPoc ? contactMobile : (src.poc_mobile || src.phone || body.poc_mobile);
+  const pocRaw = mobileIsPoc ? contactMobile : (nested.poc_mobile || nested.phone || body.poc_mobile);
   const pocError = validateIndianMobile(pocRaw, { required: true, label: 'POC mobile number' });
   if (pocError) return { error: pocError };
-  const pincode = sanitizePincode(src.pincode || body.pincode);
-  const city = String(src.city || body.city || '').trim();
-  const state = String(src.state || body.state || '').trim();
-  const address = String(src.address || body.pickup_location || '').trim();
-  if (!address) return { error: 'Pickup address is required' };
+  const pincode = sanitizePincode(nested.pincode || body.pincode);
+  const city = String(nested.city || body.city || '').trim();
+  const state = String(nested.state || body.state || '').trim();
+  const address = String(nested.address || body.pickup_location || body.address || '').trim();
+  if (!address) return { error: `${addressLabel} is required` };
   if (pincode.length !== 6) return { error: 'Enter a valid 6-digit pincode' };
   if (!city) return { error: 'City is required. Enter pincode to auto-fill city and state.' };
   if (!state) return { error: 'State is required. Enter pincode to auto-fill city and state.' };
   return {
     value: {
-      name: String(src.name || customerName || '').trim(),
+      name: String(nested.name || customerName || '').trim(),
       phone: normalizeIndianMobile(pocRaw),
       address,
       city,
@@ -245,6 +247,45 @@ function parsePickupAddress(body, customerName, contactMobile) {
       pincode,
     },
     mobileIsPoc,
+  };
+}
+
+function requestVisitAddress(extra) {
+  if (!extra || typeof extra !== 'object') return null;
+  const addr = extra.service_address || extra.pickup_address;
+  return addr && typeof addr === 'object' ? addr : null;
+}
+
+function todayYmdIst() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function parsePreferredVisitSchedule(body) {
+  const dateRaw = String(body.preferred_visit_date || body.visit_date || '').trim();
+  const timeRaw = String(body.preferred_visit_time || body.visit_time || '').trim();
+  if (!dateRaw) return { error: 'Preferred visit date is required' };
+  const dateMatch = dateRaw.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (!dateMatch) return { error: 'Enter a valid visit date' };
+  const visitDate = dateMatch[1];
+  if (visitDate < todayYmdIst()) {
+    return { error: 'Visit date cannot be in the past' };
+  }
+  let visitTime = null;
+  if (timeRaw) {
+    const timeMatch = timeRaw.match(/^(\d{2}):(\d{2})$/);
+    if (!timeMatch) return { error: 'Enter a valid visit time (HH:MM)' };
+    const hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2]);
+    if (hour > 23 || minute > 59) return { error: 'Enter a valid visit time (HH:MM)' };
+    visitTime = `${timeMatch[1]}:${timeMatch[2]}`;
+  }
+  const scheduledAt = `${visitDate}T${visitTime || '09:00'}:00+05:30`;
+  return {
+    value: {
+      preferred_visit_date: visitDate,
+      preferred_visit_time: visitTime,
+      visit_scheduled_at: scheduledAt,
+    },
   };
 }
 
@@ -266,7 +307,10 @@ async function createPublicPickup(req, res, client, ctx) {
     });
   }
 
-  const addrParsed = parsePickupAddress(req.body || {}, customer_name, mobile);
+  const addrParsed = parseVisitAddress(req.body || {}, customer_name, mobile, {
+    nestedKey: 'pickup_address',
+    addressLabel: 'Pickup address',
+  });
   if (addrParsed.error) {
     return res.status(400).json({ success: false, message: addrParsed.error });
   }
@@ -474,6 +518,19 @@ exports.createPublicRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please describe the issue (at least 10 characters)' });
     }
 
+    const addrParsed = parseVisitAddress(body, customer_name, mobile, {
+      nestedKey: 'service_address',
+      addressLabel: 'Service address',
+    });
+    if (addrParsed.error) {
+      return res.status(400).json({ success: false, message: addrParsed.error });
+    }
+
+    const scheduleParsed = parsePreferredVisitSchedule(body);
+    if (scheduleParsed.error) {
+      return res.status(400).json({ success: false, message: scheduleParsed.error });
+    }
+
     const deployed = await resolveDeployedTtspl(client, device_serial);
     const bad = rejectDeployed(res, deployed, device_serial);
     if (bad) return bad;
@@ -504,11 +561,17 @@ exports.createPublicRequest = async (req, res) => {
     const crmCompany = deployed.company_name || deployed.customer_name || null;
     const resolvedCompany = company_name || crmCompany;
 
+    const extra = {
+      service_address: addrParsed.value,
+      mobile_is_poc: addrParsed.mobileIsPoc,
+      ...scheduleParsed.value,
+    };
+
     const ins = await client.query(
       `INSERT INTO support_requests (
          customer_name, mobile_number, company_name, issue_description,
-         device_serial, source, status, matched_customer_id, request_type
-       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'complaint')
+         device_serial, source, status, matched_customer_id, request_type, extra
+       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'complaint',$7::jsonb)
        RETURNING id, created_at`,
       [
         customer_name,
@@ -517,6 +580,7 @@ exports.createPublicRequest = async (req, res) => {
         issue_description,
         ttsplCode,
         deployed.customer_id,
+        JSON.stringify(extra),
       ]
     );
 
@@ -969,9 +1033,11 @@ exports.convertToTicket = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const cust = custRes.rows[0];
-    const ticketAddress = formatTicketAddress(
-      cust.shipping_address || cust.billing_address || cust.address
-    );
+    const reqExtra = row.extra && typeof row.extra === 'object' ? row.extra : {};
+    const submittedAddress = requestVisitAddress(reqExtra);
+    const ticketAddress = submittedAddress?.address
+      ? formatTicketAddress(submittedAddress)
+      : formatTicketAddress(cust.shipping_address || cust.billing_address || cust.address);
     const ticketEmail = cust.email || null;
     const ticketPhone = row.mobile_number || cust.phone || null;
 
@@ -999,6 +1065,8 @@ exports.convertToTicket = async (req, res) => {
 
     // Customer-facing issue only — meta stays on the support_request row.
     const issueRemarks = String(row.issue_description || '').trim();
+
+    const visitScheduledAt = reqExtra.visit_scheduled_at || null;
 
     // Same shape as CRM createTicket (complaint, open, unassigned) + autofilled address/contact.
     const ticketRes = await client.query(
@@ -1028,8 +1096,8 @@ exports.convertToTicket = async (req, res) => {
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
          issue_category_label, remarks, status, otp_code, assigned_to,
-         brand, model, ram, storage, generation, processor
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15)`,
+         brand, model, ram, storage, generation, processor, visit_scheduled_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         ticketId,
         serial.serial_number || ttspl,
@@ -1046,6 +1114,7 @@ exports.convertToTicket = async (req, res) => {
         specs.storage,
         specs.generation,
         specs.processor,
+        visitScheduledAt,
       ]
     );
 

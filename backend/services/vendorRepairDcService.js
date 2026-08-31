@@ -40,6 +40,9 @@ const {
   validateDispatchDetails,
   dispatchPayloadFromBody,
   nextVendorRepairDcNumber,
+  buildVrdcConfigurationString,
+  resolveVrdcItemSpecs,
+  enrichVrdcItemRow,
 } = require('./vendorRepairDcShared');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -64,6 +67,7 @@ async function ensureVendorRepairSchema() {
         '130_vendor_repair_replacement.sql',
         '131_vendor_repair_signatures.sql',
         '148_vrdc_price_hsn_eway.sql',
+        '215_vrdc_eway_accounts.sql',
       ]) {
         const migrationPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(migrationPath)) {
@@ -79,8 +83,7 @@ async function ensureVendorRepairSchema() {
 }
 
 function configString(ticket) {
-  return [ticket.brand, ticket.model, ticket.processor, ticket.generation, ticket.ram, ticket.storage]
-    .filter(Boolean).join(' · ');
+  return buildVrdcConfigurationString(ticket);
 }
 
 async function resolveDefaultHsn(_client) {
@@ -491,7 +494,13 @@ async function listDiagnosisFailedTickets({
             t.processor, t.ram, t.storage, t.diagnosis_failed_at,
             t.diagnosis_failed_reason, t.current_location, t.created_at,
             t.previous_technician_id, t.previous_stage_id,
+            vsn.extra AS serial_extra,
             COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), inv.generation, '') AS generation,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'brand'), ''), t.brand) AS brand,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''), t.model) AS model,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'processor'), ''), t.processor) AS processor,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), t.ram) AS ram,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), t.storage) AS storage,
             ps.stage_name AS previous_stage_name,
             pu.name AS previous_technician_name
        FROM tickets t
@@ -518,7 +527,7 @@ async function listDiagnosisFailedTickets({
   }
   return deduped.map((r) => ({
     ...r,
-    configuration: configString(r),
+    configuration: buildVrdcConfigurationString({ ...r, extra: r.serial_extra }),
   }));
 }
 
@@ -579,6 +588,7 @@ async function createOutForRepairDc(client, {
 
   const tRes = await client.query(
     `SELECT t.*, s.stage_name,
+            vsn.extra AS serial_extra,
             COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '') AS generation
        FROM tickets t
        LEFT JOIN stages s ON s.stage_id = t.current_stage_id
@@ -653,6 +663,7 @@ async function createOutForRepairDc(client, {
     totalValue: totalDeclared,
     ewayBillNumber,
     ewayBillDate,
+    requireEway: false,
   });
 
   const dcNumber = await nextVendorRepairDcNumber(client);
@@ -695,7 +706,7 @@ async function createOutForRepairDc(client, {
   );
 
   for (const ticket of tRes.rows) {
-    const configuration = configString(ticket);
+    const configuration = buildVrdcConfigurationString({ ...ticket, extra: ticket.serial_extra });
     const itemRemark = itemRemarks[ticket.ticket_id]
       || itemRemarks[String(ticket.ticket_id)]
       || ticket.diagnosis_failed_reason
@@ -736,9 +747,16 @@ async function createOutForRepairDc(client, {
       actorName,
       db: client,
     });
+    await logTicketActivity(client, {
+      ticketId: ticket.ticket_id,
+      userId: actorUserId,
+      action: 'vrdc_created',
+      notes: `Out for Repair VRDC ${dcNumber} created${eway.eway_required ? ' — E-way Bill required before PDF download' : ''}`,
+      stageId: ticket.current_stage_id,
+    });
   }
 
-  return { dc_number: dcNumber };
+  return { dc_number: dcNumber, total_declared: totalDeclared, eway_required: eway.eway_required };
 }
 
 function vendorDisplayName(vendor) {
@@ -892,9 +910,13 @@ async function getVendorRepairDc(dcNumber) {
   if (!head) return null;
   const refreshedHead = head;
   const itemsRes = await pool.query(
-    `SELECT i.*, t.status AS ticket_status, t.diagnosis_failed_reason
+    `SELECT i.*, t.status AS ticket_status, t.diagnosis_failed_reason,
+            t.brand AS ticket_brand, t.model AS ticket_model, t.processor AS ticket_processor,
+            t.ram AS ticket_ram, t.storage AS ticket_storage,
+            vsn.extra AS serial_extra
        FROM vendor_repair_dc_items i
        JOIN tickets t ON t.ticket_id = i.ticket_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
       WHERE i.dc_number = $1
       ORDER BY i.id ASC`,
     [dcNumber]
@@ -924,7 +946,7 @@ async function getVendorRepairDc(dcNumber) {
     vendor_shipping_display,
     delivery_person_name,
     vendor_delivery_status: refreshedHead.vendor_delivered_at ? 'delivered' : (refreshedHead.dispatched_at ? 'in_transit' : 'pending'),
-    items: itemsRes.rows,
+    items: itemsRes.rows.map(enrichVrdcItemRow),
   };
 }
 
@@ -1035,32 +1057,16 @@ async function updateVendorRepairCommercialDetails(client, { dcNumber, body, act
     [dcNumber, defaultHsn]
   );
 
-  const ewayNum = body.eway_bill_number !== undefined || body.ewayBillNumber !== undefined
-    ? (body.eway_bill_number ?? body.ewayBillNumber)
-    : head.eway_bill_number;
-  const ewayDate = body.eway_bill_date !== undefined || body.ewayBillDate !== undefined
-    ? (body.eway_bill_date ?? body.ewayBillDate)
-    : head.eway_bill_date;
-  const eway = validateEwayForConsignment({
-    totalValue: totalDeclared,
-    ewayBillNumber: ewayNum,
-    ewayBillDate: ewayDate,
-  });
-
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
-        eway_bill_number = $2,
-        eway_bill_date = $3,
         pdf_path = NULL,
         updated_at = NOW()
       WHERE dc_number = $1`,
-    [dcNumber, eway.eway_bill_number, eway.eway_bill_date]
+    [dcNumber]
   );
 
   return {
     dc_number: dcNumber,
-    eway_bill_number: eway.eway_bill_number,
-    eway_bill_date: eway.eway_bill_date,
     total_declared: totalDeclared,
     hsn_override_applied: allowHsnOverride,
   };
@@ -1657,6 +1663,15 @@ function mapErpOutForRepareRow(row) {
   const extra = typeof row.vsn_extra === 'object' && row.vsn_extra ? row.vsn_extra : {};
   const brand = extra.brand || row.pd_brand || null;
   const model = extra.model || extra.model_name || row.pd_model || null;
+  const specs = resolveVrdcItemSpecs({
+    brand,
+    model,
+    processor: extra.processor || row.pd_processor,
+    generation: extra.generation || row.pd_generation,
+    ram: extra.ram || row.pd_ram,
+    storage: extra.storage || row.pd_storage,
+    extra,
+  });
   return {
     id: `erp:${row.serial_id}`,
     source: 'erp',
@@ -1664,16 +1679,9 @@ function mapErpOutForRepareRow(row) {
     ticket_id: row.open_ticket_id || null,
     ttspl_id: row.ttspl_id || row.inventory_asset_code || null,
     serial_number: row.serial_number,
-    brand,
-    model,
-    configuration: configString({
-      brand,
-      model,
-      processor: extra.processor || row.pd_processor,
-      generation: extra.generation || row.pd_generation,
-      ram: extra.ram || row.pd_ram,
-      storage: extra.storage || row.pd_storage,
-    }),
+    brand: specs.brand,
+    model: specs.model,
+    configuration: buildVrdcConfigurationString({ ...specs, extra }),
     vendor_name: extra.vendor_name || row.vendor_name || 'External vendor',
     vendor_address: extra.vendor_address || row.vendor_address || null,
     dc_number: null,
@@ -1701,15 +1709,16 @@ function mapVendorDcRow(r) {
     ticket_id: r.ticket_id,
     ttspl_id: r.ttspl_id,
     serial_number: r.serial_number,
-    brand: extra.brand || r.ticket_brand || null,
-    model: extra.model || r.ticket_model || null,
-    configuration: r.configuration || configString({
+    brand: resolveVrdcItemSpecs({ brand: extra.brand || r.ticket_brand, model: extra.model || r.ticket_model, extra }).brand,
+    model: resolveVrdcItemSpecs({ brand: extra.brand || r.ticket_brand, model: extra.model || r.ticket_model, extra }).model,
+    configuration: r.configuration || buildVrdcConfigurationString({
       brand: extra.brand || r.ticket_brand,
       model: extra.model || r.ticket_model,
       processor: extra.processor,
       generation: extra.generation,
       ram: extra.ram,
       storage: extra.storage,
+      extra,
     }),
     vendor_name: r.vendor_name,
     vendor_address: r.vendor_address,

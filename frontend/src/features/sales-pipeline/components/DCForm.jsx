@@ -450,7 +450,7 @@ function DcGroupCard({
 
 // ── Main DCForm ───────────────────────────────────────────────────────────────
 
-export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 'dcs' }) {
+export default function DCForm({ open, onClose, onSaved, prefillSo, soScope, returnTab = 'dcs' }) {
   const navigate = useNavigate();
 
   const [salesOrders, setSalesOrders] = useState([]);
@@ -708,6 +708,7 @@ export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 
         toast.error(`BlueDart AWB: ${awbErr.error}`);
       }
 
+      onSaved?.();
       onClose();
       if (first_dc) {
         navigate(deliveryChallanDetailTo(

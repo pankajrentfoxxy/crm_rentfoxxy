@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
@@ -20,7 +20,8 @@ import {
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
-  resolveDcBackNavigation, downloadBlob, collectBluedartAwbRows,
+  resolveDcBackNavigation, downloadBlob, collectBluedartAwbRows, persistDcBackContext,
+  readDcBackContext, DC_NAV_SOURCE_SALES_ORDER,
 } from '../salesPipelineUtils';
 import { SO_PERMISSION_SECTIONS } from '../salesOrderScope';
 import DcBluedartAwbTable from '../components/DcBluedartAwbTable';
@@ -33,6 +34,7 @@ import DcEditModal from '../components/DcEditModal';
 import MarkDeliveredModal from '../components/MarkDeliveredModal';
 import CourierTrackingModal from '../components/CourierTrackingModal';
 import RefusedWarehouseReceiveModal from '../components/RefusedWarehouseReceiveModal';
+import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 
 function resolveDcNumber(params) {
   const raw = params['*'] ?? params.dcNumber ?? '';
@@ -86,18 +88,6 @@ export default function DeliveryChallanDetailPage() {
   const listPath = '/sales-pipeline/delivery-challans';
   const cameFromElsewhere = Boolean(location.state?.from);
 
-  const handleBack = useCallback(() => {
-    const explicit = resolveDcBackNavigation(location.state);
-    if (explicit) {
-      navigate(explicit.path, explicit.state ? { state: explicit.state } : undefined);
-      return;
-    }
-    if (cameFromElsewhere) {
-      navigate(-1);
-      return;
-    }
-    navigate(listPath);
-  }, [cameFromElsewhere, listPath, location.state, navigate]);
   const { user } = useAuth();
   const { canView } = usePermission();
   const canViewOtp = canView('delivery_register_otp');
@@ -147,6 +137,30 @@ export default function DeliveryChallanDetailPage() {
 
   const head = lines[0] || {};
   const showOtp = canViewOtp || apiCanViewOtp || isSuperAdmin;
+
+  useEffect(() => {
+    if (location.state?.from === DC_NAV_SOURCE_SALES_ORDER && location.state?.salesOrderNumber) {
+      persistDcBackContext(dcNumber, location.state);
+    }
+  }, [dcNumber, location.state]);
+
+  const handleBack = useCallback(() => {
+    const explicit = resolveDcBackNavigation(location.state, {
+      dcNumber,
+      salesOrderNumber: head.sales_order_number,
+      soScope: location.state?.soScope,
+    });
+    if (explicit) {
+      navigate(explicit.path, explicit.state ? { state: explicit.state } : undefined);
+      return;
+    }
+    if (cameFromElsewhere) {
+      navigate(-1);
+      return;
+    }
+    navigate(listPath);
+  }, [cameFromElsewhere, dcNumber, head.sales_order_number, listPath, location.state, navigate]);
+
   const deliveryOtpCode = apiDeliveryOtp || head.otp_code || head.d_otp || head.delivery_otp || null;
   const warehouseReturnOtpCode = apiWarehouseOtp || head.warehouse_return_otp || null;
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -191,6 +205,15 @@ export default function DeliveryChallanDetailPage() {
   }, [dcNumber, loadQc]);
 
   useEffect(() => { load(); }, [load]);
+
+  useAutoRefresh(load);
+
+  const navigationKeyRef = useRef(location.key);
+  useEffect(() => {
+    if (navigationKeyRef.current === location.key) return;
+    navigationKeyRef.current = location.key;
+    load();
+  }, [location.key, load]);
 
   const openChangeAssignee = async () => {
     const so = lines[0]?.sales_order_number;
@@ -491,6 +514,14 @@ export default function DeliveryChallanDetailPage() {
           </button>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : 'text-black'}`}>{dcNumber}</h1>
           <p className="text-gray-600">
+            {head.customer_name || '—'} · SO:{' '}
+            <Link
+              className="text-blue-600"
+              to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}
+              state={{ tab: location.state?.returnTab || readDcBackContext(dcNumber)?.returnTab || 'dcs' }}
+            >
+              {head.sales_order_number}
+            </Link>
             {head.customer_name || '—'}
             {head.sales_order_number ? (
               <>

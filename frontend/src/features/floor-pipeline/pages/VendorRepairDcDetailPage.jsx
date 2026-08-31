@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { getBackendOrigin } from '../../../utils/api';
 import {
   downloadVendorRepairPdf,
@@ -26,6 +27,7 @@ import {
   vendorRepairDispatchModeLabel,
 } from '../vendorRepairUi';
 import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import VrdcEwayPanel from '../components/VrdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 
@@ -128,7 +130,9 @@ export default function VendorRepairDcDetailPage() {
   const { dcNumber: rawDc } = useParams();
   const dcNumber = decodeURIComponent(rawDc || '');
   const { user } = useAuth();
+  const { canCreate, canEdit } = usePermission();
   const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canDispatch = canCreate('vendor_repair_dc_dispatch') || canEdit('vendor_repair_dc_dispatch');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [dc, setDc] = useState(null);
@@ -159,11 +163,12 @@ export default function VendorRepairDcDetailPage() {
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [pendingDispatchPod, setPendingDispatchPod] = useState(null);
   const [deliverBusy, setDeliverBusy] = useState(false);
-  const [ewayBillNumber, setEwayBillNumber] = useState('');
-  const [ewayBillDate, setEwayBillDate] = useState('');
   const [itemPrices, setItemPrices] = useState({});
   const [itemHsnCodes, setItemHsnCodes] = useState({});
   const [commercialSaving, setCommercialSaving] = useState(false);
+  const [ewayCompliance, setEwayCompliance] = useState(null);
+
+  const canDownloadPdf = ewayCompliance?.can_download_pdf !== false && dc?.can_download_pdf !== false;
 
   const syncDispatchFromDc = useCallback((head) => {
     if (!head) return;
@@ -203,12 +208,16 @@ export default function VendorRepairDcDetailPage() {
   };
 
   const handleDownloadPdf = async () => {
+    if (!canDownloadPdf) {
+      toast.error(ewayCompliance?.lock_message || 'E-way Bill is required before downloading this VRDC.');
+      return;
+    }
     setPdfBusy(true);
     try {
       await downloadVendorRepairPdf(dcNumber);
       toast.success('PDF downloaded');
-    } catch {
-      toast.error('PDF download failed');
+    } catch (err) {
+      toast.error(err?.message || 'PDF download failed');
     } finally {
       setPdfBusy(false);
     }
@@ -219,11 +228,10 @@ export default function VendorRepairDcDetailPage() {
     try {
       const { data } = await fetchVendorRepairDc(dcNumber);
       setDc(data.data);
+      setEwayCompliance(data.data.eway_compliance || null);
       syncDispatchFromDc(data.data);
       if (data.data.warehouse_dispatch_signer_name) setWhDispatchSignerName(data.data.warehouse_dispatch_signer_name);
       if (data.data.vendor_dispatch_signer_name) setVendorDispatchSignerName(data.data.vendor_dispatch_signer_name);
-      setEwayBillNumber(data.data.eway_bill_number || '');
-      setEwayBillDate(data.data.eway_bill_date ? String(data.data.eway_bill_date).slice(0, 10) : '');
       const prices = {};
       const hsns = {};
       (data.data.items || []).forEach((it) => {
@@ -305,12 +313,10 @@ export default function VendorRepairDcDetailPage() {
         hsns[it.ticket_id] = itemHsnCodes[it.ticket_id] ?? '';
       });
       await updateVendorRepairCommercialDetails(dcNumber, {
-        eway_bill_number: ewayBillNumber.trim() || null,
-        eway_bill_date: ewayBillDate || null,
         item_prices: prices,
         item_hsn_codes: hsns,
       });
-      toast.success('Price, HSN & E-way Bill saved — PDF will refresh on download');
+      toast.success('Price & HSN saved — PDF will refresh on download');
       await load();
     } catch (err) {
       toast.error(err?.response?.data?.message || err?.message || 'Failed to save commercial details');
@@ -487,7 +493,7 @@ export default function VendorRepairDcDetailPage() {
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && !dc.vendor_delivered_at ? (
+          {canDispatch && ['dispatched', 'partially_returned'].includes(dc.status) && !dc.vendor_delivered_at ? (
             <button
               type="button"
               disabled={deliverBusy}
@@ -499,8 +505,9 @@ export default function VendorRepairDcDetailPage() {
           ) : null}
           <button
             type="button"
-            disabled={pdfBusy}
+            disabled={pdfBusy || !canDownloadPdf}
             onClick={handleDownloadPdf}
+            title={!canDownloadPdf ? (ewayCompliance?.lock_message || 'E-way Bill required') : undefined}
             className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm disabled:opacity-50"
           >
             <Download className="w-4 h-4" /> {pdfBusy ? 'PDF…' : 'Dispatch PDF'}
@@ -526,6 +533,15 @@ export default function VendorRepairDcDetailPage() {
         </div>
       </div>
 
+      {ewayCompliance?.applies ? (
+        <VrdcEwayPanel
+          dcNumber={dcNumber}
+          compliance={ewayCompliance}
+          onReload={load}
+          isSuperAdmin={user?.role === 'super_admin'}
+        />
+      ) : null}
+
       <div className="rounded-xl border bg-slate-50 p-4 text-sm whitespace-pre-wrap text-slate-700">
         <p className="text-xs font-semibold uppercase text-slate-500 mb-1">Dispatch From (TRUETECH)</p>
         {DEFAULT_BILLING_ADDRESS}
@@ -541,42 +557,15 @@ export default function VendorRepairDcDetailPage() {
           <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—'}</p>
           <p className="text-slate-600 pt-2">{dc.contact_person || '—'} · {dc.contact_mobile || '—'}</p>
           <p className="text-slate-600">Expected return: {fmtVendorRepairDate(dc.expected_return_date)}</p>
-          {canEditCommercial ? (
-            <div className="pt-2 space-y-2 border-t border-slate-100 mt-2">
-              <p className="text-xs font-semibold uppercase text-slate-500">E-way Bill</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input
-                  className="border rounded-lg px-2 py-1.5 text-xs font-mono"
-                  placeholder="E-way Bill number"
-                  value={ewayBillNumber}
-                  onChange={(e) => setEwayBillNumber(e.target.value)}
-                />
-                <input
-                  type="date"
-                  className="border rounded-lg px-2 py-1.5 text-xs"
-                  value={ewayBillDate}
-                  onChange={(e) => setEwayBillDate(e.target.value)}
-                />
-              </div>
-              {declaredTotal >= 50000 ? (
-                <p className="text-[11px] text-amber-700">Required when declared value ≥ ₹50,000</p>
-              ) : null}
-            </div>
-          ) : (
+          {!ewayCompliance?.applies && (dc.eway_bill_number || dc.eway_bill_date) ? (
             <p className="text-slate-700 pt-1">
               <span className="font-semibold">E-way Bill:</span>{' '}
-              {dc.eway_bill_number ? (
-                <>
-                  <span className="font-mono">{dc.eway_bill_number}</span>
-                  {dc.eway_bill_date ? (
-                    <span className="text-slate-500"> · {fmtVendorRepairDate(dc.eway_bill_date)}</span>
-                  ) : null}
-                </>
-              ) : (
-                '—'
-              )}
+              <span className="font-mono">{dc.eway_bill_number || '—'}</span>
+              {dc.eway_bill_date ? (
+                <span className="text-slate-500"> · {fmtVendorRepairDate(dc.eway_bill_date)}</span>
+              ) : null}
             </p>
-          )}
+          ) : null}
           {dc.items_received_count != null ? (
             <p className="text-slate-600 font-medium pt-1">
               Received: {dc.items_received_count || 0} / {dc.items_dispatched_count || dc.items?.length || 0}
@@ -608,7 +597,7 @@ export default function VendorRepairDcDetailPage() {
               className="inline-flex items-center gap-1 px-3 py-1.5 bg-teal-700 text-white rounded-lg text-xs font-semibold disabled:opacity-60"
             >
               {commercialSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-              Save Price / HSN / E-way
+              Save Price / HSN
             </button>
           ) : null}
         </div>
@@ -694,7 +683,7 @@ export default function VendorRepairDcDetailPage() {
 
       <div className="rounded-xl border bg-white p-4 text-sm space-y-2 print:hidden">
         <h3 className="font-semibold">Send to vendor</h3>
-        {dc.status === 'draft' && canProcess ? (
+        {dc.status === 'draft' && canDispatch ? (
           <>
             <VrdcDispatchFields
               shipBy={shipBy}
@@ -742,7 +731,7 @@ export default function VendorRepairDcDetailPage() {
         )}
       </div>
 
-      {canProcess && dc.status === 'draft' ? (
+      {canDispatch && dc.status === 'draft' ? (
         <div className="rounded-xl border bg-white p-4 space-y-3 print:hidden">
           <h3 className="font-semibold">Dispatch e-signatures</h3>
           <p className="text-xs text-slate-500">Warehouse signature and name are required. Vendor signature is optional.</p>
@@ -751,7 +740,7 @@ export default function VendorRepairDcDetailPage() {
               label="Warehouse e-sign"
               url={dc.warehouse_dispatch_esign_url}
               previewUrl={pendingWhDispatch}
-              canSign={canProcess}
+              canSign={canDispatch}
               onSign={() => setActiveSign('wh_dispatch')}
               signerName={whDispatchSignerName}
               onSignerNameChange={setWhDispatchSignerName}
@@ -760,7 +749,7 @@ export default function VendorRepairDcDetailPage() {
               label="Vendor e-sign"
               url={dc.vendor_dispatch_esign_url}
               previewUrl={pendingVendorDispatch}
-              canSign={canProcess}
+              canSign={canDispatch}
               onSign={() => setActiveSign('vendor_dispatch')}
               signerName={vendorDispatchSignerName}
               onSignerNameChange={setVendorDispatchSignerName}
@@ -817,7 +806,7 @@ export default function VendorRepairDcDetailPage() {
         </div>
       ) : null}
 
-      {canProcess && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
+      {canDispatch && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
         <div className="space-y-3 print:hidden">
           <div className="grid md:grid-cols-2 gap-3">
             <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} signerName={dc.warehouse_dispatch_signer_name} />

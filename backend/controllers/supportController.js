@@ -29,7 +29,7 @@ const { nextDocumentNumber, ensureReturnDcPickupItems } = require('../services/s
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
-const { applyReturnPickupAssignment } = require('../services/supportPickupAssignmentService');
+const { applyReturnPickupAssignment, applyTechnicianPickupOnClient } = require('../services/supportPickupAssignmentService');
 const {
     assertMachinesEligibleForSupport,
     assertSerialEligibleForSupportTicket,
@@ -1536,12 +1536,27 @@ exports.closeTicket = async (req, res) => {
              WHERE id = $1`,
             [ticketId, TICKET_CLOSED, req.user.user_id]
         );
+        // Force-close used to leave pickup/complaint lines as assigned/open.
+        // Those leftover rows still looked like an active ticket for the laptop
+        // and blocked a new complaint on the public request form.
+        const leftover = await client.query(
+            `UPDATE support_ticket_items
+                SET status = 'closed', updated_at = CURRENT_TIMESTAMP
+              WHERE ticket_id = $1
+                AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')
+              RETURNING id, item_type, status`,
+            [ticketId]
+        );
         await logAudit(client, {
             itemId: null,
             ticketId,
             userId: req.user.user_id,
             action: 'ticket_closed',
-            detail: { manual: true }
+            detail: {
+                manual: true,
+                force,
+                leftover_items_closed: leftover.rows.map((r) => r.id),
+            }
         });
         await client.query('COMMIT');
     } catch (e) {
@@ -2088,6 +2103,10 @@ exports.assignItem = async (req, res) => {
         );
         if (assignedTo) {
             await syncPartRequestsTechForItem(client, itemId, assignedTo);
+            await applyTechnicianPickupOnClient(client, {
+                ticketId: item.ticket_id,
+                technicianUserId: assignedTo,
+            });
         }
         const isReassign = item.assigned_to && assignedTo && item.assigned_to !== assignedTo;
         await logAudit(client, {
@@ -2422,6 +2441,10 @@ exports.assignTicketBulk = async (req, res) => {
         for (const row of toAssign) {
             await syncPartRequestsTechForItem(client, row.id, assignedTo);
         }
+        const pickupSync = await applyTechnicianPickupOnClient(client, {
+            ticketId,
+            technicianUserId: assignedTo,
+        });
         const newName = await resolveUserDisplayName(client, assignedTo);
         for (const row of toAssign) {
             const previousName = row.assigned_to
@@ -2445,6 +2468,11 @@ exports.assignTicketBulk = async (req, res) => {
         await bumpTicketActivity(client, ticketId);
         await recomputeTicketStatus(client, ticketId);
         await client.query('COMMIT');
+        if (pickupSync?.return_dc_number) {
+            try { await regenerateReturnDcPdfByRdc(pool, pickupSync.return_dc_number); } catch (pdfErr) {
+                console.error('[support] return DC pdf (ticket assign):', pdfErr.message);
+            }
+        }
     } catch (e) {
         await client.query('ROLLBACK');
         return res.status(500).json({ success: false, message: 'Failed to assign technicians' });
@@ -3739,6 +3767,9 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
     if (!dcl) {
         return res.status(404).json({ success: false, message: 'Return DC not found' });
     }
+    if (String(dcl.status || '').toLowerCase() === 'cancelled') {
+        return res.status(400).json({ success: false, message: 'Return DC is cancelled — cannot confirm warehouse receipt' });
+    }
 
     const client = await pool.connect();
     try {
@@ -4398,6 +4429,244 @@ async function cancelReplacementSalesOrder(client, soNumber, actor) {
     );
     return { cancelled: true, released: attachedRes.rows.length };
 }
+
+const PICKUP_EDIT_BLOCKED_STATUSES = new Set(['resolved', 'closed', 'inventory_updated', 'cancelled']);
+
+function isPickupEditableForRdcEdit(row) {
+    if (!row || row.item_type !== 'pickup') return false;
+    if (PICKUP_EDIT_BLOCKED_STATUSES.has(String(row.status || ''))) return false;
+    // Allow edit after OTP / picked_up until guard inward or warehouse receipt.
+    if (row.warehouse_received_at || row.gate_inward_at) return false;
+    return true;
+}
+
+async function buildRdcEntriesForPickupRows(client, pickupRows) {
+    const entries = [];
+    for (const row of pickupRows) {
+        const serialCode = row.ttspl_id || row.unique_serial_number || row.serial_number;
+        if (!serialCode) continue;
+        const vsnRes = await client.query(
+            `SELECT serial_id, serial_number, inventory_asset_code
+               FROM vendor_serial_numbers
+              WHERE deleted_at IS NULL
+                AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+              LIMIT 1`,
+            [serialCode]
+        );
+        const vsn = vsnRes.rows[0];
+        if (vsn) {
+            entries.push(`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || serialCode}`);
+        } else {
+            entries.push(`|${serialCode}|${serialCode}`);
+        }
+    }
+    return entries;
+}
+
+/** Remove laptop(s) from a Return DC before guard inward (e.g. 3 → 2 today, 1 later). */
+exports.editReturnPickupMachines = async (req, res) => {
+    if (!canManageAsTicketLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can edit return pickup' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const keepRaw = req.body?.keep_pickup_item_ids || req.body?.pickup_item_ids || [];
+    const keepIds = [...new Set((Array.isArray(keepRaw) ? keepRaw : [keepRaw])
+        .map((id) => parseInt(id, 10))
+        .filter((id) => Number.isFinite(id) && id > 0))];
+    if (!keepIds.length) {
+        return res.status(400).json({ success: false, message: 'Select at least one laptop to keep on this Return DC' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const ticketRes = await client.query(
+            'SELECT * FROM support_tickets WHERE id = $1 FOR UPDATE',
+            [ticketId]
+        );
+        if (!ticketRes.rows.length) {
+            throw Object.assign(new Error('Ticket not found'), { status: 404 });
+        }
+        const ticket = ticketRes.rows[0];
+        const rdc = String(ticket.return_dc_number || req.body?.return_dc_number || '').trim();
+        if (!rdc) {
+            throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
+        }
+
+        const pickupRes = await client.query(
+            `SELECT * FROM support_ticket_items
+              WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2
+              ORDER BY id ASC
+              FOR UPDATE`,
+            [ticketId, rdc]
+        );
+        const activePickups = pickupRes.rows.filter((r) => !PICKUP_EDIT_BLOCKED_STATUSES.has(String(r.status || '')));
+        if (activePickups.length < 2) {
+            throw Object.assign(
+                new Error('Edit pickup applies only when multiple laptops are on the same Return DC'),
+                { status: 400 }
+            );
+        }
+
+        const activeIds = new Set(activePickups.map((r) => r.id));
+        for (const id of keepIds) {
+            if (!activeIds.has(id)) {
+                throw Object.assign(new Error(`Pickup item #${id} is not on Return DC ${rdc}`), { status: 400 });
+            }
+        }
+        if (keepIds.length >= activePickups.length) {
+            throw Object.assign(
+                new Error('Uncheck at least one laptop to defer — or cancel the Return DC instead'),
+                { status: 400 }
+            );
+        }
+
+        const keepSet = new Set(keepIds);
+        const removing = activePickups.filter((r) => !keepSet.has(r.id));
+        const keeping = activePickups.filter((r) => keepSet.has(r.id));
+
+        for (const row of removing) {
+            if (!isPickupEditableForRdcEdit(row)) {
+                throw Object.assign(
+                    new Error(`${row.ttspl_id || row.serial_number || 'Laptop'} already gate-inwarded — cannot remove from this Return DC`),
+                    { status: 400 }
+                );
+            }
+        }
+        for (const row of keeping) {
+            if (!isPickupEditableForRdcEdit(row)) {
+                throw Object.assign(
+                    new Error('Guard already scanned this Return DC — cannot edit'),
+                    { status: 400 }
+                );
+            }
+        }
+
+        const removeIds = removing.map((r) => r.id);
+        if (removing.some((r) => r.customer_otp_verified_at || r.picked_up_at)) {
+            await preserveCustomerAssetsOnCancel(client, {
+                ticketId,
+                customerId: ticket.customer_id,
+                items: removing,
+                actorUserId: req.user.user_id,
+                actorName: req.user.name,
+            });
+        }
+        await client.query(
+            `UPDATE support_ticket_items
+                SET status = 'cancelled',
+                    return_dc_number = NULL,
+                    assigned_to = NULL,
+                    pickup_assigned_to = NULL,
+                    pickup_method = NULL,
+                    otp_code = NULL,
+                    customer_otp_code = NULL,
+                    customer_otp_sent_at = NULL,
+                    picked_up_at = NULL,
+                    customer_otp_verified_at = NULL,
+                    technician_esign_at = NULL,
+                    visited_at = NULL,
+                    gate_inward_at = NULL,
+                    pod_image_path = NULL,
+                    proof_of_completion_path = NULL,
+                    updated_at = NOW()
+              WHERE id = ANY($1::int[])`,
+            [removeIds]
+        );
+
+        const sharedOtp = keeping[0]?.customer_otp_code || keeping[0]?.otp_code || generateOtp();
+        await client.query(
+            `UPDATE support_ticket_items
+                SET otp_code = $2,
+                    customer_otp_code = $2,
+                    customer_otp_sent_at = COALESCE(customer_otp_sent_at, NOW()),
+                    updated_at = NOW()
+              WHERE id = ANY($1::int[])`,
+            [keepIds, sharedOtp]
+        );
+
+        const entries = await buildRdcEntriesForPickupRows(client, keeping);
+        if (!entries.length) {
+            throw Object.assign(new Error('Return DC would have no laptops — cancel the Return DC instead'), { status: 400 });
+        }
+
+        const dclRes = await client.query(
+            `SELECT dc_number, dc_purpose, remarks FROM delivery_challan_lines
+              WHERE dc_number = $1 AND movement_type = 'return'
+              LIMIT 1 FOR UPDATE`,
+            [rdc]
+        );
+        if (!dclRes.rows.length) {
+            throw Object.assign(new Error(`Return DC ${rdc} not found`), { status: 404 });
+        }
+        const dcl = dclRes.rows[0];
+
+        let remarks = dcl.remarks;
+        if (String(dcl.dc_purpose || '') === 'replacement') {
+            remarks = replacementFlow.buildReplacementRdcRemarks(keeping.map((r) => ({
+                ttspl_id: r.ttspl_id || r.unique_serial_number,
+                unique_serial_number: r.unique_serial_number || r.ttspl_id,
+                serial_number: r.serial_number,
+                brand: r.brand,
+                model: r.model,
+            })));
+        }
+
+        const firstKeep = keeping[0];
+        await client.query(
+            `UPDATE delivery_challan_lines
+                SET serial_number = $2::jsonb,
+                    quantity = $3,
+                    brand = COALESCE($4, brand),
+                    model_name = COALESCE($5, model_name),
+                    remarks = COALESCE($6, remarks),
+                    updated_at = NOW()
+              WHERE dc_number = $1 AND movement_type = 'return'`,
+            [
+                rdc,
+                JSON.stringify(entries),
+                Math.max(1, entries.length),
+                firstKeep.brand || null,
+                firstKeep.model || null,
+                remarks,
+            ]
+        );
+
+        await logAudit(client, {
+            ticketId,
+            userId: req.user.user_id,
+            action: 'return_pickup_edited',
+            detail: {
+                return_dc_number: rdc,
+                kept_pickup_item_ids: keepIds,
+                removed_pickup_item_ids: removeIds,
+                removed_ttspl_ids: removing.map((r) => r.ttspl_id || r.unique_serial_number).filter(Boolean),
+            },
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+
+        try { await regenerateReturnDcPdfByRdc(pool, rdc); } catch (pdfErr) {
+            console.error('[support] return pickup edit PDF regen failed:', pdfErr.message);
+        }
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        return res.json({
+            success: true,
+            message: `Return DC ${rdc} updated — ${keeping.length} laptop(s) on this pickup. Deferred unit(s) can be scheduled later.`,
+            return_dc_number: rdc,
+            kept_count: keeping.length,
+            removed_count: removing.length,
+            customer_otp_visible: sharedOtp,
+            ...data,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to edit return pickup' });
+    } finally {
+        client.release();
+    }
+};
 
 exports.cancelReturnPickup = async (req, res) => {
     if (!canManageAsTicketLead(req.user)) {

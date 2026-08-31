@@ -15,6 +15,7 @@ import {
   soPermissionSectionsForGate,
 } from '../salesOrderScope';
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
+import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 
 const PAGE_SIZE = 25;
 const SO_FILTER_DEFAULTS = {
@@ -157,6 +158,13 @@ export default function SalesOrderListPage({ scope }) {
   }, [page, search, dateFrom, dateTo, customerId, statusFilter, orderTypeFilter, scope]);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);
+
+  const handleSoSaved = useCallback(() => {
+    if (page !== 1) setFilters({ page: 1 });
+    load();
+  }, [page, setFilters, load]);
+
   useEffect(() => {
     if (location.state?.fromQuote) {
       setPrefillQuote(location.state.fromQuote);
@@ -412,11 +420,11 @@ export default function SalesOrderListPage({ scope }) {
       <SalesOrderForm
         open={soDrawer}
         onClose={() => setSoDrawer(false)}
-        onSaved={load}
+        onSaved={handleSoSaved}
         prefillQuotation={prefillQuote}
         scope={scope}
       />
-      <DCForm open={dcDrawer} onClose={() => { setDcDrawer(false); setPrefillSo(null); }} prefillSo={prefillSo} />
+      <DCForm open={dcDrawer} onClose={() => { setDcDrawer(false); setPrefillSo(null); }} onSaved={load} prefillSo={prefillSo} />
       <PaymentModal open={Boolean(paymentSo)} soNumber={paymentSo} onClose={() => setPaymentSo(null)} onSaved={load} />
     </div>
   );

@@ -48,9 +48,32 @@ function resolveDatePeriod({ period, date, dateFrom, dateTo } = {}) {
 }
 
 /** Returns SQL AND fragments for a timestamp column/expression. Mutates params. */
-function appendDateRangeClauses({ column, expr, dateFrom, dateTo, params, tableAlias = null }) {
+function appendDateRangeClauses({
+  column,
+  expr,
+  dateFrom,
+  dateTo,
+  params,
+  tableAlias = null,
+  timezone = null,
+}) {
   const col = expr || (tableAlias ? `${tableAlias}.${column}` : column);
   const clauses = [];
+  const fromYmd = String(dateFrom || '').trim();
+  const toYmd = String(dateTo || '').trim();
+
+  if (timezone && (fromYmd || toYmd)) {
+    if (fromYmd) {
+      params.push(fromYmd);
+      clauses.push(`(${col} AT TIME ZONE '${timezone}')::date >= $${params.length}::date`);
+    }
+    if (toYmd) {
+      params.push(toYmd);
+      clauses.push(`(${col} AT TIME ZONE '${timezone}')::date <= $${params.length}::date`);
+    }
+    return clauses;
+  }
+
   const from = parseDateFrom(dateFrom);
   const to = parseDateTo(dateTo);
   if (from) {
@@ -62,6 +85,39 @@ function appendDateRangeClauses({ column, expr, dateFrom, dateTo, params, tableA
     clauses.push(`${col} <= $${params.length}::timestamptz`);
   }
   return clauses;
+}
+
+/** YYYY-MM → first/last calendar day of that month. */
+function resolveMonthRange(monthYmd) {
+  const m = String(monthYmd || '').trim().match(/^(\d{4})-(\d{2})$/);
+  if (!m) return { dateFrom: null, dateTo: null };
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return { dateFrom: null, dateTo: null };
+  const lastDay = new Date(year, month, 0).getDate();
+  const mm = String(month).padStart(2, '0');
+  return {
+    dateFrom: `${year}-${mm}-01`,
+    dateTo: `${year}-${mm}-${String(lastDay).padStart(2, '0')}`,
+  };
+}
+
+/**
+ * Master-data style date resolution: month preset or explicit from/to.
+ * Legacy URLs with only date_from/date_to are treated as custom range.
+ */
+function resolveMasterDateRange(query = {}) {
+  const mode = String(query.date_mode || query.dateMode || '').trim().toLowerCase();
+  const month = String(query.month || '').trim();
+  if (mode === 'month' && month) {
+    return { ...resolveMonthRange(month), dateMode: 'month', month };
+  }
+  const from = String(query.date_from || query.dateFrom || '').trim() || null;
+  const to = String(query.date_to || query.dateTo || '').trim() || null;
+  if (mode === 'range' || from || to) {
+    return { dateFrom: from, dateTo: to, dateMode: 'range', month: null };
+  }
+  return { dateFrom: null, dateTo: null, dateMode: null, month: null };
 }
 
 function appendDateRangeToWhere(where, clauses) {
@@ -78,4 +134,6 @@ module.exports = {
   parseDateTo,
   localYmd,
   resolveDatePeriod,
+  resolveMonthRange,
+  resolveMasterDateRange,
 };

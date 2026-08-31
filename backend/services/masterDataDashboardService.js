@@ -4,7 +4,7 @@
  */
 const pool = require('../config/db');
 const { pickSpecFilters, buildSerialSpecFilter } = require('../utils/inventorySpecFilter');
-const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { appendDateRangeClauses, resolveMasterDateRange } = require('../utils/dateRangeFilter');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('./customerDeployedAssets');
 const {
   buildDashboardCacheKey,
@@ -16,6 +16,25 @@ const {
 } = require('./masterDataCache');
 
 const CUSTOMER_STATUSES = DEPLOYED_WITH_CUSTOMER_STATUSES;
+
+/** Commercial classification for sale vs rental filters + price KPIs. */
+const SQL_IS_SALE = `(
+  s.inventory_status = 'sold'
+  OR LOWER(COALESCE(sos.quotation_type, '')) LIKE '%sale%'
+)`;
+
+const SQL_IS_RENTAL = `(
+  s.inventory_status <> 'sold'
+  AND LOWER(COALESCE(sos.quotation_type, '')) NOT LIKE '%sale%'
+  AND (
+    s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit', 'returned')
+    OR COALESCE(s.rent_monthly_rate, 0) > 0
+    OR LOWER(COALESCE(sos.quotation_type, '')) IN ('rental', 'demo')
+  )
+)`;
+
+/** Delivery / rent start / GRN receive — not row sync updated_at. */
+const MASTER_ACTIVITY_DATE_EXPR = 'COALESCE(s.delivered_at, s.rent_start_date, g.created_at, s.created_at)';
 
 const VENDOR_REPAIR_EXISTS = `
   EXISTS (
@@ -146,12 +165,20 @@ function buildMasterFilters(query = {}) {
     clauses.push(`LOWER(COALESCE(s.current_entity, '')) = $${params.length}`);
   }
 
+  const pricingType = String(query.pricing_type || query.pricingType || '').trim().toLowerCase();
+  if (pricingType === 'sale') {
+    clauses.push(SQL_IS_SALE);
+  } else if (pricingType === 'rental') {
+    clauses.push(SQL_IS_RENTAL);
+  }
+
+  const dateRange = resolveMasterDateRange(query);
   const dateClauses = appendDateRangeClauses({
-    column: 'updated_at',
-    dateFrom: query.date_from || query.dateFrom,
-    dateTo: query.date_to || query.dateTo,
+    expr: MASTER_ACTIVITY_DATE_EXPR,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
     params,
-    tableAlias: 's',
+    timezone: 'Asia/Kolkata',
   });
   if (dateClauses.length) clauses.push(...dateClauses);
 
@@ -371,12 +398,17 @@ async function getKpis(query = {}) {
   // KPI cards are fleet-wide overview. Ignore list drill-down filters
   // (location / from_vendor / customer / vendor / status / stage) so values
   // stay correct when e.g. location=Customer is applied to the laptop table.
+  const dateRange = resolveMasterDateRange(query);
   const kpiQuery = {
     search: query.search,
-    date_from: query.date_from || query.dateFrom,
-    date_to: query.date_to || query.dateTo,
-    dateFrom: query.dateFrom,
-    dateTo: query.dateTo,
+    pricing_type: query.pricing_type || query.pricingType,
+    pricingType: query.pricingType || query.pricing_type,
+    date_mode: dateRange.dateMode || query.date_mode || query.dateMode,
+    month: dateRange.month || query.month,
+    date_from: dateRange.dateFrom,
+    date_to: dateRange.dateTo,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
     ...pickSpecFilters(query),
   };
 
@@ -408,7 +440,14 @@ async function getKpis(query = {}) {
                 s.inventory_status = 'in_stock'
                 AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
               )
-          )::int AS total_qc_process
+          )::int AS total_qc_process,
+          COUNT(*) FILTER (WHERE ${SQL_IS_SALE})::int AS total_sale_units,
+          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL})::int AS total_rental_units,
+          COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${SQL_IS_SALE}), 0)::numeric AS total_sale_value,
+          COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
+            WHERE ${SQL_IS_RENTAL}
+              AND s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')
+          ), 0)::numeric AS total_monthly_rental_value
        ${FROM_SQL}
        ${joinSql}
        ${whereSql}`,
@@ -428,6 +467,10 @@ async function getKpis(query = {}) {
     total_from_vendors: k.total_from_vendors || 0,
     total_ready_to_rent_sale: k.total_ready_to_rent_sale || 0,
     total_qc_process: k.total_qc_process || 0,
+    total_sale_units: k.total_sale_units || 0,
+    total_rental_units: k.total_rental_units || 0,
+    total_sale_value: Number(k.total_sale_value || 0),
+    total_monthly_rental_value: Number(k.total_monthly_rental_value || 0),
   };
   await setCachedKpis(kpiKey, payload);
   return payload;
@@ -602,7 +645,7 @@ async function getFloorSummary() {
   return { stages };
 }
 
-async function getMasterDashboard(query = {}) {
+async function getMasterDashboardTab(query = {}) {
   const cacheKey = buildDashboardCacheKey(query);
   const cached = await getCachedDashboard(cacheKey);
   if (cached !== undefined) return cached;
@@ -611,26 +654,155 @@ async function getMasterDashboard(query = {}) {
 
   let payload;
   if (tab === 'customers') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getCustomerSummary(query)]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getCustomerSummary(query)) };
   } else if (tab === 'vendors') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getVendorSummary(query)]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getVendorSummary(query)) };
   } else if (tab === 'floor') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getFloorSummary()]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getFloorSummary()) };
   } else {
-    const [kpis, list] = await Promise.all([getKpis(query), listLaptops(query)]);
-    payload = { kpis, tab: 'laptops', ...list };
+    payload = { tab: 'laptops', ...(await listLaptops(query)) };
   }
 
   await setCachedDashboard(cacheKey, payload);
   return payload;
 }
 
+/** @deprecated Use getMasterDashboardTab + getKpis separately for faster loads. */
+async function getMasterDashboard(query = {}) {
+  const [kpis, tabPayload] = await Promise.all([
+    getKpis(query),
+    getMasterDashboardTab(query),
+  ]);
+  return { kpis, ...tabPayload };
+}
+
+async function listAllLaptopsForExport(query = {}) {
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20000, 1), 20000);
+  const { whereSql, params, joinSql } = buildMasterFilters(query);
+  const listParams = [...params, limit];
+  const listRes = await pool.query(
+    `SELECT
+        s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.inventory_status,
+        s.current_customer_id, s.current_dc_number, s.current_entity,
+        s.rent_monthly_rate, s.rent_start_date, s.delivered_at, s.grn_id, s.qc_status,
+        p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id,
+        COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name,
+        COALESCE(c.company_name, c.name) AS customer_name,
+        active_ticket.ticket_id AS active_floor_ticket_id,
+        active_ticket.stage_name AS ticket_stage_name,
+        sos.sales_order_number, sos.dc_number AS sos_dc_number, sos.so_rate, sos.quotation_type,
+        vr.on_vendor_repair,
+        vpd.purchase_rate,
+        vpd.monthly_rental_amount
+     ${FROM_SQL}
+     ${joinSql}
+     ${whereSql}
+     ORDER BY s.serial_id DESC
+     LIMIT $${params.length + 1}`,
+    listParams
+  );
+  return listRes.rows.map(mapLaptopRow);
+}
+
+function fmtExportMoney(n) {
+  if (n == null || n === '') return '';
+  return Number(n);
+}
+
+function fmtExportVendorPrice(r) {
+  if (r.vendor_purchase_price == null) return '';
+  if (r.vendor_price_type === 'monthly') return Number(r.vendor_purchase_price);
+  return Number(r.vendor_purchase_price);
+}
+
+function fmtExportCustomerPrice(r) {
+  if (r.customer_price == null) return '';
+  return Number(r.customer_price);
+}
+
+function laptopRowToExport(r, idx) {
+  const specs = [r.processor, r.generation, r.ram, r.storage, r.graphics].filter(Boolean).join(' | ');
+  return {
+    'S.No': idx + 1,
+    TTSPL: r.ttspl_id || '',
+    'Serial Number': r.serial_number || '',
+    Brand: r.brand || '',
+    Model: r.model || '',
+    Specs: specs,
+    'Screen Size': r.screen_size || '',
+    Status: String(r.current_status || '').replace(/_/g, ' '),
+    Location: r.current_location || '',
+    'Current Customer': r.customer_name || '',
+    Vendor: r.vendor_name || '',
+    'Vendor Type': r.purchase_order_type_label || '',
+    'Vendor Price': fmtExportVendorPrice(r),
+    'Vendor Price Type': r.vendor_price_type === 'monthly' ? 'Rent/mo' : (r.vendor_price_type === 'purchase' ? 'Purchase' : ''),
+    'Customer Price': fmtExportCustomerPrice(r),
+    'Customer Price Type': r.customer_price_type === 'sale' ? 'Sale' : (r.customer_price_type === 'monthly' ? 'Rent/mo' : ''),
+    Stage: r.current_stage || '',
+    'Sales Order': r.sales_order_number || '',
+    'Delivery Challan': r.delivery_challan_number || '',
+    'Purchase Order': r.purchase_order_number || '',
+    GRN: r.grn_number || '',
+    Entity: r.entity_code || '',
+  };
+}
+
+async function buildMasterDataExportWorkbook(query = {}) {
+  const XLSX = require('xlsx');
+  const tab = String(query.tab || 'laptops').toLowerCase();
+  let sheetRows = [];
+  let sheetName = 'Master Data';
+
+  if (tab === 'customers') {
+    const { customers } = await getCustomerSummary(query);
+    sheetName = 'Customers';
+    sheetRows = customers.map((c, idx) => ({
+      'S.No': idx + 1,
+      Customer: c.customer_name || '',
+      'Customer ID': c.customer_id || '',
+      Active: Number(c.active_laptops || 0),
+      Returned: Number(c.returned_laptops || 0),
+      'Monthly Rental Value': fmtExportMoney(c.monthly_rental_value),
+      'Sale Value': fmtExportMoney(c.sale_value),
+    }));
+  } else if (tab === 'vendors') {
+    const { vendors } = await getVendorSummary(query);
+    sheetName = 'Vendors';
+    sheetRows = vendors.map((v, idx) => ({
+      'S.No': idx + 1,
+      Vendor: v.vendor_name || '',
+      'Vendor ID': v.vendor_id || '',
+      Laptops: Number(v.purchased_laptops || 0),
+      'Purchase Value': fmtExportMoney(v.purchase_value),
+    }));
+  } else if (tab === 'floor') {
+    const { stages } = await getFloorSummary();
+    sheetName = 'Floor';
+    sheetRows = stages.map((s, idx) => ({
+      'S.No': idx + 1,
+      Stage: s.stage_name || '',
+      Count: Number(s.count || 0),
+    }));
+  } else {
+    const rows = await listAllLaptopsForExport(query);
+    sheetName = 'Laptop Master';
+    sheetRows = rows.map(laptopRowToExport);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ Note: 'No rows match filters' }]);
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const safeTab = tab.replace(/[^\w-]+/g, '_');
+  return { buf, filename: `master_data_${safeTab}.xlsx` };
+}
+
 module.exports = {
   getMasterDashboard,
+  getMasterDashboardTab,
   listLaptops,
   getKpis,
+  buildMasterDataExportWorkbook,
   CUSTOMER_STATUSES,
 };

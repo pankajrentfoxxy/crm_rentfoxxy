@@ -189,6 +189,7 @@ async function processReturnedSerials(db, {
     if (wasRented) {
       creditNote = await billing.createReturnCreditNote(db, {
         serialId, returnDate, returnTicketId, actorUserId,
+        supportTicketId, returnDcNumber: dcNumber,
       });
     }
     results.push({

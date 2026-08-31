@@ -9,6 +9,8 @@ const { logTtsplEvent } = require('./ttsplAuditService');
 const { formatTtspl, parseTtsplNum } = require('./vendorInventoryAssetCodeService');
 const { parseGateQrPayload, lookupToken } = require('./gateQrService');
 const inventorySM = require('./inventoryStateMachine');
+const { compareConfig } = require('./grnConfigService');
+const { resolveVrdcItemSpecs, enrichVrdcItemRow } = require('./vendorRepairDcShared');
 
 const DIRECTIONS = new Set(['inward', 'outward']);
 const CANCELLED_DC = new Set(['cancelled']);
@@ -35,15 +37,148 @@ function normalizeTtspl(raw) {
 }
 
 function formatConfig(extra) {
-  const x = extra && typeof extra === 'object' ? extra : {};
+  const specs = resolveVrdcItemSpecs({ extra: extra && typeof extra === 'object' ? extra : {} });
+  return formatConfigDisplay(specs);
+}
+
+function parseConfigLine(str) {
+  const parts = String(str || '').split(/[·/|]/).map((s) => s.trim()).filter((p) => p && p !== '-');
+  if (parts.length >= 6) {
+    return {
+      brand: parts[0] || '',
+      model: parts[1] || '',
+      processor: parts[2] || '',
+      generation: parts[3] || '',
+      ram: parts[4] || '',
+      storage: parts[5] || '',
+      ssd: parts[5] || '',
+    };
+  }
+  if (parts.length === 5) {
+    return {
+      brand: parts[0] || '',
+      model: parts[1] || '',
+      processor: parts[2] || '',
+      generation: '',
+      ram: parts[3] || '',
+      storage: parts[4] || '',
+      ssd: parts[4] || '',
+    };
+  }
+  return {
+    brand: parts[0] || '',
+    model: parts[1] || '',
+    processor: parts[2] || '',
+    generation: parts[3] || '',
+    ram: parts[4] || '',
+    storage: parts[5] || '',
+    ssd: parts[5] || '',
+  };
+}
+
+function formatConfigDisplay(specs = {}) {
   return [
-    x.brand || x.brand_name,
-    x.model || x.model_name,
-    x.processor,
-    x.generation,
-    x.ram,
-    x.storage,
-  ].filter(Boolean).join(' / ') || null;
+    specs.brand,
+    specs.model,
+    specs.processor,
+    specs.generation,
+    specs.ram,
+    specs.storage || specs.ssd,
+  ].filter((v) => v != null && String(v).trim() !== '' && String(v).trim() !== '-').join(' · ') || null;
+}
+
+function toCompareShape(specs = {}) {
+  return {
+    brand: specs.brand,
+    model: specs.model,
+    processor: specs.processor,
+    generation: specs.generation,
+    ram: specs.ram,
+    ssd: specs.storage || specs.ssd,
+    gpu: specs.gpu,
+  };
+}
+
+const CONFIG_FIELD_LABELS = {
+  brand: 'Brand',
+  model: 'Model',
+  processor: 'Processor',
+  generation: 'Generation',
+  ram: 'RAM',
+  ssd: 'Storage',
+  gpu: 'GPU',
+};
+
+function formatConfigMismatchMessage(errors = []) {
+  if (!errors.length) return 'Laptop configuration does not match this movement';
+  return errors.map((e) => {
+    const label = CONFIG_FIELD_LABELS[e.field] || e.field;
+    return `${label}: expected "${e.expected ?? '—'}", scanned "${e.actual ?? '—'}"`;
+  }).join(' · ');
+}
+
+function normalizeConfigKey(str) {
+  return String(str || '')
+    .split(/[·/|]/)
+    .map((p) => p.trim())
+    .filter((p) => p && p !== '-')
+    .join('|')
+    .toUpperCase();
+}
+
+function hasConfigFields(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  return Boolean(
+    obj.brand || obj.model || obj.processor || obj.ram
+    || obj.storage || obj.ssd || obj.generation
+  );
+}
+
+/** Prefer serial.extra specs; fall back to parsing serial.configuration. */
+function resolveSerialConfigSource(serial) {
+  const extra = parseJson(serial?.extra, null);
+  if (hasConfigFields(extra)) {
+    return { ...extra, extra };
+  }
+  const cfg = serial?.configuration;
+  if (cfg) {
+    const parsed = parseConfigLine(cfg);
+    return { ...parsed, extra: parsed };
+  }
+  return {};
+}
+
+function compareMovementConfigs(expectedLine, actualExtra) {
+  const extra = actualExtra && typeof actualExtra === 'object' ? actualExtra : {};
+  const expectedSpecs = resolveVrdcItemSpecs(parseConfigLine(expectedLine));
+  const actualSpecs = resolveVrdcItemSpecs({ ...extra, extra });
+  const expectedDisplay = formatConfigDisplay(expectedSpecs);
+  const scannedDisplay = formatConfigDisplay(actualSpecs);
+
+  if (
+    expectedDisplay && scannedDisplay
+    && normalizeConfigKey(expectedDisplay) === normalizeConfigKey(scannedDisplay)
+  ) {
+    return {
+      matched: true,
+      expected: expectedDisplay,
+      scanned: scannedDisplay,
+      errors: [],
+      mismatch_message: '',
+    };
+  }
+
+  const result = compareConfig(
+    toCompareShape(expectedSpecs),
+    { ...toCompareShape(actualSpecs), manufacturer: actualSpecs.brand }
+  );
+  return {
+    matched: result.configurationMatched,
+    expected: expectedDisplay,
+    scanned: scannedDisplay,
+    errors: result.errors || [],
+    mismatch_message: formatConfigMismatchMessage(result.errors),
+  };
 }
 
 function parseJson(v, fallback = null) {
@@ -120,18 +255,6 @@ function movementModeLabel(shipBy, dispatchMode) {
   return dispatchMode || shipBy;
 }
 
-function configsMatch(expected, actual) {
-  const a = String(expected || '').replace(/\s+/g, ' ').trim().toUpperCase();
-  const b = String(actual || '').replace(/\s+/g, ' ').trim().toUpperCase();
-  if (!a && !b) return true;
-  if (!a || !b) return true;
-  if (a === b) return true;
-  if (a.includes(b) || b.includes(a)) return true;
-  const parts = a.split(/[/,|]/).map((s) => s.trim()).filter((s) => s.length >= 3);
-  const overlap = parts.filter((p) => b.includes(p)).length;
-  return overlap >= 2;
-}
-
 function checkRow(ok, expected, scanned, passMessage, failMessage) {
   return {
     ok: Boolean(ok),
@@ -167,8 +290,9 @@ function buildLaptopChecks({ expected, serial, ctx, scanRaw, sessionDirection })
   );
 
   const expCfg = expected?.configuration || '';
-  const gotCfg = formatConfig(parseJson(serial?.extra, {})) || serial?.configuration || '';
-  const configOk = configsMatch(expCfg, gotCfg);
+  const serialConfigSource = resolveSerialConfigSource(serial);
+  const configCmp = compareMovementConfigs(expCfg, serialConfigSource);
+  const configOk = configCmp.matched;
 
   const selected = sessionDirection || ctx?.session_direction || ctx?.direction;
   const modeLabel = `${String(ctx?.direction || '').toUpperCase()}${ctx?.movement_mode ? ` · ${ctx.movement_mode}` : ''}`;
@@ -193,10 +317,10 @@ function buildLaptopChecks({ expected, serial, ctx, scanRaw, sessionDirection })
     ),
     configuration: checkRow(
       configOk,
-      expCfg || null,
-      gotCfg || null,
+      configCmp.expected || expCfg || null,
+      configCmp.scanned || formatConfigDisplay(resolveVrdcItemSpecs(serialConfigSource)) || serial?.configuration || null,
       'Laptop configuration matches',
-      'Laptop configuration does not match this movement'
+      configCmp.mismatch_message || 'Laptop configuration does not match this movement'
     ),
     movement_mode: checkRow(
       modeOk,
@@ -211,11 +335,13 @@ function buildLaptopChecks({ expected, serial, ctx, scanRaw, sessionDirection })
 }
 
 function laptopDto(row, extra = {}) {
+  const rowExtra = parseJson(row.extra, null);
   return {
     serial_id: row.serial_id || null,
     ttspl: row.ttspl || row.inventory_asset_code || row.ttspl_id || extra.ttspl || null,
     serial_number: row.serial_number || extra.serial_number || null,
-    configuration: row.configuration || formatConfig(parseJson(row.extra, {})) || extra.configuration || null,
+    configuration: row.configuration || formatConfigDisplay(resolveVrdcItemSpecs(rowExtra || {})) || extra.configuration || null,
+    extra: rowExtra,
     inventory_status: row.inventory_status || extra.inventory_status || null,
     awb_number: row.awb_number || extra.awb_number || null,
     scanned: Boolean(extra.scanned),
@@ -487,10 +613,17 @@ async function loadReturnDc(db, rdcNumber) {
     `SELECT id, ttspl_id, serial_number, unique_serial_number, pickup_type,
             warehouse_received_at, pickup_awb, pickup_courier_name,
             return_dc_number, pickup_method, customer_otp_verified_at,
-            picked_up_at, technician_esign_at, gate_inward_at
+            picked_up_at, technician_esign_at, gate_inward_at, status
        FROM support_ticket_items
-      WHERE return_dc_number = $1
-         OR (ticket_id = $2 AND $2 IS NOT NULL AND item_type = 'pickup')
+      WHERE item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
+        AND (
+          return_dc_number = $1
+          OR (
+            return_dc_number IS NULL
+            AND ticket_id = $2 AND $2 IS NOT NULL
+          )
+        )
       ORDER BY id ASC`,
     [rdcNumber, head.support_ticket_id]
   );
@@ -578,11 +711,13 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   if (!headRes.rows.length) return null;
   const head = headRes.rows[0];
   const items = await db.query(
-    `SELECT id, serial_id, ttspl_id, serial_number, configuration, item_status,
-            receive_dc_number, replacement_dc_number
-       FROM vendor_repair_dc_items
-      WHERE dc_number = $1
-      ORDER BY id ASC`,
+    `SELECT i.id, i.serial_id, i.ttspl_id, i.serial_number, i.configuration, i.item_status,
+            i.receive_dc_number, i.replacement_dc_number,
+            vsn.extra AS serial_extra
+       FROM vendor_repair_dc_items i
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
+      WHERE i.dc_number = $1
+      ORDER BY i.id ASC`,
     [head.dc_number]
   );
   const dcStatus = String(head.status || '').toLowerCase();
@@ -601,7 +736,7 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   });
 
   const pick = direction === 'inward' ? (inwardItems.length ? inwardItems : items.rows) : outwardItems;
-  const units = pick.map((row) => ({
+  const units = pick.map((row) => enrichVrdcItemRow(row)).map((row) => ({
     serial_id: row.serial_id,
     ttspl: row.ttspl_id,
     serial_number: row.serial_number,
@@ -1010,7 +1145,7 @@ async function scannedInSession(db, sessionId, serialId) {
   return r.rows.length > 0;
 }
 
-async function attachScanState(db, session, laptops) {
+async function attachScanState(db, session, laptops, ctx) {
   const scans = await db.query(
     `SELECT serial_id, ttspl, serial_number, validation_result, scan_time, confirmed_at, metadata
        FROM gate_movements
@@ -1032,19 +1167,34 @@ async function attachScanState(db, session, laptops) {
     if (s.ttspl) latestByCode.set(normalizeCode(s.ttspl), s);
     if (s.serial_number) latestByCode.set(normalizeCode(s.serial_number), s);
   }
-  return laptops.map((l) => {
+  const enriched = await enrichLaptops(db, laptops);
+  return enriched.map((l) => {
     const hit = (l.serial_id && latestById.get(Number(l.serial_id)))
       || latestByCode.get(normalizeCode(l.ttspl))
       || latestByCode.get(normalizeCode(l.serial_number))
       || null;
-    const meta = parseJson(hit?.metadata, {}) || {};
-    const verified = hit?.validation_result === 'valid';
-    const checks = meta.checks || (verified ? {
-      ttspl: { ok: true, expected: l.ttspl, scanned: l.ttspl, message: 'TTSPL matches this movement' },
-      serial_number: { ok: true, expected: l.serial_number, scanned: l.serial_number, message: 'Serial number matches this movement' },
-      configuration: { ok: true, expected: l.configuration, scanned: l.configuration, message: 'Laptop configuration matches' },
-      movement_mode: { ok: true, expected: session.direction, scanned: session.direction, message: 'Movement mode matches this document' },
-    } : null);
+
+    let checks = null;
+    let verified = hit?.validation_result === 'valid';
+    if (hit && ctx) {
+      const { checks: freshChecks, all_passed } = buildLaptopChecks({
+        expected: l,
+        serial: l,
+        ctx,
+        scanRaw: l.ttspl || l.serial_number,
+        sessionDirection: session.direction,
+      });
+      checks = freshChecks;
+      verified = hit.validation_result === 'valid' && all_passed;
+    } else if (verified) {
+      checks = {
+        ttspl: { ok: true, expected: l.ttspl, scanned: l.ttspl, message: 'TTSPL matches this movement' },
+        serial_number: { ok: true, expected: l.serial_number, scanned: l.serial_number, message: 'Serial number matches this movement' },
+        configuration: { ok: true, expected: l.configuration, scanned: l.configuration, message: 'Laptop configuration matches' },
+        movement_mode: { ok: true, expected: session.direction, scanned: session.direction, message: 'Movement mode matches this document' },
+      };
+    }
+
     return {
       ...laptopDto(l, {
         scanned: Boolean(hit),
@@ -1111,7 +1261,7 @@ async function openOrReuseSession(db, ctx, actor) {
 }
 
 async function sessionView(db, session, ctx) {
-  const laptops = await attachScanState(db, session, ctx.laptops || []);
+  const laptops = await attachScanState(db, session, ctx.laptops || [], ctx);
   const verifiedCount = laptops.filter((l) => l.verified).length;
   const allGreen = laptops.length > 0 && laptops.every((l) => l.verified);
   const pending = await db.query(
@@ -1707,6 +1857,7 @@ async function applyInwardReturnDcGate(client, { session, actor }) {
             updated_at = NOW()
       WHERE return_dc_number = $1
         AND item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
       RETURNING id, ticket_id, gate_inward_at`,
     [rdc, actor.userId, session.session_id]
   );

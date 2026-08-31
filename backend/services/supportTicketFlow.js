@@ -52,7 +52,12 @@ const derivePickupStep = (item) => {
   const isLegacy = !item.pickup_type
     && (item.pickup_method === 'self_carry' || item.loan_delivered_at);
   if (!isLegacy) {
-    if (item.status === 'pending_dispatch' || (item.return_dc_number && !item.pickup_method && !item.assigned_to && !item.pickup_assigned_to)) {
+    if (
+      !item.pickup_method
+      && !item.pickup_assigned_to
+      && !item.assigned_to
+      && (item.status === 'pending_dispatch' || item.return_dc_number)
+    ) {
       return 'pending_dispatch';
     }
     if (isRepair) {

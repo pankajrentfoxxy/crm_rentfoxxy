@@ -379,10 +379,19 @@ export const itemAllowsTechnicianAssign = (item) => {
   if (!item) return true;
   const method = String(item.pickup_method || '').trim().toLowerCase();
   if (method === 'courier' || method === 'porter') return false;
-  if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
   if (item.item_type === 'complaint' && item.visited_at) return false;
   return true;
 };
+
+/** Return pickup can be edited (remove laptops) until guard inward or warehouse receipt. */
+export function isReturnPickupEditable(item) {
+  if (!item || item.item_type !== 'pickup') return false;
+  if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(item.status || ''))) {
+    return false;
+  }
+  if (item.warehouse_received_at || item.gate_inward_at) return false;
+  return true;
+}
 
 /** Return pickup assignee can change before technician marks reached / OTP. */
 export const isPickupAssignmentEditable = (item) => {

@@ -19,7 +19,6 @@ function isTechnicianVisitMethod(method) {
 function itemAllowsTechnicianAssign(item) {
   if (!item) return true;
   if (isCourierOrPorterMethod(item.pickup_method)) return false;
-  if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
   return true;
 }
 

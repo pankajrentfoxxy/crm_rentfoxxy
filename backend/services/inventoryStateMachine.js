@@ -93,6 +93,7 @@ async function transitionAsset(db, {
   rentStartDate = null,
   rentEndDate = null,
   rentMonthlyRate = null,
+  deliveredAt = null,
   actorUserId = null,
   actorName = null,
   allowOverride = false,
@@ -131,13 +132,22 @@ async function transitionAsset(db, {
     case STATUS.RENTED:
     case STATUS.SOLD:
       if (customerId !== null) add('current_customer_id', customerId);
-      add('delivered_at', new Date());
+      // Use authoritative POD / DC date when provided; only default to NOW() on first delivery.
+      if (deliveredAt != null) {
+        add('delivered_at', new Date(deliveredAt));
+      } else if (from !== toStatus) {
+        add('delivered_at', new Date());
+      }
       if (rentStartDate !== null) add('rent_start_date', rentStartDate);
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       break;
     case STATUS.ON_DEMO:
       if (customerId !== null) add('current_customer_id', customerId);
-      add('delivered_at', new Date());
+      if (deliveredAt != null) {
+        add('delivered_at', new Date(deliveredAt));
+      } else if (from !== toStatus) {
+        add('delivered_at', new Date());
+      }
       // Demo is free until the customer "keeps" — clear any mistaken rental anchors.
       sets.push('rent_start_date = NULL', 'rent_billed_until = NULL');
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
@@ -309,6 +319,7 @@ const markDelivered = async (db, serialId, {
     dispatchMode,
     rentStartDate,
     rentMonthlyRate: rentMonthlyRate ?? null,
+    deliveredAt: deliveredAt || null,
     reason: correctionReason,
     actorUserId,
     actorName,

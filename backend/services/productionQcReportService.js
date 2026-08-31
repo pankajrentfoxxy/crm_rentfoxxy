@@ -22,6 +22,19 @@ const {
 const VSN_SUPPLEMENTAL_BASE = 1000000000;
 const SUPPLEMENTAL_STAGE = 'GRN QC';
 
+function canViewProductionQcCustomerVendor(user) {
+  const role = String(user?.role || '').toLowerCase();
+  return role === 'admin' || role === 'super_admin';
+}
+
+function redactProductionQcCustomerVendor(data) {
+  if (data == null) return data;
+  if (Array.isArray(data)) return data.map(redactProductionQcCustomerVendor);
+  if (typeof data !== 'object') return data;
+  const { customer_vendor, ...rest } = data;
+  return rest;
+}
+
 /** Canonical report components requested for Production QC Report. */
 const REPORT_COMPONENTS = [
   { key: 'display', label: 'Display', sources: ['screen_resolution', 'refresh_rate', 'touch_screen'] },
@@ -380,7 +393,7 @@ function nextBind(params, searchBindIndex = 0) {
   return searchBindIndex + params.length;
 }
 
-function buildListFilters(query = {}, { searchBindIndex = 0 } = {}) {
+function buildListFilters(query = {}, { searchBindIndex = 0, includeCustomerVendorInSearch = true } = {}) {
   const params = [];
   const conditions = [];
   const search = normalizeMasterSearch(query);
@@ -391,17 +404,20 @@ function buildListFilters(query = {}, { searchBindIndex = 0 } = {}) {
       params.push(`%${search}%`);
     }
     const p = `$${bind}`;
-    conditions.push(`(
-      COALESCE(r.ttspl_id, '') ILIKE ${p}
-      OR COALESCE(r.serial_number, '') ILIKE ${p}
-      OR COALESCE(r.brand, '') ILIKE ${p}
-      OR COALESCE(r.model, '') ILIKE ${p}
-      OR COALESCE(r.customer_vendor, '') ILIKE ${p}
-      OR COALESCE(r.technician_name, '') ILIKE ${p}
-      OR COALESCE(r.checked_by_name, '') ILIKE ${p}
-      OR COALESCE(r.qc_stage, '') ILIKE ${p}
-      OR COALESCE(r.qc_result, '') ILIKE ${p}
-    )`);
+    const searchFields = [
+      `COALESCE(r.ttspl_id, '') ILIKE ${p}`,
+      `COALESCE(r.serial_number, '') ILIKE ${p}`,
+      `COALESCE(r.brand, '') ILIKE ${p}`,
+      `COALESCE(r.model, '') ILIKE ${p}`,
+      `COALESCE(r.technician_name, '') ILIKE ${p}`,
+      `COALESCE(r.checked_by_name, '') ILIKE ${p}`,
+      `COALESCE(r.qc_stage, '') ILIKE ${p}`,
+      `COALESCE(r.qc_result, '') ILIKE ${p}`,
+    ];
+    if (includeCustomerVendorInSearch) {
+      searchFields.splice(4, 0, `COALESCE(r.customer_vendor, '') ILIKE ${p}`);
+    }
+    conditions.push(`(${searchFields.join('\n      OR ')})`);
   }
 
   const dateFrom = queryDateFrom(query);
@@ -477,7 +493,8 @@ function mapListRow(row) {
   };
 }
 
-async function listProductionQcReportUncached(query = {}) {
+async function listProductionQcReportUncached(query = {}, options = {}) {
+  const includeCustomerVendor = options.includeCustomerVendor !== false;
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const maxLimit = query.for_export ? 2000 : 100;
   const limit = Math.min(maxLimit, Math.max(1, parseInt(query.limit, 10) || 25));
@@ -485,7 +502,10 @@ async function listProductionQcReportUncached(query = {}) {
   const search = normalizeMasterSearch(query);
   const queryParams = search ? [`%${search}%`] : [];
   const searchParam = search ? '$1' : null;
-  const { params, where } = buildListFilters(query, { searchBindIndex: search ? 1 : 0 });
+  const { params, where } = buildListFilters(query, {
+    searchBindIndex: search ? 1 : 0,
+    includeCustomerVendorInSearch: includeCustomerVendor,
+  });
   const allParams = [...queryParams, ...params];
   const baseSql = unifiedReportRowsCte(searchParam);
 
@@ -523,13 +543,18 @@ async function listProductionQcReportUncached(query = {}) {
   };
 }
 
-async function listProductionQcReport(query = {}) {
+async function listProductionQcReport(query = {}, options = {}) {
   const cacheKey = buildListCacheKey(query);
   const cached = await getCachedList(cacheKey);
-  if (cached) return cached;
+  const result = cached || await listProductionQcReportUncached(query, options);
+  if (!cached) await setCachedList(cacheKey, result);
 
-  const result = await listProductionQcReportUncached(query);
-  await setCachedList(cacheKey, result);
+  if (options.includeCustomerVendor === false) {
+    return {
+      ...result,
+      rows: redactProductionQcCustomerVendor(result.rows || []),
+    };
+  }
   return result;
 }
 
@@ -806,6 +831,8 @@ async function snapshotQcResultToHistory(db, qcId) {
 
 module.exports = {
   REPORT_COMPONENTS,
+  canViewProductionQcCustomerVendor,
+  redactProductionQcCustomerVendor,
   listProductionQcReport,
   getProductionQcReportDetail,
   getProductionQcReportFilters,

@@ -50,6 +50,7 @@ const {
     setOutcome,
     markPickedUp,
     initiateReplacement,
+    editReturnPickupMachines,
     cancelReturnPickup,
     getReplacementContext,
     assignReturnPickupDispatch,
@@ -169,6 +170,7 @@ router.post('/tickets/:ticketId/resend-laptop', requireTicketLead, initiateResen
 router.get('/tickets/:ticketId/return-redelivery-context', requireTicketLead, getReturnRedeliveryContext);
 router.post('/tickets/:ticketId/return-redelivery', requireTicketLead, initiateReturnRedelivery);
 router.post('/tickets/:ticketId/replacements', requireTicketLead, initiateReplacement);
+router.patch('/tickets/:ticketId/return-pickup-machines', requireTicketLead, editReturnPickupMachines);
 router.post('/tickets/:ticketId/cancel-return-pickup', requireTicketLead, cancelReturnPickup);
 router.post('/tickets/:ticketId/assign-return-pickup', requireTicketLead, assignReturnPickupDispatch);
 router.patch('/tickets/:ticketId/return-pickup-assignment', requireTicketLead, changeReturnPickupAssignment);

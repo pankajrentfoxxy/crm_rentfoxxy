@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getApiUrl } from '../utils/api';
+import { getApiUrl, getCaptureApiBase } from '../utils/api';
 import { buildMacCaptureCommand } from '../utils/macHwCaptureScript';
 import {
   buildWindowsCaptureCommand,
@@ -35,13 +35,13 @@ export default function GrnSerialCapturePage() {
   const [done, setDone] = useState(false);
   const [capturedSerial, setCapturedSerial] = useState('');
 
-  const apiBase = getPublicApiBase();
+  const scriptApiBase = getCaptureApiBase();
   const psScript = useMemo(
-    () => buildWindowsCaptureCommand(apiBase, token, 'grn-capture'),
-    [apiBase, token]
+    () => buildWindowsCaptureCommand(scriptApiBase, token, 'grn-capture'),
+    [scriptApiBase, token]
   );
   const psEncoded = useMemo(() => encodePsCommand(psScript), [psScript]);
-  const macScript = useMemo(() => buildMacCaptureCommand(apiBase, token, 'grn-capture'), [apiBase, token]);
+  const macScript = useMemo(() => buildMacCaptureCommand(scriptApiBase, token, 'grn-capture'), [scriptApiBase, token]);
 
   const loadSession = useCallback(async () => {
     setSessionWarning(null);
@@ -96,7 +96,7 @@ export default function GrnSerialCapturePage() {
   };
 
   const downloadWindowsScript = () => {
-    const content = buildWindowsCapturePs1(apiBase, token, 'grn-capture', 'Rentfoxxy GRN');
+    const content = buildWindowsCapturePs1(scriptApiBase, token, 'grn-capture', 'Rentfoxxy GRN');
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -304,7 +304,7 @@ export default function GrnSerialCapturePage() {
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400 m-0">
-                  API: <span className="font-mono break-all">{apiBase}/grn-capture/…</span>
+                  API: <span className="font-mono break-all">{scriptApiBase}/grn-capture/…</span>
                 </p>
               </div>
             </>

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, AlertTriangle, Plus, X,
-  Package, Wrench, MapPin,
+  Package, Wrench, MapPin, CalendarDays,
 } from 'lucide-react';
 import api from '../../../utils/api';
 import { INDIAN_STATES } from '../../../constants/indianStates';
@@ -19,6 +19,10 @@ const inputClass = (invalid) =>
       ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500'
       : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
   }`;
+
+function todayYmdIst() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
 
 function FieldError({ children }) {
   if (!children) return null;
@@ -41,6 +45,8 @@ export default function PublicSupportRequestPage() {
     city: '',
     state: '',
     address: '',
+    preferred_visit_date: '',
+    preferred_visit_time: '',
   });
   const [devices, setDevices] = useState([]);
   const [deviceDraft, setDeviceDraft] = useState('');
@@ -152,18 +158,32 @@ export default function PublicSupportRequestPage() {
 
     if (isPickup) {
       if (!devices.length) next.devices = 'Add at least one TTSPL / laptop';
-      if (!form.mobile_is_poc) {
-        const pocErr = indianMobileError(form.poc_mobile, { required: true, label: 'POC mobile number' });
-        if (pocErr) next.poc_mobile = pocErr;
-      }
-      if (sanitizePincode(form.pincode).length !== 6) next.pincode = 'Enter a valid 6-digit pincode';
-      if (!form.city.trim()) next.city = 'City is required';
-      if (!form.state.trim()) next.state = 'State is required';
-      if (!form.address.trim()) next.address = 'Pickup address is required';
     } else {
       if (!String(form.device_serial || '').trim()) next.device_serial = 'TTSPL / device ID is required';
       if (String(form.issue_description || '').trim().length < 10) {
         next.issue_description = 'Please describe the issue (at least 10 characters)';
+      }
+    }
+
+    if (!form.mobile_is_poc) {
+      const pocErr = indianMobileError(form.poc_mobile, { required: true, label: 'POC mobile number' });
+      if (pocErr) next.poc_mobile = pocErr;
+    }
+    if (sanitizePincode(form.pincode).length !== 6) next.pincode = 'Enter a valid 6-digit pincode';
+    if (!form.city.trim()) next.city = 'City is required';
+    if (!form.state.trim()) next.state = 'State is required';
+    if (!form.address.trim()) {
+      next.address = isPickup ? 'Pickup address is required' : 'Service address is required';
+    }
+
+    if (!isPickup) {
+      if (!form.preferred_visit_date.trim()) {
+        next.preferred_visit_date = 'Preferred visit date is required';
+      } else if (form.preferred_visit_date < todayYmdIst()) {
+        next.preferred_visit_date = 'Visit date cannot be in the past';
+      }
+      if (form.preferred_visit_time.trim() && !/^\d{2}:\d{2}$/.test(form.preferred_visit_time.trim())) {
+        next.preferred_visit_time = 'Enter a valid time (HH:MM)';
       }
     }
 
@@ -196,22 +216,28 @@ export default function PublicSupportRequestPage() {
         company_name: form.company_name.trim() || undefined,
         issue_description: form.issue_description.trim() || undefined,
       };
+      const visitAddress = {
+        name: form.customer_name.trim(),
+        phone: form.mobile_is_poc
+          ? normalizeIndianMobile(form.mobile_number)
+          : normalizeIndianMobile(form.poc_mobile),
+        address: form.address.trim(),
+        city: form.city.trim(),
+        state: form.state.trim(),
+        pincode: sanitizePincode(form.pincode),
+      };
+      payload.mobile_is_poc = form.mobile_is_poc;
+      payload.poc_mobile = form.mobile_is_poc ? undefined : normalizeIndianMobile(form.poc_mobile);
       if (isPickup) {
         payload.device_serials = devices;
-        payload.mobile_is_poc = form.mobile_is_poc;
-        payload.poc_mobile = form.mobile_is_poc ? undefined : normalizeIndianMobile(form.poc_mobile);
-        payload.pickup_address = {
-          name: form.customer_name.trim(),
-          phone: form.mobile_is_poc
-            ? normalizeIndianMobile(form.mobile_number)
-            : normalizeIndianMobile(form.poc_mobile),
-          address: form.address.trim(),
-          city: form.city.trim(),
-          state: form.state.trim(),
-          pincode: sanitizePincode(form.pincode),
-        };
+        payload.pickup_address = visitAddress;
       } else {
         payload.device_serial = form.device_serial.trim();
+        payload.service_address = visitAddress;
+        payload.preferred_visit_date = form.preferred_visit_date.trim();
+        if (form.preferred_visit_time.trim()) {
+          payload.preferred_visit_time = form.preferred_visit_time.trim();
+        }
       }
       const { data } = await api.post('/support-public/request', payload);
       setDone(data);
@@ -225,7 +251,7 @@ export default function PublicSupportRequestPage() {
   const subtitle = useMemo(() => (
     isPickup
       ? 'Schedule a laptop pickup — add each TTSPL and the collection address.'
-      : 'Tell us what\'s wrong — we\'ll get back to you shortly.'
+      : 'Tell us what\'s wrong, where to visit, and when — we\'ll get back to you shortly.'
   ), [isPickup]);
 
   return (
@@ -411,93 +437,127 @@ export default function PublicSupportRequestPage() {
                 )}
               </section>
 
-              {isPickup ? (
+              <section className="space-y-3.5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5" /> {isPickup ? 'Pickup location' : 'Service location'}
+                </p>
+
+                <label className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-[#534AB7]"
+                    checked={form.mobile_is_poc}
+                    onChange={(e) => set('mobile_is_poc', e.target.checked)}
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-slate-800">This mobile number is the POC number</span>
+                    <span className="block text-xs text-slate-500">Uncheck to enter a different person-of-contact mobile</span>
+                  </span>
+                </label>
+
+                {!form.mobile_is_poc ? (
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">POC mobile number *</span>
+                    <input
+                      className={inputClass(fieldErrors.poc_mobile)}
+                      value={form.poc_mobile}
+                      onChange={(e) => set('poc_mobile', formatIndianMobileInput(e.target.value))}
+                      inputMode="numeric"
+                      placeholder="10-digit POC mobile"
+                      maxLength={10}
+                    />
+                    <FieldError>{fieldErrors.poc_mobile}</FieldError>
+                  </label>
+                ) : null}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="block sm:col-span-1">
+                    <span className="text-xs font-semibold text-slate-600">Pincode *</span>
+                    <input
+                      className={inputClass(fieldErrors.pincode)}
+                      value={form.pincode}
+                      onChange={(e) => onPincodeChange(e.target.value)}
+                      inputMode="numeric"
+                      placeholder="6 digits"
+                      maxLength={6}
+                    />
+                    <FieldError>{fieldErrors.pincode}</FieldError>
+                    {pinBusy ? <span className="mt-1 block text-xs text-indigo-600">Looking up city &amp; state…</span> : null}
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">City *</span>
+                    <input
+                      className={inputClass(fieldErrors.city)}
+                      value={form.city}
+                      onChange={(e) => set('city', e.target.value)}
+                      placeholder="Auto from pincode"
+                    />
+                    <FieldError>{fieldErrors.city}</FieldError>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">State *</span>
+                    <select
+                      className={inputClass(fieldErrors.state)}
+                      value={form.state}
+                      onChange={(e) => set('state', e.target.value)}
+                    >
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((state) => (
+                        <option key={state} value={state}>{state}</option>
+                      ))}
+                      {form.state && !INDIAN_STATES.includes(form.state) ? (
+                        <option value={form.state}>{form.state}</option>
+                      ) : null}
+                    </select>
+                    <FieldError>{fieldErrors.state}</FieldError>
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-600">
+                    {isPickup ? 'Pickup address *' : 'Service / visit address *'}
+                  </span>
+                  <textarea
+                    className={`${inputClass(fieldErrors.address)} min-h-[88px]`}
+                    value={form.address}
+                    onChange={(e) => set('address', e.target.value)}
+                    placeholder="Building, street, landmark"
+                  />
+                  <FieldError>{fieldErrors.address}</FieldError>
+                </label>
+              </section>
+
+              {!isPickup ? (
                 <section className="space-y-3.5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5" /> Pickup location
+                    <CalendarDays className="w-3.5 h-3.5" /> Preferred visit schedule
                   </p>
-
-                  <label className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 accent-[#534AB7]"
-                      checked={form.mobile_is_poc}
-                      onChange={(e) => set('mobile_is_poc', e.target.checked)}
-                    />
-                    <span>
-                      <span className="block text-sm font-medium text-slate-800">This mobile number is the POC number</span>
-                      <span className="block text-xs text-slate-500">Uncheck to enter a different person-of-contact mobile</span>
-                    </span>
-                  </label>
-
-                  {!form.mobile_is_poc ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <label className="block">
-                      <span className="text-xs font-semibold text-slate-600">POC mobile number *</span>
+                      <span className="text-xs font-semibold text-slate-600">Visit date *</span>
                       <input
-                        className={inputClass(fieldErrors.poc_mobile)}
-                        value={form.poc_mobile}
-                        onChange={(e) => set('poc_mobile', formatIndianMobileInput(e.target.value))}
-                        inputMode="numeric"
-                        placeholder="10-digit POC mobile"
-                        maxLength={10}
+                        type="date"
+                        className={inputClass(fieldErrors.preferred_visit_date)}
+                        value={form.preferred_visit_date}
+                        min={todayYmdIst()}
+                        onChange={(e) => set('preferred_visit_date', e.target.value)}
                       />
-                      <FieldError>{fieldErrors.poc_mobile}</FieldError>
-                    </label>
-                  ) : null}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <label className="block sm:col-span-1">
-                      <span className="text-xs font-semibold text-slate-600">Pincode *</span>
-                      <input
-                        className={inputClass(fieldErrors.pincode)}
-                        value={form.pincode}
-                        onChange={(e) => onPincodeChange(e.target.value)}
-                        inputMode="numeric"
-                        placeholder="6 digits"
-                        maxLength={6}
-                      />
-                      <FieldError>{fieldErrors.pincode}</FieldError>
-                      {pinBusy ? <span className="mt-1 block text-xs text-indigo-600">Looking up city &amp; state…</span> : null}
+                      <FieldError>{fieldErrors.preferred_visit_date}</FieldError>
                     </label>
                     <label className="block">
-                      <span className="text-xs font-semibold text-slate-600">City *</span>
+                      <span className="text-xs font-semibold text-slate-600">Visit time</span>
                       <input
-                        className={inputClass(fieldErrors.city)}
-                        value={form.city}
-                        onChange={(e) => set('city', e.target.value)}
-                        placeholder="Auto from pincode"
+                        type="time"
+                        className={inputClass(fieldErrors.preferred_visit_time)}
+                        value={form.preferred_visit_time}
+                        onChange={(e) => set('preferred_visit_time', e.target.value)}
                       />
-                      <FieldError>{fieldErrors.city}</FieldError>
-                    </label>
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-600">State *</span>
-                      <select
-                        className={inputClass(fieldErrors.state)}
-                        value={form.state}
-                        onChange={(e) => set('state', e.target.value)}
-                      >
-                        <option value="">Select state</option>
-                        {INDIAN_STATES.map((state) => (
-                          <option key={state} value={state}>{state}</option>
-                        ))}
-                        {form.state && !INDIAN_STATES.includes(form.state) ? (
-                          <option value={form.state}>{form.state}</option>
-                        ) : null}
-                      </select>
-                      <FieldError>{fieldErrors.state}</FieldError>
+                      <FieldError>{fieldErrors.preferred_visit_time}</FieldError>
+                      {!fieldErrors.preferred_visit_time ? (
+                        <span className="mt-1 block text-xs text-slate-400">Optional — we&apos;ll try to visit around this time</span>
+                      ) : null}
                     </label>
                   </div>
-
-                  <label className="block">
-                    <span className="text-xs font-semibold text-slate-600">Pickup address *</span>
-                    <textarea
-                      className={`${inputClass(fieldErrors.address)} min-h-[88px]`}
-                      value={form.address}
-                      onChange={(e) => set('address', e.target.value)}
-                      placeholder="Building, street, landmark"
-                    />
-                    <FieldError>{fieldErrors.address}</FieldError>
-                  </label>
                 </section>
               ) : null}
 

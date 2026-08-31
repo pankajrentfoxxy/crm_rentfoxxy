@@ -544,7 +544,9 @@ exports.getFloorNavCounts = async (req, res) => {
         qc_queue: (await canViewSection('qc_management')) ? (r.qc_queue || 0) : 0,
         chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
         body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
-        diagnosis_failed: (await canViewSection('floor_pipeline')) ? (r.diagnosis_failed || 0) : 0,
+        diagnosis_failed: (await canViewSection('diagnosis_failed') || await canViewSection('floor_pipeline'))
+          ? (r.diagnosis_failed || 0)
+          : 0,
         pending_inventory: pendingInventory,
       },
     });
@@ -1083,6 +1085,8 @@ exports.assignTicket = async (req, res) => {
     const currentTicket = ticketRes.rows[0];
     const preserveDispatchQcStage =
       currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
+    const preserveQcStageReassign =
+      ['QC1', 'QC2'].includes(currentTicket.stage_name) && user_id && !target_stage_id && !team_id;
 
     // Floor Manager → HW Technician: capture ON / NOT ON + identity when provided.
     const isFloorManagerAssign = currentTicket.stage_name === 'Floor Manager' && !!user_id;
@@ -1182,9 +1186,9 @@ exports.assignTicket = async (req, res) => {
         targetTeamId = stageRes.rows[0].team_id;
         logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
-    } else if (preserveDispatchQcStage) {
-      // Reassign within Dispatch QC — keep stage, only change assignee
-      logMessage += 'Reassigned at Dispatch QC. ';
+    } else if (preserveDispatchQcStage || preserveQcStageReassign) {
+      // Reassign within Dispatch QC / QC1 / QC2 — keep stage, only change assignee
+      logMessage += preserveDispatchQcStage ? 'Reassigned at Dispatch QC. ' : `Reassigned at ${currentTicket.stage_name}. `;
     } else if (user_id) {
       // Get all teams for this user (primary team_id + user_teams)
       const userTeamsRes = await pool.query(
@@ -2180,21 +2184,59 @@ async function queryTeamMembers(pool, { roles, teamId }) {
   return r.rows;
 }
 
+/** QC1/QC2 pools: any active user on the team (floor managers, multi-team QC, etc.). */
+async function queryQcTeamMembersByMembership(pool, teamId) {
+  if (!teamId) return [];
+  const r = await pool.query(
+    `SELECT u.user_id, u.name, u.role,
+            COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+     FROM users u
+     LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+     LEFT JOIN user_teams ut ON u.user_id = ut.user_id AND ut.team_id = $1
+     WHERE COALESCE(u.active, true) = true
+       AND (u.team_id = $1 OR ut.team_id = $1)
+     GROUP BY u.user_id, u.name, u.role
+     ORDER BY active_tickets ASC, u.name ASC`,
+    [teamId]
+  );
+  return r.rows;
+}
+
+async function resolveTeamIdForName(pool, teamName) {
+  const n = String(teamName || '').trim().toLowerCase();
+  if (n === 'qc1 team') {
+    const stage = await pool.query(`SELECT team_id FROM stages WHERE stage_name = 'QC1' LIMIT 1`);
+    if (stage.rows[0]?.team_id) return stage.rows[0].team_id;
+  }
+  if (n === 'qc2 team') {
+    const stage = await pool.query(`SELECT team_id FROM stages WHERE stage_name = 'QC2' LIMIT 1`);
+    if (stage.rows[0]?.team_id) return stage.rows[0].team_id;
+  }
+  const teamRes = await pool.query(
+    `SELECT team_id FROM teams WHERE team_name = $1 ORDER BY team_id ASC LIMIT 1`,
+    [teamName]
+  );
+  return teamRes.rows[0]?.team_id ?? null;
+}
+
 exports.getTeamMembers = async (req, res) => {
   const teamName = String(req.query.team_name || 'Hardware & Software').trim();
   const n = teamName.trim().toLowerCase();
 
   try {
-    const teamRes = await pool.query(
-      `SELECT team_id FROM teams WHERE team_name = $1 LIMIT 1`,
-      [teamName]
-    );
-    const teamId = teamRes.rows[0]?.team_id ?? null;
-
     if (n === 'dispatch qc team' || n === 'dispatch qc') {
+      const teamId = await resolveTeamIdForName(pool, teamName);
       const rows = await queryDispatchQcEligibleMembers(pool, teamId);
       return res.json({ success: true, team_name: teamName, members: rows });
     }
+
+    if (n === 'qc1 team' || n === 'qc2 team') {
+      const teamId = await resolveTeamIdForName(pool, teamName);
+      const rows = await queryQcTeamMembersByMembership(pool, teamId);
+      return res.json({ success: true, team_name: teamName, members: rows });
+    }
+
+    const teamId = await resolveTeamIdForName(pool, teamName);
 
     const { roles, roleOnly } = rolesForTeamName(teamName);
 

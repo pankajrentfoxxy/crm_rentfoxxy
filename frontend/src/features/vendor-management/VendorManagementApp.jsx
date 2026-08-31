@@ -63,8 +63,22 @@ export default function VendorManagementApp() {
         <Route path="serial-numbers" element={g('vendor_management', <SerialNumberPage />)} />
         <Route path="replaced-products" element={g('vendor_management', <ReplacedProductsPage />)} />
 
-        <Route path="vendor-repair-dc" element={g('vendor_repair_dc', <VendorRepairDcListPage />)} />
-        <Route path="vendor-repair-dc/:dcNumber" element={g('vendor_repair_dc', <VendorRepairDcDetailPage />)} />
+        <Route
+          path="vendor-repair-dc"
+          element={
+            <ProtectedRoute sections={['vendor_repair_dc', 'vendor_repair_dc_dispatch']} action="view">
+              <VendorRepairDcListPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="vendor-repair-dc/:dcNumber"
+          element={
+            <ProtectedRoute sections={['vendor_repair_dc', 'vendor_repair_dc_dispatch']} action="view">
+              <VendorRepairDcDetailPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route path="billing/vendor-overview" element={g('vendor_management', <BillingMonthlyPage view="overview" />)} />
         <Route path="billing/pending" element={g('vendor_management', <BillingMonthlyPage view="pending" />)} />

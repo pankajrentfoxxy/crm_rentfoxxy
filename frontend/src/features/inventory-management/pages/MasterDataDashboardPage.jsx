@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  Building2, HardDrive, Laptop, Loader2, Users, Wrench,
+  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Users, Wrench,
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
 import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS, specFiltersToParams } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
-import { fetchMasterDataDashboard } from '../inventoryManagementApi';
+import { exportMasterDataExcel, fetchMasterDataDashboard, fetchMasterDataKpis } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
@@ -32,9 +32,51 @@ const LOCATION_OPTIONS = ['', 'Inventory', 'Customer', 'Floor', 'Vendor'];
 
 /** Query keys synced to the URL so filters survive detail navigation + back. */
 const URL_KEYS = [
-  'tab', 'page', 'q', 'status', 'location', 'stage', 'entity',
-  'customer_id', 'vendor_id', 'from_vendor', 'ready', 'qc_process', 'date_from', 'date_to',
+  'tab', 'page', 'q', 'status', 'location', 'stage', 'entity', 'pricing_type',
+  'date_mode', 'month', 'date_from', 'date_to',
+  'customer_id', 'vendor_id', 'from_vendor', 'ready', 'qc_process',
   ...SPEC_FILTER_KEYS,
+];
+
+const DATE_MODE_OPTIONS = [
+  { value: '', label: 'All time' },
+  { value: 'month', label: 'By month' },
+  { value: 'range', label: 'Custom date range' },
+];
+
+function currentMonthValue() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+}
+
+function buildMonthOptions(count = 24) {
+  const options = [];
+  const anchor = new Date();
+  anchor.setDate(1);
+  for (let i = 0; i < count; i += 1) {
+    const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+    const value = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+    const label = d.toLocaleDateString('en-IN', {
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'Asia/Kolkata',
+    });
+    options.push({ value, label });
+  }
+  return options;
+}
+
+function formatMonthLabel(yyyyMm) {
+  if (!/^\d{4}-\d{2}$/.test(yyyyMm || '')) return yyyyMm || '';
+  const d = new Date(`${yyyyMm}-01T12:00:00+05:30`);
+  return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+}
+
+const MONTH_OPTIONS = buildMonthOptions();
+
+const PRICING_TYPE_OPTIONS = [
+  { value: '', label: 'All commercial types' },
+  { value: 'sale', label: 'Sale only' },
+  { value: 'rental', label: 'Rental only' },
 ];
 
 function readSpecFilters(sp) {
@@ -131,6 +173,7 @@ function grnHref(row) {
 export default function MasterDataDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
+  const [kpiLoading, setKpiLoading] = useState(true);
   const [kpis, setKpis] = useState({});
   const [rows, setRows] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -140,6 +183,7 @@ export default function MasterDataDashboardPage() {
   const [stages, setStages] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [historyTtspl, setHistoryTtspl] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   // Local search box; debounced value is written into the URL.
   const [searchInput, setSearchInput] = useState(() => searchParams.get('q') || '');
@@ -152,6 +196,7 @@ export default function MasterDataDashboardPage() {
   const location = searchParams.get('location') || '';
   const stage = searchParams.get('stage') || '';
   const entity = searchParams.get('entity') || '';
+  const pricingType = searchParams.get('pricing_type') || '';
   const customerId = searchParams.get('customer_id') || '';
   const vendorId = searchParams.get('vendor_id') || '';
   const fromVendor = searchParams.get('from_vendor') === '1';
@@ -159,6 +204,8 @@ export default function MasterDataDashboardPage() {
   const qcProcess = searchParams.get('qc_process') === '1';
   const dateFrom = searchParams.get('date_from') || '';
   const dateTo = searchParams.get('date_to') || '';
+  const dateMode = searchParams.get('date_mode') || (dateFrom || dateTo ? 'range' : '');
+  const month = searchParams.get('month') || '';
   const specFilters = useMemo(() => readSpecFilters(searchParams), [searchParams]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
 
@@ -192,7 +239,17 @@ export default function MasterDataDashboardPage() {
     setSearchInput((prev) => (prev.trim() === q ? prev : q));
   }, [searchParams]);
 
-  const filterParams = useMemo(() => ({
+  const kpiFilterParams = useMemo(() => ({
+    search: search || undefined,
+    pricing_type: pricingType || undefined,
+    date_mode: dateMode || undefined,
+    month: dateMode === 'month' ? (month || currentMonthValue()) : undefined,
+    date_from: dateMode === 'range' ? (dateFrom || undefined) : undefined,
+    date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
+    ...specFiltersToParams(debouncedSpecs),
+  }), [search, pricingType, dateMode, month, dateFrom, dateTo, debouncedSpecs]);
+
+  const tabFilterParams = useMemo(() => ({
     tab,
     page,
     limit: PAGE_SIZE,
@@ -201,24 +258,40 @@ export default function MasterDataDashboardPage() {
     location: location || undefined,
     stage: stage || undefined,
     entity: entity || undefined,
+    pricing_type: pricingType || undefined,
+    date_mode: dateMode || undefined,
+    month: dateMode === 'month' ? (month || currentMonthValue()) : undefined,
+    date_from: dateMode === 'range' ? (dateFrom || undefined) : undefined,
+    date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
     customer_id: customerId || undefined,
     vendor_id: vendorId || undefined,
     from_vendor: fromVendor ? '1' : undefined,
     ready: ready ? '1' : undefined,
     qc_process: qcProcess ? '1' : undefined,
-    date_from: dateFrom || undefined,
-    date_to: dateTo || undefined,
     ...specFiltersToParams(debouncedSpecs),
   }), [
-    tab, page, search, status, location, stage, entity, customerId, vendorId, fromVendor, ready, qcProcess, dateFrom, dateTo, debouncedSpecs,
+    tab, page, search, status, location, stage, entity, pricingType, dateMode, month,
+    dateFrom, dateTo, customerId, vendorId, fromVendor, ready, qcProcess, debouncedSpecs,
   ]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const loadKpis = useCallback(async () => {
+    setKpiLoading(true);
     try {
-      const { data } = await fetchMasterDataDashboard(filterParams);
+      const { data } = await fetchMasterDataKpis(kpiFilterParams);
       if (!data?.success) throw new Error(data?.message || 'Failed');
       setKpis(data.kpis || {});
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Failed to load KPIs');
+    } finally {
+      setKpiLoading(false);
+    }
+  }, [kpiFilterParams]);
+
+  const loadTab = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await fetchMasterDataDashboard(tabFilterParams);
+      if (!data?.success) throw new Error(data?.message || 'Failed');
       if (data.tab === 'laptops') {
         setRows(data.data || []);
         setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -236,9 +309,10 @@ export default function MasterDataDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterParams]);
+  }, [tabFilterParams]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadKpis(); }, [loadKpis]);
+  useEffect(() => { loadTab(); }, [loadTab]);
 
   const openCustomer = (id) => {
     patchParams({
@@ -262,6 +336,18 @@ export default function MasterDataDashboardPage() {
       tab: 'laptops',
     });
   };
+  const openSaleList = () => {
+    patchParams({
+      pricing_type: 'sale',
+      tab: 'laptops',
+    });
+  };
+  const openRentalList = () => {
+    patchParams({
+      pricing_type: 'rental',
+      tab: 'laptops',
+    });
+  };
   const openAllLaptops = () => {
     patchParams({
       customer_id: '',
@@ -269,6 +355,7 @@ export default function MasterDataDashboardPage() {
       from_vendor: false,
       ready: false,
       qc_process: false,
+      pricing_type: '',
       status: '',
       stage: '',
       location: '',
@@ -360,6 +447,19 @@ export default function MasterDataDashboardPage() {
     patchParams(patch);
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const { page: _page, limit: _limit, ...exportParams } = tabFilterParams;
+      await exportMasterDataExcel(exportParams);
+      toast.success('Export downloaded');
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -370,35 +470,35 @@ export default function MasterDataDashboardPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <StatCard
           label="Total Laptops"
-          value={kpis.total_laptops ?? '—'}
+          value={kpiLoading ? '…' : (kpis.total_laptops ?? '—')}
           icon={Laptop}
           hint="Click to open all laptops"
           onClick={openAllLaptops}
-          active={tab === 'laptops' && !location && !fromVendor && !ready && !qcProcess && !customerId && !vendorId}
+          active={tab === 'laptops' && !location && !fromVendor && !ready && !qcProcess && !customerId && !vendorId && !pricingType}
         />
         <StatCard
           label="With Customers"
-          value={kpis.total_active_customer_assets ?? '—'}
+          value={kpiLoading ? '…' : (kpis.total_active_customer_assets ?? '—')}
           icon={HardDrive}
           tone="teal"
           hint="Rent / demo / sold / in transit"
           onClick={openWithCustomerList}
-          active={location === 'Customer' && tab === 'laptops' && !fromVendor && !ready && !qcProcess}
+          active={location === 'Customer' && tab === 'laptops' && !fromVendor && !ready && !qcProcess && !pricingType}
         />
         <StatCard
           label="From Vendors"
-          value={kpis.total_from_vendors ?? '—'}
+          value={kpiLoading ? '…' : (kpis.total_from_vendors ?? '—')}
           icon={Building2}
           tone="purple"
           hint="Click to open laptop list"
           onClick={openFromVendorList}
-          active={fromVendor && tab === 'laptops' && !ready && !qcProcess}
+          active={fromVendor && tab === 'laptops' && !ready && !qcProcess && !pricingType}
         />
-        <StatCard label="Customers" value={kpis.total_customers ?? '—'} icon={Users} />
-        <StatCard label="Vendors" value={kpis.total_vendors ?? '—'} icon={Building2} />
+        <StatCard label="Customers" value={kpiLoading ? '…' : (kpis.total_customers ?? '—')} icon={Users} />
+        <StatCard label="Vendors" value={kpiLoading ? '…' : (kpis.total_vendors ?? '—')} icon={Building2} />
         <StatCard
           label="QC Process"
-          value={kpis.total_qc_process ?? '—'}
+          value={kpiLoading ? '…' : (kpis.total_qc_process ?? '—')}
           icon={Wrench}
           tone="amber"
           hint="Not ready — floor / QC / repair / inventory"
@@ -407,7 +507,7 @@ export default function MasterDataDashboardPage() {
         />
         <StatCard
           label="Ready to Rent/Sale"
-          value={kpis.total_ready_to_rent_sale ?? '—'}
+          value={kpiLoading ? '…' : (kpis.total_ready_to_rent_sale ?? '—')}
           tone="green"
           hint="In stock + QC passed"
           onClick={openReadyToRentSale}
@@ -415,16 +515,63 @@ export default function MasterDataDashboardPage() {
         />
       </div>
 
-      {(location === 'Customer' || fromVendor || ready || qcProcess) && tab === 'laptops' ? (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard
+          label="Sale Laptops"
+          value={kpiLoading ? '…' : (kpis.total_sale_units ?? '—')}
+          icon={IndianRupee}
+          tone="red"
+          hint="Sold or sale quotation"
+          onClick={openSaleList}
+          active={pricingType === 'sale' && tab === 'laptops'}
+        />
+        <StatCard
+          label="Total Sale Value"
+          value={kpiLoading ? '…' : fmtMoney(kpis.total_sale_value)}
+          icon={IndianRupee}
+          tone="red"
+          hint="Sum of sale prices (filtered)"
+          onClick={openSaleList}
+          active={pricingType === 'sale' && tab === 'laptops'}
+        />
+        <StatCard
+          label="Rental Laptops"
+          value={kpiLoading ? '…' : (kpis.total_rental_units ?? '—')}
+          icon={IndianRupee}
+          tone="blue"
+          hint="Rental / demo deployments"
+          onClick={openRentalList}
+          active={pricingType === 'rental' && tab === 'laptops'}
+        />
+        <StatCard
+          label="Monthly Rental Value"
+          value={kpiLoading ? '…' : fmtMoney(kpis.total_monthly_rental_value)}
+          icon={IndianRupee}
+          tone="blue"
+          hint="Active rental monthly total"
+          onClick={openRentalList}
+          active={pricingType === 'rental' && tab === 'laptops'}
+        />
+      </div>
+
+      {(location === 'Customer' || fromVendor || ready || qcProcess || pricingType || dateMode) && tab === 'laptops' ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 bg-teal-50 border border-teal-100 rounded-xl px-3 py-2">
           <span className="font-semibold text-teal-800">
-            {qcProcess
-              ? 'Showing QC process laptops (not ready to rent/sale)'
-              : ready
-                ? 'Showing ready to rent/sale laptops'
-                : location === 'Customer'
-                  ? 'Showing laptops with customers'
-                  : 'Showing laptops sourced from vendors'}
+            {dateMode === 'month'
+              ? `Showing laptops for ${formatMonthLabel(month || currentMonthValue())} (delivery / rent start / GRN date, IST)`
+              : dateMode === 'range' && (dateFrom || dateTo)
+                ? `Showing laptops ${dateFrom || '…'} to ${dateTo || '…'} (IST activity dates)`
+                : pricingType === 'sale'
+                  ? 'Showing sale laptops only'
+                  : pricingType === 'rental'
+                    ? 'Showing rental laptops only'
+                    : qcProcess
+                      ? 'Showing QC process laptops (not ready to rent/sale)'
+                      : ready
+                        ? 'Showing ready to rent/sale laptops'
+                        : location === 'Customer'
+                          ? 'Showing laptops with customers'
+                          : 'Showing laptops sourced from vendors'}
           </span>
           <button type="button" onClick={clearFilters} className="ml-auto text-teal-700 hover:underline font-medium">
             Clear filter
@@ -457,17 +604,78 @@ export default function MasterDataDashboardPage() {
             value={stage}
             onChange={(e) => patchParams({ stage: e.target.value })}
           />
+          <select className="border rounded-lg px-3 py-2 text-sm" value={pricingType} onChange={(e) => patchParams({ pricing_type: e.target.value })}>
+            {PRICING_TYPE_OPTIONS.map((opt) => (
+              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
           <select className="border rounded-lg px-3 py-2 text-sm" value={entity} onChange={(e) => patchParams({ entity: e.target.value })}>
             <option value="">All entities</option>
             <option value="rentfoxxy">Rentfoxxy</option>
             <option value="gorefurbo">Gorefurbo</option>
           </select>
-          <DateRangeFilter
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onDateFromChange={(v) => patchParams({ date_from: v })}
-            onDateToChange={(v) => patchParams({ date_to: v })}
-          />
+          <select
+            className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem]"
+            value={dateMode}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next === 'month') {
+                patchParams({
+                  date_mode: 'month',
+                  month: month || currentMonthValue(),
+                  date_from: '',
+                  date_to: '',
+                });
+              } else if (next === 'range') {
+                patchParams({
+                  date_mode: 'range',
+                  month: '',
+                });
+              } else {
+                patchParams({
+                  date_mode: '',
+                  month: '',
+                  date_from: '',
+                  date_to: '',
+                });
+              }
+            }}
+            aria-label="Date filter mode"
+          >
+            {DATE_MODE_OPTIONS.map((opt) => (
+              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {dateMode === 'month' ? (
+            <select
+              className="border rounded-lg px-3 py-2 text-sm min-w-[9rem]"
+              value={month || currentMonthValue()}
+              onChange={(e) => patchParams({ date_mode: 'month', month: e.target.value, date_from: '', date_to: '' })}
+              aria-label="Select month"
+            >
+              {MONTH_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          ) : null}
+          {dateMode === 'range' ? (
+            <DateRangeFilter
+              layout="inline"
+              showPresets={false}
+              fromLabel="From"
+              toLabel="To"
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onRangeChange={({ dateFrom: from, dateTo: to }) => patchParams({
+                date_mode: 'range',
+                month: '',
+                date_from: from,
+                date_to: to,
+              })}
+              onDateFromChange={(v) => patchParams({ date_mode: 'range', month: '', date_from: v })}
+              onDateToChange={(v) => patchParams({ date_mode: 'range', month: '', date_to: v })}
+            />
+          ) : null}
           <button type="button" onClick={clearFilters} className="text-sm px-3 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">
             Clear
           </button>
@@ -486,19 +694,30 @@ export default function MasterDataDashboardPage() {
         ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-0">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => patchParams({ tab: t.id })}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
-              tab === t.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-0">
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => patchParams({ tab: t.id })}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+                tab === t.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting || loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 mb-1 border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+          Export Excel
+        </button>
       </div>
 
       {loading ? (

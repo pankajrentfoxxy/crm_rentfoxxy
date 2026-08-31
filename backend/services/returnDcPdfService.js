@@ -62,6 +62,7 @@ async function buildUnitsForRdc(db, dcl, pickupItems) {
   const seen = new Set();
 
   for (const item of pickupItems) {
+    if (String(item.status || '') === 'cancelled') continue;
     const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
     const key = code || `item-${item.id}`;
     if (seen.has(key)) continue;
@@ -122,6 +123,7 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
     const itemsRes = await db.query(
       `SELECT * FROM support_ticket_items
         WHERE return_dc_number = $1 AND item_type = 'pickup'
+          AND COALESCE(status, '') NOT IN ('cancelled')
         ORDER BY id ASC`,
       [rdcNumber]
     );
