@@ -12,7 +12,179 @@ const {
 const { loadDeliveryDefaults } = require('./supportReplacementFlowService');
 
 const DC_PURPOSE = 'service_return';
-const OPEN_SDC_STATUSES = new Set(['pending', 'in_transit', 'shipped', 'reached']);
+const OPEN_SDC_STATUSES = new Set([
+  'pending', 'processing', 'dispatch_ready', 'in_transit', 'shipped', 'reached',
+]);
+
+function sdcStatusRank(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'cancelled') return -1;
+  if (s === 'rejected') return 50;
+  if (s === 'delivered') return 40;
+  if (['in_transit', 'shipped', 'reached'].includes(s)) return 30;
+  if (s === 'dispatch_ready') return 20;
+  if (s === 'processing') return 15;
+  return 10;
+}
+
+function buildSdcTracking(sdc, extras = {}) {
+  const status = String(sdc.status || 'pending').toLowerCase();
+  const rank = sdcStatusRank(status);
+  const outwardAt = sdc.dispatched_at || extras.gateAt || null;
+  const outwardBy = extras.gateName || null;
+  const readyAt = extras.dispatchReadyAt
+    || (rank >= 20 ? (sdc.created_at || sdc.updated_at) : null);
+
+  const steps = [
+    {
+      key: 'created',
+      label: 'SDC created',
+      done: status !== 'cancelled' || Boolean(sdc.created_at),
+      current: rank < 20 && status !== 'cancelled' && status !== 'rejected',
+      at: sdc.created_at || null,
+      by: sdc.created_by_name || null,
+    },
+    {
+      key: 'dispatch_ready',
+      label: 'Dispatch ready',
+      done: rank >= 20,
+      current: status === 'dispatch_ready',
+      at: rank >= 20 ? readyAt : null,
+      by: null,
+    },
+    {
+      key: 'outward',
+      label: 'Outward (gate)',
+      done: rank >= 30 || Boolean(outwardAt),
+      current: false,
+      at: outwardAt,
+      by: outwardBy,
+    },
+    {
+      key: 'in_transit',
+      label: 'In transit',
+      done: rank >= 30,
+      current: ['in_transit', 'shipped', 'reached'].includes(status),
+      at: outwardAt,
+      by: null,
+    },
+    {
+      key: 'delivered',
+      label: 'Delivered',
+      done: status === 'delivered',
+      current: status === 'delivered',
+      at: sdc.delivered_at || null,
+      by: null,
+    },
+  ];
+  if (status === 'rejected') {
+    steps.push({
+      key: 'rejected',
+      label: 'Rejected',
+      done: true,
+      current: true,
+      at: sdc.updated_at || null,
+      by: null,
+    });
+    const delivered = steps.find((s) => s.key === 'delivered');
+    if (delivered) delivered.current = false;
+  }
+  if (status === 'cancelled') {
+    steps[0].current = false;
+    steps[0].done = Boolean(sdc.created_at);
+    steps.push({
+      key: 'cancelled',
+      label: 'Cancelled',
+      done: true,
+      current: true,
+      at: sdc.updated_at || null,
+      by: null,
+    });
+  }
+
+  const current = steps.find((s) => s.current) || [...steps].reverse().find((s) => s.done) || steps[0];
+  return {
+    dc_number: sdc.dc_number,
+    status,
+    current_step: current?.key || 'created',
+    steps,
+    dispatch_mode: sdc.dispatch_mode || sdc.ship_by || null,
+    courier_name: sdc.courier_name || null,
+    awb_number: sdc.awb_number || null,
+    porter_tracking_id: sdc.porter_tracking_id || null,
+    porter_order_id: sdc.porter_order_id || null,
+    courier_tracking_url: sdc.courier_tracking_url || null,
+    pdf_path: sdc.pdf_path || null,
+    sales_order_number: sdc.sales_order_number || null,
+    original_dc_number: sdc.original_dc_number || null,
+    dc_purpose: sdc.dc_purpose || DC_PURPOSE,
+    created_at: sdc.created_at || null,
+    dispatched_at: outwardAt,
+    delivered_at: sdc.delivered_at || null,
+    created_by_name: sdc.created_by_name || null,
+    guard_name: outwardBy,
+  };
+}
+
+async function loadSdcTrackingExtras(db, dcNumbers) {
+  const extras = new Map();
+  if (!dcNumbers.length) return extras;
+  for (const n of dcNumbers) extras.set(n, {});
+
+  try {
+    const gate = await db.query(
+      `SELECT DISTINCT ON (reference_number)
+              reference_number, confirmed_at, guard_name
+         FROM gate_movements
+        WHERE direction = 'outward'
+          AND reference_type IN ('sdc', 'dc')
+          AND reference_number = ANY($1::text[])
+          AND validation_result = 'valid'
+          AND confirmed_at IS NOT NULL
+        ORDER BY reference_number, confirmed_at ASC`,
+      [dcNumbers]
+    );
+    for (const row of gate.rows) {
+      extras.get(row.reference_number).gateAt = row.confirmed_at;
+      extras.get(row.reference_number).gateName = row.guard_name || null;
+    }
+  } catch (_) { /* gate tables may not exist on older DBs */ }
+
+  try {
+    const sess = await db.query(
+      `SELECT DISTINCT ON (reference_number)
+              reference_number, confirmed_at
+         FROM gate_scan_sessions
+        WHERE direction = 'outward'
+          AND reference_type IN ('sdc', 'dc')
+          AND reference_number = ANY($1::text[])
+          AND status = 'confirmed'
+          AND confirmed_at IS NOT NULL
+        ORDER BY reference_number, confirmed_at ASC`,
+      [dcNumbers]
+    );
+    for (const row of sess.rows) {
+      const slot = extras.get(row.reference_number);
+      if (slot && !slot.gateAt) slot.gateAt = row.confirmed_at;
+    }
+  } catch (_) { /* ignore */ }
+
+  try {
+    const ready = await db.query(
+      `SELECT DISTINCT ON (dc_number) dc_number, created_at
+         FROM inventory_status_transitions
+        WHERE dc_number = ANY($1::text[])
+          AND to_status = 'dispatch_ready'
+        ORDER BY dc_number, created_at ASC`,
+      [dcNumbers]
+    );
+    for (const row of ready.rows) {
+      extras.get(row.dc_number).dispatchReadyAt = row.created_at;
+    }
+  } catch (_) { /* ignore */ }
+
+  return extras;
+}
 
 async function logServiceDcAudit(db, { itemId, ticketId, userId, action, detail }) {
   await db.query(
@@ -170,14 +342,30 @@ async function listEligibleItems(db, ticketId, itemIds = null) {
 async function getServiceDcContext(db, ticketId) {
   const { ticket, items } = await listEligibleItems(db, ticketId);
   const sdcRes = await db.query(
-    `SELECT dcl.*
+    `SELECT dcl.dc_number, dcl.status, dcl.dc_purpose, dcl.pdf_path,
+            dcl.sales_order_number, dcl.original_dc_number,
+            dcl.dispatch_mode, dcl.ship_by, dcl.courier_name, dcl.awb_number,
+            dcl.porter_tracking_id, dcl.porter_order_id, dcl.courier_tracking_url,
+            dcl.created_at, dcl.updated_at, dcl.dispatched_at, dcl.delivered_at,
+            u.name AS created_by_name
        FROM delivery_challan_lines dcl
-      WHERE dcl.support_ticket_id = $1
+       LEFT JOIN users u ON u.user_id = dcl.created_by
+      WHERE (
+            dcl.support_ticket_id = $1
+            OR dcl.dc_number IN (
+              SELECT sti.service_dc_number
+                FROM support_ticket_items sti
+               WHERE sti.ticket_id = $1
+                 AND sti.service_dc_number IS NOT NULL
+            )
+          )
         AND dcl.movement_type = 'outbound'
         AND dcl.dc_purpose = $2
       ORDER BY dcl.id DESC`,
     [ticketId, DC_PURPOSE]
   );
+  const extras = await loadSdcTrackingExtras(db, sdcRes.rows.map((r) => r.dc_number));
+  const serviceDcs = sdcRes.rows.map((row) => buildSdcTracking(row, extras.get(row.dc_number) || {}));
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, items[0]?.item || null);
   return {
     ticket_id: ticket.id,
@@ -191,7 +379,7 @@ async function getServiceDcContext(db, ticketId) {
       service_dc_number: row.item.service_dc_number || null,
     })),
     can_create: items.some((row) => row.eligible),
-    service_dcs: sdcRes.rows,
+    service_dcs: serviceDcs,
     delivery_defaults: deliveryDefaults,
     ticket_service_dc_number: ticket.service_dc_number || null,
   };
@@ -285,21 +473,25 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
   const entityCode = entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
-  // Pending until Dispatch QC passes; dispatch transitions happen via normal DC dispatch flow.
-  const dcStatus = 'pending';
+  // SDC is warehouse-ready on create. Guard outward submit moves it to in_transit.
+  const dcStatus = 'dispatch_ready';
+  const shipByValue = dispatchInfo.dcDispatchMode === 'inhouse' ? 'by_hand'
+    : dispatchInfo.dcDispatchMode === 'porter' ? 'by_porter'
+      : dispatchInfo.dcDispatchMode === 'courier' ? 'by_courier'
+        : null;
 
   await db.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
          customer_shipping_address, brand, model_name, quantity, serial_number,
-         dispatch_mode, delivery_person_id, courier_name, awb_number,
+         dispatch_mode, ship_by, delivery_person_id, courier_name, awb_number,
          porter_tracking_id, porter_order_id,
          sales_order_number, original_dc_number, dc_purpose, remarks,
          status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
-     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
-             $17,$18,$19,$20,
-             $21,$22,NOW(),NOW(),$23,$24,FALSE)`,
+     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,
+             $18,$19,$20,$21,
+             $22,$23,NOW(),NOW(),$24,$25,TRUE)`,
     [
       sdcNumber,
       ticketId,
@@ -312,6 +504,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       Math.max(1, entries.length),
       JSON.stringify(entries),
       dispatchInfo.dcDispatchMode,
+      shipByValue,
       dispatchInfo.techId,
       dispatchInfo.courierName,
       dispatchInfo.awbNumber,
@@ -328,6 +521,31 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     ]
   );
 
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS dc_shipment_units (
+        id SERIAL PRIMARY KEY,
+        dc_number TEXT NOT NULL,
+        allocation_id INTEGER,
+        serial_id INTEGER,
+        serial_number TEXT,
+        ttspl_id TEXT,
+        courier_name TEXT DEFAULT 'BlueDart',
+        awb_number TEXT,
+        weight NUMERIC(10, 2),
+        remarks TEXT,
+        tracking_status TEXT,
+        tracking_status_type TEXT,
+        tracking_synced_at TIMESTAMPTZ,
+        received_by TEXT,
+        delivered_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'in_transit',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch (_) { /* already exists */ }
+
   const itemIdsStamped = [];
   for (const row of selected) {
     await db.query(
@@ -338,13 +556,46 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     );
     itemIdsStamped.push(row.item.id);
 
-    await inventorySM.reserveForDc(db, row.serial.serial_id, {
-      dcNumber: sdcNumber,
-      customerId: ticket.customer_id,
-      entityCode,
-      actorUserId: actor?.user_id,
-      actorName: actor?.name,
-    });
+    try {
+      await inventorySM.markDispatchReady(db, row.serial.serial_id, {
+        dcNumber: sdcNumber,
+        customerId: ticket.customer_id,
+        entityCode,
+        dispatchMode: dispatchInfo.dcDispatchMode,
+        actorUserId: actor?.user_id,
+        actorName: actor?.name,
+      });
+    } catch (dispErr) {
+      console.error('serviceDc.markDispatchReady', dispErr.message);
+      await db.query(
+        `UPDATE vendor_serial_numbers
+            SET inventory_status = 'dispatch_ready',
+                current_dc_number = $2,
+                dispatch_mode = COALESCE($3, dispatch_mode),
+                current_customer_id = COALESCE($4, current_customer_id),
+                status_changed_at = NOW(),
+                updated_at = NOW()
+          WHERE serial_id = $1`,
+        [row.serial.serial_id, sdcNumber, dispatchInfo.dcDispatchMode || null, ticket.customer_id || null]
+      );
+    }
+
+    try {
+      await db.query(
+        `INSERT INTO dc_shipment_units (
+           dc_number, serial_id, serial_number, ttspl_id,
+           courier_name, awb_number, status
+         ) VALUES ($1,$2,$3,$4,$5,$6,'dispatch_ready')`,
+        [
+          sdcNumber,
+          row.serial.serial_id,
+          row.serial.serial_number || null,
+          row.serial.inventory_asset_code || row.item.ttspl_id || null,
+          dispatchInfo.courierName || null,
+          dispatchInfo.awbNumber || null,
+        ]
+      );
+    } catch (_) { /* table may not exist */ }
   }
 
   await db.query(
@@ -593,6 +844,7 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
 
 module.exports = {
   DC_PURPOSE,
+  OPEN_SDC_STATUSES,
   getServiceDcContext,
   createServiceDc,
   onServiceDcDelivered,

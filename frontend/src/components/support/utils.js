@@ -232,6 +232,10 @@ export const getItemStepperV3Pickup = (item) => {
       ...sharedIdx,
       awaiting_service_return: 5,
       service_dc_pending: 5,
+      dispatch_ready: 5,
+      in_transit: 5,
+      shipped: 5,
+      reached: 5,
       warehouse_confirmed: 6,
       reached_warehouse: 4,
       inventory_updated: 6,
@@ -240,7 +244,12 @@ export const getItemStepperV3Pickup = (item) => {
       closed: 6,
     };
     let currentIndex = idxMap[es] ?? 0;
-    if (isClosed(item)) currentIndex = steps.length - 1;
+    if (isClosed(item)) {
+      const sdcOpen = Boolean(item.service_dc_number)
+        && item.service_dc_status !== 'delivered'
+        && !item.service_dc_delivered_at;
+      currentIndex = sdcOpen ? 5 : steps.length - 1;
+    }
     return { steps, currentIndex, completedThrough: Math.max(0, currentIndex - 1) };
   }
 

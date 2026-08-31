@@ -27,6 +27,7 @@ import DcBluedartAwbTable from '../components/DcBluedartAwbTable';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
+import { formatTicketId } from '../../../components/support/utils';
 import { Copy, KeyRound } from 'lucide-react';
 import DcEditModal from '../components/DcEditModal';
 import MarkDeliveredModal from '../components/MarkDeliveredModal';
@@ -100,6 +101,7 @@ export default function DeliveryChallanDetailPage() {
   const { user } = useAuth();
   const { canView } = usePermission();
   const canViewOtp = canView('delivery_register_otp');
+  const canViewSupportTicket = canView('support_tickets');
   const isSuperAdmin = user?.role === 'super_admin';
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const canEditDeliveryDate = isSuperAdmin || canOverrideHsn;
@@ -489,10 +491,31 @@ export default function DeliveryChallanDetailPage() {
           </button>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : 'text-black'}`}>{dcNumber}</h1>
           <p className="text-gray-600">
-            {head.customer_name || '—'} · SO:{' '}
-            <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}>
-              {head.sales_order_number}
-            </Link>
+            {head.customer_name || '—'}
+            {head.sales_order_number ? (
+              <>
+                {' · SO: '}
+                <Link className="text-blue-600 hover:underline" to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}>
+                  {head.sales_order_number}
+                </Link>
+              </>
+            ) : null}
+            {head.support_ticket_id ? (
+              <>
+                {' · Ticket: '}
+                {canViewSupportTicket ? (
+                  <Link
+                    className="text-blue-600 hover:underline font-mono"
+                    to={`/support/tickets/${head.support_ticket_id}`}
+                    state={{ from: `/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}` }}
+                  >
+                    {formatTicketId(head.support_ticket_id)}
+                  </Link>
+                ) : (
+                  <span className="font-mono">{formatTicketId(head.support_ticket_id)}</span>
+                )}
+              </>
+            ) : null}
           </p>
           <p className="text-sm text-gray-500 mt-1">
             Created: {formatDate(head.created_at)}
@@ -504,6 +527,9 @@ export default function DeliveryChallanDetailPage() {
           </p>
           <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
+            {head.dc_purpose === 'service_return' ? (
+              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-100 text-teal-800">Service Return</span>
+            ) : null}
             {head.entity_code && (
               <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${head.entity_code === 'gorefurbo' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
                 {head.entity_code === 'gorefurbo' ? 'Gorefurbo' : 'Rentfoxxy'}

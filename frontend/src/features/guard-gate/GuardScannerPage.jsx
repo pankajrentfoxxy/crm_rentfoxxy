@@ -134,10 +134,14 @@ export default function GuardScannerPage() {
             checks: data.checks || null,
           });
         } else {
+          const verified = Number(data.auto_verified || data.scanned_count || 0);
+          const allOk = Boolean(data.all_checks_passed || data.can_confirm);
           setFlash({
-            tone: 'info',
-            title: nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification',
-            message: data.message || 'Now scan the laptop TTSPL or serial to verify.',
+            tone: allOk ? 'success' : 'info',
+            title: allOk ? 'Verified from document' : (nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification'),
+            message: data.message || (allOk
+              ? 'TTSPL, serial, and configuration matched this DC. Submit to process.'
+              : 'Now scan the laptop TTSPL or serial to verify.'),
           });
         }
       } else if (data?.kind === 'direction_mismatch' && nextDir) {
@@ -314,7 +318,9 @@ export default function GuardScannerPage() {
           </h1>
           <p className="text-sm text-slate-500">
             {verifying
-              ? 'Confirm laptop details. Submit stays locked until every check is green.'
+              ? (submitEnabled
+                ? 'Document units matched. Submit to process this movement.'
+                : 'Confirm laptop details. Submit stays locked until every check is green.')
               : 'Select direction, then scan a DC / Return DC / Repair DC QR'}
           </p>
         </div>

@@ -914,7 +914,24 @@ async function getDeliveryChallanLines(dcNumber) {
      ORDER BY dcl.id ASC`,
     [dcNumber]
   );
-  return result.rows;
+  const rows = result.rows;
+  if (rows.length && !rows.some((r) => r.support_ticket_id)) {
+    try {
+      const t = await pool.query(
+        `SELECT ticket_id
+           FROM support_ticket_items
+          WHERE service_dc_number = $1 OR return_dc_number = $1
+          ORDER BY id DESC
+          LIMIT 1`,
+        [dcNumber]
+      );
+      const ticketId = t.rows[0]?.ticket_id || null;
+      if (ticketId) {
+        for (const row of rows) row.support_ticket_id = ticketId;
+      }
+    } catch (_) { /* support tables may be missing on very old DBs */ }
+  }
+  return rows;
 }
 
 async function healReturnDcPickupLinks() {
