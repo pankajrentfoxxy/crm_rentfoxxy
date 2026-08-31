@@ -1,6 +1,8 @@
 const pool = require('../config/db');
 const svc = require('../services/vendorRepairDcService');
 const { hasPermission } = require('../services/permissionService');
+const { canManageDcEwayBill } = require('../services/saleDcComplianceService');
+const vrdcEway = require('../services/vrdcEwayComplianceService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const path = require('path');
 const fs = require('fs');
@@ -47,6 +49,32 @@ async function requireVendorRepairDispatch(req, res, next) {
 }
 
 const { pickSpecFilters } = require('../utils/inventorySpecFilter');
+
+async function logVrdcDcTicketActivities({ dcNumber, userId, action, notes }) {
+  const items = await pool.query(
+    `SELECT i.ticket_id, t.current_stage_id
+       FROM vendor_repair_dc_items i
+       JOIN tickets t ON t.ticket_id = i.ticket_id
+      WHERE i.dc_number = $1`,
+    [dcNumber]
+  );
+  for (const row of items.rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await pool.query(
+      `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes, created_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+      [row.ticket_id, row.current_stage_id, userId || null, action, notes]
+    );
+  }
+}
+
+async function requireVrdcEwayUpload(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+  if (req.user.role === 'super_admin') return next();
+  const cache = req.permissionCache || (req.permissionCache = {});
+  if (await canManageDcEwayBill(req.user, cache)) return next();
+  return res.status(403).json({ success: false, message: 'Accounts E-Way Bill upload access required' });
+}
 
 exports.listDiagnosisFailed = async (req, res) => {
   try {
@@ -109,7 +137,10 @@ exports.createOutForRepair = async (req, res) => {
       actorRole: req.user.role,
     });
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Vendor repair DC created', ...result });
+    const msg = result.eway_required
+      ? 'Vendor repair DC created — E-way Bill required before PDF download'
+      : 'Vendor repair DC created';
+    res.json({ success: true, message: msg, ...result });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(400).json({ success: false, message: err.message || 'Failed to create vendor repair DC' });
@@ -155,7 +186,16 @@ exports.getVendorRepairDc = async (req, res) => {
   try {
     const dc = await svc.getVendorRepairDc(req.params.dcNumber);
     if (!dc) return res.status(404).json({ success: false, message: 'Vendor repair DC not found' });
-    res.json({ success: true, data: dc });
+    const cache = req.permissionCache || (req.permissionCache = {});
+    const eway_compliance = await vrdcEway.buildVrdcEwayCompliance(dc, dc.items || [], req.user, cache);
+    res.json({
+      success: true,
+      data: {
+        ...dc,
+        eway_compliance,
+        can_download_pdf: eway_compliance.can_download_pdf,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load DC' });
   }
@@ -399,10 +439,103 @@ exports.listVendorPortalRepairDcs = async (req, res) => {
   }
 };
 
+exports.sendAccountsVrdcEwayMail = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  try {
+    const dc = await svc.getVendorRepairDc(dcNumber);
+    if (!dc) return res.status(404).json({ success: false, message: 'Vendor repair DC not found' });
+
+    const productValue = await vrdcEway.computeVrdcTotalValue(dcNumber);
+    if (!vrdcEway.requiresVrdcEway(productValue)) {
+      return res.status(400).json({
+        success: false,
+        message: `E-Way Bill is not required for VRDC value ₹${Number(productValue).toLocaleString('en-IN')}`,
+      });
+    }
+
+    if (dc.accounts_notified_at) {
+      return res.status(409).json({
+        success: false,
+        message: 'Mail to Accounts already sent',
+        already_sent: true,
+        accounts_notified_at: dc.accounts_notified_at,
+      });
+    }
+
+    const mailResult = await vrdcEway.sendAccountsVrdcEwayEmail({
+      dcNumber,
+      vendorName: dc.vendor_name,
+      productValue,
+      laptops: vrdcEway.laptopRowsFromItems(dc.items || []),
+    });
+
+    await pool.query(
+      `UPDATE vendor_repair_delivery_challans SET
+          accounts_notified_at = NOW(),
+          accounts_notified_by = $2,
+          updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber, req.user?.user_id || null]
+    );
+
+    await logVrdcDcTicketActivities({
+      dcNumber,
+      userId: req.user?.user_id,
+      action: 'vrdc_eway_accounts_requested',
+      notes: `E-way Bill request emailed to ${vrdcEway.ACCOUNTS_EMAIL} for VRDC ${dcNumber}.`,
+    });
+
+    res.json({
+      success: true,
+      message: 'Mail sent to Accounts Team',
+      to: mailResult.to,
+      accounts_notified_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('sendAccountsVrdcEwayMail:', err);
+    const status = err.message?.includes('not configured') ? 503 : 500;
+    res.status(status).json({ success: false, message: err.message || 'Failed to send mail' });
+  }
+};
+
+exports.uploadVrdcEway = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  try {
+    const saved = await vrdcEway.saveVrdcEwayBill({
+      dcNumber,
+      ewayBillNumber: req.body?.eway_bill_number || req.body?.ewayBillNumber,
+      ewayBillDate: req.body?.eway_bill_date || req.body?.ewayBillDate,
+      userId: req.user?.user_id,
+    });
+
+    await logVrdcDcTicketActivities({
+      dcNumber,
+      userId: req.user?.user_id,
+      action: 'vrdc_eway_added',
+      notes: `E-way Bill ${saved.eway_bill_number} added — VRDC download unlocked.`,
+    });
+
+    const dc = await svc.getVendorRepairDc(dcNumber);
+    const cache = req.permissionCache || (req.permissionCache = {});
+    const eway_compliance = await vrdcEway.buildVrdcEwayCompliance(dc, dc.items || [], req.user, cache);
+
+    res.json({
+      success: true,
+      message: 'E-Way Bill saved — VRDC download enabled',
+      eway_compliance,
+      ...saved,
+    });
+  } catch (err) {
+    console.error('uploadVrdcEway:', err);
+    res.status(400).json({ success: false, message: err.message || 'Upload failed' });
+  }
+};
+
 exports.downloadPdf = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
     const dcNumber = req.params.dcNumber;
+    await vrdcEway.assertCanDownloadVrdcPdf(req.user, dcNumber);
     const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
     const rel = await generateVendorRepairPdf(dcNumber);
     if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });
@@ -413,7 +546,9 @@ exports.downloadPdf = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="VRDC_${safe}.pdf"`);
     res.download(abs, `VRDC_${safe}.pdf`);
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
+    const msg = err.message || 'PDF download failed';
+    const status = msg.includes('E-way Bill is required') ? 403 : 500;
+    res.status(status).json({ success: false, message: msg });
   }
 };
 
@@ -548,3 +683,4 @@ exports.exportOutForRepairPdf = async (req, res) => {
 exports.requireWarehouse = requireWarehouse;
 exports.requireDiagnosisFailedProcess = requireDiagnosisFailedProcess;
 exports.requireVendorRepairDispatch = requireVendorRepairDispatch;
+exports.requireVrdcEwayUpload = requireVrdcEwayUpload;

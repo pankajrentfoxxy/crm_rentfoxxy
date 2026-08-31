@@ -33,6 +33,8 @@ router.patch(...vrdcRoute('/commercial-details', ctrl.requireWarehouse, ctrl.upd
 router.post(...vrdcRoute('/mark-delivered-to-vendor', ctrl.requireVendorRepairDispatch, ctrl.markDeliveredToVendor));
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireVendorRepairDispatch, ctrl.signDispatch));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));
+router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.sendAccountsVrdcEwayMail));
+router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, ctrl.uploadVrdcEway));
 router.get(...vrdcRoute('', vendorRepairView, ctrl.getVendorRepairDc));
 
 router.post('/inventory/erp/:serialId/receive-back', ctrl.requireWarehouse, ctrl.receiveErpRepairBack);

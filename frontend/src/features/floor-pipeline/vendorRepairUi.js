@@ -28,9 +28,16 @@ export function fmtVendorRepairDateTimeIst(v) {
 
 export function parseVrdcItemConfig(item) {
   const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  let brand = parts[0] || '';
+  let model = parts[1] || '';
+  const combined = `${brand} ${model}`.toLowerCase();
+  if (/macbook|mac book|\bimac\b|mac mini|mac studio|\bmac pro\b/.test(combined)) {
+    brand = 'Apple';
+    model = model.replace(/^dell\s+/i, '').replace(/^apple\s+/i, '');
+  }
   return {
-    brand: parts[0] || '',
-    model: parts[1] || '',
+    brand,
+    model,
     processor: parts[2] || '',
     generation: parts[3] || '',
     ram: parts[4] || '',
@@ -78,13 +85,11 @@ export function formatVendorShippingFromVendor(vendor, { includeName = true } = 
 }
 
 export function formatVrdcProductLines(item) {
-  const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
-  const brand = parts[0] || '';
-  const model = parts[1] || '';
-  const title = `${brand} ${model}`.replace(/\s+/g, ' ').trim();
+  const cfg = parseVrdcItemConfig(item);
+  const title = `${cfg.brand} ${cfg.model}`.replace(/\s+/g, ' ').trim();
   const specs = [
-    [parts[2], parts[3]].filter(Boolean).join(' | '),
-    [parts[4], parts[5]].filter(Boolean).join(' | '),
+    [cfg.processor, cfg.generation].filter((v) => v && v !== '-').join(' | '),
+    [cfg.ram, cfg.storage].filter(Boolean).join(' | '),
   ].filter(Boolean);
   const ids = [item?.serial_number, item?.ttspl_id].filter(Boolean).join(' · ');
   return { title, specs, ids };

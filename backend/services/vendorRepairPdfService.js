@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const { mergeCompany, formatCompanyBlock } = require('../utils/companyDefaults');
 const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
 const { resolveHsnForDisplay } = require('../constants/hsnDefaults');
+const { enrichVrdcItemRow } = require('./vendorRepairDcShared');
 
 const C = {
   ink: '#1f2937',
@@ -63,7 +64,14 @@ async function loadDc(dcNumber) {
   const head = headRes.rows[0];
   if (!head) return null;
   const itemsRes = await pool.query(
-    `SELECT * FROM vendor_repair_dc_items WHERE dc_number = $1 ORDER BY id ASC`,
+    `SELECT i.*, t.brand AS ticket_brand, t.model AS ticket_model, t.processor AS ticket_processor,
+            t.ram AS ticket_ram, t.storage AS ticket_storage,
+            vsn.extra AS serial_extra
+       FROM vendor_repair_dc_items i
+       LEFT JOIN tickets t ON t.ticket_id = i.ticket_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
+      WHERE i.dc_number = $1
+      ORDER BY i.id ASC`,
     [dcNumber]
   );
   const vendorMaster = head.vendor_id ? {
@@ -82,7 +90,7 @@ async function loadDc(dcNumber) {
   } : null;
   return {
     ...head,
-    items: itemsRes.rows,
+    items: itemsRes.rows.map(enrichVrdcItemRow),
     vendor_billing_display: formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name,
     vendor_shipping_display: formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address,
   };
