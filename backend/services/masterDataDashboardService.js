@@ -186,7 +186,28 @@ function buildMasterFilters(query = {}) {
   }
 
   const dateRange = resolveMasterDateRange(query);
-  if (Array.isArray(dateRange.ranges) && dateRange.ranges.length > 1) {
+  const usePurchaseDate = String(query.date_basis || query.dateBasis || '').toLowerCase() === 'purchase';
+  if (usePurchaseDate) {
+    const purchaseClausesForRange = (range) => {
+      const parts = [];
+      if (range?.dateFrom) {
+        params.push(range.dateFrom);
+        parts.push(`p.purchase_order_date >= $${params.length}::date`);
+      }
+      if (range?.dateTo) {
+        params.push(range.dateTo);
+        parts.push(`p.purchase_order_date <= $${params.length}::date`);
+      }
+      return parts.length ? `(${parts.join(' AND ')})` : null;
+    };
+    if (Array.isArray(dateRange.ranges) && dateRange.ranges.length > 1) {
+      const orParts = dateRange.ranges.map(purchaseClausesForRange).filter(Boolean);
+      if (orParts.length) clauses.push(`(${orParts.join(' OR ')})`);
+    } else {
+      const one = purchaseClausesForRange(dateRange);
+      if (one) clauses.push(one);
+    }
+  } else if (Array.isArray(dateRange.ranges) && dateRange.ranges.length > 1) {
     const orParts = dateRange.ranges.map((range) => {
       const parts = appendDateRangeClauses({
         expr: MASTER_ACTIVITY_DATE_EXPR,
@@ -912,4 +933,10 @@ module.exports = {
   buildMasterDataExportWorkbook,
   setVendorExcludeFromVendorPo,
   CUSTOMER_STATUSES,
+  FROM_SQL,
+  buildMasterFilters,
+  mapLaptopRow,
+  SQL_IS_SALE,
+  SQL_IS_RENTAL,
+  VENDOR_REPAIR_EXISTS,
 };
