@@ -13,7 +13,7 @@ import {
   permissionsArrayToMatrix,
   saveRolePermissions,
 } from '../../../utils/rbacApi';
-import { mergeRbacSectionList } from '../../../constants/sections';
+import { ADMIN_ONLY_RBAC_SECTIONS, mergeRbacSectionList } from '../../../constants/sections';
 
 function countChanges(matrix, baseline) {
   let n = 0;
@@ -218,6 +218,9 @@ export default function RolePermissionsPage() {
                 matrix={matrix}
                 baselineMatrix={baselineMatrix}
                 onChange={(section, values) => updateSection(section, values)}
+                lockedSections={
+                  ['admin', 'super_admin'].includes(selectedRole) ? [] : ADMIN_ONLY_RBAC_SECTIONS
+                }
               />
             )}
 

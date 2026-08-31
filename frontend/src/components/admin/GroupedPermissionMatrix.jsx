@@ -58,7 +58,9 @@ export default function GroupedPermissionMatrix({
   baselineMatrix,
   disabled = false,
   showDataScope = false,
+  lockedSections = [],
 }) {
+  const locked = new Set(lockedSections);
   const [collapsed, setCollapsed] = useState({});
 
   const toggleGroup = (group) => {
@@ -166,6 +168,11 @@ export default function GroupedPermissionMatrix({
                             <span className="font-medium text-gray-800">
                               {SECTION_LABELS[section] || section}
                             </span>
+                            {locked.has(section) ? (
+                              <span className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded-full">
+                                Admin / Super Admin only
+                              </span>
+                            ) : null}
                             {isModified(section) ? (
                               <span className="bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0.5 rounded-full">
                                 Modified
@@ -179,7 +186,7 @@ export default function GroupedPermissionMatrix({
                               type="checkbox"
                               className={`w-4 h-4 ${ACTION_COLORS[action]}`}
                               checked={!!matrix[section]?.[action]}
-                              disabled={disabled}
+                              disabled={disabled || locked.has(section)}
                               onChange={(e) => handleChange(section, action, e.target.checked)}
                             />
                           </td>

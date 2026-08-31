@@ -570,20 +570,78 @@ async function getInwardOutwardDetails({
   }
 }
 
-async function getInwardOutwardFilters() {
-  const [entities, vendors, customers, couriers, users] = await Promise.all([
-    pool.query(`SELECT code, legal_name FROM companies WHERE active IS DISTINCT FROM false ORDER BY code`),
-    pool.query(`SELECT vendor_id, business_name FROM vendors WHERE deleted_at IS NULL AND COALESCE(business_name, '') <> '' ORDER BY business_name`),
-    pool.query(
-      `SELECT DISTINCT customer_id, customer_name FROM (
+async function getInwardOutwardFilters({ from = null, to = null } = {}) {
+  const scoped = Boolean(from && to);
+
+  const customerParams = [];
+  const customerSql = scoped
+    ? `SELECT DISTINCT customer_id, customer_name FROM (
+         SELECT d.customer_id, d.customer_name
+           FROM delivery_challan_lines d
+          WHERE d.customer_id IS NOT NULL
+            AND COALESCE(d.movement_type, 'outbound') = 'outbound'
+            AND d.dispatched_at IS NOT NULL
+            ${dateClause('d.dispatched_at', from, to, customerParams)}
+         UNION
+         SELECT t.customer_id, t.customer_name
+           FROM support_ticket_items i
+           JOIN support_tickets t ON t.id = i.ticket_id
+          WHERE t.customer_id IS NOT NULL
+            AND i.item_type = 'pickup'
+            AND i.warehouse_received_at IS NOT NULL
+            ${dateClause('i.warehouse_received_at', from, to, customerParams)}
+         UNION
+         SELECT io.customer_id,
+                COALESCE(c.company_name, c.name, '') AS customer_name
+           FROM inward_outward io
+           LEFT JOIN customers c ON c.customer_id = io.customer_id
+          WHERE io.customer_id IS NOT NULL
+            ${dateClause('io.created_at', from, to, customerParams)}
+       ) c
+       WHERE COALESCE(customer_name, '') <> ''
+       ORDER BY customer_name
+       LIMIT 1000`
+    : `SELECT DISTINCT customer_id, customer_name FROM (
          SELECT customer_id, customer_name FROM delivery_challan_lines WHERE customer_id IS NOT NULL
          UNION
          SELECT customer_id, customer_name FROM support_tickets WHERE customer_id IS NOT NULL
        ) c
        WHERE COALESCE(customer_name, '') <> ''
        ORDER BY customer_name
-       LIMIT 1000`
-    ),
+       LIMIT 1000`;
+
+  const vendorParams = [];
+  const vendorSql = scoped
+    ? `SELECT DISTINCT v.vendor_id, v.business_name FROM (
+         SELECT po.vendor_id
+           FROM vendor_serial_numbers vsn
+           JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+          WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL
+            ${dateClause('vsn.created_at', from, to, vendorParams)}
+         UNION
+         SELECT h.vendor_id
+           FROM vendor_repair_dc_items it
+           JOIN vendor_repair_delivery_challans h ON h.dc_number = it.dc_number
+          WHERE h.vendor_id IS NOT NULL
+            ${dateClause('COALESCE(it.returned_at, h.updated_at, h.dispatched_at)', from, to, vendorParams)}
+         UNION
+         SELECT io.vendor_id
+           FROM inward_outward io
+          WHERE io.vendor_id IS NOT NULL
+            ${dateClause('io.created_at', from, to, vendorParams)}
+       ) x
+       JOIN vendors v ON v.vendor_id = x.vendor_id
+      WHERE v.deleted_at IS NULL AND COALESCE(v.business_name, '') <> ''
+      ORDER BY v.business_name
+      LIMIT 1000`
+    : `SELECT vendor_id, business_name FROM vendors
+       WHERE deleted_at IS NULL AND COALESCE(business_name, '') <> ''
+       ORDER BY business_name`;
+
+  const [entities, vendors, customers, couriers, users] = await Promise.all([
+    pool.query(`SELECT code, legal_name FROM companies WHERE active IS DISTINCT FROM false ORDER BY code`),
+    pool.query(vendorSql, vendorParams),
+    pool.query(customerSql, customerParams),
     pool.query(
       `SELECT DISTINCT courier_name FROM (
          SELECT courier_name FROM delivery_challan_lines WHERE COALESCE(courier_name, '') <> ''

@@ -73,10 +73,12 @@ function effectiveStatusSql(alias) {
 }
 
 // Lifecycle statuses that mean a unit has left the "Ready to Rent/Sell" shelf
-// (DC created/dispatched, with a customer, or scrapped/returned).
-// These units belong in Customer Assets / Dead Assets, not the rentable pool.
+// (reserved on an SO, DC created, dispatched, with a customer, or scrapped/returned).
+// Must stay aligned with SO attach (`searchAvailableInventory`) so warehouse
+// does not see units that cannot be attached.
 const OFF_SHELF_STATUSES = [
-  'in_transit', 'rented', 'on_demo', 'sold', 'returned', 'scrapped'
+  'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold',
+  'returned', 'scrapped', 'out_stock',
 ];
 
 /** Units awaiting serial-verified warehouse receive must not appear on rentable shelf lists. */

@@ -1,20 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Receipt, Search } from 'lucide-react';
+import { Plus, Receipt, IndianRupee, BadgeMinus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
-import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
 import { downloadInvoicePdf, generateInvoicesBulk, listInvoices, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
 
 const TABS = ['all', 'draft', 'sent', 'paid', 'overdue'];
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const PAGE_SIZES = [25, 50, 100];
+const YEARS = Array.from({ length: 6 }, (_, i) => 2024 + i);
 
 function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+}
+
+function fmtMoney(n) {
+  return `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export default function InvoiceListPage() {
@@ -27,6 +33,9 @@ export default function InvoiceListPage() {
   const [year, setYear] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
   const [customers, setCustomers] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
@@ -56,10 +65,12 @@ export default function InvoiceListPage() {
     [customers]
   );
 
+  useEffect(() => { setPage(1); }, [tab, customerId, month, year, searchDebounced, pageSize]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = { limit: 100 };
+      const params = { page, limit: pageSize };
       if (tab !== 'all') params.status = tab;
       if (customerId) params.customer_id = customerId;
       if (month) params.month = month;
@@ -68,16 +79,21 @@ export default function InvoiceListPage() {
       const res = await listInvoices(params);
       setRows(res.data?.invoices || []);
       setSummary(res.data?.summary || {});
+      setTotal(Number(res.data?.total || 0));
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to load invoices');
     } finally {
       setLoading(false);
     }
-  }, [tab, customerId, month, year, searchDebounced]);
+  }, [tab, customerId, month, year, searchDebounced, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
 
   const stats = useMemo(() => ({
+    invoiceCount: summary.total_count || 0,
+    subtotal: summary.subtotal_total || 0,
+    creditNotes: summary.credit_note_total || 0,
+    creditNoteInvoices: summary.credit_note_invoice_count || 0,
     draft: { count: summary.draft_count || 0, total: summary.draft_total || 0 },
     sent: { count: summary.sent_count || 0, total: summary.sent_total || 0 },
     paid: { count: summary.paid_count || 0, total: summary.paid_total || 0 },
@@ -117,6 +133,8 @@ export default function InvoiceListPage() {
       const parts = [];
       if (s.created) parts.push(`${s.created} created`);
       if (s.appended) parts.push(`${s.appended} updated`);
+      if (s.credit_notes_created) parts.push(`${s.credit_notes_created} credit notes created`);
+      if (s.credit_notes_applied) parts.push(`${s.credit_notes_applied} credit notes applied`);
       if (s.skipped) parts.push(`${s.skipped} skipped`);
       if (s.errors) parts.push(`${s.errors} failed`);
       toast.success(parts.length ? parts.join(', ') : 'No invoices generated');
@@ -166,25 +184,37 @@ export default function InvoiceListPage() {
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        <StatCard label="Draft" value={stats.draft.count} hint={fmt(stats.draft.total)} tone="gray" />
-        <StatCard label="Sent" value={stats.sent.count} hint={fmt(stats.sent.total)} tone="blue" />
-        <StatCard label="Paid" value={stats.paid.count} hint={fmt(stats.paid.total)} tone="green" />
-        <StatCard label="Overdue" value={stats.overdue.count} hint={fmt(stats.overdue.total)} tone="red" />
-        <StatCard label="Outstanding" value={fmt(stats.outstanding)} tone="amber" />
+      <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 mb-3">
+        <StatCard
+          label="Total Subtotal"
+          value={fmtMoney(stats.subtotal)}
+          hint={`${Number(stats.invoiceCount || 0).toLocaleString('en-IN')} invoice${stats.invoiceCount === 1 ? '' : 's'}`}
+          icon={IndianRupee}
+          tone="blue"
+        />
+        <StatCard
+          label="Credit Note Total"
+          value={fmtMoney(stats.creditNotes)}
+          hint={`${Number(stats.creditNoteInvoices || 0).toLocaleString('en-IN')} invoice${stats.creditNoteInvoices === 1 ? '' : 's'} with credit`}
+          icon={BadgeMinus}
+          tone="amber"
+        />
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-          <input
-            type="search"
-            placeholder="Search invoice #, customer, IRN…"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="w-full border rounded-lg pl-9 pr-3 py-2 text-sm"
-          />
-        </div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+        <StatCard label="Draft" value={stats.draft.count} hint={fmt(stats.draft.total)} tone="gray" active={tab === 'draft'} onClick={() => setTab('draft')} />
+        <StatCard label="Sent" value={stats.sent.count} hint={fmt(stats.sent.total)} tone="blue" active={tab === 'sent'} onClick={() => setTab('sent')} />
+        <StatCard label="Paid" value={stats.paid.count} hint={fmt(stats.paid.total)} tone="green" active={tab === 'paid'} onClick={() => setTab('paid')} />
+        <StatCard label="Overdue" value={stats.overdue.count} hint={fmt(stats.overdue.total)} tone="red" active={tab === 'overdue'} onClick={() => setTab('overdue')} />
+        <StatCard label="Outstanding" value={fmt(stats.outstanding)} tone="amber" active={tab === 'all'} onClick={() => setTab('all')} />
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-3 items-end">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search invoice #, customer, IRN…"
+        />
         <div className="min-w-[220px] w-56">
           <SearchableSelect
             id="invoice-filter-customer"
@@ -194,11 +224,40 @@ export default function InvoiceListPage() {
             placeholder="All customers"
           />
         </div>
-        <select value={month} onChange={(e) => setMonth(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
-          <option value="">All months</option>
-          {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-        </select>
-        <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm w-28" placeholder="All years" />
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Month
+          <select value={month} onChange={(e) => setMonth(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px] min-w-[120px]">
+            <option value="">All months</option>
+            {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Year
+          <select value={year} onChange={(e) => setYear(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px] min-w-[110px]">
+            <option value="">All years</option>
+            {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Rows
+          <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} className="border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px] w-24">
+            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setSearchInput('');
+            setCustomerId('');
+            setMonth('');
+            setYear('');
+            setTab('all');
+            setPage(1);
+          }}
+          className="border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm min-h-[44px] hover:bg-slate-50"
+        >
+          Clear
+        </button>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
@@ -207,17 +266,43 @@ export default function InvoiceListPage() {
         ))}
       </div>
 
-      {/* Mobile cards */}
-      <div className="grid gap-3 sm:hidden">
-        {loading ? (
-          <p className="text-center text-sm text-gray-500 py-8">Loading…</p>
-        ) : rows.length === 0 ? (
-          <p className="text-center text-sm text-gray-500 py-8">
-            No invoices{year ? ` for ${year}` : ''}.
-            {year ? ' Clear the year filter to see all periods.' : ' Run billing activation on the server, then backfill with --commit.'}
-          </p>
-        ) : rows.map((r) => (
-          <div key={r.invoice_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+      <ResponsiveTable
+        columns={[
+          { key: 'invoice_number', header: 'Invoice #', render: (r) => (
+            <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline font-medium">{r.invoice_number}</Link>
+          ) },
+          { key: 'month', header: 'Month', render: (r) => `${MONTHS[r.invoice_month] || ''} ${r.invoice_year || ''}` },
+          { key: 'customer_name', header: 'Customer' },
+          { key: 'laptop_count', header: 'Laptops', align: 'right', render: (r) => r.laptop_count || 0 },
+          { key: 'subtotal', header: 'Subtotal', align: 'right', render: (r) => fmt(r.subtotal) },
+          { key: 'gst_amount', header: 'GST', align: 'right', render: (r) => fmt(r.gst_amount) },
+          { key: 'credit_note_adjustment', header: 'Credit Adj', align: 'right', render: (r) => fmt(r.credit_note_adjustment) },
+          { key: 'grand_total', header: 'Total', align: 'right', render: (r) => <span className="font-medium">{fmt(r.grand_total)}</span> },
+          { key: 'status', header: 'Status', render: (r) => <InvoiceStatusBadge status={r.status} /> },
+          { key: 'irn', header: 'IRN', render: (r) => (r.irn ? <span className="text-green-700 text-xs font-medium">✓ IRN</span> : <span className="text-gray-400">—</span>) },
+          { key: 'actions', header: 'Actions', render: (r) => (
+            <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+              <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">View</Link>
+              {(r.status === 'draft' || r.status === 'sent') && (
+                <PermissionGate section="customer_billing" action="edit">
+                  <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">Send</Link>
+                </PermissionGate>
+              )}
+              {r.status === 'sent' && (
+                <PermissionGate section="customer_billing" action="edit">
+                  <button type="button" onClick={() => handleMarkPaid(r.invoice_id)} className="text-xs text-green-600 hover:underline">Paid</button>
+                </PermissionGate>
+              )}
+              <button type="button" onClick={() => handleDownload(r.invoice_id, r.invoice_number)} className="text-xs text-gray-600 hover:underline">PDF</button>
+            </div>
+          ) },
+        ]}
+        rows={rows}
+        keyField="invoice_id"
+        loading={loading}
+        empty={<p className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-sm text-slate-500">No invoices match these filters.</p>}
+        renderCard={(r) => (
+          <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 font-semibold">{r.invoice_number}</Link>
               <InvoiceStatusBadge status={r.status} />
@@ -241,69 +326,16 @@ export default function InvoiceListPage() {
               </div>
             </div>
           </div>
-        ))}
-      </div>
+        )}
+      />
 
-      <div className="hidden sm:block bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-            <tr>
-              <th className="px-4 py-3">Invoice #</th>
-              <th className="px-4 py-3">Month</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Laptops</th>
-              <th className="px-4 py-3">Subtotal</th>
-              <th className="px-4 py-3">GST</th>
-              <th className="px-4 py-3">Credit Adj</th>
-              <th className="px-4 py-3">Total</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">IRN</th>
-              <th className="px-4 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {loading ? (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">
-                No invoices{year ? ` for ${year}` : ''}.
-                {year ? ' Clear the year filter to see all periods.' : ' If you ran activation scripts, ensure you used --commit on the production server.'}
-              </td></tr>
-            ) : rows.map((r) => (
-              <tr key={r.invoice_id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium">
-                  <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline">{r.invoice_number}</Link>
-                </td>
-                <td className="px-4 py-3">{MONTHS[r.invoice_month]} {r.invoice_year}</td>
-                <td className="px-4 py-3">{r.customer_name}</td>
-                <td className="px-4 py-3">{r.laptop_count || 0}</td>
-                <td className="px-4 py-3">{fmt(r.subtotal)}</td>
-                <td className="px-4 py-3">{fmt(r.gst_amount)}</td>
-                <td className="px-4 py-3">{fmt(r.credit_note_adjustment)}</td>
-                <td className="px-4 py-3 font-medium">{fmt(r.grand_total)}</td>
-                <td className="px-4 py-3"><InvoiceStatusBadge status={r.status} /></td>
-                <td className="px-4 py-3">{r.irn ? <span className="text-green-700 text-xs font-medium">✓ IRN</span> : <span className="text-gray-400">—</span>}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">View</Link>
-                    {(r.status === 'draft' || r.status === 'sent') && (
-                      <PermissionGate section="customer_billing" action="edit">
-                        <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">Send</Link>
-                      </PermissionGate>
-                    )}
-                    {r.status === 'sent' && (
-                      <PermissionGate section="customer_billing" action="edit">
-                        <button type="button" onClick={() => handleMarkPaid(r.invoice_id)} className="text-xs text-green-600 hover:underline">Paid</button>
-                      </PermissionGate>
-                    )}
-                    <button type="button" onClick={() => handleDownload(r.invoice_id, r.invoice_number)} className="text-xs text-gray-600 hover:underline">PDF</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ListPagination
+        page={page}
+        totalPages={Math.max(1, Math.ceil(total / pageSize))}
+        total={total}
+        pageSize={pageSize}
+        onPageChange={setPage}
+      />
 
       {genOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

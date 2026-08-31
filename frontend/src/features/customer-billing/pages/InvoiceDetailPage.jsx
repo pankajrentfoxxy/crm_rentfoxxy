@@ -123,6 +123,11 @@ export default function InvoiceDetailPage() {
     });
   }, [lineItems, lineFilter, searchDebounced]);
 
+  const appliedNotes = useMemo(
+    () => creditNotes.filter((cn) => String(cn.status || '').toLowerCase() === 'applied'),
+    [creditNotes]
+  );
+
   if (!invoice) {
     return <div className="p-6 text-gray-500">Loading…</div>;
   }
@@ -318,7 +323,7 @@ export default function InvoiceDetailPage() {
             <div className="flex justify-between"><span>GST {invoice.gst_percent}%</span><span>{fmt(invoice.gst_amount)}</span></div>
             {parseFloat(invoice.credit_note_adjustment) > 0 && (
               <div className="flex justify-between text-red-600">
-                <span>Credit Notes{creditNotes.length ? ` (${creditNotes.map((c) => c.credit_note_number).join(', ')})` : ''}</span>
+                <span>Credit Notes{appliedNotes.length ? ` (${appliedNotes.map((c) => c.credit_note_number).join(', ')})` : ''}</span>
                 <span>-{fmt(invoice.credit_note_adjustment)}</span>
               </div>
             )}
@@ -335,6 +340,34 @@ export default function InvoiceDetailPage() {
             <p className="font-medium">{invoice.customer_name}</p>
             <p className="text-gray-500">{invoice.gst_number || 'No GST'}</p>
             <p className="text-gray-500 mt-2">{typeof invoice.billing_address === 'object' ? JSON.stringify(invoice.billing_address) : (invoice.billing_address || '—')}</p>
+          </div>
+          <div className="bg-white border rounded-xl p-5 text-sm">
+            <h3 className="font-semibold mb-3">Credit note activity</h3>
+            {creditNotes.length ? (
+              <ul className="space-y-2">
+                {creditNotes.map((cn) => {
+                  const status = String(cn.status || '').toLowerCase();
+                  const label = status === 'pending' ? 'Draft' : cn.status;
+                  const inTotal = status === 'applied';
+                  return (
+                    <li key={cn.credit_note_number} className="flex justify-between gap-3">
+                      <span>
+                        <span className="font-medium">{cn.credit_note_number}</span>
+                        <span className="text-gray-500"> · {label}</span>
+                        {status === 'pending' && (
+                          <span className="block text-[11px] text-amber-700">Awaiting approval — not in total</span>
+                        )}
+                      </span>
+                      <span className={inTotal ? 'text-red-600' : 'text-slate-400'}>
+                        {inTotal ? '-' : ''}{fmt(cn.amount)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-gray-500">No credit notes on this invoice</p>
+            )}
           </div>
           <div className="bg-white border rounded-xl p-5 text-sm">
             <h3 className="font-semibold mb-3">E-Invoice</h3>

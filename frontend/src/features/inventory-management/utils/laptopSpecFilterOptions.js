@@ -19,20 +19,27 @@ export function buildSpecFilterOptionsFromLaptopTree(tree = [], brandName = '', 
     (tree || []).filter((b) => b.status === 'active').map((b) => b.name),
   );
 
-  const brandKey = String(brandName || '').trim();
+  const brandKeys = Array.isArray(brandName)
+    ? brandName.map((n) => String(n || '').trim()).filter(Boolean)
+    : String(brandName || '').split(',').map((n) => n.trim()).filter(Boolean);
   let models = [];
   let processors = [];
   let generations = [];
 
-  if (brandKey) {
-    const brand = (tree || []).find(
-      (b) => b.status === 'active' && brandNamesMatch(b.name, brandKey),
-    );
-    if (brand) {
-      models = activeLaptopMappedNames(brand.models);
-      processors = activeLaptopMappedNames(brand.processors);
-      generations = activeLaptopMappedNames(brand.generations);
+  if (brandKeys.length) {
+    const modelSet = new Set();
+    const procSet = new Set();
+    const genSet = new Set();
+    for (const brand of tree || []) {
+      if (brand.status !== 'active') continue;
+      if (!brandKeys.some((key) => brandNamesMatch(brand.name, key))) continue;
+      activeLaptopMappedNames(brand.models).forEach((n) => modelSet.add(n));
+      activeLaptopMappedNames(brand.processors).forEach((n) => procSet.add(n));
+      activeLaptopMappedNames(brand.generations).forEach((n) => genSet.add(n));
     }
+    models = sortAlpha([...modelSet]);
+    processors = sortAlpha([...procSet]);
+    generations = sortAlpha([...genSet]);
   } else {
     const modelSet = new Set();
     const procSet = new Set();

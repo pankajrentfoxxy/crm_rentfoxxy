@@ -23,6 +23,8 @@ import PartsDashboardPage from './pages/PartsDashboardPage';
 import CustomerAssetsPage from './pages/CustomerAssetsPage';
 import PartsMovementHistoryPage from './pages/PartsMovementHistoryPage';
 import MasterDataDashboardPage from './pages/MasterDataDashboardPage';
+import MasterVendorDataPage from './pages/MasterVendorDataPage';
+import MasterReturnDataPage from './pages/MasterReturnDataPage';
 import TtsplHistorySearchPage from './pages/TtsplHistorySearchPage';
 import PartVendorRepairDcListPage from './pages/PartVendorRepairDcListPage';
 import PartVendorRepairDcDetailPage from './pages/PartVendorRepairDcDetailPage';
@@ -38,6 +40,8 @@ function InventoryIndexRedirect() {
   const { canView } = usePermission();
   if (canView('inventory_management')) return <Navigate to="qc-process" replace />;
   if (canView('inventory_master_data')) return <Navigate to="master-data" replace />;
+  if (canView('inventory_vendor_master_data')) return <Navigate to="vendor-master-data" replace />;
+  if (canView('inventory_return_master_data')) return <Navigate to="return-master-data" replace />;
   if (canView('inventory_asset_movement')) return <Navigate to="asset-movement" replace />;
   if (canView('parts_dashboard')) return <Navigate to="parts-dashboard" replace />;
   if (canView('parts_inventory')) return <Navigate to="parts" replace />;
@@ -86,6 +90,8 @@ export default function InventoryManagementApp() {
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />
         <Route path="master-data" element={g('inventory_master_data', <MasterDataDashboardPage />)} />
+        <Route path="vendor-master-data" element={g('inventory_vendor_master_data', <MasterVendorDataPage />)} />
+        <Route path="return-master-data" element={g('inventory_return_master_data', <MasterReturnDataPage />)} />
         <Route path="ttspl-history" element={g('ttspl_history', <TtsplHistorySearchPage />)} />
 
         <Route path="*" element={<InventoryIndexRedirect />} />

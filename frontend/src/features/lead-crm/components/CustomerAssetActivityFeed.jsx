@@ -20,8 +20,8 @@ export default function CustomerAssetActivityFeed({ activity = [], loading = fal
   return (
     <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-        <h3 className="text-sm font-semibold text-gray-800">Asset edit activity</h3>
-        <p className="text-xs text-gray-500 mt-0.5">Recent changes to specs, DC, delivery date, and rates</p>
+        <h3 className="text-sm font-semibold text-gray-800">Customer activity</h3>
+        <p className="text-xs text-gray-500 mt-0.5">Asset edits and credit notes applied on invoices</p>
       </div>
       <ul className="divide-y divide-gray-100 max-h-72 overflow-y-auto">
         {activity.map((item) => (

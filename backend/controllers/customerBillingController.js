@@ -6,6 +6,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const {
   generateCustomerInvoice,
   generateAllCustomerInvoices,
+  approveAndApplyCreditNote,
 } = require('../services/billingSchedulerService');
 const {
   recordPayment,
@@ -167,54 +168,74 @@ exports.ensureBillingEngineSchema = async () => {
   await pool.query(sql);
 };
 
+function invoiceListFilters(query, { includeStatus = true } = {}) {
+  const { customer_id, month, year, status, search } = query;
+  const params = [];
+  const where = ['1=1'];
+  if (customer_id) {
+    params.push(customer_id);
+    where.push(`ci.customer_id = $${params.length}`);
+  }
+  if (month) {
+    params.push(month);
+    where.push(`ci.invoice_month = $${params.length}`);
+  }
+  if (year) {
+    params.push(year);
+    where.push(`ci.invoice_year = $${params.length}`);
+  }
+  if (includeStatus && status) {
+    params.push(status);
+    where.push(`ci.status = $${params.length}`);
+  }
+  const qSearch = String(search || '').trim();
+  if (qSearch) {
+    params.push(`%${qSearch}%`);
+    const n = params.length;
+    where.push(`(
+      ci.invoice_number ILIKE $${n}
+      OR COALESCE(c.company_name, '') ILIKE $${n}
+      OR COALESCE(c.name, '') ILIKE $${n}
+      OR COALESCE(ci.irn, '') ILIKE $${n}
+    )`);
+  }
+  return { params, where };
+}
+
 exports.listInvoices = async (req, res) => {
   try {
-    const { customer_id, month, year, status, search, page = 1, limit = 50 } = req.query;
-    const params = [];
-    const where = ['1=1'];
-    if (customer_id) {
-      params.push(customer_id);
-      where.push(`ci.customer_id = $${params.length}`);
-    }
-    if (month) {
-      params.push(month);
-      where.push(`ci.invoice_month = $${params.length}`);
-    }
-    if (year) {
-      params.push(year);
-      where.push(`ci.invoice_year = $${params.length}`);
-    }
-    if (status) {
-      params.push(status);
-      where.push(`ci.status = $${params.length}`);
-    }
-    const qSearch = String(search || '').trim();
-    if (qSearch) {
-      params.push(`%${qSearch}%`);
-      const n = params.length;
-      where.push(`(
-        ci.invoice_number ILIKE $${n}
-        OR COALESCE(c.company_name, '') ILIKE $${n}
-        OR COALESCE(c.name, '') ILIKE $${n}
-        OR COALESCE(ci.irn, '') ILIKE $${n}
-      )`);
-    }
-    const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
-    params.push(parseInt(limit, 10), offset);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 25));
+    const offset = (page - 1) * limit;
+    const list = invoiceListFilters(req.query, { includeStatus: true });
+    const kpi = invoiceListFilters(req.query, { includeStatus: false });
+    list.params.push(limit, offset);
 
-    const [listRes, summaryRes] = await Promise.all([
+    const [listRes, countRes, summaryRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
                 COALESCE(jsonb_array_length(ci.line_items), 0) AS laptop_count
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
-         WHERE ${where.join(' AND ')}
+         WHERE ${list.where.join(' AND ')}
          ORDER BY ci.invoice_year DESC, ci.invoice_month DESC, ci.invoice_id DESC
-         LIMIT $${params.length - 1} OFFSET $${params.length}`,
-        params
+         LIMIT $${list.params.length - 1} OFFSET $${list.params.length}`,
+        list.params
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS n
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         WHERE ${list.where.join(' AND ')}`,
+        list.params.slice(0, list.params.length - 2)
       ),
       pool.query(
         `SELECT
+           COUNT(*)::int AS total_count,
+           COALESCE(SUM(ci.grand_total), 0) AS total_amount,
+           COALESCE(SUM(ci.subtotal), 0) AS subtotal_total,
+           COALESCE(SUM(ci.credit_note_adjustment), 0) AS credit_note_total,
+           COUNT(*) FILTER (WHERE COALESCE(ci.credit_note_adjustment, 0) > 0)::int AS credit_note_invoice_count,
            COUNT(*) FILTER (WHERE ci.status = 'draft')::int AS draft_count,
            COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'draft'), 0) AS draft_total,
            COUNT(*) FILTER (WHERE ci.status = 'sent')::int AS sent_count,
@@ -226,17 +247,20 @@ exports.listInvoices = async (req, res) => {
            COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status IN ('sent','overdue')), 0) AS outstanding_total
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
-         WHERE ${where.join(' AND ')}`,
-        params.slice(0, params.length - 2)
+         WHERE ${kpi.where.join(' AND ')}`,
+        kpi.params
       ),
     ]);
 
+    const total = countRes.rows[0]?.n || 0;
     res.json({
       success: true,
       invoices: listRes.rows,
       summary: summaryRes.rows[0] || {},
-      page: parseInt(page, 10),
-      limit: parseInt(limit, 10),
+      page,
+      limit,
+      total,
+      total_pages: Math.max(1, Math.ceil(total / limit)),
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -328,6 +352,8 @@ exports.generateInvoicesBulk = async (req, res) => {
     const appended = results.filter((r) => r.appended).length;
     const skipped = results.filter((r) => r.skipped && !r.error).length;
     const errors = results.filter((r) => r.error).length;
+    const creditNotesCreated = results.reduce((n, r) => n + Number(r.credit_notes_created || 0), 0);
+    const creditNotesApplied = results.reduce((n, r) => n + Number(r.credit_notes_applied || 0), 0);
 
     res.json({
       success: true,
@@ -337,6 +363,8 @@ exports.generateInvoicesBulk = async (req, res) => {
         appended,
         skipped,
         errors,
+        credit_notes_created: creditNotesCreated,
+        credit_notes_applied: creditNotesApplied,
       },
       results,
     });
@@ -482,34 +510,132 @@ exports.downloadInvoicePdf = async (req, res) => {
   }
 };
 
+function creditNoteListFilters(query, { includeStatus = true } = {}) {
+  const { customer_id, status, search, ttspl } = query;
+  const params = [];
+  const where = ['1=1'];
+  if (customer_id) {
+    params.push(customer_id);
+    where.push(`cn.customer_id = $${params.length}`);
+  }
+  if (includeStatus && status) {
+    params.push(status);
+    where.push(`cn.status = $${params.length}`);
+  }
+  const ttsplKeys = (Array.isArray(ttspl) ? ttspl : String(ttspl || '').split(','))
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  if (ttsplKeys.length) {
+    params.push(ttsplKeys);
+    where.push(`EXISTS (
+      SELECT 1
+        FROM jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(COALESCE(cn.ttspl_ids, '[]'::jsonb)) = 'array'
+               THEN COALESCE(cn.ttspl_ids, '[]'::jsonb)
+               ELSE '[]'::jsonb
+          END
+        ) AS t(code)
+       WHERE t.code = ANY($${params.length}::text[])
+    )`);
+  }
+  const qSearch = String(search || '').trim();
+  if (qSearch) {
+    params.push(`%${qSearch}%`);
+    const n = params.length;
+    where.push(`(
+      cn.credit_note_number ILIKE $${n}
+      OR COALESCE(c.company_name, '') ILIKE $${n}
+      OR COALESCE(c.name, '') ILIKE $${n}
+      OR COALESCE(cn.reason, '') ILIKE $${n}
+      OR COALESCE(cn.description, '') ILIKE $${n}
+      OR COALESCE(ci.invoice_number, '') ILIKE $${n}
+      OR COALESCE(cn.ttspl_ids::text, '') ILIKE $${n}
+    )`);
+  }
+  return { params, where };
+}
+
+const CREDIT_NOTE_FROM = `
+  FROM customer_credit_notes cn
+  LEFT JOIN customers c ON c.customer_id = cn.customer_id
+  LEFT JOIN customer_invoices ci ON ci.invoice_id = COALESCE(cn.applied_in_invoice_id, cn.invoice_id)
+  LEFT JOIN support_tickets st ON st.id = COALESCE(cn.support_ticket_id, cn.return_ticket_id)
+`;
+
 exports.listCreditNotes = async (req, res) => {
   try {
-    const { customer_id, status } = req.query;
-    const params = [];
-    const where = ['1=1'];
-    if (customer_id) {
-      params.push(customer_id);
-      where.push(`cn.customer_id = $${params.length}`);
-    }
-    if (status) {
-      params.push(status);
-      where.push(`cn.status = $${params.length}`);
-    }
-    const result = await pool.query(
-      `SELECT cn.*,
-              c.company_name AS customer_name,
-              ci.invoice_number,
-              COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
-              COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
-       FROM customer_credit_notes cn
-       LEFT JOIN customers c ON c.customer_id = cn.customer_id
-       LEFT JOIN customer_invoices ci ON ci.invoice_id = cn.invoice_id
-       LEFT JOIN support_tickets st ON st.id = COALESCE(cn.support_ticket_id, cn.return_ticket_id)
-       WHERE ${where.join(' AND ')}
-       ORDER BY cn.created_at DESC`,
-      params
-    );
-    res.json({ success: true, credit_notes: result.rows });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 25));
+    const offset = (page - 1) * limit;
+    const list = creditNoteListFilters(req.query, { includeStatus: true });
+    const kpi = creditNoteListFilters(req.query, { includeStatus: false });
+    const laptopQuery = { ...req.query };
+    delete laptopQuery.ttspl;
+    const laptopScope = creditNoteListFilters(laptopQuery, { includeStatus: true });
+    list.params.push(limit, offset);
+
+    const [listRes, countRes, summaryRes, laptopRes] = await Promise.all([
+      pool.query(
+        `SELECT cn.*,
+                c.company_name AS customer_name,
+                ci.invoice_number,
+                COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
+                COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
+         ${CREDIT_NOTE_FROM}
+         WHERE ${list.where.join(' AND ')}
+         ORDER BY cn.created_at DESC
+         LIMIT $${list.params.length - 1} OFFSET $${list.params.length}`,
+        list.params
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS n ${CREDIT_NOTE_FROM} WHERE ${list.where.join(' AND ')}`,
+        list.params.slice(0, list.params.length - 2)
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*)::int AS total_count,
+           COALESCE(SUM(cn.amount), 0) AS total_amount,
+           COUNT(*) FILTER (WHERE cn.status = 'pending')::int AS pending_count,
+           COALESCE(SUM(cn.amount) FILTER (WHERE cn.status = 'pending'), 0) AS pending_amount,
+           COUNT(*) FILTER (WHERE cn.status = 'approved')::int AS approved_count,
+           COALESCE(SUM(cn.amount) FILTER (WHERE cn.status = 'approved'), 0) AS approved_amount,
+           COUNT(*) FILTER (WHERE cn.status = 'applied')::int AS applied_count,
+           COALESCE(SUM(cn.amount) FILTER (WHERE cn.status = 'applied'), 0) AS applied_amount,
+           COUNT(*) FILTER (WHERE cn.status = 'cancelled')::int AS cancelled_count,
+           COALESCE(SUM(cn.amount) FILTER (WHERE cn.status = 'cancelled'), 0) AS cancelled_amount
+         ${CREDIT_NOTE_FROM}
+         WHERE ${kpi.where.join(' AND ')}`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT DISTINCT t.code AS ttspl
+         ${CREDIT_NOTE_FROM}
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+           CASE WHEN jsonb_typeof(COALESCE(cn.ttspl_ids, '[]'::jsonb)) = 'array'
+                THEN COALESCE(cn.ttspl_ids, '[]'::jsonb)
+                ELSE '[]'::jsonb
+           END
+         ) AS t(code)
+         WHERE ${laptopScope.where.join(' AND ')}
+           AND t.code IS NOT NULL
+           AND t.code <> ''
+         ORDER BY 1
+         LIMIT 500`,
+        laptopScope.params
+      ),
+    ]);
+
+    const total = countRes.rows[0]?.n || 0;
+    res.json({
+      success: true,
+      credit_notes: listRes.rows,
+      summary: summaryRes.rows[0] || {},
+      laptops: laptopRes.rows.map((r) => r.ttspl),
+      page,
+      limit,
+      total,
+      total_pages: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -553,17 +679,48 @@ exports.createCreditNote = async (req, res) => {
 exports.approveCreditNote = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query(
-      `UPDATE customer_credit_notes
-       SET status = 'approved', approved_by = $1, updated_at = NOW()
-       WHERE credit_note_id = $2 AND status = 'pending'
-       RETURNING *`,
-      [req.user?.user_id || null, id]
-    );
-    if (!result.rows.length) {
-      return res.status(404).json({ success: false, message: 'Credit note not found or not pending' });
+    const result = await approveAndApplyCreditNote(Number(id), req.user?.user_id || null);
+    if (!result.ok) {
+      return res.status(404).json({ success: false, message: result.reason });
     }
-    res.json({ success: true, credit_note: result.rows[0] });
+    res.json({
+      success: true,
+      credit_note: result.credit_note,
+      applied: result.applied,
+      invoice_id: result.invoice_id,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.approveCreditNotesBulk = async (req, res) => {
+  try {
+    const ids = [...new Set(
+      (Array.isArray(req.body?.ids) ? req.body.ids : [])
+        .map((id) => Number(id))
+        .filter((id) => id > 0)
+    )];
+    if (!ids.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one credit note' });
+    }
+    const results = [];
+    for (const id of ids) {
+      try {
+        const result = await approveAndApplyCreditNote(id, req.user?.user_id || null);
+        results.push({ credit_note_id: id, ...result });
+      } catch (err) {
+        results.push({ credit_note_id: id, ok: false, reason: err.message });
+      }
+    }
+    const approved = results.filter((r) => r.ok).length;
+    const applied = results.filter((r) => r.applied).length;
+    const failed = results.filter((r) => !r.ok).length;
+    res.json({
+      success: failed === 0,
+      summary: { total: results.length, approved, applied, failed },
+      results,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

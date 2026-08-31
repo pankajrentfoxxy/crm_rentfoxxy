@@ -42,6 +42,8 @@ export const APPLICATION_SECTIONS = [
   'inventory',
   'inventory_management',
   'inventory_master_data',
+  'inventory_vendor_master_data',
+  'inventory_return_master_data',
   'inventory_asset_movement',
   'parts',
   'parts_dashboard',
@@ -144,6 +146,8 @@ export const SECTION_LABELS = {
   inventory: 'Inventory',
   inventory_management: 'Inventory Management',
   inventory_master_data: 'Master Data Dashboard',
+  inventory_vendor_master_data: 'Master Vendor Data',
+  inventory_return_master_data: 'Master Return Data',
   inventory_asset_movement: 'Inventory — Asset Movement',
   parts: 'Parts (Legacy)',
   parts_dashboard: 'Parts Dashboard',
@@ -212,7 +216,7 @@ export const SECTION_GROUPS = {
     'delivery_register_management', 'delivery_register_otp', 'technician_bucket', 'delivery_technicians', 'delivery_my_deliveries', 'technicians_bucket_list', 'payment_records',
   ],
   'Vendor & Procurement': ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch', 'procurement', 'sales_pipeline'],
-  'Master Data': ['inventory_master_data'],
+  'Master Data': ['inventory_master_data', 'inventory_vendor_master_data', 'inventory_return_master_data'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'diagnosis_failed', 'tickets'],
   Inventory: [
     'inventory', 'inventory_management', 'inventory_asset_movement', 'customer_inventory', 'ttspl_history',
@@ -277,6 +281,12 @@ export const GROUP_COLORS = {
 export const PERMISSION_ACTIONS = ['can_view', 'can_create', 'can_edit', 'can_delete'];
 
 /** Legacy umbrella keys — kept in DB for backward compat but hidden from role-permission UI. */
+/** These modules can be granted only to admin / super_admin. */
+export const ADMIN_ONLY_RBAC_SECTIONS = [
+  'inventory_vendor_master_data',
+  'inventory_return_master_data',
+];
+
 export const HIDDEN_ROLE_PERMISSION_SECTIONS = new Set([
   'sales_orders',
   'sales_orders_doc',

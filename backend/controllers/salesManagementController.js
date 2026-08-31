@@ -1434,6 +1434,7 @@ exports.listDeliveryChallans = async (req, res) => {
       search: req.query.search || '',
       status: req.query.status || '',
       dcPurpose: req.query.dc_purpose || req.query.purpose || '',
+      orderType: req.query.order_type || req.query.orderType || '',
       assignedUserId,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,

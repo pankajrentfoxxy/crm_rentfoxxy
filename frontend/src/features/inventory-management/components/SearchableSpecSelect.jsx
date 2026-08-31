@@ -9,6 +9,7 @@ export default function SearchableSpecSelect({
   placeholder = 'All',
   disabled = false,
   className = '',
+  multiple = false,
 }) {
   const rootRef = useRef(null);
   const searchRef = useRef(null);
@@ -42,7 +43,22 @@ export default function SearchableSpecSelect({
     };
   }, [open]);
 
-  const display = value || placeholder;
+  const selectedValues = useMemo(() => {
+    if (!multiple) return [];
+    if (Array.isArray(value)) return value.map(String).filter(Boolean);
+    return String(value || '').split(',').map((s) => s.trim()).filter(Boolean);
+  }, [multiple, value]);
+
+  const toggleMulti = (opt) => {
+    const next = selectedValues.includes(opt)
+      ? selectedValues.filter((v) => v !== opt)
+      : [...selectedValues, opt];
+    onChange(next);
+  };
+
+  const display = multiple
+    ? (selectedValues.length ? `${selectedValues.length} selected` : placeholder)
+    : (value || placeholder);
 
   return (
     <div ref={rootRef} className={`min-w-[92px] flex-1 max-w-[132px] ${className}`}>
@@ -60,7 +76,7 @@ export default function SearchableSpecSelect({
           onClick={() => { if (!disabled) setOpen((o) => !o); }}
           className="w-full flex items-center justify-between gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs min-h-[32px] text-left disabled:opacity-50 hover:border-slate-300 focus:outline-none focus:ring-1 focus:ring-sky-500"
         >
-          <span className={`truncate ${value ? 'text-slate-800' : 'text-slate-400'}`}>{display}</span>
+          <span className={`truncate ${multiple ? (selectedValues.length ? 'text-slate-800' : 'text-slate-400') : (value ? 'text-slate-800' : 'text-slate-400')}`}>{display}</span>
           <ChevronDown className={`w-3 h-3 shrink-0 text-slate-400 ${open ? 'rotate-180' : ''}`} />
         </button>
         {open ? (
@@ -78,13 +94,15 @@ export default function SearchableSpecSelect({
                 />
               </div>
             </div>
-            <ul role="listbox" className="max-h-40 overflow-y-auto py-0.5 text-xs">
+            <ul role="listbox" aria-multiselectable={multiple || undefined} className="max-h-40 overflow-y-auto py-0.5 text-xs">
               <li>
                 <button
                   type="button"
                   role="option"
-                  onClick={() => { onChange(''); setOpen(false); setSearch(''); }}
-                  className={`w-full text-left px-2 py-1.5 hover:bg-sky-50 ${!value ? 'bg-sky-50 text-sky-800 font-medium' : 'text-slate-500'}`}
+                  onClick={() => { onChange(multiple ? [] : ''); setOpen(false); setSearch(''); }}
+                  className={`w-full text-left px-2 py-1.5 hover:bg-sky-50 ${
+                    (multiple ? selectedValues.length === 0 : !value) ? 'bg-sky-50 text-sky-800 font-medium' : 'text-slate-500'
+                  }`}
                 >
                   {placeholder}
                 </button>
@@ -92,20 +110,42 @@ export default function SearchableSpecSelect({
               {filteredOptions.length === 0 ? (
                 <li className="px-2 py-2 text-center text-slate-400">No match</li>
               ) : (
-                filteredOptions.map((opt) => (
-                  <li key={opt}>
-                    <button
-                      type="button"
-                      role="option"
-                      onClick={() => { onChange(opt); setOpen(false); setSearch(''); }}
-                      className={`w-full text-left px-2 py-1.5 hover:bg-sky-50 truncate ${
-                        value === opt ? 'bg-sky-50 text-sky-800 font-medium' : 'text-slate-800'
-                      }`}
-                    >
-                      {opt}
-                    </button>
-                  </li>
-                ))
+                filteredOptions.map((opt) => {
+                  const checked = multiple ? selectedValues.includes(opt) : value === opt;
+                  return (
+                    <li key={opt}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={checked}
+                        onClick={() => {
+                          if (multiple) {
+                            toggleMulti(opt);
+                            return;
+                          }
+                          onChange(opt);
+                          setOpen(false);
+                          setSearch('');
+                        }}
+                        className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 hover:bg-sky-50 ${
+                          checked ? 'bg-sky-50 text-sky-800 font-medium' : 'text-slate-800'
+                        }`}
+                      >
+                        {multiple ? (
+                          <span
+                            className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${
+                              checked ? 'border-sky-600 bg-sky-600 text-white' : 'border-slate-300 bg-white'
+                            }`}
+                            aria-hidden
+                          >
+                            {checked ? '✓' : ''}
+                          </span>
+                        ) : null}
+                        <span className="truncate">{opt}</span>
+                      </button>
+                    </li>
+                  );
+                })
               )}
             </ul>
           </div>

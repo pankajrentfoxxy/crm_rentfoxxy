@@ -9,11 +9,23 @@ const serialStatus = require('../controllers/inventoryManagement/serialStatus.co
 const universalSearch = require('../controllers/inventoryManagement/universalSearch.controller');
 const assetMovement = require('../controllers/inventoryManagement/assetMovement.controller');
 const masterData = require('../controllers/inventoryManagement/masterData.controller');
+const vendorMasterData = require('../controllers/inventoryManagement/vendorMasterData.controller');
+const returnMasterData = require('../controllers/inventoryManagement/returnMasterData.controller');
 
 const router = express.Router();
 
 const invView = [authMiddleware, checkSectionPermission('inventory_management', 'view')];
 const masterDataView = [authMiddleware, checkSectionPermission('inventory_master_data', 'view')];
+const vendorMasterDataView = [
+  authMiddleware,
+  checkRole('admin', 'super_admin'),
+  checkSectionPermission('inventory_vendor_master_data', 'view'),
+];
+const returnMasterDataView = [
+  authMiddleware,
+  checkRole('admin', 'super_admin'),
+  checkSectionPermission('inventory_return_master_data', 'view'),
+];
 const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];
 const invAdmin = [
   authMiddleware,
@@ -33,7 +45,7 @@ const custInvView = [authMiddleware, checkSectionPermission('customer_inventory'
 const moduleEntry = [
   authMiddleware,
   checkAnySectionPermission(
-    ['inventory', 'inventory_management', 'inventory_master_data', 'inventory_asset_movement', 'parts', 'parts_dashboard', 'parts_inventory', 'parts_approval', 'parts_history', 'parts_discarded', 'scrap_challans', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
+    ['inventory', 'inventory_management', 'inventory_master_data', 'inventory_vendor_master_data', 'inventory_return_master_data', 'inventory_asset_movement', 'parts', 'parts_dashboard', 'parts_inventory', 'parts_approval', 'parts_history', 'parts_discarded', 'scrap_challans', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
     'view'
   ),
 ];
@@ -102,7 +114,19 @@ router.post(
 router.get('/lists/counts', invView, inventoryList.getListCounts);
 router.get('/master-data/kpis', masterDataView, masterData.getMasterDataKpis);
 router.get('/master-data/export.xlsx', masterDataView, masterData.exportMasterDataExcel);
+router.patch(
+  '/master-data/vendors/:vendorId/exclude-from-vendor-po',
+  masterDataView,
+  masterData.setVendorExcludeValidators,
+  masterData.setVendorExcludeFromVendorPo
+);
 router.get('/master-data', masterDataView, masterData.getMasterDataDashboard);
+router.get('/vendor-master-data/overview', vendorMasterDataView, vendorMasterData.getOverview);
+router.get('/vendor-master-data/export.xlsx', vendorMasterDataView, vendorMasterData.exportExcel);
+router.get('/vendor-master-data/laptops', vendorMasterDataView, vendorMasterData.listLaptops);
+router.get('/return-master-data/overview', returnMasterDataView, returnMasterData.getOverview);
+router.get('/return-master-data/export.xlsx', returnMasterDataView, returnMasterData.exportExcel);
+router.get('/return-master-data/laptops', returnMasterDataView, returnMasterData.listLaptops);
 router.get('/customer-assets', custInvView, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(
   '/spare-parts/change-status',

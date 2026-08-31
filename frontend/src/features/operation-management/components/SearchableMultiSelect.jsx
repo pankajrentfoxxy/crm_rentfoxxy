@@ -25,6 +25,8 @@ export default function SearchableMultiSelect({
   maxSelections,
   emptyMessage = 'No options available.',
   countNoun = 'item',
+  compact = false,
+  searchPlaceholder = 'Search...',
 }) {
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
@@ -139,7 +141,7 @@ export default function SearchableMultiSelect({
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search serial number..."
+            placeholder={searchPlaceholder}
             className="w-full rounded-md border border-gray-200 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
           />
         </div>
@@ -190,7 +192,7 @@ export default function SearchableMultiSelect({
         </label>
       ) : null}
 
-      {selectedValues.length > 0 ? (
+      {!compact && selectedValues.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {selectedValues.map((v) => (
             <span
@@ -224,7 +226,9 @@ export default function SearchableMultiSelect({
           if (disabled) return;
           setOpen((prev) => !prev);
         }}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2.5 border border-gray-200 rounded-lg text-sm bg-white text-left disabled:opacity-60 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600 min-h-[42px]"
+        className={`w-full flex items-center justify-between gap-2 border border-gray-200 rounded-lg bg-white text-left disabled:opacity-60 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600 ${
+          compact ? 'px-3 py-2 text-sm min-h-[38px]' : 'px-3 py-2.5 text-sm min-h-[42px]'
+        }`}
       >
         <span className={selectedValues.length ? 'text-gray-900 truncate' : 'text-gray-400 truncate'}>
           {triggerText}

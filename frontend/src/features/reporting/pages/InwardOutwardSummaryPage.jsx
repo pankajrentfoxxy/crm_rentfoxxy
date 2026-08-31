@@ -8,19 +8,42 @@ import ExportButton from '../components/ExportButton';
 import { exportReport } from '../reportingApi';
 import usePermission from '../../../hooks/usePermission';
 
+const pad2 = (n) => String(n).padStart(2, '0');
 const today = () => new Date().toISOString().slice(0, 10);
 const yesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+const currentMonth = () => new Date().getMonth() + 1;
+const currentYear = () => new Date().getFullYear();
+
+const MONTHS = [
+  { v: 1, l: 'January' }, { v: 2, l: 'February' }, { v: 3, l: 'March' },
+  { v: 4, l: 'April' }, { v: 5, l: 'May' }, { v: 6, l: 'June' },
+  { v: 7, l: 'July' }, { v: 8, l: 'August' }, { v: 9, l: 'September' },
+  { v: 10, l: 'October' }, { v: 11, l: 'November' }, { v: 12, l: 'December' },
+];
+const YEARS = Array.from({ length: 6 }, (_, i) => 2024 + i);
+
+const rangeForMonth = (month, year) => {
+  const m = Number(month) || currentMonth();
+  const y = Number(year) || currentYear();
+  const last = new Date(y, m, 0).getDate();
+  return {
+    from: `${y}-${pad2(m)}-01`,
+    to: `${y}-${pad2(m)}-${pad2(last)}`,
+  };
+};
 
 const DATE_PRESETS = [
   { value: 'all', label: 'All dates' },
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
+  { value: 'month', label: 'Month' },
   { value: 'custom', label: 'Custom' },
 ];
 
-const rangeForPreset = (preset) => {
+const rangeForPreset = (preset, month, year) => {
   if (preset === 'today') return { from: today(), to: today() };
   if (preset === 'yesterday') return { from: yesterday(), to: yesterday() };
+  if (preset === 'month') return rangeForMonth(month, year);
   return { from: '', to: '' };
 };
 
@@ -422,7 +445,15 @@ function DetailModal({ open, title, type, loading, rows, onClose, onTtsplClick, 
   );
 }
 
-const DEFAULT_FILTERS = { preset: 'today', from: today(), to: today(), customer: '', vendor: '' };
+const DEFAULT_FILTERS = {
+  preset: 'today',
+  from: today(),
+  to: today(),
+  month: currentMonth(),
+  year: currentYear(),
+  customer: '',
+  vendor: '',
+};
 
 export default function InwardOutwardSummaryPage() {
   const { canView } = usePermission();
@@ -455,21 +486,46 @@ export default function InwardOutwardSummaryPage() {
   }, [filters]);
 
   const setPreset = (preset) => {
-    setFilters((f) => ({ ...f, preset, ...(preset === 'custom' ? {} : rangeForPreset(preset)) }));
+    setFilters((f) => ({
+      ...f,
+      preset,
+      customer: '',
+      vendor: '',
+      ...(preset === 'custom' ? {} : rangeForPreset(preset, f.month, f.year)),
+    }));
   };
 
   const setDate = (key, value) => {
-    setFilters((f) => ({ ...f, preset: 'custom', [key]: value }));
+    setFilters((f) => ({ ...f, preset: 'custom', customer: '', vendor: '', [key]: value }));
+  };
+
+  const setMonthYear = (key, value) => {
+    setFilters((f) => {
+      const next = { ...f, preset: 'month', customer: '', vendor: '', [key]: value };
+      return { ...next, ...rangeForMonth(next.month, next.year) };
+    });
   };
 
   useEffect(() => {
-    api.get('/reports/inward-outward-summary/filters')
-      .then((r) => setOptions({
-        vendors: r.data.vendors || [],
-        customers: r.data.customers || [],
-      }))
+    const params = paramsForFilters(filters);
+    api.get('/reports/inward-outward-summary/filters', { params })
+      .then((r) => {
+        const customers = r.data.customers || [];
+        const vendors = r.data.vendors || [];
+        setOptions({ vendors, customers });
+        setFilters((f) => {
+          const customerOk = !f.customer || customers.some((c) => String(c.customer_id) === String(f.customer));
+          const vendorOk = !f.vendor || vendors.some((v) => String(v.vendor_id) === String(f.vendor));
+          if (customerOk && vendorOk) return f;
+          return {
+            ...f,
+            customer: customerOk ? f.customer : '',
+            vendor: vendorOk ? f.vendor : '',
+          };
+        });
+      })
       .catch(() => {});
-  }, []);
+  }, [filters.from, filters.to, filters.preset]);
 
   const load = useCallback(async (f) => {
     setLoading(true);
@@ -580,6 +636,30 @@ export default function InwardOutwardSummaryPage() {
           ))}
         </div>
         <div className="flex flex-wrap gap-3 items-end">
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">Month</span>
+            <select
+              value={filters.month}
+              onChange={(e) => setMonthYear('month', Number(e.target.value))}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[140px]"
+            >
+              {MONTHS.map((m) => (
+                <option key={m.v} value={m.v}>{m.l}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">Year</span>
+            <select
+              value={filters.year}
+              onChange={(e) => setMonthYear('year', Number(e.target.value))}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[100px]"
+            >
+              {YEARS.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </label>
           <label className="text-sm">
             <span className="block text-gray-500 text-xs mb-1">From</span>
             <input type="date" value={filters.from} onChange={(e) => setDate('from', e.target.value)}

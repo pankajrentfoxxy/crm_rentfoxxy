@@ -57,6 +57,45 @@ export function fetchMasterDataKpis(params) {
   return api.get(`${base}/master-data/kpis`, { params });
 }
 
+/** Persist Vendor Master Data “Exclude from Vendor PO” checkbox. */
+export function setVendorExcludeFromVendorPo(vendorId, excludeFromVendorPo) {
+  return api.patch(`${base}/master-data/vendors/${encodeURIComponent(vendorId)}/exclude-from-vendor-po`, {
+    exclude_from_vendor_po: Boolean(excludeFromVendorPo),
+  });
+}
+
+export function fetchVendorMasterOverview(params) {
+  return api.get(`${base}/vendor-master-data/overview`, { params });
+}
+
+export function fetchVendorMasterLaptops(params) {
+  return api.get(`${base}/vendor-master-data/laptops`, { params });
+}
+
+export async function exportVendorMasterExcel(params = {}) {
+  const response = await api.get(`${base}/vendor-master-data/export.xlsx`, {
+    params,
+    responseType: 'blob',
+  });
+  downloadBlobResponse(response, 'master_vendor_data.xlsx');
+}
+
+export function fetchReturnMasterOverview(params) {
+  return api.get(`${base}/return-master-data/overview`, { params });
+}
+
+export function fetchReturnMasterLaptops(params) {
+  return api.get(`${base}/return-master-data/laptops`, { params });
+}
+
+export async function exportReturnMasterExcel(params = {}) {
+  const response = await api.get(`${base}/return-master-data/export.xlsx`, {
+    params,
+    responseType: 'blob',
+  });
+  downloadBlobResponse(response, 'master_return_data.xlsx');
+}
+
 /** Master Data Dashboard — export current tab + filters as Excel */
 export async function exportMasterDataExcel(params = {}) {
   const response = await api.get(`${base}/master-data/export.xlsx`, {

@@ -116,7 +116,7 @@ function AttachPicker({ soNumber, line, onAttached, onTicketCreated }) {
                 Looking for: {[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ') || 'this config'}
               </p>
               <p className="text-[11px] text-gray-400 mt-1">
-                Ensure laptops matching this spec have passed QC.
+                QC-passed units reserved on another SO or already on a DC will not appear here.
               </p>
             </div>
           ) : filtered.length === 0 ? (

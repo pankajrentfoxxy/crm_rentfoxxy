@@ -87,9 +87,9 @@ async function runBillingBatch(runName, fn) {
 async function buildCustomerInvoiceLines(client, {
   customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts = false,
 }) {
-  // Default (cron): mid-month starts wait for the NEXT month (billing lag) —
-  // rent_start_date <= monthStart. On-delivery invoices pass
-  // includeCurrentMonthStarts so delivery-date → month-end is billed immediately.
+  // Mid-month starts wait for the NEXT month as catch-up
+  // (sent 10 Aug → Sept invoice bills 10–31 Aug + 1–30 Sep).
+  // includeCurrentMonthStarts is only for rare same-month backfills.
   const startCutoff = includeCurrentMonthStarts ? monthEnd : monthStart;
   const serialsRes = await client.query(
     `SELECT vsn.serial_id,
@@ -99,7 +99,11 @@ async function buildCustomerInvoiceLines(client, {
             vsn.inventory_status,
             vsn.rent_start_date,
             vsn.rent_billed_until,
-            COALESCE(vsn.rent_end_date, vsn.returned_at::date) AS rent_end_date,
+            CASE
+              WHEN vsn.inventory_status = 'returned'
+                THEN COALESCE(vsn.rent_end_date, vsn.returned_at::date)
+              ELSE vsn.rent_end_date
+            END AS rent_end_date,
             vsn.rent_monthly_rate,
             COALESCE(vsn.extra->>'brand', '') AS brand,
             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
@@ -123,7 +127,9 @@ async function buildCustomerInvoiceLines(client, {
   for (const row of serialsRes.rows) {
     const rentStart = new Date(row.rent_start_date);
     const billedUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
-    const rentEnd = row.rent_end_date ? new Date(row.rent_end_date) : null;
+    const rentEndRaw = row.rent_end_date ? new Date(row.rent_end_date) : null;
+    // Ignore a leftover return date from a previous rental cycle.
+    const rentEnd = rentEndRaw && rentEndRaw >= rentStart ? rentEndRaw : null;
 
     let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
     if (billStart < rentStart) billStart = rentStart;
@@ -173,6 +179,462 @@ async function buildCustomerInvoiceLines(client, {
   return { lineItems, subtotal, periodStart, periodEnd };
 }
 
+function parseInvoiceLineDate(value) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  const s = String(value).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function invoiceLinesArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function linePeriodBounds(lines) {
+  let fromDate = null;
+  let toDate = null;
+  for (const line of lines) {
+    const start = parseInvoiceLineDate(line.rent_start);
+    const end = parseInvoiceLineDate(line.rent_end);
+    if (start && (!fromDate || start < fromDate)) fromDate = start;
+    if (end && (!toDate || end > toDate)) toDate = end;
+  }
+  return { fromDate, toDate };
+}
+
+/**
+ * Mid-month starts belong on the NEXT month as catch-up (e.g. sent 10 Aug →
+ * Sept invoice bills 10–31 Aug catch-up + 1–30 Sep). On-delivery used to put
+ * those days on the August invoice, so Sept generate saw billed_until=31 Aug
+ * and created no catch-up. Move still-draft start-month lines forward.
+ */
+async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, month, year }) {
+  const prevEnd = new Date(year, month - 1, 0);
+  const prevMonth = prevEnd.getMonth() + 1;
+  const prevYear = prevEnd.getFullYear();
+  const prevStart = new Date(prevYear, prevMonth - 1, 1);
+  const expectedPeriod = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+
+  const prev = await client.query(
+    `SELECT invoice_id, invoice_number, status, line_items, gst_percent, credit_note_adjustment
+       FROM customer_invoices
+      WHERE customer_id = $1 AND invoice_month = $2 AND invoice_year = $3
+      FOR UPDATE`,
+    [customerId, prevMonth, prevYear]
+  );
+  if (!prev.rows.length) return [];
+  const inv = prev.rows[0];
+  if (String(inv.status || '').toLowerCase() !== 'draft') return [];
+
+  const lines = invoiceLinesArray(inv.line_items);
+  const stay = [];
+  const move = [];
+  for (const line of lines) {
+    const start = parseInvoiceLineDate(line.rent_start);
+    const midStart = start
+      && start.getFullYear() === prevYear
+      && start.getMonth() + 1 === prevMonth
+      && start.getDate() > 1;
+    const period = String(line.period || line.period_label || '');
+    const samePeriod = !period || period === expectedPeriod;
+    if (midStart && samePeriod) {
+      move.push({ ...line, is_catchup: true, period: expectedPeriod });
+    } else {
+      stay.push(line);
+    }
+  }
+  if (!move.length) return [];
+
+  const staySubtotal = parseFloat(stay.reduce((sum, line) => sum + Number(line.amount || 0), 0).toFixed(2));
+  const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+  const credit = parseFloat(inv.credit_note_adjustment || 0);
+  const money = invoiceMoneyTotals(staySubtotal, gstPercent, credit);
+  const bounds = linePeriodBounds(stay);
+
+  await client.query(
+    `UPDATE customer_invoices
+        SET line_items = $1::jsonb,
+            subtotal = $2,
+            gst_amount = $3,
+            grand_total = $4,
+            from_date = $5,
+            to_date = $6,
+            updated_at = NOW()
+      WHERE invoice_id = $7`,
+    [
+      JSON.stringify(stay),
+      staySubtotal.toFixed(2),
+      money.gstAmount,
+      money.grandTotal,
+      toLocalYmd(bounds.fromDate || prevStart),
+      toLocalYmd(bounds.toDate || prevEnd),
+      inv.invoice_id,
+    ]
+  );
+
+  const serialIds = [...new Set(move.map((l) => Number(l.serial_id)).filter((id) => id > 0))];
+  const ttspls = [...new Set(move.map((l) => l.ttspl_id).filter(Boolean))];
+  await client.query(
+    `DELETE FROM customer_invoice_lines
+      WHERE invoice_id = $1
+        AND COALESCE(period_label, $2) = $2
+        AND rent_start > $3::date
+        AND (
+          (serial_id IS NOT NULL AND serial_id = ANY($4::int[]))
+          OR (ttspl_id IS NOT NULL AND ttspl_id = ANY($5::text[]))
+        )`,
+    [inv.invoice_id, expectedPeriod, toLocalYmd(prevStart), serialIds, ttspls]
+  );
+
+  billingLog.info(
+    {
+      customerId,
+      fromInvoice: inv.invoice_number,
+      moved: move.length,
+      month,
+      year,
+    },
+    'Moved mid-month start lines to next-month catch-up'
+  );
+  return move;
+}
+
+async function mergeCatchupOntoDraft(client, inv, catchupLines) {
+  if (!catchupLines.length) return inv;
+  const existing = invoiceLinesArray(inv.line_items);
+  const seen = new Set(existing.map((l) => `${l.serial_id || ''}|${l.ttspl_id || ''}|${l.period || l.rent_start || ''}`));
+  const extra = catchupLines.filter((l) => !seen.has(`${l.serial_id || ''}|${l.ttspl_id || ''}|${l.period || l.rent_start || ''}`));
+  if (!extra.length) return inv;
+
+  const merged = [...extra, ...existing];
+  const subtotal = parseFloat(merged.reduce((sum, line) => sum + Number(line.amount || 0), 0).toFixed(2));
+  const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+  const credit = parseFloat(inv.credit_note_adjustment || 0);
+  const money = invoiceMoneyTotals(subtotal, gstPercent, credit);
+  const bounds = linePeriodBounds(merged);
+
+  await insertCustomerInvoiceLines(client, inv.invoice_id, extra);
+  await client.query(
+    `UPDATE customer_invoices
+        SET line_items = $1::jsonb,
+            subtotal = $2,
+            gst_amount = $3,
+            grand_total = $4,
+            from_date = $5,
+            to_date = $6,
+            updated_at = NOW()
+      WHERE invoice_id = $7`,
+    [
+      JSON.stringify(merged),
+      subtotal.toFixed(2),
+      money.gstAmount,
+      money.grandTotal,
+      toLocalYmd(bounds.fromDate || new Date(inv.from_date)),
+      toLocalYmd(bounds.toDate || new Date(inv.to_date)),
+      inv.invoice_id,
+    ]
+  );
+  return {
+    ...inv,
+    line_items: merged,
+    subtotal,
+    gst_amount: money.gstAmount,
+    grand_total: money.grandTotal,
+  };
+}
+
+function invoiceMoneyTotals(subtotal, gstPercent, creditAdjustment) {
+  const gstAmount = parseFloat((Number(subtotal || 0) * Number(gstPercent || 0) / 100).toFixed(2));
+  const grandTotal = Math.max(
+    0,
+    parseFloat((Number(subtotal || 0) + gstAmount - Number(creditAdjustment || 0)).toFixed(2))
+  );
+  return { gstAmount, grandTotal };
+}
+
+/**
+ * Attach open draft credit notes to an invoice without changing totals.
+ * They stay pending until accounts approves them.
+ */
+async function linkOpenCreditNotesToInvoice(client, { customerId, invoiceId }) {
+  if (!customerId || !invoiceId) return 0;
+  const { rowCount } = await client.query(
+    `UPDATE customer_credit_notes
+        SET invoice_id = COALESCE(invoice_id, $1),
+            updated_at = NOW()
+      WHERE customer_id = $2
+        AND applied_in_invoice_id IS NULL
+        AND status IN ('pending', 'approved')`,
+    [invoiceId, customerId]
+  );
+  return rowCount || 0;
+}
+
+async function refreshInvoiceCreditTotals(client, invoiceId) {
+  const inv = await client.query(
+    `SELECT invoice_id, invoice_number, subtotal, gst_percent, credit_note_adjustment
+       FROM customer_invoices WHERE invoice_id = $1 FOR UPDATE`,
+    [invoiceId]
+  );
+  if (!inv.rows.length) return null;
+  const row = inv.rows[0];
+  const applied = await client.query(
+    `SELECT COALESCE(SUM(amount), 0)::numeric AS total
+       FROM customer_credit_notes
+      WHERE applied_in_invoice_id = $1 AND status = 'applied'`,
+    [invoiceId]
+  );
+  const creditAdjustment = parseFloat(applied.rows[0]?.total || 0);
+  const next = invoiceMoneyTotals(
+    parseFloat(row.subtotal || 0),
+    parseFloat(row.gst_percent != null ? row.gst_percent : 18),
+    creditAdjustment
+  );
+  await client.query(
+    `UPDATE customer_invoices
+        SET credit_note_adjustment = $1,
+            gst_amount = $2,
+            grand_total = $3,
+            updated_at = NOW()
+      WHERE invoice_id = $4`,
+    [creditAdjustment.toFixed(2), next.gstAmount, next.grandTotal, invoiceId]
+  );
+  return { ...row, credit_note_adjustment: creditAdjustment, ...next };
+}
+
+/**
+ * Apply approved credit notes onto an invoice and log activity.
+ * Draft/pending notes are never applied here.
+ */
+async function applyOpenCreditNotes(client, { customerId, invoiceId, invoiceNumber, creditNoteIds = null }) {
+  const params = [invoiceId, customerId];
+  let extra = '';
+  if (Array.isArray(creditNoteIds) && creditNoteIds.length) {
+    params.push(creditNoteIds);
+    extra = ` AND credit_note_id = ANY($3::int[])`;
+  }
+  const { rows } = await client.query(
+    `UPDATE customer_credit_notes
+        SET applied_in_invoice_id = $1,
+            invoice_id = COALESCE(invoice_id, $1),
+            status = 'applied',
+            updated_at = NOW()
+      WHERE customer_id = $2
+        AND applied_in_invoice_id IS NULL
+        AND status = 'approved'
+        ${extra}
+      RETURNING credit_note_id, credit_note_number, amount, serial_id, ttspl_ids, reason`,
+    params
+  );
+
+  let total = 0;
+  for (const cn of rows) {
+    total += parseFloat(cn.amount || 0);
+    const ttsplIds = Array.isArray(cn.ttspl_ids)
+      ? cn.ttspl_ids
+      : (typeof cn.ttspl_ids === 'string' ? (() => { try { return JSON.parse(cn.ttspl_ids); } catch { return []; } })() : []);
+    const ttspl = ttsplIds.length ? String(ttsplIds[0]) : null;
+    await client.query(
+      `INSERT INTO customer_asset_activity
+        (customer_id, vendor_serial_id, ttspl_id, action, description, changes)
+       VALUES ($1, $2, $3, 'credit_note_applied', $4, $5::jsonb)`,
+      [
+        customerId,
+        cn.serial_id || null,
+        ttspl,
+        `${cn.credit_note_number} applied on ${invoiceNumber || `invoice #${invoiceId}`} — ${cn.reason} (₹${Number(cn.amount).toFixed(2)})`,
+        JSON.stringify([{
+          field: 'credit_note',
+          label: 'Credit note',
+          old_value: null,
+          new_value: cn.credit_note_number,
+          amount: Number(cn.amount),
+          invoice_id: invoiceId,
+          invoice_number: invoiceNumber || null,
+        }]),
+      ]
+    );
+  }
+
+  if (rows.length) {
+    billingLog.info(
+      { customerId, invoiceId, invoiceNumber, count: rows.length, total },
+      'Applied credit notes on invoice'
+    );
+  }
+
+  return { total: parseFloat(total.toFixed(2)), notes: rows };
+}
+
+/**
+ * Approve a draft credit note, then apply it to the linked (or latest draft) invoice.
+ */
+async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `UPDATE customer_credit_notes
+          SET status = 'approved',
+              approved_by = $1,
+              updated_at = NOW()
+        WHERE credit_note_id = $2 AND status = 'pending'
+        RETURNING *`,
+      [actorUserId, creditNoteId]
+    );
+    if (!updated.rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'Credit note not found or not pending' };
+    }
+    const cn = updated.rows[0];
+    let invoiceId = cn.invoice_id || null;
+    if (!invoiceId) {
+      const draft = await client.query(
+        `SELECT invoice_id, invoice_number
+           FROM customer_invoices
+          WHERE customer_id = $1 AND status = 'draft'
+          ORDER BY invoice_year DESC, invoice_month DESC, invoice_id DESC
+          LIMIT 1`,
+        [cn.customer_id]
+      );
+      invoiceId = draft.rows[0]?.invoice_id || null;
+    }
+    let applied = { total: 0, notes: [] };
+    if (invoiceId) {
+      const inv = await client.query(
+        `SELECT invoice_id, invoice_number, status FROM customer_invoices WHERE invoice_id = $1`,
+        [invoiceId]
+      );
+      const invoice = inv.rows[0];
+      if (invoice && String(invoice.status || '').toLowerCase() === 'draft') {
+        applied = await applyOpenCreditNotes(client, {
+          customerId: cn.customer_id,
+          invoiceId,
+          invoiceNumber: invoice.invoice_number,
+          creditNoteIds: [cn.credit_note_id],
+        });
+        if (applied.notes.length) {
+          await refreshInvoiceCreditTotals(client, invoiceId);
+        }
+      }
+    }
+    const latest = await client.query(
+      `SELECT * FROM customer_credit_notes WHERE credit_note_id = $1`,
+      [creditNoteId]
+    );
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      credit_note: latest.rows[0],
+      applied: applied.notes.length > 0,
+      invoice_id: invoiceId,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Raise credit notes for returned units that still have unused prepaid days
+ * and no CN yet. Must run before invoice lines advance rent_billed_until.
+ */
+const WAREHOUSE_RETURN_DATE_SQL = `COALESCE(
+  (pickup.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date,
+  (rdc.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
+)`;
+
+async function createMissingReturnCreditNotes(client, { customerId, actorUserId = null }) {
+  const { rows } = await client.query(
+    `SELECT vsn.serial_id,
+            ${WAREHOUSE_RETURN_DATE_SQL} AS return_date,
+            pickup.ticket_id,
+            COALESCE(pickup.return_dc_number, rdc.dc_number) AS return_dc_number
+       FROM vendor_serial_numbers vsn
+       LEFT JOIN LATERAL (
+         SELECT sti.warehouse_received_at,
+                sti.ticket_id,
+                sti.return_dc_number
+           FROM support_ticket_items sti
+          WHERE (sti.ttspl_id = vsn.inventory_asset_code
+                 OR sti.unique_serial_number = vsn.inventory_asset_code
+                 OR sti.serial_number = vsn.serial_number)
+            AND sti.item_type = 'pickup'
+            AND sti.warehouse_received_at IS NOT NULL
+            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END, '') <> 'repair'
+          ORDER BY sti.warehouse_received_at DESC
+          LIMIT 1
+       ) pickup ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT rl.warehouse_received_at, rl.dc_number
+           FROM delivery_challan_lines rl
+          WHERE rl.movement_type = 'return'
+            AND rl.customer_id = $1
+            AND COALESCE(rl.status, '') NOT IN ('cancelled')
+            AND rl.warehouse_received_at IS NOT NULL
+            AND (
+              vsn.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+              OR vsn.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+            )
+          ORDER BY rl.warehouse_received_at DESC
+          LIMIT 1
+       ) rdc ON TRUE
+      WHERE vsn.deleted_at IS NULL
+        AND vsn.rent_billed_until IS NOT NULL
+        AND ${WAREHOUSE_RETURN_DATE_SQL} IS NOT NULL
+        AND vsn.rent_billed_until > ${WAREHOUSE_RETURN_DATE_SQL}
+        AND (
+          vsn.inventory_status IN ('returned', 'in_stock')
+          OR vsn.current_customer_id IS NULL
+        )
+        AND (
+          vsn.current_customer_id = $1
+          OR EXISTS (
+            SELECT 1
+              FROM customer_invoice_lines cil
+              JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+             WHERE cil.serial_id = vsn.serial_id
+               AND ci.customer_id = $1
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM customer_credit_notes cn
+           WHERE cn.serial_id = vsn.serial_id
+             AND cn.status <> 'cancelled'
+        )`,
+    [customerId]
+  );
+
+  const created = [];
+  for (const row of rows) {
+    const cn = await createReturnCreditNote(client, {
+      serialId: row.serial_id,
+      returnDate: row.return_date,
+      actorUserId,
+      supportTicketId: row.ticket_id || null,
+      returnDcNumber: row.return_dc_number || null,
+      source: 'invoice_generation',
+      customerId,
+    });
+    if (cn) created.push(cn);
+  }
+  return created;
+}
+
 async function generateCustomerInvoice(customerId, month, year, options = {}) {
   const includeCurrentMonthStarts = Boolean(options.includeCurrentMonthStarts);
   const appendToDraft = Boolean(options.appendToDraft);
@@ -182,6 +644,11 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const createdNotes = await createMissingReturnCreditNotes(client, { customerId });
+    const movedCatchup = await takeMidMonthStartLinesFromPreviousInvoice(client, {
+      customerId, month, year,
+    });
 
     const existing = await client.query(
       `SELECT invoice_id, invoice_number, status, line_items, subtotal,
@@ -197,14 +664,45 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       && String(existing.rows[0].status || '').toLowerCase() === 'draft';
 
     if (existing.rows.length && !canAppend) {
-      await client.query('ROLLBACK');
-      return { skipped: true, invoice_id: existing.rows[0].invoice_id };
+      const inv = existing.rows[0];
+      const isDraft = String(inv.status || '').toLowerCase() === 'draft';
+      let catchupAdded = 0;
+      if (isDraft) {
+        if (movedCatchup.length) {
+          await mergeCatchupOntoDraft(client, inv, movedCatchup);
+          catchupAdded = movedCatchup.length;
+        }
+        await linkOpenCreditNotesToInvoice(client, {
+          customerId,
+          invoiceId: inv.invoice_id,
+        });
+      }
+      await client.query('COMMIT');
+      return {
+        skipped: catchupAdded === 0,
+        invoice_id: inv.invoice_id,
+        invoice_number: inv.invoice_number,
+        catchup_lines: catchupAdded,
+        credit_notes_created: createdNotes.length,
+        credit_notes_applied: 0,
+        reason: catchupAdded ? 'Added previous-month catch-up lines' : 'Invoice already exists',
+      };
     }
 
     const built = await buildCustomerInvoiceLines(client, {
       customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts,
     });
-    const { lineItems, subtotal, periodStart, periodEnd } = built;
+    const lineItems = [...movedCatchup, ...built.lineItems];
+    const subtotal = parseFloat(
+      (movedCatchup.reduce((sum, line) => sum + Number(line.amount || 0), 0) + Number(built.subtotal || 0)).toFixed(2)
+    );
+    const catchupStarts = movedCatchup
+      .map((line) => parseInvoiceLineDate(line.rent_start))
+      .filter(Boolean);
+    const periodStart = [built.periodStart, ...catchupStarts]
+      .filter(Boolean)
+      .sort((a, b) => a - b)[0] || built.periodStart;
+    const periodEnd = built.periodEnd;
 
     if (canAppend) {
       const inv = existing.rows[0];
@@ -212,8 +710,19 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       // the existing draft. Sent/approved invoices stay untouched — cron catch-up
       // remains the safety net for any still-unbilled spans.
       if (!lineItems.length) {
-        await client.query('ROLLBACK');
-        return { skipped: true, invoice_id: inv.invoice_id, reason: 'No new unbilled rental lines' };
+        await linkOpenCreditNotesToInvoice(client, {
+          customerId,
+          invoiceId: inv.invoice_id,
+        });
+        await client.query('COMMIT');
+        return {
+          skipped: true,
+          invoice_id: inv.invoice_id,
+          invoice_number: inv.invoice_number,
+          credit_notes_created: createdNotes.length,
+          credit_notes_applied: 0,
+          reason: 'No new unbilled rental lines',
+        };
       }
       const prevLines = Array.isArray(inv.line_items)
         ? inv.line_items
@@ -221,36 +730,41 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       const merged = [...prevLines, ...lineItems];
       const newSubtotal = parseFloat((parseFloat(inv.subtotal || 0) + subtotal).toFixed(2));
       const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
-      const creditAdjustment = parseFloat(inv.credit_note_adjustment || 0);
-      const gstAmount = parseFloat((newSubtotal * gstPercent / 100).toFixed(2));
-      const grandTotal = Math.max(0, parseFloat((newSubtotal + gstAmount - creditAdjustment).toFixed(2)));
-
       const prevFrom = inv.from_date ? new Date(inv.from_date) : null;
       const prevTo = inv.to_date ? new Date(inv.to_date) : null;
       const fromDate = periodStart && (!prevFrom || periodStart < prevFrom) ? periodStart : (prevFrom || periodStart || monthStart);
       const toDate = periodEnd && (!prevTo || periodEnd > prevTo) ? periodEnd : (prevTo || periodEnd || monthEnd);
+
+      await insertCustomerInvoiceLines(client, inv.invoice_id, lineItems);
+      await linkOpenCreditNotesToInvoice(client, {
+        customerId,
+        invoiceId: inv.invoice_id,
+      });
+      const creditAdjustment = parseFloat(inv.credit_note_adjustment || 0);
+      const { gstAmount, grandTotal } = invoiceMoneyTotals(newSubtotal, gstPercent, creditAdjustment);
 
       await client.query(
         `UPDATE customer_invoices
             SET line_items = $1::jsonb,
                 subtotal = $2,
                 gst_amount = $3,
-                grand_total = $4,
-                from_date = $5,
-                to_date = $6,
+                credit_note_adjustment = $4,
+                grand_total = $5,
+                from_date = $6,
+                to_date = $7,
                 updated_at = NOW()
-          WHERE invoice_id = $7`,
+          WHERE invoice_id = $8`,
         [
           JSON.stringify(merged),
           newSubtotal.toFixed(2),
           gstAmount,
+          creditAdjustment.toFixed(2),
           grandTotal,
           toLocalYmd(fromDate),
           toLocalYmd(toDate),
           inv.invoice_id,
         ]
       );
-      await insertCustomerInvoiceLines(client, inv.invoice_id, lineItems);
       await client.query('COMMIT');
       billingLog.info(
         { invoiceNumber: inv.invoice_number, customerId, appended: lineItems.length },
@@ -260,26 +774,23 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         invoice_id: inv.invoice_id,
         invoice_number: inv.invoice_number,
         appended: true,
+        credit_notes_created: createdNotes.length,
+        credit_notes_applied: 0,
       };
     }
 
     if (!lineItems.length) {
-      await client.query('ROLLBACK');
-      return { skipped: true, reason: 'No active rental laptops' };
+      await client.query('COMMIT');
+      return {
+        skipped: true,
+        reason: 'No active rental laptops',
+        credit_notes_created: createdNotes.length,
+        credit_notes_applied: 0,
+      };
     }
 
-    const cnRes = await client.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total_cn
-       FROM customer_credit_notes
-       WHERE customer_id = $1 AND status = 'approved'
-         AND applied_in_invoice_id IS NULL`,
-      [customerId]
-    );
-    const creditAdjustment = parseFloat(cnRes.rows[0].total_cn || 0);
-
     const gstPercent = 18;
-    const gstAmount = parseFloat((subtotal * gstPercent / 100).toFixed(2));
-    const grandTotal = Math.max(0, parseFloat((subtotal + gstAmount - creditAdjustment).toFixed(2)));
+    const { gstAmount, grandTotal } = invoiceMoneyTotals(subtotal, gstPercent, 0);
 
     const entityCode = 'rentfoxxy';
     const invoiceNumber = await nextInvoiceNumber(entityCode);
@@ -299,28 +810,24 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         toLocalYmd(periodEnd || monthEnd),
         JSON.stringify(lineItems),
         subtotal.toFixed(2), gstPercent, gstAmount,
-        creditAdjustment.toFixed(2), grandTotal, entityCode,
+        '0.00', grandTotal, entityCode,
       ]
     );
 
     const invoiceId = insertRes.rows[0].invoice_id;
     await insertCustomerInvoiceLines(client, invoiceId, lineItems);
-
-    if (creditAdjustment > 0) {
-      await client.query(
-        `UPDATE customer_credit_notes
-         SET applied_in_invoice_id = $1, status = 'applied', updated_at = NOW()
-         WHERE customer_id = $2 AND status = 'approved'
-           AND applied_in_invoice_id IS NULL`,
-        [invoiceId, customerId]
-      );
-    }
+    await linkOpenCreditNotesToInvoice(client, { customerId, invoiceId });
 
     await client.query('COMMIT');
-    billingLog.info({ invoiceNumber, customerId }, 'Generated PREPAID customer invoice');
+    billingLog.info(
+      { invoiceNumber, customerId, creditNotesCreated: createdNotes.length },
+      'Generated PREPAID customer invoice'
+    );
     return {
       invoice_id: invoiceId,
       invoice_number: insertRes.rows[0].invoice_number,
+      credit_notes_created: createdNotes.length,
+      credit_notes_applied: 0,
     };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -414,7 +921,9 @@ async function maybeInvoiceFirstRentalPeriod({
     }
 
     const result = await generateCustomerInvoice(customerId, anchor.month, anchor.year, {
-      includeCurrentMonthStarts: true,
+      // Mid-month starts wait for the next month as catch-up
+      // (sent 10 Aug → billed 10–31 Aug + 1–30 Sep on the September invoice).
+      includeCurrentMonthStarts: false,
       appendToDraft: true,
     });
 
@@ -593,6 +1102,8 @@ async function sendGeneratedCustomerInvoice(invoiceId, actorUserId = null) {
 async function createReturnCreditNote(client, {
   serialId, returnDate, returnTicketId = null, actorUserId = null,
   supportTicketId = null, returnDcNumber = null,
+  source = 'return_pickup',
+  customerId = null,
 }) {
   const r = await client.query(
     `SELECT serial_id, current_customer_id,
@@ -602,7 +1113,8 @@ async function createReturnCreditNote(client, {
     [serialId]
   );
   const s = r.rows[0];
-  if (!s || !s.current_customer_id || !s.rent_billed_until) return null;
+  const resolvedCustomerId = customerId || s?.current_customer_id;
+  if (!s || !resolvedCustomerId || !s.rent_billed_until) return null;
 
   const calc = calcReturnCreditNoteAmount({
     rentMonthlyRate: s.rent_monthly_rate,
@@ -624,21 +1136,21 @@ async function createReturnCreditNote(client, {
       (credit_note_number, customer_id, reason, description, amount,
        quantity, unit_rate, from_date, to_date, ttspl_ids, status, created_by,
        serial_id, return_ticket_id, source, support_ticket_id, return_dc_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,'return_pickup',$14,$15)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,$14,$15,$16)
      RETURNING *`,
     [
-      cnNumber, s.current_customer_id,
+      cnNumber, resolvedCustomerId,
       'Rental return — unused prepaid days',
-      `Unit ${s.ttspl_id || s.serial_id} returned on ${toLocalYmd(retDate)}; ` +
+      `Unit ${s.ttspl_id || s.serial_id} warehouse received on ${toLocalYmd(retDate)}; ` +
         `${calc.unusedDays} prepaid day(s) (${toLocalYmd(calc.refundStart)} to ${toLocalYmd(calc.billedUntil)}) refunded at ₹${calc.dailyRate.toFixed(2)}/day (base, excl. GST).`,
       calc.amount, calc.unusedDays, calc.dailyRate,
       toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
       JSON.stringify([s.ttspl_id].filter(Boolean)), actorUserId,
-      serialId, returnTicketId,
+      serialId, returnTicketId, source || 'return_pickup',
       supportTicketId, returnDcNumber,
     ]
   );
-  billingLog.info({ cnNumber, amount: calc.amount, customerId: s.current_customer_id, serialId }, 'Return credit note created');
+  billingLog.info({ cnNumber, amount: calc.amount, customerId: resolvedCustomerId, serialId }, 'Return credit note created');
   return ins.rows[0];
 }
 
@@ -860,6 +1372,7 @@ module.exports = {
   generateVendorBill,
   generateAllVendorBills,
   createReturnCreditNote,
+  approveAndApplyCreditNote,
   runBillingBatch,
   maybeInvoiceOnRentalDelivery,
   maybeInvoiceOnRentalDcCreate,

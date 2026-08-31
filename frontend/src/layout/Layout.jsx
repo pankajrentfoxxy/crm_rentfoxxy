@@ -343,7 +343,7 @@ export default function Layout({ children }) {
   // Whether each sidebar group has any content the user can reach.
   const groupHasContent = {
     reports: showReportsAccordion && reportsVisibleChildren.length > 0,
-    master_data: canView('inventory_master_data') || canView('customers') || canView('vendor_management'),
+    master_data: canView('inventory_master_data') || canView('inventory_vendor_master_data') || canView('inventory_return_master_data') || canView('customers') || canView('vendor_management'),
     lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
     sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
     dispatch: showDispatchAccordion && dispatchVisibleChildren.length > 0,

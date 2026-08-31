@@ -762,10 +762,21 @@ async function getDcQcStatusSummaries(dcNumbers) {
   return out;
 }
 
+const DC_SO_TYPE_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT sol.quotation_type, sol.entity_code
+      FROM sales_order_lines sol
+     WHERE d.sales_order_number IS NOT NULL
+       AND sol.sales_order_number = d.sales_order_number
+     ORDER BY sol.id DESC
+     LIMIT 1
+  ) so ON TRUE`;
+
 function buildDeliveryChallanListWhere({
   search = '',
   status = '',
   dcPurpose = '',
+  orderType = '',
   assignedUserId = null,
   dateFrom,
   dateTo,
@@ -788,6 +799,11 @@ function buildDeliveryChallanListWhere({
   } else if (dcPurpose === 'service_return') {
     where += ` AND d.dc_purpose = 'service_return'`;
   }
+  if (orderType === 'sale') {
+    where += ` AND ${salesOrderScopeWhere('sale', 'so')}`;
+  } else if (orderType === 'rental') {
+    where += ` AND NOT (${salesOrderScopeWhere('sale', 'so')})`;
+  }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
   } else if (status === 'dispatch_ready') {
@@ -806,11 +822,12 @@ function buildDeliveryChallanListWhere({
 }
 
 async function listDeliveryChallansGrouped({
-  page = 1, limit = 20, search = '', status = '', dcPurpose = '', assignedUserId = null, dateFrom, dateTo,
+  page = 1, limit = 20, search = '', status = '', dcPurpose = '', orderType = '', assignedUserId = null, dateFrom, dateTo,
 } = {}) {
   const { where, params } = buildDeliveryChallanListWhere({
-    search, status, dcPurpose, assignedUserId, dateFrom, dateTo,
+    search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo,
   });
+  const fromSql = `FROM delivery_challan_lines d ${DC_SO_TYPE_JOIN}`;
   // A DC can have several line items; list/count one row per DC (not per line)
   // so multi-laptop challans don't appear duplicated.
   const laptopUnitSql = `CASE
@@ -820,12 +837,12 @@ async function listDeliveryChallansGrouped({
   END`;
   const [countResult, laptopResult, statusResult] = await Promise.all([
     pool.query(
-      `SELECT COUNT(DISTINCT d.dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
+      `SELECT COUNT(DISTINCT d.dc_number)::int AS total ${fromSql} ${where}`,
       params
     ),
     pool.query(
       `SELECT COALESCE(SUM(${laptopUnitSql}), 0)::int AS total_laptops
-         FROM delivery_challan_lines d
+         ${fromSql}
          ${where}`,
       params
     ),
@@ -834,7 +851,7 @@ async function listDeliveryChallansGrouped({
          SELECT DISTINCT ON (d.dc_number)
                 d.dc_number,
                 COALESCE(NULLIF(TRIM(d.status), ''), 'pending') AS dc_status
-           FROM delivery_challan_lines d
+           ${fromSql}
            ${where}
           ORDER BY d.dc_number, d.id DESC
        )
@@ -859,8 +876,11 @@ async function listDeliveryChallansGrouped({
             d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
             d.courier_name, d.awb_number, d.model_name, d.dispatch_mode, d.dispatched_at,
             d.created_at, d.updated_at, d.dc_purpose, d.support_ticket_id,
-            COALESCE(u.name, u.email, '') AS delivery_person_name
+            COALESCE(u.name, u.email, '') AS delivery_person_name,
+            so.quotation_type AS order_type,
+            so.entity_code
        FROM delivery_challan_lines d
+       ${DC_SO_TYPE_JOIN}
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
        ${where}
        ORDER BY d.dc_number, d.id DESC
@@ -906,8 +926,17 @@ async function getDeliveryChallanLines(dcNumber) {
     `SELECT dcl.*,
        COALESCE(NULLIF(TRIM(dt.first_name || ' ' || COALESCE(dt.last_name, '')), ''), u.name) AS delivery_person_name,
        COALESCE(dt.phone, u.mobile_no) AS delivery_person_phone,
-       dt.email AS delivery_person_email
+       dt.email AS delivery_person_email,
+       so.quotation_type AS order_type
      FROM delivery_challan_lines dcl
+     LEFT JOIN LATERAL (
+       SELECT sol.quotation_type
+         FROM sales_order_lines sol
+        WHERE dcl.sales_order_number IS NOT NULL
+          AND sol.sales_order_number = dcl.sales_order_number
+        ORDER BY sol.id DESC
+        LIMIT 1
+     ) so ON TRUE
      LEFT JOIN delivery_technicians dt ON dt.technician_id = dcl.delivery_person_id
      LEFT JOIN users u ON u.user_id = COALESCE(dt.user_id, dcl.delivery_person_id)
      WHERE dcl.dc_number = $1

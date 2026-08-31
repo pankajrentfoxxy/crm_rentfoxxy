@@ -16,7 +16,7 @@ import {
   resetUserPermissions,
   saveUserPermissions,
 } from '../../../utils/rbacApi';
-import { mergeRbacSectionList } from '../../../constants/sections';
+import { ADMIN_ONLY_RBAC_SECTIONS, mergeRbacSectionList } from '../../../constants/sections';
 
 export default function UserPermissionsPage() {
   const { user, refreshPermissions } = useAuth();
@@ -284,6 +284,9 @@ export default function UserPermissionsPage() {
             baselineMatrix={roleDefaultsMatrix}
             onChange={(section, values) => updateSection(section, values)}
             showDataScope
+            lockedSections={
+              ['admin', 'super_admin'].includes(selectedRole) ? [] : ADMIN_ONLY_RBAC_SECTIONS
+            }
           />
         ) : null}
 

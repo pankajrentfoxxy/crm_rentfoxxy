@@ -71,11 +71,13 @@ function invalidateInventoryListCachesFireAndForget() {
 /** Invalidate all inventory list + count cache entries. */
 async function invalidateInventoryListCaches() {
   const { invalidateMasterDataCaches } = require('./masterDataCache');
+  const { invalidateCustomerLaptopsCache } = require('./customerLaptopsCache');
   await Promise.all([
     cacheDelPattern(`inventory:${CACHE_VERSION}:`),
     cacheDelPattern(`inventory_count:${CACHE_VERSION}:`),
     invalidateMasterDataCaches(),
   ]);
+  invalidateCustomerLaptopsCache();
 }
 
 module.exports = {

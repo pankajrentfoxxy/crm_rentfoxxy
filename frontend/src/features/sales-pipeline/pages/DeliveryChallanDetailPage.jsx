@@ -20,6 +20,7 @@ import {
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
+  dcOrderTypeLabel, dcOrderTypeStyle,
   resolveDcBackNavigation, downloadBlob, collectBluedartAwbRows, persistDcBackContext,
   readDcBackContext, DC_NAV_SOURCE_SALES_ORDER,
 } from '../salesPipelineUtils';
@@ -558,6 +559,7 @@ export default function DeliveryChallanDetailPage() {
           </p>
           <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${dcOrderTypeStyle(head)}`}>{dcOrderTypeLabel(head)}</span>
             {head.dc_purpose === 'service_return' ? (
               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-100 text-teal-800">Service Return</span>
             ) : null}

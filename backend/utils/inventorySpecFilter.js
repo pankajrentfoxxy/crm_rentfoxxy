@@ -362,13 +362,29 @@ function serialSpecExpr(field, sAlias = 's', pAlias = 'p') {
 
 /** Append AND clauses for vendor_serial_numbers lists. Requires PO alias `p` in FROM. */
 function buildSerialSpecFilter(filters, params, sAlias = 's', pAlias = 'p') {
-  if (!hasSpecFilters(filters)) {
+  const normalized = {};
+  for (const key of SPEC_QUERY_KEYS) {
+    const raw = filters[key];
+    if (raw == null || raw === '') continue;
+    if (Array.isArray(raw)) {
+      const vals = raw.map((v) => String(v || '').trim()).filter(Boolean);
+      if (vals.length) normalized[key] = vals;
+    } else {
+      const vals = parseMultiSpecValues(raw);
+      if (vals.length) normalized[key] = vals;
+    }
+  }
+  if (!hasMultiSpecFilters(normalized) && !hasSpecFilters(normalized)) {
     return { joinSql: '', whereSql: '' };
   }
-  const activeFields = SPEC_QUERY_KEYS.filter((k) => filters[k]);
-  const clauses = activeFields.map(
-    (key) => buildCascadeSerialSpecClause(key, filters[key], params, sAlias, pAlias)
-  );
+  const activeFields = SPEC_QUERY_KEYS.filter((k) => normalized[k]);
+  const clauses = activeFields.map((key) => {
+    const vals = Array.isArray(normalized[key]) ? normalized[key] : [normalized[key]];
+    if (vals.length === 1) {
+      return buildCascadeSerialSpecClause(key, vals[0], params, sAlias, pAlias);
+    }
+    return `(${vals.map((val) => buildCascadeSerialSpecClause(key, val, params, sAlias, pAlias)).join(' OR ')})`;
+  });
   return {
     joinSql: minimalSpecJoinSql(activeFields, sAlias),
     whereSql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
