@@ -17,6 +17,7 @@ import AddWorkflowPhasePanel from './components/AddWorkflowPhasePanel';
 import RaisePartRequestForm from '../../features/support/components/RaisePartRequestForm';
 import PickupItemCard from './components/PickupItemCard';
 import CreatePickupModal from './components/CreatePickupModal';
+import EditPickupModal from './components/EditPickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
 import RepairSwapPanel from './components/RepairSwapPanel';
@@ -32,6 +33,7 @@ import {
   initials,
   itemAllowsTechnicianAssign,
   isPickupAssignmentEditable,
+  isReturnPickupEditable,
   isMigratedPickupStuck,
   hasWarehouseReturnPickup,
   podUrl as podUrlFor,
@@ -485,13 +487,14 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   const [assignBusy, setAssignBusy] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [showEditPickup, setShowEditPickup] = useState(false);
 
   if (!ticket.sales_order_number) return null;
   const units = replacementOrders.filter((o) => o.sales_order_number === ticket.sales_order_number);
   const delivered = units.filter((o) => o.status === 'delivered' || o.status === 'completed' || o.delivery_completed_at || o.new_machine_serial).length;
   const hasDeliveryDc = units.some((o) => o.dc_number);
   const soPath = replacementSalesOrderDetailPath(ticket.sales_order_number);
-  const linkedPickups = pickups.filter((p) => p.return_dc_number === ticket.return_dc_number);
+  const linkedPickups = pickups.filter((p) => p.return_dc_number === ticket.return_dc_number && p.status !== 'cancelled');
   const replacementDelivered = units.some((o) => o.delivery_completed_at || o.status === 'delivered' || o.status === 'completed' || o.new_machine_serial);
   const pickupInitiated = linkedPickups.some(
     (p) => p.pickup_method || p.assigned_to || p.pickup_assigned_to || p.picked_up_at || p.warehouse_received_at
@@ -508,6 +511,8 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
   const canForceVoidPickup = isLead && ticket.return_dc_number && migratedPickupStuck;
+  const editableLinkedPickups = linkedPickups.filter(isReturnPickupEditable);
+  const canEditReturnPickup = isLead && ticket.return_dc_number && editableLinkedPickups.length >= 2;
 
   const assignPickup = async (form) => {
     setAssignBusy(true);
@@ -694,10 +699,59 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
             <AssignmentHistoryList rows={assignmentHistory} />
           </div>
         )}
+        {canEditReturnPickup && (
+          <div className="pt-2 border-t border-pink-100">
+            <button
+              type="button"
+              className="support-btn-outline min-h-[40px] text-sm"
+              onClick={() => setShowEditPickup(true)}
+              disabled={cancelBusy || assignBusy}
+            >
+              Edit pickup laptops ({editableLinkedPickups.length} on RDC)
+            </button>
+            <p className="text-xs text-slate-500 mt-1">
+              Customer sending fewer laptops today? Uncheck deferred units before guard inward — they stay on the ticket for a later pickup.
+            </p>
+          </div>
+        )}
+        {showEditPickup && (
+          <EditPickupModal
+            ticket={ticket}
+            pickups={pickups}
+            onSaved={() => { setShowEditPickup(false); onRefresh?.(); }}
+            onClose={() => setShowEditPickup(false)}
+          />
+        )}
+        {canEditReturnPickup && (
+          <div className="pt-2 border-t border-pink-100">
+            <button
+              type="button"
+              className="support-btn-outline min-h-[40px] text-sm"
+              onClick={() => setShowEditPickup(true)}
+              disabled={cancelBusy || assignBusy}
+            >
+              Edit pickup laptops ({editableLinkedPickups.length} on RDC)
+            </button>
+            <p className="text-xs text-slate-500 mt-1">
+              Uncheck laptop(s) the customer is not sending today — they remain on the ticket for a later pickup.
+            </p>
+          </div>
+        )}
+        {showEditPickup && (
+          <EditPickupModal
+            ticket={ticket}
+            pickups={pickups}
+            onSaved={() => { setShowEditPickup(false); onRefresh?.(); }}
+            onClose={() => setShowEditPickup(false)}
+          />
+        )}
         {canForceVoidPickup && (
           <div className="pt-2 border-t border-amber-200 bg-amber-50 rounded-lg p-3">
             <p className="text-xs text-amber-900 mb-2">
               CRM shows return pickup as done (migrated data) but it never happened. Void to restore the laptop with the customer.
+              {canEditReturnPickup && (
+                <> If only some laptops were picked up, use <strong>Edit pickup laptops</strong> above instead.</>
+              )}
             </p>
             <button
               type="button"
@@ -743,13 +797,16 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
     (p) => p.status === 'pending_dispatch' || (p.return_dc_number && !p.pickup_method && !p.assigned_to)
   );
   const linkedPickups = ticket.return_dc_number
-    ? pickups.filter((p) => p.return_dc_number === ticket.return_dc_number)
+    ? pickups.filter((p) => p.return_dc_number === ticket.return_dc_number && p.status !== 'cancelled')
     : pickups.filter((p) => !['cancelled'].includes(p.status));
   const migratedPickupStuck = linkedPickups.some((p) => isMigratedPickupStuck(p));
   const canCancelReturnPickup = isLead && ticket.return_dc_number
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
   const canForceVoidPickup = isLead && ticket.return_dc_number && migratedPickupStuck;
+  const editableLinkedPickups = linkedPickups.filter(isReturnPickupEditable);
+  const canEditReturnPickup = isLead && ticket.return_dc_number && editableLinkedPickups.length >= 2;
+  const [showEditPickup, setShowEditPickup] = useState(false);
 
   const cancelReturnPickup = async (force = false) => {
     const reason = window.prompt(
@@ -816,6 +873,9 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
         <div className="mt-3 pt-3 border-t border-amber-200 bg-amber-50 rounded-lg p-3">
           <p className="text-sm text-amber-900 mb-2">
             CRM shows this pickup as done (migrated data) but it was not completed. Void it to restore the laptop with the customer and open a new ticket.
+            {canEditReturnPickup && (
+              <> If only some laptops were picked up, use <strong>Edit pickup laptops</strong> below instead of voiding the whole Return DC.</>
+            )}
           </p>
           <button
             type="button"
@@ -826,6 +886,29 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
             {cancelBusy ? 'Voiding…' : `Void migrated pickup (${ticket.return_dc_number})`}
           </button>
         </div>
+      )}
+      {canEditReturnPickup && (
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <button
+            type="button"
+            className="support-btn-outline min-h-[40px] text-sm"
+            onClick={() => setShowEditPickup(true)}
+            disabled={cancelBusy}
+          >
+            Edit pickup laptops ({editableLinkedPickups.length} on RDC)
+          </button>
+          <p className="text-xs text-slate-500 mt-1">
+            Uncheck laptop(s) not being picked up today — available until guard scans the Return DC inward.
+          </p>
+        </div>
+      )}
+      {showEditPickup && (
+        <EditPickupModal
+          ticket={ticket}
+          pickups={pickups}
+          onSaved={() => { setShowEditPickup(false); onRefresh?.(); }}
+          onClose={() => setShowEditPickup(false)}
+        />
       )}
       {canCancelReturnPickup && (
         <div className="mt-3 pt-3 border-t border-slate-100">

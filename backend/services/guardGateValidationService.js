@@ -613,10 +613,17 @@ async function loadReturnDc(db, rdcNumber) {
     `SELECT id, ttspl_id, serial_number, unique_serial_number, pickup_type,
             warehouse_received_at, pickup_awb, pickup_courier_name,
             return_dc_number, pickup_method, customer_otp_verified_at,
-            picked_up_at, technician_esign_at, gate_inward_at
+            picked_up_at, technician_esign_at, gate_inward_at, status
        FROM support_ticket_items
-      WHERE return_dc_number = $1
-         OR (ticket_id = $2 AND $2 IS NOT NULL AND item_type = 'pickup')
+      WHERE item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
+        AND (
+          return_dc_number = $1
+          OR (
+            return_dc_number IS NULL
+            AND ticket_id = $2 AND $2 IS NOT NULL
+          )
+        )
       ORDER BY id ASC`,
     [rdcNumber, head.support_ticket_id]
   );
@@ -1850,6 +1857,7 @@ async function applyInwardReturnDcGate(client, { session, actor }) {
             updated_at = NOW()
       WHERE return_dc_number = $1
         AND item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
       RETURNING id, ticket_id, gate_inward_at`,
     [rdc, actor.userId, session.session_id]
   );

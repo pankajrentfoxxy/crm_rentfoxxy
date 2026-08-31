@@ -941,6 +941,7 @@ async function healReturnDcPickupLinks() {
       FROM delivery_challan_lines dcl
      WHERE sti.item_type = 'pickup'
        AND sti.return_dc_number IS NULL
+       AND COALESCE(sti.status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')
        AND dcl.movement_type = 'return'
        AND dcl.support_ticket_id = sti.ticket_id
   `).catch(() => {});
@@ -978,7 +979,9 @@ async function ensureReturnDcPickupItems(db, dcl) {
     await db.query(
       `UPDATE support_ticket_items
           SET return_dc_number = $1, updated_at = NOW()
-        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+        WHERE ticket_id = $2 AND item_type = 'pickup'
+          AND return_dc_number IS NULL
+          AND COALESCE(status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')`,
       [rdcNumber, ticketId]
     );
   }
@@ -1005,6 +1008,7 @@ async function ensureReturnDcPickupItems(db, dcl) {
   const existingRes = await db.query(
     `SELECT * FROM support_ticket_items
       WHERE return_dc_number = $1 AND item_type = 'pickup'
+        AND COALESCE(status, '') NOT IN ('cancelled')
       ORDER BY id ASC`,
     [rdcNumber]
   );
@@ -1598,6 +1602,7 @@ async function getReturnDcDetail(rdcNumber) {
           LIMIT 1
        ) vsn ON TRUE
       WHERE sti.item_type = 'pickup'
+        AND COALESCE(sti.status, '') NOT IN ('cancelled')
         AND (
           sti.return_dc_number = $1
           OR (sti.return_dc_number IS NULL AND sti.ticket_id = $2)
@@ -1609,11 +1614,17 @@ async function getReturnDcDetail(rdcNumber) {
   if (pickupItems.some((i) => !i.return_dc_number)) {
     await pool.query(
       `UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW()
-        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+        WHERE ticket_id = $2 AND item_type = 'pickup'
+          AND return_dc_number IS NULL
+          AND COALESCE(status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')`,
       [rdcNumber, dcl.support_ticket_id]
     );
-    pickupItems = pickupItems.map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
+    pickupItems = pickupItems
+      .filter((i) => i.status !== 'cancelled')
+      .map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
   }
+
+  pickupItems = pickupItems.filter((i) => i.status !== 'cancelled');
 
   const { buildUnitsForRdc } = require('./returnDcPdfService');
   const units = await buildUnitsForRdc(pool, dcl, pickupItems);
