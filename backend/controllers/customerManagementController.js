@@ -2310,6 +2310,115 @@ exports.getCustomerLaptops = async (req, res) => {
   }
 };
 
+function fmtExcelCalendarDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  return `${dd}-${mm}-${dt.getFullYear()}`;
+}
+
+function assetConfigLine(lap) {
+  return [lap.processor, lap.generation, lap.ram, lap.storage, lap.gpu, lap.screen_size]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function entityLabel(code) {
+  if (code === 'gorefurbo') return 'Gorefurbo';
+  if (code) return 'Rentfoxxy';
+  return '';
+}
+
+exports.exportCustomerLaptopsExcel = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
+    const lifecycle = req.query.lifecycle === 'returned' ? 'returned' : 'active';
+    const search = (req.query.search || '').trim();
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
+    const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
+
+    const custRes = await pool.query(
+      `SELECT COALESCE(company_name, name) AS customer_name FROM customers WHERE customer_id = $1`,
+      [customerId]
+    );
+    const customerName = custRes.rows[0]?.customer_name || `Customer ${customerId}`;
+
+    const EXPORT_LIMIT = 20000;
+    const result = lifecycle === 'returned'
+      ? await queryCustomerReturnedAssets(customerId, { search, from, to, limit: EXPORT_LIMIT, offset: 0 })
+      : await queryCustomerActiveAssets(customerId, { search, from, to, limit: EXPORT_LIMIT, offset: 0 });
+
+    let sheetRows;
+    let columnOrder;
+    let sheetName;
+
+    if (lifecycle === 'returned') {
+      sheetName = 'Returned Laptops';
+      columnOrder = [
+        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config',
+        'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'Status',
+      ];
+      sheetRows = result.rows.map((lap, idx) => ({
+        'S.No': idx + 1,
+        'TTSPL ID': lap.ttspl_id || '',
+        'Serial No': lap.serial_number || '',
+        Model: lap.model_name || '',
+        Config: assetConfigLine(lap),
+        'Return DC': lap.dc_number || '',
+        'Delivered to Customer': fmtExcelCalendarDate(lap.delivered_at),
+        'Returned from Customer': fmtExcelCalendarDate(lap.returned_at),
+        Type: lap.pickup_type || 'return',
+        Status: 'returned',
+      }));
+    } else {
+      sheetName = 'Rented Laptops';
+      columnOrder = [
+        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity',
+        'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'Status',
+      ];
+      sheetRows = result.rows.map((lap, idx) => ({
+        'S.No': idx + 1,
+        'TTSPL ID': lap.ttspl_id || '',
+        'Serial No': lap.serial_number || '',
+        Model: lap.model_name || '',
+        Config: assetConfigLine(lap),
+        Entity: entityLabel(lap.entity_code),
+        'DC Number': lap.dc_number || '',
+        'Dispatch Date': fmtExcelCalendarDate(lap.dispatch_date),
+        'Delivered Date': fmtExcelCalendarDate(lap.delivered_at),
+        'Monthly Rate': lap.rent_monthly_rate != null ? Number(lap.rent_monthly_rate) : '',
+        Status: lap.status || 'rented',
+      }));
+    }
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sheetRows, { header: columnOrder });
+    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const safeName = String(customerName).replace(/[^\w.-]+/g, '_').slice(0, 40);
+    const safeLifecycle = lifecycle === 'returned' ? 'returned' : 'rented';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="customer_${customerId}_${safeName}_${safeLifecycle}_laptops.xlsx"`
+    );
+    res.send(buf);
+  } catch (error) {
+    console.error('exportCustomerLaptopsExcel:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
+  }
+};
+
 /** Support ticket item statuses treated as still open (mirrors supportQuery.js). */
 const OPEN_ITEM_STATUSES_SQL = `sti.status NOT IN ('resolved', 'closed')`;
 

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react';
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button, SearchField, ListPagination } from '../../../components/ui/primitives';
@@ -8,7 +8,7 @@ import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
-  updateCustomerStatus, getCustomerTickets, getCustomerRentalSummary, loginAsCustomerPortal,
+  updateCustomerStatus, getCustomerTickets, getCustomerRentalSummary, loginAsCustomerPortal, exportCustomerLaptopsExcel,
 } from '../leadCrmApi';
 import { formatCurrency, formatAssetCalendarDate as fmtAssetDate } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -213,6 +213,7 @@ export default function CustomerDetailPage() {
   const [assetEdit, setAssetEdit] = useState(null);
   const [assetActivity, setAssetActivity] = useState([]);
   const [assetActivityLoading, setAssetActivityLoading] = useState(false);
+  const [assetExporting, setAssetExporting] = useState(null);
   const [ticketRows, setTicketRows] = useState([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
   const [ticketPage, setTicketPage] = useState(1);
@@ -289,6 +290,23 @@ export default function CustomerDetailPage() {
   const refreshAssetsTab = useCallback(async () => {
     await Promise.all([loadAssets(), loadAssetActivity()]);
   }, [loadAssets, loadAssetActivity]);
+
+  const handleExportAssets = async (lifecycle) => {
+    setAssetExporting(lifecycle);
+    try {
+      await exportCustomerLaptopsExcel(id, {
+        lifecycle,
+        search: assetSearch || undefined,
+        from: assetFrom || undefined,
+        to: assetTo || undefined,
+      });
+      toast.success(lifecycle === 'returned' ? 'Returned laptops export downloaded' : 'Rented laptops export downloaded');
+    } catch {
+      toast.error('Export failed');
+    } finally {
+      setAssetExporting(null);
+    }
+  };
 
   const loadTickets = useCallback(async () => {
     setTicketsLoading(true);
@@ -563,12 +581,34 @@ export default function CustomerDetailPage() {
             </button>
           </div>
 
-          <SearchField
-            value={assetSearchInput}
-            onChange={(e) => setAssetSearchInput(e.target.value)}
-            placeholder="Search TTSPL, serial, model, DC number…"
-            className="max-w-md"
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SearchField
+              value={assetSearchInput}
+              onChange={(e) => setAssetSearchInput(e.target.value)}
+              placeholder="Search TTSPL, serial, model, DC number…"
+              className="max-w-md flex-1 min-w-[220px]"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleExportAssets('active')}
+                disabled={Boolean(assetExporting)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-green-200 text-green-800 rounded-lg hover:bg-green-50 disabled:opacity-50"
+              >
+                {assetExporting === 'active' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Export Rented
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportAssets('returned')}
+                disabled={Boolean(assetExporting)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+              >
+                {assetExporting === 'returned' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Export Returned
+              </button>
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col text-xs text-gray-500">

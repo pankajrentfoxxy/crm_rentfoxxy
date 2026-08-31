@@ -46,6 +46,31 @@ export const bulkUpdateCustomerType = (data) =>
   api.patch('/customer-management/customers/bulk-customer-type', data);
 export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers/${id}/verify-kyc`);
 export const getCustomerLaptops = (id, params) => api.get(`/customer-management/customers/${id}/laptops`, { params });
+
+function downloadBlobResponse(response, fallbackName) {
+  const blob = new Blob([response.data], {
+    type: response.headers['content-type'] || 'application/octet-stream',
+  });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const disposition = response.headers['content-disposition'] || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  a.href = url;
+  a.download = match?.[1] || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function exportCustomerLaptopsExcel(customerId, params = {}) {
+  const lifecycle = params.lifecycle === 'returned' ? 'returned' : 'active';
+  const response = await api.get(`/customer-management/customers/${customerId}/laptops/export.xlsx`, {
+    params,
+    responseType: 'blob',
+  });
+  downloadBlobResponse(response, `customer_${customerId}_${lifecycle}_laptops.xlsx`);
+}
 export const getCustomerTickets = (id, params) =>
   api.get(`/customer-management/customers/${id}/tickets`, { params });
 export const getCustomerRentalSummary = (id) =>

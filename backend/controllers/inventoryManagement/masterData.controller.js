@@ -2,6 +2,7 @@ const {
   getMasterDashboard,
   getMasterDashboardTab,
   getKpis,
+  buildMasterDataExportWorkbook,
 } = require('../../services/masterDataDashboardService');
 
 exports.getMasterDataKpis = async (req, res) => {
@@ -26,5 +27,17 @@ exports.getMasterDataDashboard = async (req, res) => {
   } catch (err) {
     console.error('getMasterDataDashboard:', err);
     res.status(500).json({ success: false, message: err.message || 'Failed to load master data' });
+  }
+};
+
+exports.exportMasterDataExcel = async (req, res) => {
+  try {
+    const { buf, filename } = await buildMasterDataExportWorkbook(req.query || {});
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buf);
+  } catch (err) {
+    console.error('exportMasterDataExcel:', err);
+    res.status(500).json({ success: false, message: err.message || 'Export failed' });
   }
 };

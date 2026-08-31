@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  Building2, HardDrive, IndianRupee, Laptop, Loader2, Users, Wrench,
+  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Users, Wrench,
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
 import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS, specFiltersToParams } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
-import { fetchMasterDataDashboard, fetchMasterDataKpis } from '../inventoryManagementApi';
+import { exportMasterDataExcel, fetchMasterDataDashboard, fetchMasterDataKpis } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
@@ -183,6 +183,7 @@ export default function MasterDataDashboardPage() {
   const [stages, setStages] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [historyTtspl, setHistoryTtspl] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   // Local search box; debounced value is written into the URL.
   const [searchInput, setSearchInput] = useState(() => searchParams.get('q') || '');
@@ -446,6 +447,19 @@ export default function MasterDataDashboardPage() {
     patchParams(patch);
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const { page: _page, limit: _limit, ...exportParams } = tabFilterParams;
+      await exportMasterDataExcel(exportParams);
+      toast.success('Export downloaded');
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -680,19 +694,30 @@ export default function MasterDataDashboardPage() {
         ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-0">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => patchParams({ tab: t.id })}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
-              tab === t.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-0">
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => patchParams({ tab: t.id })}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+                tab === t.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting || loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 mb-1 border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+          Export Excel
+        </button>
       </div>
 
       {loading ? (

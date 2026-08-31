@@ -676,10 +676,133 @@ async function getMasterDashboard(query = {}) {
   return { kpis, ...tabPayload };
 }
 
+async function listAllLaptopsForExport(query = {}) {
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20000, 1), 20000);
+  const { whereSql, params, joinSql } = buildMasterFilters(query);
+  const listParams = [...params, limit];
+  const listRes = await pool.query(
+    `SELECT
+        s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.inventory_status,
+        s.current_customer_id, s.current_dc_number, s.current_entity,
+        s.rent_monthly_rate, s.rent_start_date, s.delivered_at, s.grn_id, s.qc_status,
+        p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id,
+        COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name,
+        COALESCE(c.company_name, c.name) AS customer_name,
+        active_ticket.ticket_id AS active_floor_ticket_id,
+        active_ticket.stage_name AS ticket_stage_name,
+        sos.sales_order_number, sos.dc_number AS sos_dc_number, sos.so_rate, sos.quotation_type,
+        vr.on_vendor_repair,
+        vpd.purchase_rate,
+        vpd.monthly_rental_amount
+     ${FROM_SQL}
+     ${joinSql}
+     ${whereSql}
+     ORDER BY s.serial_id DESC
+     LIMIT $${params.length + 1}`,
+    listParams
+  );
+  return listRes.rows.map(mapLaptopRow);
+}
+
+function fmtExportMoney(n) {
+  if (n == null || n === '') return '';
+  return Number(n);
+}
+
+function fmtExportVendorPrice(r) {
+  if (r.vendor_purchase_price == null) return '';
+  if (r.vendor_price_type === 'monthly') return Number(r.vendor_purchase_price);
+  return Number(r.vendor_purchase_price);
+}
+
+function fmtExportCustomerPrice(r) {
+  if (r.customer_price == null) return '';
+  return Number(r.customer_price);
+}
+
+function laptopRowToExport(r, idx) {
+  const specs = [r.processor, r.generation, r.ram, r.storage, r.graphics].filter(Boolean).join(' | ');
+  return {
+    'S.No': idx + 1,
+    TTSPL: r.ttspl_id || '',
+    'Serial Number': r.serial_number || '',
+    Brand: r.brand || '',
+    Model: r.model || '',
+    Specs: specs,
+    'Screen Size': r.screen_size || '',
+    Status: String(r.current_status || '').replace(/_/g, ' '),
+    Location: r.current_location || '',
+    'Current Customer': r.customer_name || '',
+    Vendor: r.vendor_name || '',
+    'Vendor Type': r.purchase_order_type_label || '',
+    'Vendor Price': fmtExportVendorPrice(r),
+    'Vendor Price Type': r.vendor_price_type === 'monthly' ? 'Rent/mo' : (r.vendor_price_type === 'purchase' ? 'Purchase' : ''),
+    'Customer Price': fmtExportCustomerPrice(r),
+    'Customer Price Type': r.customer_price_type === 'sale' ? 'Sale' : (r.customer_price_type === 'monthly' ? 'Rent/mo' : ''),
+    Stage: r.current_stage || '',
+    'Sales Order': r.sales_order_number || '',
+    'Delivery Challan': r.delivery_challan_number || '',
+    'Purchase Order': r.purchase_order_number || '',
+    GRN: r.grn_number || '',
+    Entity: r.entity_code || '',
+  };
+}
+
+async function buildMasterDataExportWorkbook(query = {}) {
+  const XLSX = require('xlsx');
+  const tab = String(query.tab || 'laptops').toLowerCase();
+  let sheetRows = [];
+  let sheetName = 'Master Data';
+
+  if (tab === 'customers') {
+    const { customers } = await getCustomerSummary(query);
+    sheetName = 'Customers';
+    sheetRows = customers.map((c, idx) => ({
+      'S.No': idx + 1,
+      Customer: c.customer_name || '',
+      'Customer ID': c.customer_id || '',
+      Active: Number(c.active_laptops || 0),
+      Returned: Number(c.returned_laptops || 0),
+      'Monthly Rental Value': fmtExportMoney(c.monthly_rental_value),
+      'Sale Value': fmtExportMoney(c.sale_value),
+    }));
+  } else if (tab === 'vendors') {
+    const { vendors } = await getVendorSummary(query);
+    sheetName = 'Vendors';
+    sheetRows = vendors.map((v, idx) => ({
+      'S.No': idx + 1,
+      Vendor: v.vendor_name || '',
+      'Vendor ID': v.vendor_id || '',
+      Laptops: Number(v.purchased_laptops || 0),
+      'Purchase Value': fmtExportMoney(v.purchase_value),
+    }));
+  } else if (tab === 'floor') {
+    const { stages } = await getFloorSummary();
+    sheetName = 'Floor';
+    sheetRows = stages.map((s, idx) => ({
+      'S.No': idx + 1,
+      Stage: s.stage_name || '',
+      Count: Number(s.count || 0),
+    }));
+  } else {
+    const rows = await listAllLaptopsForExport(query);
+    sheetName = 'Laptop Master';
+    sheetRows = rows.map(laptopRowToExport);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ Note: 'No rows match filters' }]);
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const safeTab = tab.replace(/[^\w-]+/g, '_');
+  return { buf, filename: `master_data_${safeTab}.xlsx` };
+}
+
 module.exports = {
   getMasterDashboard,
   getMasterDashboardTab,
   listLaptops,
   getKpis,
+  buildMasterDataExportWorkbook,
   CUSTOMER_STATUSES,
 };
