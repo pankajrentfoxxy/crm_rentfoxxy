@@ -13,6 +13,7 @@ export const downloadInvoicePdf = (id) => api.get(`${base}/invoices/${id}/pdf`, 
 export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: p });
 export const createCreditNote = (d) => api.post(`${base}/credit-notes`, d);
 export const approveCreditNote = (id) => api.patch(`${base}/credit-notes/${id}/approve`);
+export const approveCreditNotesBulk = (ids) => api.post(`${base}/credit-notes/approve-bulk`, { ids });
 export const listSecurityDeposits = (p) => api.get(`${base}/security-deposits`, { params: p });
 export const recordSecurityDeposit = (d) => api.post(`${base}/security-deposits`, d);
 export const refundSecurityDeposit = (id, d) => api.patch(`${base}/security-deposits/${id}/refund`, d);

@@ -52,7 +52,7 @@ export default function FinanceDashboardPage() {
   const handleApproveCn = async (id) => {
     try {
       await approveCreditNote(id);
-      toast.success('Credit note approved');
+      toast.success('Credit note approved and applied to the invoice');
       load();
     } catch {
       toast.error('Failed');

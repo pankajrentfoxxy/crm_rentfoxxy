@@ -20,6 +20,7 @@ router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid
 
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
 router.post('/credit-notes', cp('credit_notes', 'create'), ctrl.createCreditNote);
+router.post('/credit-notes/approve-bulk', cp('credit_notes', 'edit'), ctrl.approveCreditNotesBulk);
 router.patch('/credit-notes/:id/approve', cp('credit_notes', 'edit'), ctrl.approveCreditNote);
 
 router.get('/security-deposits', cp('security_deposits', 'view'), ctrl.listSecurityDeposits);

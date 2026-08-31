@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -6,10 +6,16 @@ import {
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
-import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS, specFiltersToParams } from '../inventorySpecFilters';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS, specFiltersToParams, parseSpecMultiUrl } from '../inventorySpecFilters';
+import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
-import { exportMasterDataExcel, fetchMasterDataDashboard, fetchMasterDataKpis } from '../inventoryManagementApi';
+import {
+  exportMasterDataExcel,
+  fetchMasterDataDashboard,
+  fetchMasterDataKpis,
+  setVendorExcludeFromVendorPo,
+} from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
@@ -24,11 +30,25 @@ const TABS = [
 ];
 
 const STATUS_OPTIONS = [
-  '', 'in_stock', 'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
+  'in_stock', 'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
   'returned', 'in_repair', 'qc_failed', 'scrapped',
 ];
 
-const LOCATION_OPTIONS = ['', 'Inventory', 'Customer', 'Floor', 'Vendor'];
+const LOCATION_OPTIONS = ['Inventory', 'Customer', 'Floor', 'Vendor'];
+
+const ENTITY_OPTIONS = [
+  { value: 'rentfoxxy', label: 'Rentfoxxy' },
+  { value: 'gorefurbo', label: 'Gorefurbo' },
+];
+
+const DEFAULT_STAGE_OPTIONS = ['Floor Manager', 'Pending Inventory', 'Inventory'];
+
+function readCsvParam(sp, key) {
+  return String(sp.get(key) || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /** Query keys synced to the URL so filters survive detail navigation + back. */
 const URL_KEYS = [
@@ -74,20 +94,47 @@ function formatMonthLabel(yyyyMm) {
 const MONTH_OPTIONS = buildMonthOptions();
 
 const PRICING_TYPE_OPTIONS = [
-  { value: '', label: 'All commercial types' },
-  { value: 'sale', label: 'Sale only' },
-  { value: 'rental', label: 'Rental only' },
+  { value: 'sale', label: 'Sale' },
+  { value: 'rental', label: 'Rental' },
 ];
 
 function readSpecFilters(sp) {
   const next = { ...EMPTY_SPEC_FILTERS };
   SPEC_FILTER_KEYS.forEach((k) => {
-    next[k] = sp.get(k) || '';
+    next[k] = parseSpecMultiUrl(sp.get(k)).join(',');
   });
   return next;
 }
 
 const fmtMoney = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
+function summarizeVendorPoTotals(rows = []) {
+  return rows.reduce(
+    (acc, row) => {
+      const excluded = Boolean(row.exclude_from_vendor_po);
+      const laptops = Number(row.purchased_laptops || 0);
+      const value = Number(row.purchase_value || 0);
+      if (excluded) {
+        acc.total_excluded_vendors += 1;
+        acc.total_excluded_laptops += laptops;
+        acc.total_excluded_purchase_value += value;
+        return acc;
+      }
+      acc.total_vendors += 1;
+      acc.total_purchased_laptops += laptops;
+      acc.total_purchase_value += value;
+      return acc;
+    },
+    {
+      total_vendors: 0,
+      total_purchased_laptops: 0,
+      total_purchase_value: 0,
+      total_excluded_vendors: 0,
+      total_excluded_laptops: 0,
+      total_excluded_purchase_value: 0,
+    },
+  );
+}
 
 function fmtCustomerPrice(r) {
   if (r.customer_price == null) return '—';
@@ -184,6 +231,10 @@ export default function MasterDataDashboardPage() {
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [excludingVendorId, setExcludingVendorId] = useState(null);
+  const [stageOptions, setStageOptions] = useState(DEFAULT_STAGE_OPTIONS);
+  const kpiReqRef = useRef(0);
+  const tabReqRef = useRef(0);
 
   // Local search box; debounced value is written into the URL.
   const [searchInput, setSearchInput] = useState(() => searchParams.get('q') || '');
@@ -192,20 +243,28 @@ export default function MasterDataDashboardPage() {
   const tab = searchParams.get('tab') || 'laptops';
   const page = Math.max(1, Number(searchParams.get('page')) || 1);
   const search = searchParams.get('q') || '';
-  const status = searchParams.get('status') || '';
-  const location = searchParams.get('location') || '';
-  const stage = searchParams.get('stage') || '';
-  const entity = searchParams.get('entity') || '';
-  const pricingType = searchParams.get('pricing_type') || '';
-  const customerId = searchParams.get('customer_id') || '';
-  const vendorId = searchParams.get('vendor_id') || '';
+  const statuses = readCsvParam(searchParams, 'status');
+  const locations = readCsvParam(searchParams, 'location');
+  const stagesSelected = readCsvParam(searchParams, 'stage');
+  const entities = readCsvParam(searchParams, 'entity');
+  const pricingTypes = readCsvParam(searchParams, 'pricing_type');
+  const customerIds = readCsvParam(searchParams, 'customer_id');
+  const vendorIds = readCsvParam(searchParams, 'vendor_id');
+  const status = statuses.join(',');
+  const location = locations.join(',');
+  const stage = stagesSelected.join(',');
+  const entity = entities.join(',');
+  const pricingType = pricingTypes.join(',');
+  const customerId = customerIds.join(',');
+  const vendorId = vendorIds.join(',');
   const fromVendor = searchParams.get('from_vendor') === '1';
   const ready = searchParams.get('ready') === '1';
   const qcProcess = searchParams.get('qc_process') === '1';
   const dateFrom = searchParams.get('date_from') || '';
   const dateTo = searchParams.get('date_to') || '';
   const dateMode = searchParams.get('date_mode') || (dateFrom || dateTo ? 'range' : '');
-  const month = searchParams.get('month') || '';
+  const months = readCsvParam(searchParams, 'month');
+  const month = months.join(',');
   const specFilters = useMemo(() => readSpecFilters(searchParams), [searchParams]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
 
@@ -218,9 +277,10 @@ export default function MasterDataDashboardPage() {
       }
       Object.entries(apply).forEach(([k, v]) => {
         if (k !== 'page' && !URL_KEYS.includes(k)) return;
-        if (v === '' || v == null || v === false || (k === 'page' && Number(v) <= 1)) next.delete(k);
-        else if (v === true) next.set(k, '1');
-        else next.set(k, String(v));
+        const normalized = Array.isArray(v) ? v.filter(Boolean).join(',') : v;
+        if (normalized === '' || normalized == null || normalized === false || (k === 'page' && Number(normalized) <= 1)) next.delete(k);
+        else if (normalized === true) next.set(k, '1');
+        else next.set(k, String(normalized));
       });
       return next;
     }, { replace: true });
@@ -241,13 +301,17 @@ export default function MasterDataDashboardPage() {
 
   const kpiFilterParams = useMemo(() => ({
     search: search || undefined,
+    status: status || undefined,
+    location: location || undefined,
+    stage: stage || undefined,
+    entity: entity || undefined,
     pricing_type: pricingType || undefined,
     date_mode: dateMode || undefined,
     month: dateMode === 'month' ? (month || currentMonthValue()) : undefined,
     date_from: dateMode === 'range' ? (dateFrom || undefined) : undefined,
     date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
     ...specFiltersToParams(debouncedSpecs),
-  }), [search, pricingType, dateMode, month, dateFrom, dateTo, debouncedSpecs]);
+  }), [search, status, location, stage, entity, pricingType, dateMode, month, dateFrom, dateTo, debouncedSpecs]);
 
   const tabFilterParams = useMemo(() => ({
     tab,
@@ -275,22 +339,27 @@ export default function MasterDataDashboardPage() {
   ]);
 
   const loadKpis = useCallback(async () => {
+    const reqId = ++kpiReqRef.current;
     setKpiLoading(true);
     try {
       const { data } = await fetchMasterDataKpis(kpiFilterParams);
+      if (reqId !== kpiReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       setKpis(data.kpis || {});
     } catch (e) {
+      if (reqId !== kpiReqRef.current) return;
       toast.error(e.response?.data?.message || e.message || 'Failed to load KPIs');
     } finally {
-      setKpiLoading(false);
+      if (reqId === kpiReqRef.current) setKpiLoading(false);
     }
   }, [kpiFilterParams]);
 
   const loadTab = useCallback(async () => {
+    const reqId = ++tabReqRef.current;
     setLoading(true);
     try {
       const { data } = await fetchMasterDataDashboard(tabFilterParams);
+      if (reqId !== tabReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       if (data.tab === 'laptops') {
         setRows(data.data || []);
@@ -305,14 +374,26 @@ export default function MasterDataDashboardPage() {
         setStages(data.stages || []);
       }
     } catch (e) {
+      if (reqId !== tabReqRef.current) return;
       toast.error(e.response?.data?.message || e.message || 'Failed to load master data');
     } finally {
-      setLoading(false);
+      if (reqId === tabReqRef.current) setLoading(false);
     }
   }, [tabFilterParams]);
 
   useEffect(() => { loadKpis(); }, [loadKpis]);
   useEffect(() => { loadTab(); }, [loadTab]);
+
+  useEffect(() => {
+    fetchMasterDataDashboard({ tab: 'floor' })
+      .then(({ data }) => {
+        const names = (data?.stages || []).map((s) => s.stage_name).filter(Boolean);
+        if (names.length) {
+          setStageOptions([...new Set([...DEFAULT_STAGE_OPTIONS, ...names])]);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const openCustomer = (id) => {
     patchParams({
@@ -340,12 +421,28 @@ export default function MasterDataDashboardPage() {
     patchParams({
       pricing_type: 'sale',
       tab: 'laptops',
+      customer_id: '',
+      vendor_id: '',
+      from_vendor: false,
+      ready: false,
+      qc_process: false,
+      location: '',
+      status: '',
+      stage: '',
     });
   };
   const openRentalList = () => {
     patchParams({
       pricing_type: 'rental',
       tab: 'laptops',
+      customer_id: '',
+      vendor_id: '',
+      from_vendor: false,
+      ready: false,
+      qc_process: false,
+      location: '',
+      status: '',
+      stage: '',
     });
   };
   const openAllLaptops = () => {
@@ -447,6 +544,39 @@ export default function MasterDataDashboardPage() {
     patchParams(patch);
   };
 
+  const toggleVendorPoExclusion = async (vendor, nextExclude) => {
+    const vendorId = vendor.vendor_id;
+    const prevVendors = vendors;
+    const nextVendors = vendors.map((row) => (
+      row.vendor_id === vendorId ? { ...row, exclude_from_vendor_po: nextExclude } : row
+    ));
+    setVendors(nextVendors);
+    setVendorTotals(summarizeVendorPoTotals(nextVendors));
+    setExcludingVendorId(vendorId);
+    try {
+      const { data } = await setVendorExcludeFromVendorPo(vendorId, nextExclude);
+      if (!data?.success) throw new Error(data?.message || 'Failed');
+      const saved = data.vendor?.exclude_from_vendor_po === true;
+      setVendors((curr) => {
+        const synced = curr.map((row) => (
+          row.vendor_id === vendorId ? { ...row, exclude_from_vendor_po: saved } : row
+        ));
+        setVendorTotals(summarizeVendorPoTotals(synced));
+        return synced;
+      });
+      toast.success(saved
+        ? 'Vendor excluded from Vendor PO listing and totals'
+        : 'Vendor included in Vendor PO listing and totals');
+      loadKpis();
+    } catch (e) {
+      setVendors(prevVendors);
+      setVendorTotals(summarizeVendorPoTotals(prevVendors));
+      toast.error(e.response?.data?.message || e.message || 'Failed to update vendor exclusion');
+    } finally {
+      setExcludingVendorId(null);
+    }
+  };
+
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -483,7 +613,7 @@ export default function MasterDataDashboardPage() {
           tone="teal"
           hint="Rent / demo / sold / in transit"
           onClick={openWithCustomerList}
-          active={location === 'Customer' && tab === 'laptops' && !fromVendor && !ready && !qcProcess && !pricingType}
+          active={locations.length === 1 && locations[0] === 'Customer' && tab === 'laptops' && !fromVendor && !ready && !qcProcess && !pricingType}
         />
         <StatCard
           label="From Vendors"
@@ -494,8 +624,18 @@ export default function MasterDataDashboardPage() {
           onClick={openFromVendorList}
           active={fromVendor && tab === 'laptops' && !ready && !qcProcess && !pricingType}
         />
-        <StatCard label="Customers" value={kpiLoading ? '…' : (kpis.total_customers ?? '—')} icon={Users} />
-        <StatCard label="Vendors" value={kpiLoading ? '…' : (kpis.total_vendors ?? '—')} icon={Building2} />
+        <StatCard
+          label="Customers"
+          value={kpiLoading ? '…' : (kpis.total_customers ?? '—')}
+          icon={Users}
+          hint="In current filters"
+        />
+        <StatCard
+          label="Vendors"
+          value={kpiLoading ? '…' : (kpis.total_vendors ?? '—')}
+          icon={Building2}
+          hint="In current filters"
+        />
         <StatCard
           label="QC Process"
           value={kpiLoading ? '…' : (kpis.total_qc_process ?? '—')}
@@ -523,7 +663,7 @@ export default function MasterDataDashboardPage() {
           tone="red"
           hint="Sold or sale quotation"
           onClick={openSaleList}
-          active={pricingType === 'sale' && tab === 'laptops'}
+          active={pricingTypes.length === 1 && pricingTypes[0] === 'sale' && tab === 'laptops'}
         />
         <StatCard
           label="Total Sale Value"
@@ -532,7 +672,7 @@ export default function MasterDataDashboardPage() {
           tone="red"
           hint="Sum of sale prices (filtered)"
           onClick={openSaleList}
-          active={pricingType === 'sale' && tab === 'laptops'}
+          active={pricingTypes.length === 1 && pricingTypes[0] === 'sale' && tab === 'laptops'}
         />
         <StatCard
           label="Rental Laptops"
@@ -541,7 +681,7 @@ export default function MasterDataDashboardPage() {
           tone="blue"
           hint="Rental / demo deployments"
           onClick={openRentalList}
-          active={pricingType === 'rental' && tab === 'laptops'}
+          active={pricingTypes.length === 1 && pricingTypes[0] === 'rental' && tab === 'laptops'}
         />
         <StatCard
           label="Monthly Rental Value"
@@ -550,26 +690,26 @@ export default function MasterDataDashboardPage() {
           tone="blue"
           hint="Active rental monthly total"
           onClick={openRentalList}
-          active={pricingType === 'rental' && tab === 'laptops'}
+          active={pricingTypes.length === 1 && pricingTypes[0] === 'rental' && tab === 'laptops'}
         />
       </div>
 
-      {(location === 'Customer' || fromVendor || ready || qcProcess || pricingType || dateMode) && tab === 'laptops' ? (
+      {(location || fromVendor || ready || qcProcess || pricingType || dateMode) && tab === 'laptops' ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 bg-teal-50 border border-teal-100 rounded-xl px-3 py-2">
           <span className="font-semibold text-teal-800">
             {dateMode === 'month'
-              ? `Showing laptops for ${formatMonthLabel(month || currentMonthValue())} (delivery / rent start / GRN date, IST)`
+              ? `Showing laptops for ${(months.length ? months : [currentMonthValue()]).map(formatMonthLabel).join(', ')} (delivery / rent start / GRN date, IST)`
               : dateMode === 'range' && (dateFrom || dateTo)
                 ? `Showing laptops ${dateFrom || '…'} to ${dateTo || '…'} (IST activity dates)`
-                : pricingType === 'sale'
+                : pricingTypes.length === 1 && pricingTypes[0] === 'sale'
                   ? 'Showing sale laptops only'
-                  : pricingType === 'rental'
+                  : pricingTypes.length === 1 && pricingTypes[0] === 'rental'
                     ? 'Showing rental laptops only'
                     : qcProcess
                       ? 'Showing QC process laptops (not ready to rent/sale)'
                       : ready
                         ? 'Showing ready to rent/sale laptops'
-                        : location === 'Customer'
+                        : locations.includes('Customer')
                           ? 'Showing laptops with customers'
                           : 'Showing laptops sourced from vendors'}
           </span>
@@ -580,42 +720,75 @@ export default function MasterDataDashboardPage() {
       ) : null}
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-end">
           <SearchField
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search TTSPL, serial, customer, vendor, SO, DC, PO…"
             className="flex-1 min-w-[220px]"
           />
-          <select className="border rounded-lg px-3 py-2 text-sm" value={status} onChange={(e) => patchParams({ status: e.target.value })}>
-            <option value="">All statuses</option>
-            {STATUS_OPTIONS.filter(Boolean).map((s) => (
-              <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-            ))}
-          </select>
-          <select className="border rounded-lg px-3 py-2 text-sm" value={location} onChange={(e) => patchParams({ location: e.target.value })}>
-            {LOCATION_OPTIONS.map((l) => (
-              <option key={l || 'all'} value={l}>{l || 'All locations'}</option>
-            ))}
-          </select>
-          <input
-            className="border rounded-lg px-3 py-2 text-sm w-36"
-            placeholder="Stage"
-            value={stage}
-            onChange={(e) => patchParams({ stage: e.target.value })}
-          />
-          <select className="border rounded-lg px-3 py-2 text-sm" value={pricingType} onChange={(e) => patchParams({ pricing_type: e.target.value })}>
-            {PRICING_TYPE_OPTIONS.map((opt) => (
-              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <select className="border rounded-lg px-3 py-2 text-sm" value={entity} onChange={(e) => patchParams({ entity: e.target.value })}>
-            <option value="">All entities</option>
-            <option value="rentfoxxy">Rentfoxxy</option>
-            <option value="gorefurbo">Gorefurbo</option>
-          </select>
+          <div className="min-w-[11rem] w-44">
+            <SearchableMultiSelect
+              id="md-filter-status"
+              value={statuses}
+              onChange={(vals) => patchParams({ status: vals })}
+              options={STATUS_OPTIONS.map((s) => ({ value: s, label: s.replace(/_/g, ' ') }))}
+              placeholder="All statuses"
+              countNoun="status"
+              compact
+              searchPlaceholder="Search status…"
+            />
+          </div>
+          <div className="min-w-[11rem] w-44">
+            <SearchableMultiSelect
+              id="md-filter-location"
+              value={locations}
+              onChange={(vals) => patchParams({ location: vals })}
+              options={LOCATION_OPTIONS}
+              placeholder="All locations"
+              countNoun="location"
+              compact
+              searchPlaceholder="Search location…"
+            />
+          </div>
+          <div className="min-w-[11rem] w-44">
+            <SearchableMultiSelect
+              id="md-filter-stage"
+              value={stagesSelected}
+              onChange={(vals) => patchParams({ stage: vals })}
+              options={stageOptions}
+              placeholder="All stages"
+              countNoun="stage"
+              compact
+              searchPlaceholder="Search stage…"
+            />
+          </div>
+          <div className="min-w-[10rem] w-40">
+            <SearchableMultiSelect
+              id="md-filter-pricing"
+              value={pricingTypes}
+              onChange={(vals) => patchParams({ pricing_type: vals })}
+              options={PRICING_TYPE_OPTIONS}
+              placeholder="All types"
+              countNoun="type"
+              compact
+              searchPlaceholder="Search type…"
+            />
+          </div>
+          <div className="min-w-[10rem] w-40">
+            <SearchableMultiSelect
+              id="md-filter-entity"
+              value={entities}
+              onChange={(vals) => patchParams({ entity: vals })}
+              options={ENTITY_OPTIONS}
+              placeholder="All entities"
+              countNoun="entity"
+              compact
+              searchPlaceholder="Search entity…"
+            />
+          </div>
           <select
-            className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem]"
+            className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem] min-h-[38px]"
             value={dateMode}
             onChange={(e) => {
               const next = e.target.value;
@@ -647,16 +820,23 @@ export default function MasterDataDashboardPage() {
             ))}
           </select>
           {dateMode === 'month' ? (
-            <select
-              className="border rounded-lg px-3 py-2 text-sm min-w-[9rem]"
-              value={month || currentMonthValue()}
-              onChange={(e) => patchParams({ date_mode: 'month', month: e.target.value, date_from: '', date_to: '' })}
-              aria-label="Select month"
-            >
-              {MONTH_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
+            <div className="min-w-[11rem] w-44">
+              <SearchableMultiSelect
+                id="md-filter-month"
+                value={months.length ? months : [currentMonthValue()]}
+                onChange={(vals) => patchParams({
+                  date_mode: 'month',
+                  month: vals.length ? vals : currentMonthValue(),
+                  date_from: '',
+                  date_to: '',
+                })}
+                options={MONTH_OPTIONS}
+                placeholder="Select months"
+                countNoun="month"
+                compact
+                searchPlaceholder="Search month…"
+              />
+            </div>
           ) : null}
           {dateMode === 'range' ? (
             <DateRangeFilter
@@ -870,12 +1050,19 @@ export default function MasterDataDashboardPage() {
         <div className="space-y-4">
           <p className="text-xs text-slate-500">
             Click a vendor to open purchased laptops with <strong>current customer</strong> (if assigned) and both prices.
+            Check <strong>Exclude from Vendor PO</strong> to keep the vendor and inventory, but drop that vendor from Vendor PO listing and purchase totals.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <StatCard label="Vendors (filtered)" value={vendorTotals.total_vendors ?? 0} />
+            <StatCard label="Vendors (Vendor PO)" value={vendorTotals.total_vendors ?? 0} />
             <StatCard label="Purchased Laptops" value={vendorTotals.total_purchased_laptops ?? 0} />
             <StatCard label="Purchase Value" value={fmtMoney(vendorTotals.total_purchase_value)} />
           </div>
+          {(vendorTotals.total_excluded_vendors || 0) > 0 ? (
+            <p className="text-xs text-slate-500">
+              {vendorTotals.total_excluded_vendors} vendor{vendorTotals.total_excluded_vendors === 1 ? '' : 's'} excluded from Vendor PO
+              {' '}({vendorTotals.total_excluded_laptops || 0} laptops, {fmtMoney(vendorTotals.total_excluded_purchase_value)} not counted).
+            </p>
+          ) : null}
           <div className="border rounded-xl overflow-hidden bg-white">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
@@ -883,22 +1070,46 @@ export default function MasterDataDashboardPage() {
                   <th className="px-3 py-2 text-left">Vendor</th>
                   <th className="px-3 py-2 text-right">Laptops</th>
                   <th className="px-3 py-2 text-right">Purchase Value</th>
+                  <th className="px-3 py-2 text-left whitespace-nowrap">Exclude from Vendor PO</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {vendors.map((v) => (
-                  <tr key={v.vendor_id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2">
-                      <button type="button" className="text-blue-700 hover:underline font-medium" onClick={() => openVendor(v.vendor_id)}>
-                        {v.vendor_name || `#${v.vendor_id}`}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-right">{v.purchased_laptops}</td>
-                    <td className="px-3 py-2 text-right">{fmtMoney(v.purchase_value)}</td>
-                  </tr>
-                ))}
+                {vendors.map((v) => {
+                  const excluded = Boolean(v.exclude_from_vendor_po);
+                  const busy = excludingVendorId === v.vendor_id;
+                  return (
+                    <tr key={v.vendor_id} className={excluded ? 'bg-slate-50/80 text-slate-500' : 'hover:bg-slate-50'}>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="button" className="text-blue-700 hover:underline font-medium" onClick={() => openVendor(v.vendor_id)}>
+                            {v.vendor_name || `#${v.vendor_id}`}
+                          </button>
+                          {excluded ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                              Excluded
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">{v.purchased_laptops}</td>
+                      <td className="px-3 py-2 text-right">{fmtMoney(v.purchase_value)}</td>
+                      <td className="px-3 py-2">
+                        <label className="inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                            checked={excluded}
+                            disabled={busy}
+                            onChange={(e) => toggleVendorPoExclusion(v, e.target.checked)}
+                          />
+                          <span>{excluded ? 'Excluded' : 'Exclude'}</span>
+                        </label>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {!vendors.length ? (
-                  <tr><td colSpan={3} className="px-3 py-8 text-center text-slate-400">No vendors</td></tr>
+                  <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-400">No vendors</td></tr>
                 ) : null}
               </tbody>
             </table>

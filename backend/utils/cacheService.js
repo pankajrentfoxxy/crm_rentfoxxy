@@ -102,5 +102,6 @@ module.exports = {
     MASTER_DATA_KPI: parseInt(process.env.CACHE_TTL_MASTER_DATA_KPI_SEC || '180', 10),
     PRODUCTION_QC_LIST: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_LIST_SEC || '300', 10),
     PRODUCTION_QC_DETAIL: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_DETAIL_SEC || '600', 10),
+    CUSTOMER_LAPTOPS: parseInt(process.env.CACHE_TTL_CUSTOMER_LAPTOPS_SEC || '45', 10),
   },
 };

@@ -102,6 +102,12 @@ router.post(
 router.get('/lists/counts', invView, inventoryList.getListCounts);
 router.get('/master-data/kpis', masterDataView, masterData.getMasterDataKpis);
 router.get('/master-data/export.xlsx', masterDataView, masterData.exportMasterDataExcel);
+router.patch(
+  '/master-data/vendors/:vendorId/exclude-from-vendor-po',
+  masterDataView,
+  masterData.setVendorExcludeValidators,
+  masterData.setVendorExcludeFromVendorPo
+);
 router.get('/master-data', masterDataView, masterData.getMasterDataDashboard);
 router.get('/customer-assets', custInvView, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(

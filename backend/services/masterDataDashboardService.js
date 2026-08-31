@@ -3,8 +3,8 @@
  * Reuses vendor_serial_numbers as the asset master (no duplicated fleet table).
  */
 const pool = require('../config/db');
-const { pickSpecFilters, buildSerialSpecFilter } = require('../utils/inventorySpecFilter');
-const { appendDateRangeClauses, resolveMasterDateRange } = require('../utils/dateRangeFilter');
+const { pickMultiSpecFilters, buildSerialSpecFilter } = require('../utils/inventorySpecFilter');
+const { appendDateRangeClauses, resolveMasterDateRange, parseCsvQuery } = require('../utils/dateRangeFilter');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('./customerDeployedAssets');
 const {
   buildDashboardCacheKey,
@@ -13,6 +13,7 @@ const {
   setCachedDashboard,
   getCachedKpis,
   setCachedKpis,
+  invalidateMasterDataCachesFireAndForget,
 } = require('./masterDataCache');
 
 const CUSTOMER_STATUSES = DEPLOYED_WITH_CUSTOMER_STATUSES;
@@ -88,20 +89,24 @@ function buildMasterFilters(query = {}) {
     )`);
   }
 
-  if (query.status) {
-    params.push(String(query.status).trim());
-    clauses.push(`s.inventory_status = $${params.length}`);
+  const statuses = parseCsvQuery(query.status);
+  if (statuses.length) {
+    params.push(statuses);
+    clauses.push(`s.inventory_status = ANY($${params.length}::text[])`);
   }
 
-  if (query.location) {
-    const loc = String(query.location).trim().toLowerCase();
-    if (loc === 'customer') {
+  const locations = parseCsvQuery(query.location).map((l) => l.toLowerCase());
+  if (locations.length) {
+    const locParts = [];
+    if (locations.includes('customer')) {
       params.push(CUSTOMER_STATUSES);
-      clauses.push(`s.inventory_status = ANY($${params.length}::text[])`);
-    } else if (loc === 'inventory') {
-      clauses.push(`s.inventory_status = 'in_stock'`);
-    } else if (loc === 'floor') {
-      clauses.push(`(
+      locParts.push(`s.inventory_status = ANY($${params.length}::text[])`);
+    }
+    if (locations.includes('inventory')) {
+      locParts.push(`s.inventory_status = 'in_stock'`);
+    }
+    if (locations.includes('floor')) {
+      locParts.push(`(
         EXISTS (
           SELECT 1 FROM tickets tk
            WHERE tk.vendor_serial_id = s.serial_id
@@ -109,30 +114,35 @@ function buildMasterFilters(query = {}) {
         )
         OR s.inventory_status IN ('returned', 'qc_failed', 'in_repair')
       )`);
-    } else if (loc === 'vendor') {
-      clauses.push(VENDOR_REPAIR_EXISTS);
     }
+    if (locations.includes('vendor')) {
+      locParts.push(VENDOR_REPAIR_EXISTS);
+    }
+    if (locParts.length) clauses.push(`(${locParts.join(' OR ')})`);
   }
 
-  if (query.stage) {
-    params.push(String(query.stage).trim());
+  const stages = parseCsvQuery(query.stage);
+  if (stages.length) {
+    params.push(stages);
     clauses.push(`EXISTS (
       SELECT 1 FROM tickets tk
       JOIN stages st ON st.stage_id = tk.current_stage_id
       WHERE tk.vendor_serial_id = s.serial_id
         AND tk.status IN ('in_progress', 'on_hold')
-        AND st.stage_name = $${params.length}
+        AND st.stage_name = ANY($${params.length}::text[])
     )`);
   }
 
-  if (query.customer_id) {
-    params.push(Number(query.customer_id));
-    clauses.push(`s.current_customer_id = $${params.length}`);
+  const customerIds = parseCsvQuery(query.customer_id).map(Number).filter((n) => n > 0);
+  if (customerIds.length) {
+    params.push(customerIds);
+    clauses.push(`s.current_customer_id = ANY($${params.length}::int[])`);
   }
 
-  if (query.vendor_id) {
-    params.push(Number(query.vendor_id));
-    clauses.push(`p.vendor_id = $${params.length}`);
+  const vendorIds = parseCsvQuery(query.vendor_id).map(Number).filter((n) => n > 0);
+  if (vendorIds.length) {
+    params.push(vendorIds);
+    clauses.push(`p.vendor_id = ANY($${params.length}::int[])`);
   }
 
   // All laptops purchased from any vendor (sourcing), not "currently at vendor repair".
@@ -160,31 +170,55 @@ function buildMasterFilters(query = {}) {
     )`);
   }
 
-  if (query.entity) {
-    params.push(String(query.entity).trim().toLowerCase());
-    clauses.push(`LOWER(COALESCE(s.current_entity, '')) = $${params.length}`);
+  const entities = parseCsvQuery(query.entity).map((e) => e.toLowerCase());
+  if (entities.length) {
+    params.push(entities);
+    clauses.push(`LOWER(COALESCE(s.current_entity, '')) = ANY($${params.length}::text[])`);
   }
 
-  const pricingType = String(query.pricing_type || query.pricingType || '').trim().toLowerCase();
-  if (pricingType === 'sale') {
+  const pricingTypes = parseCsvQuery(query.pricing_type || query.pricingType).map((t) => t.toLowerCase());
+  if (pricingTypes.includes('sale') && pricingTypes.includes('rental')) {
+    clauses.push(`(${SQL_IS_SALE} OR ${SQL_IS_RENTAL})`);
+  } else if (pricingTypes.includes('sale')) {
     clauses.push(SQL_IS_SALE);
-  } else if (pricingType === 'rental') {
+  } else if (pricingTypes.includes('rental')) {
     clauses.push(SQL_IS_RENTAL);
   }
 
   const dateRange = resolveMasterDateRange(query);
-  const dateClauses = appendDateRangeClauses({
-    expr: MASTER_ACTIVITY_DATE_EXPR,
-    dateFrom: dateRange.dateFrom,
-    dateTo: dateRange.dateTo,
-    params,
-    timezone: 'Asia/Kolkata',
-  });
-  if (dateClauses.length) clauses.push(...dateClauses);
+  if (Array.isArray(dateRange.ranges) && dateRange.ranges.length > 1) {
+    const orParts = dateRange.ranges.map((range) => {
+      const parts = appendDateRangeClauses({
+        expr: MASTER_ACTIVITY_DATE_EXPR,
+        dateFrom: range.dateFrom,
+        dateTo: range.dateTo,
+        params,
+        timezone: 'Asia/Kolkata',
+      });
+      return parts.length ? `(${parts.join(' AND ')})` : null;
+    }).filter(Boolean);
+    if (orParts.length) clauses.push(`(${orParts.join(' OR ')})`);
+  } else {
+    const dateClauses = appendDateRangeClauses({
+      expr: MASTER_ACTIVITY_DATE_EXPR,
+      dateFrom: dateRange.dateFrom,
+      dateTo: dateRange.dateTo,
+      params,
+      timezone: 'Asia/Kolkata',
+    });
+    if (dateClauses.length) clauses.push(...dateClauses);
+  }
 
-  const specFilters = pickSpecFilters(query);
+  const specFilters = pickMultiSpecFilters(query);
   const spec = buildSerialSpecFilter(specFilters, params);
   if (spec.whereSql) clauses.push(spec.whereSql.replace(/^\s*AND\s+/i, ''));
+
+  const applyVendorPoExclusion = String(
+    query.apply_vendor_po_exclusion || query.applyVendorPoExclusion || ''
+  ).trim().toLowerCase();
+  if (applyVendorPoExclusion === '1' || applyVendorPoExclusion === 'true' || applyVendorPoExclusion === 'yes') {
+    clauses.push(`COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE`);
+  }
 
   return {
     whereSql: `WHERE ${clauses.join(' AND ')}`,
@@ -395,12 +429,17 @@ function mapLaptopRow(row) {
 }
 
 async function getKpis(query = {}) {
-  // KPI cards are fleet-wide overview. Ignore list drill-down filters
-  // (location / from_vendor / customer / vendor / status / stage) so values
-  // stay correct when e.g. location=Customer is applied to the laptop table.
+  // KPI cards follow the shared filter bar (date, specs, status, location,
+  // stage, entity, pricing, search) and Vendor PO exclusions. Card drill-downs
+  // (customer_id / vendor_id / from_vendor / ready / qc_process) stay off so
+  // clicking a card does not collapse the other overview numbers.
   const dateRange = resolveMasterDateRange(query);
   const kpiQuery = {
     search: query.search,
+    status: query.status,
+    location: query.location,
+    stage: query.stage,
+    entity: query.entity,
     pricing_type: query.pricing_type || query.pricingType,
     pricingType: query.pricingType || query.pricing_type,
     date_mode: dateRange.dateMode || query.date_mode || query.dateMode,
@@ -409,7 +448,8 @@ async function getKpis(query = {}) {
     date_to: dateRange.dateTo,
     dateFrom: dateRange.dateFrom,
     dateTo: dateRange.dateTo,
-    ...pickSpecFilters(query),
+    apply_vendor_po_exclusion: '1',
+    ...pickMultiSpecFilters(query),
   };
 
   const kpiKey = buildKpiCacheKey(kpiQuery);
@@ -420,48 +460,46 @@ async function getKpis(query = {}) {
   const deployedIdx = params.length + 1;
   const kpiParams = [...params, CUSTOMER_STATUSES];
 
-  const [kpiRes, custRes, vendRes] = await Promise.all([
-    pool.query(
-      `SELECT
-          COUNT(*)::int AS total_laptops,
-          COUNT(*) FILTER (WHERE s.inventory_status = ANY($${deployedIdx}::text[]))::int AS total_active_customer_assets,
-          COUNT(*) FILTER (
-            WHERE s.current_customer_id IS NOT NULL
-               OR s.inventory_status = ANY($${deployedIdx}::text[])
-          )::int AS total_with_customer,
-          COUNT(*) FILTER (WHERE p.vendor_id IS NOT NULL)::int AS total_from_vendors,
-          COUNT(*) FILTER (
-            WHERE s.inventory_status = 'in_stock'
+  const kpiRes = await pool.query(
+    `SELECT
+        COUNT(*)::int AS total_laptops,
+        COUNT(DISTINCT s.current_customer_id) FILTER (WHERE s.current_customer_id IS NOT NULL)::int AS total_customers,
+        COUNT(DISTINCT p.vendor_id) FILTER (WHERE p.vendor_id IS NOT NULL)::int AS total_vendors,
+        COUNT(*) FILTER (WHERE s.inventory_status = ANY($${deployedIdx}::text[]))::int AS total_active_customer_assets,
+        COUNT(*) FILTER (
+          WHERE s.current_customer_id IS NOT NULL
+             OR s.inventory_status = ANY($${deployedIdx}::text[])
+        )::int AS total_with_customer,
+        COUNT(*) FILTER (WHERE p.vendor_id IS NOT NULL)::int AS total_from_vendors,
+        COUNT(*) FILTER (
+          WHERE s.inventory_status = 'in_stock'
+            AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
+        )::int AS total_ready_to_rent_sale,
+        COUNT(*) FILTER (
+          WHERE NOT (s.inventory_status = ANY($${deployedIdx}::text[]))
+            AND NOT (
+              s.inventory_status = 'in_stock'
               AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
-          )::int AS total_ready_to_rent_sale,
-          COUNT(*) FILTER (
-            WHERE NOT (s.inventory_status = ANY($${deployedIdx}::text[]))
-              AND NOT (
-                s.inventory_status = 'in_stock'
-                AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
-              )
-          )::int AS total_qc_process,
-          COUNT(*) FILTER (WHERE ${SQL_IS_SALE})::int AS total_sale_units,
-          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL})::int AS total_rental_units,
-          COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${SQL_IS_SALE}), 0)::numeric AS total_sale_value,
-          COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
-            WHERE ${SQL_IS_RENTAL}
-              AND s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')
-          ), 0)::numeric AS total_monthly_rental_value
-       ${FROM_SQL}
-       ${joinSql}
-       ${whereSql}`,
-      kpiParams
-    ),
-    pool.query(`SELECT COUNT(*)::int AS c FROM customers`),
-    pool.query(`SELECT COUNT(*)::int AS c FROM vendors WHERE deleted_at IS NULL`),
-  ]);
+            )
+        )::int AS total_qc_process,
+        COUNT(*) FILTER (WHERE ${SQL_IS_SALE})::int AS total_sale_units,
+        COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL})::int AS total_rental_units,
+        COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${SQL_IS_SALE}), 0)::numeric AS total_sale_value,
+        COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
+          WHERE ${SQL_IS_RENTAL}
+            AND s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')
+        ), 0)::numeric AS total_monthly_rental_value
+     ${FROM_SQL}
+     ${joinSql}
+     ${whereSql}`,
+    kpiParams
+  );
 
   const k = kpiRes.rows[0] || {};
   const payload = {
     total_laptops: k.total_laptops || 0,
-    total_customers: custRes.rows[0]?.c || 0,
-    total_vendors: vendRes.rows[0]?.c || 0,
+    total_customers: k.total_customers || 0,
+    total_vendors: k.total_vendors || 0,
     total_active_customer_assets: k.total_active_customer_assets || 0,
     total_with_customer: k.total_with_customer || 0,
     total_from_vendors: k.total_from_vendors || 0,
@@ -567,12 +605,48 @@ async function getCustomerSummary(query = {}) {
   return { totals, customers: r.rows };
 }
 
+function isExcludedFromVendorPo(row) {
+  return row?.exclude_from_vendor_po === true
+    || row?.exclude_from_vendor_po === 't'
+    || row?.exclude_from_vendor_po === 1
+    || row?.exclude_from_vendor_po === '1';
+}
+
+function summarizeVendorPoTotals(vendors = []) {
+  return vendors.reduce(
+    (acc, row) => {
+      const excluded = isExcludedFromVendorPo(row);
+      const laptops = Number(row.purchased_laptops || 0);
+      const value = Number(row.purchase_value || 0);
+      if (excluded) {
+        acc.total_excluded_vendors += 1;
+        acc.total_excluded_laptops += laptops;
+        acc.total_excluded_purchase_value += value;
+        return acc;
+      }
+      acc.total_vendors += 1;
+      acc.total_purchased_laptops += laptops;
+      acc.total_purchase_value += value;
+      return acc;
+    },
+    {
+      total_vendors: 0,
+      total_purchased_laptops: 0,
+      total_purchase_value: 0,
+      total_excluded_vendors: 0,
+      total_excluded_laptops: 0,
+      total_excluded_purchase_value: 0,
+    }
+  );
+}
+
 async function getVendorSummary(query = {}) {
   const base = buildMasterFilters(query);
   const r = await pool.query(
     `SELECT
         p.vendor_id,
         COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name,
+        COALESCE(v.exclude_from_vendor_po, FALSE) AS exclude_from_vendor_po,
         COUNT(*)::int AS purchased_laptops,
         COALESCE(SUM(COALESCE(vpd.purchase_rate, 0)), 0)::numeric AS purchase_value
      ${FROM_SQL}
@@ -580,23 +654,49 @@ async function getVendorSummary(query = {}) {
      ${base.whereSql}
        AND p.vendor_id IS NOT NULL
      GROUP BY p.vendor_id,
-              COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,''))))
-     ORDER BY purchased_laptops DESC, vendor_name ASC
+              COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))),
+              COALESCE(v.exclude_from_vendor_po, FALSE)
+     ORDER BY COALESCE(v.exclude_from_vendor_po, FALSE) ASC,
+              purchased_laptops DESC,
+              vendor_name ASC
      LIMIT 200`,
     base.params
   );
 
-  const totals = r.rows.reduce(
-    (acc, row) => {
-      acc.total_vendors += 1;
-      acc.total_purchased_laptops += Number(row.purchased_laptops || 0);
-      acc.total_purchase_value += Number(row.purchase_value || 0);
-      return acc;
-    },
-    { total_vendors: 0, total_purchased_laptops: 0, total_purchase_value: 0 }
-  );
+  const vendors = r.rows.map((row) => ({
+    ...row,
+    exclude_from_vendor_po: isExcludedFromVendorPo(row),
+  }));
 
-  return { totals, vendors: r.rows };
+  return { totals: summarizeVendorPoTotals(vendors), vendors };
+}
+
+async function setVendorExcludeFromVendorPo(vendorId, exclude) {
+  const id = Number(vendorId);
+  if (!Number.isInteger(id) || id <= 0) {
+    const err = new Error('Invalid vendor');
+    err.statusCode = 400;
+    throw err;
+  }
+  const r = await pool.query(
+    `UPDATE vendors
+        SET exclude_from_vendor_po = $2,
+            updated_at = NOW()
+      WHERE vendor_id = $1
+        AND deleted_at IS NULL
+      RETURNING vendor_id, exclude_from_vendor_po`,
+    [id, Boolean(exclude)]
+  );
+  if (!r.rows[0]) {
+    const err = new Error('Vendor not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  invalidateMasterDataCachesFireAndForget();
+  return {
+    vendor_id: r.rows[0].vendor_id,
+    exclude_from_vendor_po: isExcludedFromVendorPo(r.rows[0]),
+  };
 }
 
 async function getFloorSummary() {
@@ -646,21 +746,25 @@ async function getFloorSummary() {
 }
 
 async function getMasterDashboardTab(query = {}) {
-  const cacheKey = buildDashboardCacheKey(query);
+  const tab = String(query.tab || 'laptops').toLowerCase();
+  // Laptop / customer lists follow Vendor PO exclusions so clicking a KPI card
+  // matches the filtered card count. Vendor tab keeps excluded rows visible.
+  const scopedQuery = (tab === 'vendors' || tab === 'floor')
+    ? query
+    : { ...query, apply_vendor_po_exclusion: '1' };
+  const cacheKey = buildDashboardCacheKey(scopedQuery);
   const cached = await getCachedDashboard(cacheKey);
   if (cached !== undefined) return cached;
 
-  const tab = String(query.tab || 'laptops').toLowerCase();
-
   let payload;
   if (tab === 'customers') {
-    payload = { tab, ...(await getCustomerSummary(query)) };
+    payload = { tab, ...(await getCustomerSummary(scopedQuery)) };
   } else if (tab === 'vendors') {
     payload = { tab, ...(await getVendorSummary(query)) };
   } else if (tab === 'floor') {
     payload = { tab, ...(await getFloorSummary()) };
   } else {
-    payload = { tab: 'laptops', ...(await listLaptops(query)) };
+    payload = { tab: 'laptops', ...(await listLaptops(scopedQuery)) };
   }
 
   await setCachedDashboard(cacheKey, payload);
@@ -755,7 +859,7 @@ async function buildMasterDataExportWorkbook(query = {}) {
   let sheetName = 'Master Data';
 
   if (tab === 'customers') {
-    const { customers } = await getCustomerSummary(query);
+    const { customers } = await getCustomerSummary({ ...query, apply_vendor_po_exclusion: '1' });
     sheetName = 'Customers';
     sheetRows = customers.map((c, idx) => ({
       'S.No': idx + 1,
@@ -769,13 +873,15 @@ async function buildMasterDataExportWorkbook(query = {}) {
   } else if (tab === 'vendors') {
     const { vendors } = await getVendorSummary(query);
     sheetName = 'Vendors';
-    sheetRows = vendors.map((v, idx) => ({
-      'S.No': idx + 1,
-      Vendor: v.vendor_name || '',
-      'Vendor ID': v.vendor_id || '',
-      Laptops: Number(v.purchased_laptops || 0),
-      'Purchase Value': fmtExportMoney(v.purchase_value),
-    }));
+    sheetRows = vendors
+      .filter((v) => !isExcludedFromVendorPo(v))
+      .map((v, idx) => ({
+        'S.No': idx + 1,
+        Vendor: v.vendor_name || '',
+        'Vendor ID': v.vendor_id || '',
+        Laptops: Number(v.purchased_laptops || 0),
+        'Purchase Value': fmtExportMoney(v.purchase_value),
+      }));
   } else if (tab === 'floor') {
     const { stages } = await getFloorSummary();
     sheetName = 'Floor';
@@ -785,7 +891,7 @@ async function buildMasterDataExportWorkbook(query = {}) {
       Count: Number(s.count || 0),
     }));
   } else {
-    const rows = await listAllLaptopsForExport(query);
+    const rows = await listAllLaptopsForExport({ ...query, apply_vendor_po_exclusion: '1' });
     sheetName = 'Laptop Master';
     sheetRows = rows.map(laptopRowToExport);
   }
@@ -804,5 +910,6 @@ module.exports = {
   listLaptops,
   getKpis,
   buildMasterDataExportWorkbook,
+  setVendorExcludeFromVendorPo,
   CUSTOMER_STATUSES,
 };

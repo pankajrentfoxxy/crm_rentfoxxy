@@ -8,7 +8,7 @@ import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
 import { listDCs } from '../salesPipelineApi';
-import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
+import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath, dcOrderTypeLabel, dcOrderTypeStyle } from '../salesPipelineUtils';
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 
@@ -19,6 +19,11 @@ const PURPOSE_FILTERS = [
   { value: 'replacement', label: 'Replacement' },
   { value: 'service_return', label: 'Service' },
 ];
+const ORDER_TYPE_FILTERS = [
+  { value: '', label: 'All' },
+  { value: 'rental', label: 'Rental' },
+  { value: 'sale', label: 'Sold' },
+];
 const PAGE_SIZE = 25;
 const DC_FILTER_DEFAULTS = {
   page: 1,
@@ -27,13 +32,14 @@ const DC_FILTER_DEFAULTS = {
   dateTo: '',
   tab: 'all',
   purpose: '',
+  orderType: '',
 };
 
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { filters, setFilters } = useUrlFilters(DC_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo, tab, purpose } = filters;
+  const { page, dateFrom, dateTo, tab, purpose, orderType } = filters;
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +66,7 @@ export default function DeliveryChallanListPage() {
         search: search || undefined,
         status: tab !== 'all' ? tab : undefined,
         dc_purpose: purpose || undefined,
+        order_type: orderType || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
@@ -81,7 +88,7 @@ export default function DeliveryChallanListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page, search, dateFrom, dateTo, purpose]);
+  }, [tab, page, search, dateFrom, dateTo, purpose, orderType]);
 
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
@@ -113,6 +120,7 @@ export default function DeliveryChallanListPage() {
         {r.dc_purpose === 'replacement' && (
           <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
         )}
+        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${dcOrderTypeStyle(r)}`}>{dcOrderTypeLabel(r)}</span>
       </span>
     ) },
     { key: 'date', header: 'Created', render: (r) => formatDate(r.created_at) },
@@ -154,6 +162,7 @@ export default function DeliveryChallanListPage() {
             {r.dc_purpose === 'replacement' && (
               <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
             )}
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${dcOrderTypeStyle(r)}`}>{dcOrderTypeLabel(r)}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
           </div>
         </div>
@@ -221,6 +230,19 @@ export default function DeliveryChallanListPage() {
             onClick={() => setFilters({ purpose: p.value, page: 1 })}
             className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
               purpose === p.value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide ml-2">Status</span>
+        {ORDER_TYPE_FILTERS.map((p) => (
+          <button
+            key={p.value || 'all-order'}
+            type="button"
+            onClick={() => setFilters({ orderType: p.value, page: 1 })}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              orderType === p.value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-slate-700'
             }`}
           >
             {p.label}

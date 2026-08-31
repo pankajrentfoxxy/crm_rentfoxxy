@@ -3464,6 +3464,7 @@ model vendors {
   pincode                            String?                              @db.VarChar(10)
   logo_url                           String?
   notes                              String?
+  exclude_from_vendor_po             Boolean                              @default(false)
   shipping_same                      Boolean?                             @default(true)
   shipping_address                   String?
   shipping_city                      String?                              @db.VarChar(100)

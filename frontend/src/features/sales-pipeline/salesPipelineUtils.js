@@ -222,6 +222,18 @@ export function typeLabel(t) {
   return t || '—';
 }
 
+/** DC list/detail: sale vs rental badge. Demo is treated as rental. */
+export function dcOrderTypeLabel(row) {
+  const t = String(row?.order_type || row?.quotation_type || '').toLowerCase();
+  const entity = String(row?.entity_code || '').toLowerCase();
+  if (t === 'sale' || t === 'sales' || entity === 'gorefurbo') return 'Sold';
+  return 'Rental';
+}
+
+export function dcOrderTypeStyle(row) {
+  return dcOrderTypeLabel(row) === 'Sold' ? TYPE_STYLES.sale : TYPE_STYLES.rental;
+}
+
 /** SO list/detail: support replacement orders show as Replacement; others use quotation_type. */
 export function salesOrderTypeLabel(row) {
   if (row?.is_replacement_order) return 'Replacement';

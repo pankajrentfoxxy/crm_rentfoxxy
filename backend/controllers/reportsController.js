@@ -2221,9 +2221,10 @@ exports.getInwardOutwardDetails = async (req, res) => {
     }
 };
 
-exports.getInwardOutwardFilters = async (_req, res) => {
+exports.getInwardOutwardFilters = async (req, res) => {
     try {
-        const filters = await getInwardOutwardFilters();
+        const { from, to } = resolveDateRange(req.query);
+        const filters = await getInwardOutwardFilters({ from, to });
         res.json({ success: true, ...filters });
     } catch (error) {
         console.error('getInwardOutwardFilters error:', error);

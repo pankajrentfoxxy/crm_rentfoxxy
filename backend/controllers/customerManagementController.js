@@ -32,6 +32,12 @@ const {
   listCustomerAssetActivity,
   normalizeAssetDateField,
 } = require('../services/customerAssetActivityService');
+const {
+  buildCustomerLaptopsCacheKey,
+  getCachedCustomerLaptops,
+  setCachedCustomerLaptops,
+  invalidateCustomerLaptopsCache,
+} = require('../services/customerLaptopsCache');
 
 const CUSTOMER_ASSET_SPEC_FIELDS = [
   'brand',
@@ -391,6 +397,13 @@ async function ensureCustomerManagementSchema() {
     const sql = fs.readFileSync(migrationPath, 'utf8');
     await pool.query(sql);
   }
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dcl_customer_movement_status
+      ON delivery_challan_lines (customer_id, movement_type, status);
+    CREATE INDEX IF NOT EXISTS idx_vsn_customer_status_active
+      ON vendor_serial_numbers (current_customer_id, inventory_status)
+      WHERE deleted_at IS NULL;
+  `);
 }
 
 exports.ensureCustomerManagementSchema = ensureCustomerManagementSchema;
@@ -1717,21 +1730,13 @@ const ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL = `
          )
          AND NOT EXISTS (
            SELECT 1
-             FROM delivery_challan_lines dcl_reout
-             CROSS JOIN LATERAL jsonb_array_elements_text(
-               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
-                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
-             ) AS out_elem
-            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
-              AND dcl_reout.customer_id = rl_done.customer_id
-              AND COALESCE(dcl_reout.status, '') = 'delivered'
+             FROM outbound_reout o
+            WHERE o.out_at > COALESCE(sti_done.warehouse_received_at, rl_done.delivered_at, rl_done.created_at)
               AND (
-                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
-                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
-                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+                (o.ttspl IS NOT NULL AND o.ttspl = vsn.inventory_asset_code)
+                OR (o.serial_no IS NOT NULL AND o.serial_no = vsn.serial_number)
+                OR (o.serial_id IS NOT NULL AND o.serial_id = vsn.serial_id)
               )
-              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
-                  > COALESCE(sti_done.warehouse_received_at, rl_done.delivered_at, rl_done.created_at)
          )
     )
     AND NOT EXISTS (
@@ -1752,21 +1757,13 @@ const ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL = `
          )
          AND NOT EXISTS (
            SELECT 1
-             FROM delivery_challan_lines dcl_reout
-             CROSS JOIN LATERAL jsonb_array_elements_text(
-               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
-                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
-             ) AS out_elem
-            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
-              AND dcl_reout.customer_id = rl_legacy.customer_id
-              AND COALESCE(dcl_reout.status, '') = 'delivered'
+             FROM outbound_reout o
+            WHERE o.out_at > COALESCE(rl_legacy.warehouse_received_at, rl_legacy.delivered_at, rl_legacy.created_at)
               AND (
-                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
-                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
-                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+                (o.ttspl IS NOT NULL AND o.ttspl = vsn.inventory_asset_code)
+                OR (o.serial_no IS NOT NULL AND o.serial_no = vsn.serial_number)
+                OR (o.serial_id IS NOT NULL AND o.serial_id = vsn.serial_id)
               )
-              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
-                  > COALESCE(rl_legacy.warehouse_received_at, rl_legacy.delivered_at, rl_legacy.created_at)
          )
     )
 `;
@@ -1788,9 +1785,7 @@ const INVENTORY_JOIN_SQL = `
      LIMIT 1
   ) inv ON TRUE`;
 
-const ACTIVE_FROM_SQL = `
-  FROM vendor_serial_numbers vsn
-  ${INVENTORY_JOIN_SQL}
+const POD_JOIN_SQL = `
   LEFT JOIN LATERAL (
     SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url,
            dcl.pdf_path, dcl.delivery_completed_at, dcl.dispatched_at
@@ -1799,7 +1794,9 @@ const ACTIVE_FROM_SQL = `
       AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
     ORDER BY dcl.delivery_completed_at DESC NULLS LAST, dcl.id DESC
     LIMIT 1
-  ) pod ON TRUE
+  ) pod ON TRUE`;
+
+const RATE_JOIN_SQL = `
   LEFT JOIN LATERAL (
     SELECT sol.rate
       FROM sales_order_serials sos
@@ -1812,7 +1809,36 @@ const ACTIVE_FROM_SQL = `
        )
      ORDER BY sos.allocation_id DESC
      LIMIT 1
-  ) sos_rate ON TRUE
+  ) sos_rate ON TRUE`;
+
+// Expand each outbound DC's jsonb serials once per customer instead of once per laptop.
+const ACTIVE_OUTBOUND_REOUT_CTE = `
+WITH outbound_reout AS MATERIALIZED (
+  SELECT
+    COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at) AS out_at,
+    NULLIF(split_part(out_elem, '|', 3), '') AS ttspl,
+    NULLIF(split_part(out_elem, '|', 2), '') AS serial_no,
+    CASE
+      WHEN NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '') ~ '^[0-9]+$'
+      THEN NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int
+      ELSE NULL
+    END AS serial_id
+  FROM delivery_challan_lines dcl
+  CROSS JOIN LATERAL jsonb_array_elements_text(
+    CASE WHEN jsonb_typeof(dcl.serial_number) = 'array'
+         THEN dcl.serial_number ELSE '[]'::jsonb END
+  ) AS out_elem
+  WHERE dcl.customer_id = $1
+    AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+    AND COALESCE(dcl.status, '') = 'delivered'
+)
+`;
+
+function withActiveCte(sql) {
+  return `${ACTIVE_OUTBOUND_REOUT_CTE}${sql}`;
+}
+
+const ACTIVE_WHERE_SQL = `
   WHERE vsn.current_customer_id = $1
     AND vsn.deleted_at IS NULL
     AND vsn.inventory_status = ANY($2::text[])
@@ -1861,23 +1887,28 @@ const ACTIVE_FROM_SQL = `
          -- Ignore superseded returns when the unit was outbound-delivered again afterward.
          AND NOT EXISTS (
            SELECT 1
-             FROM delivery_challan_lines dcl_reout
-             CROSS JOIN LATERAL jsonb_array_elements_text(
-               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
-                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
-             ) AS out_elem
-            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
-              AND dcl_reout.customer_id = rl.customer_id
-              AND COALESCE(dcl_reout.status, '') = 'delivered'
+             FROM outbound_reout o
+            WHERE o.out_at > COALESCE(rl.delivered_at, rl.created_at)
               AND (
-                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
-                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
-                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+                (o.ttspl IS NOT NULL AND o.ttspl = vsn.inventory_asset_code)
+                OR (o.serial_no IS NOT NULL AND o.serial_no = vsn.serial_number)
+                OR (o.serial_id IS NOT NULL AND o.serial_id = vsn.serial_id)
               )
-              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
-                  > COALESCE(rl.delivered_at, rl.created_at)
          )
     )${ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL}
+`;
+
+const ACTIVE_CORE_FROM_SQL = `
+  FROM vendor_serial_numbers vsn
+  ${ACTIVE_WHERE_SQL}
+`;
+
+const ACTIVE_FROM_SQL = `
+  FROM vendor_serial_numbers vsn
+  ${INVENTORY_JOIN_SQL}
+  ${POD_JOIN_SQL}
+  ${RATE_JOIN_SQL}
+  ${ACTIVE_WHERE_SQL}
 `;
 
 const ACTIVE_SELECT_SQL = `
@@ -1972,9 +2003,32 @@ const RETURNED_SELECT_SQL = `
          sti.warehouse_esign_url
 `;
 
+const RETURNED_COUNT_FROM_SQL = `
+  FROM delivery_challan_lines rl
+  LEFT JOIN support_ticket_items sti
+    ON sti.return_dc_number = rl.dc_number
+   AND sti.item_type = 'pickup'
+  WHERE rl.movement_type = 'return'
+    AND rl.customer_id = $1
+    AND COALESCE(rl.status, '') NOT IN ('cancelled')
+    AND ${RETURNED_BUCKET_ELIGIBLE_SQL}
+`;
+
+function activeFilterFromSql({ search = '', from = '', to = '' } = {}) {
+  const needsInv = Boolean(search);
+  const needsPod = Boolean(from || to);
+  if (!needsInv && !needsPod) return ACTIVE_CORE_FROM_SQL;
+  return `
+  FROM vendor_serial_numbers vsn
+  ${needsInv ? INVENTORY_JOIN_SQL : ''}
+  ${needsPod ? POD_JOIN_SQL : ''}
+  ${ACTIVE_WHERE_SQL}
+`;
+}
+
 async function countCustomerActiveAssets(customerId) {
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS total ${ACTIVE_FROM_SQL}`,
+    withActiveCte(`SELECT COUNT(*)::int AS total ${ACTIVE_CORE_FROM_SQL}`),
     [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
   );
   return rows[0]?.total || 0;
@@ -1982,7 +2036,7 @@ async function countCustomerActiveAssets(customerId) {
 
 async function countCustomerReturnedAssets(customerId) {
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS total ${RETURNED_FROM_SQL}`,
+    `SELECT COUNT(*)::int AS total ${RETURNED_COUNT_FROM_SQL}`,
     [customerId]
   );
   return rows[0]?.total || 0;
@@ -1993,23 +2047,29 @@ async function queryCustomerActiveAssets(customerId, { search = '', from = '', t
   const params = [customerId, statusList];
   const searchSql = buildActiveSearchSql(search, params);
   const dateSql = buildActiveDateSql(from, to, params);
-  const fromWhere = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}`;
+  const filterFrom = `${activeFilterFromSql({ search, from, to })}${searchSql}${dateSql}`;
+  const hydrateFrom = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}`;
 
-  let total;
-  if (!skipCount) {
-    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
-    total = countR.rows[0]?.total || 0;
-  }
-
-  let listSql = `${ACTIVE_SELECT_SQL} ${fromWhere} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`;
+  const countSql = withActiveCte(`SELECT COUNT(*)::int AS total ${filterFrom}`);
+  let listSql = withActiveCte(
+    `${ACTIVE_SELECT_SQL} ${hydrateFrom} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`
+  );
   const listParams = [...params];
   if (limit != null) {
     listParams.push(limit, offset || 0);
     listSql += ` LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`;
   }
 
-  const { rows } = await pool.query(listSql, listParams);
-  return { rows: rows.map(mapActiveAssetRow), total };
+  if (skipCount) {
+    const { rows } = await pool.query(listSql, listParams);
+    return { rows: rows.map(mapActiveAssetRow), total: undefined };
+  }
+
+  const [countR, listR] = await Promise.all([
+    pool.query(countSql, params),
+    pool.query(listSql, listParams),
+  ]);
+  return { rows: listR.rows.map(mapActiveAssetRow), total: countR.rows[0]?.total || 0 };
 }
 
 // Exposed so the customer portal serves the same deployed-asset rows as this
@@ -2532,6 +2592,7 @@ exports.updateCustomerAsset = async (req, res) => {
     }
 
     await client.query('COMMIT');
+    invalidateCustomerLaptopsCache(customerId);
 
     const ttsplId = row.inventory_asset_code || row.serial_number;
     await logCustomerAssetEdit({
@@ -2613,7 +2674,7 @@ exports.getCustomerLaptops = async (req, res) => {
 
     if (!paginate) {
       const [{ rows: active }, { rows: returned }] = await Promise.all([
-        pool.query(`${ACTIVE_SELECT_SQL} ${ACTIVE_FROM_SQL} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`, [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]).then((r) => ({ rows: r.rows.map(mapActiveAssetRow) })),
+        pool.query(withActiveCte(`${ACTIVE_SELECT_SQL} ${ACTIVE_FROM_SQL} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`), [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]).then((r) => ({ rows: r.rows.map(mapActiveAssetRow) })),
         pool.query(`${RETURNED_SELECT_SQL} ${RETURNED_FROM_SQL} ORDER BY ${RETURNED_AT_SQL} DESC NULLS LAST, rl.id DESC`, [customerId]).then((r) => ({ rows: r.rows.map(mapReturnedAssetRow) })),
       ]);
       const counts = { active: active.length, returned: returned.length };
@@ -2627,20 +2688,28 @@ exports.getCustomerLaptops = async (req, res) => {
     }
 
     const offset = (page - 1) * limit;
-    const result = lifecycle === 'returned'
-      ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit, offset })
-      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit, offset });
+    const cacheKey = buildCustomerLaptopsCacheKey({
+      customerId, lifecycle, page, limit, search, from, to, statuses, paginate: true,
+    });
+    const cached = await getCachedCustomerLaptops(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
-    const otherCountPromise = lifecycle === 'returned'
-      ? countCustomerActiveAssets(customerId)
-      : countCustomerReturnedAssets(customerId);
-    const otherTotal = await otherCountPromise;
+    const [result, otherTotal] = await Promise.all([
+      lifecycle === 'returned'
+        ? queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit, offset })
+        : queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit, offset }),
+      lifecycle === 'returned'
+        ? countCustomerActiveAssets(customerId)
+        : countCustomerReturnedAssets(customerId),
+    ]);
     const counts = {
       active: lifecycle === 'active' ? result.total : otherTotal,
       returned: lifecycle === 'returned' ? result.total : otherTotal,
     };
 
-    return res.json({
+    const payload = {
       success: true,
       lifecycle,
       data: result.rows,
@@ -2651,7 +2720,9 @@ exports.getCustomerLaptops = async (req, res) => {
         totalPages: Math.max(1, Math.ceil(result.total / limit)),
       },
       counts,
-    });
+    };
+    setCachedCustomerLaptops(cacheKey, payload).catch(() => {});
+    return res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -3055,9 +3126,9 @@ exports.getCustomerRentalSummary = async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `SELECT COALESCE(SUM(COALESCE(NULLIF(vsn.rent_monthly_rate, 0), sos_rate.rate)), 0)::numeric AS total_monthly_rent,
+      withActiveCte(`SELECT COALESCE(SUM(COALESCE(NULLIF(vsn.rent_monthly_rate, 0), sos_rate.rate)), 0)::numeric AS total_monthly_rent,
               COUNT(*)::int AS active_asset_count
-         ${ACTIVE_FROM_SQL}`,
+         ${ACTIVE_FROM_SQL}`),
       [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
     );
 

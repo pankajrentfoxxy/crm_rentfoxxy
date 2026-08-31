@@ -151,7 +151,10 @@ async function processReturnedSerials(db, {
     }
 
     const wasRented = s.inventory_status === 'rented';
-    const returnDate = new Date();
+    const warehouseReceivedAt = pickupItem?.warehouse_received_at
+      ? new Date(pickupItem.warehouse_received_at)
+      : null;
+    const returnDate = warehouseReceivedAt || new Date();
     await inventorySM.markReturned(db, serialId, {
       reason: dcNumber ? `Picked up via Return DC ${dcNumber}` : 'Picked up (customer return)',
       rentEndDate: returnDate, actorUserId, actorName,
@@ -186,9 +189,12 @@ async function processReturnedSerials(db, {
     const returnTicketId = tk && tk.ok ? tk.ticket_id : null;
 
     let creditNote = null;
-    if (wasRented) {
+    // Unused prepaid days are credited from warehouse received date, not
+    // pickup/created date. Invoice generate creates the CN when warehouse
+    // receipt is recorded later.
+    if (wasRented && warehouseReceivedAt) {
       creditNote = await billing.createReturnCreditNote(db, {
-        serialId, returnDate, returnTicketId, actorUserId,
+        serialId, returnDate: warehouseReceivedAt, returnTicketId, actorUserId,
         supportTicketId, returnDcNumber: dcNumber,
       });
     }

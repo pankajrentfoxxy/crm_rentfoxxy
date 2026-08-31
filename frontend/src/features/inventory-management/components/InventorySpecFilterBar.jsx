@@ -1,6 +1,6 @@
 import React from 'react';
 import useInventorySpecFilterOptions from '../hooks/useInventorySpecFilterOptions';
-import { EMPTY_SPEC_FILTERS, hasActiveSpecFilters } from '../inventorySpecFilters';
+import { EMPTY_SPEC_FILTERS, hasActiveSpecFilters, parseSpecMultiUrl } from '../inventorySpecFilters';
 import SearchableSpecSelect from './SearchableSpecSelect';
 
 const FILTER_FIELDS = [
@@ -22,17 +22,18 @@ export default function InventorySpecFilterBar({
 }) {
   const { options, loading } = useInventorySpecFilterOptions(filters.brand, true);
   const active = hasActiveSpecFilters(filters);
-  const brandScopeKey = (filters.brand || '').trim() || 'all';
+  const brandScopeKey = parseSpecMultiUrl(filters.brand).join('|') || 'all';
   const displayOptions = loading
     ? { brands: [], models: [], processors: [], generations: [], rams: [], storages: [], gpus: [], screen_sizes: [] }
     : options;
 
   const setField = (key, value) => {
+    const nextValue = Array.isArray(value) ? value.filter(Boolean).join(',') : (value || '');
     if (key === 'brand') {
-      onChange({ ...filters, brand: value, model: '', processor: '', generation: '' });
+      onChange({ ...filters, brand: nextValue, model: '', processor: '', generation: '' });
       return;
     }
-    onChange({ ...filters, [key]: value });
+    onChange({ ...filters, [key]: nextValue });
   };
 
   return (
@@ -42,7 +43,8 @@ export default function InventorySpecFilterBar({
           <SearchableSpecSelect
             key={brandScoped ? `${brandScopeKey}-${key}` : key}
             label={label}
-            value={filters[key] || ''}
+            multiple
+            value={parseSpecMultiUrl(filters[key])}
             onChange={(v) => setField(key, v)}
             options={displayOptions[optionsKey] || []}
             disabled={loading}

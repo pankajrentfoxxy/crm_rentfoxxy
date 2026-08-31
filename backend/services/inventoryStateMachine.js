@@ -128,6 +128,8 @@ async function transitionAsset(db, {
       if (customerId !== null) add('current_customer_id', customerId);
       add('dispatched_at', new Date());
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
+      add('returned_at', null);
+      add('rent_end_date', null);
       break;
     case STATUS.RENTED:
     case STATUS.SOLD:
@@ -140,6 +142,8 @@ async function transitionAsset(db, {
       }
       if (rentStartDate !== null) add('rent_start_date', rentStartDate);
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
+      add('returned_at', null);
+      add('rent_end_date', null);
       break;
     case STATUS.ON_DEMO:
       if (customerId !== null) add('current_customer_id', customerId);
@@ -165,6 +169,7 @@ async function transitionAsset(db, {
       add('rent_start_date', null);
       add('rent_end_date', null);
       add('rent_billed_until', null);
+      add('returned_at', null);
       break;
     default:
       break;

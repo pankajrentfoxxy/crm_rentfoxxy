@@ -102,22 +102,42 @@ function resolveMonthRange(monthYmd) {
   };
 }
 
+function parseCsvQuery(raw) {
+  if (raw == null || raw === '') return [];
+  const parts = Array.isArray(raw)
+    ? raw.flatMap((v) => String(v || '').split(','))
+    : String(raw).split(',');
+  return [...new Set(parts.map((s) => s.trim()).filter(Boolean))];
+}
+
 /**
  * Master-data style date resolution: month preset or explicit from/to.
  * Legacy URLs with only date_from/date_to are treated as custom range.
+ * `month` accepts one or more YYYY-MM values (comma-separated).
  */
 function resolveMasterDateRange(query = {}) {
   const mode = String(query.date_mode || query.dateMode || '').trim().toLowerCase();
-  const month = String(query.month || '').trim();
-  if (mode === 'month' && month) {
-    return { ...resolveMonthRange(month), dateMode: 'month', month };
+  const months = parseCsvQuery(query.month);
+  if (mode === 'month' && months.length) {
+    const ranges = months.map(resolveMonthRange).filter((r) => r.dateFrom);
+    if (!ranges.length) {
+      return { dateFrom: null, dateTo: null, dateMode: 'month', month: months.join(','), months, ranges: [] };
+    }
+    return {
+      dateFrom: ranges[0].dateFrom,
+      dateTo: ranges[ranges.length - 1].dateTo,
+      dateMode: 'month',
+      month: months.join(','),
+      months,
+      ranges,
+    };
   }
   const from = String(query.date_from || query.dateFrom || '').trim() || null;
   const to = String(query.date_to || query.dateTo || '').trim() || null;
   if (mode === 'range' || from || to) {
-    return { dateFrom: from, dateTo: to, dateMode: 'range', month: null };
+    return { dateFrom: from, dateTo: to, dateMode: 'range', month: null, months: [], ranges: [] };
   }
-  return { dateFrom: null, dateTo: null, dateMode: null, month: null };
+  return { dateFrom: null, dateTo: null, dateMode: null, month: null, months: [], ranges: [] };
 }
 
 function appendDateRangeToWhere(where, clauses) {
@@ -136,4 +156,5 @@ module.exports = {
   resolveDatePeriod,
   resolveMonthRange,
   resolveMasterDateRange,
+  parseCsvQuery,
 };
