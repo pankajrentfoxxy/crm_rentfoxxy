@@ -10,6 +10,7 @@ router.use(authMiddleware);
 
 router.get('/invoices', cp('customer_billing', 'view'), ctrl.listInvoices);
 router.post('/invoices/generate', cp('customer_billing', 'create'), ctrl.generateInvoice);
+router.post('/invoices/generate-bulk', cp('customer_billing', 'create'), ctrl.generateInvoicesBulk);
 router.get('/invoices/:invoiceId/payments', cp('customer_billing', 'view'), ctrl.listInvoicePayments);
 router.post('/invoices/:id/payments', cp('customer_billing', 'edit'), ctrl.recordInvoicePayment);
 router.get('/invoices/:invoiceId/pdf', cp('customer_billing', 'view'), ctrl.downloadInvoicePdf);

@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const {
   generateCustomerInvoice,
+  generateAllCustomerInvoices,
 } = require('../services/billingSchedulerService');
 const {
   recordPayment,
@@ -285,6 +286,60 @@ exports.generateInvoice = async (req, res) => {
       [result.invoice_id]
     );
     res.json({ success: true, ...result, invoice: inv.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.generateInvoicesBulk = async (req, res) => {
+  try {
+    const { customer_ids, all, month, year } = req.body || {};
+    const m = Number(month);
+    const y = Number(year);
+    if (!m || !y) {
+      return res.status(400).json({ success: false, message: 'month and year required' });
+    }
+
+    let results;
+    if (all) {
+      results = await generateAllCustomerInvoices(m, y);
+    } else {
+      const ids = Array.isArray(customer_ids)
+        ? [...new Set(customer_ids.map((id) => Number(id)).filter((id) => id > 0))]
+        : [];
+      if (!ids.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Select at least one customer, or enable “All billable customers”',
+        });
+      }
+      results = [];
+      for (const customerId of ids) {
+        try {
+          const result = await generateCustomerInvoice(customerId, m, y);
+          results.push({ customer_id: customerId, ...result });
+        } catch (err) {
+          results.push({ customer_id: customerId, error: err.message });
+        }
+      }
+    }
+
+    const created = results.filter((r) => r.invoice_id && !r.skipped && !r.appended).length;
+    const appended = results.filter((r) => r.appended).length;
+    const skipped = results.filter((r) => r.skipped && !r.error).length;
+    const errors = results.filter((r) => r.error).length;
+
+    res.json({
+      success: true,
+      summary: {
+        total: results.length,
+        created,
+        appended,
+        skipped,
+        errors,
+      },
+      results,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

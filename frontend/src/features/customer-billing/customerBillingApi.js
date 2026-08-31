@@ -6,6 +6,7 @@ const einvBase = '/einvoice';
 export const listInvoices = (p) => api.get(`${base}/invoices`, { params: p });
 export const getInvoice = (id) => api.get(`${base}/invoices/${id}`);
 export const generateInvoice = (d) => api.post(`${base}/invoices/generate`, d);
+export const generateInvoicesBulk = (d) => api.post(`${base}/invoices/generate-bulk`, d);
 export const sendInvoice = (id, d) => api.post(`${base}/invoices/${id}/send`, d);
 export const markInvoicePaid = (id, d) => api.patch(`${base}/invoices/${id}/paid`, d);
 export const downloadInvoicePdf = (id) => api.get(`${base}/invoices/${id}/pdf`, { responseType: 'blob' });
