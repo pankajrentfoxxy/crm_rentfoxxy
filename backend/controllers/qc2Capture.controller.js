@@ -116,6 +116,10 @@ async function getPublicSession(req, res) {
 /** Public — download per-session Windows EXE for hardware capture */
 async function downloadWindowsExe(req, res) {
   try {
+    const touch = await qc2Capture.touchTokenForCapture(req.params.token);
+    if (!touch.ok) {
+      return res.status(touch.code || 409).json({ success: false, message: touch.message });
+    }
     const session = await qc2Capture.getPublicSession(req.params.token);
     if (!session) {
       return res.status(404).json({ success: false, message: 'Link not found or expired' });

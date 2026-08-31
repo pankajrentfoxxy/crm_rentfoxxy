@@ -1,7 +1,6 @@
 const pool = require('../config/db');
 const svc = require('../services/vendorRepairDcService');
 const { hasPermission } = require('../services/permissionService');
-const { canManageDcEwayBill } = require('../services/saleDcComplianceService');
 const vrdcEway = require('../services/vrdcEwayComplianceService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const path = require('path');
@@ -72,7 +71,7 @@ async function requireVrdcEwayUpload(req, res, next) {
   if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
   if (req.user.role === 'super_admin') return next();
   const cache = req.permissionCache || (req.permissionCache = {});
-  if (await canManageDcEwayBill(req.user, cache)) return next();
+  if (await vrdcEway.canUploadVrdcEwayBill(req.user, cache)) return next();
   return res.status(403).json({ success: false, message: 'Accounts E-Way Bill upload access required' });
 }
 
@@ -184,7 +183,9 @@ exports.listVendorRepairDcs = async (req, res) => {
 
 exports.getVendorRepairDc = async (req, res) => {
   try {
-    const dc = await svc.getVendorRepairDc(req.params.dcNumber);
+    const dcNumber = req.params.dcNumber;
+    await vrdcEway.purgeLockedVrdcPublicPdf(dcNumber).catch(() => {});
+    const dc = await svc.getVendorRepairDc(dcNumber);
     if (!dc) return res.status(404).json({ success: false, message: 'Vendor repair DC not found' });
     const cache = req.permissionCache || (req.permissionCache = {});
     const eway_compliance = await vrdcEway.buildVrdcEwayCompliance(dc, dc.items || [], req.user, cache);
@@ -264,8 +265,14 @@ exports.markDeliveredToVendor = async (req, res) => {
   let pdfPath = null;
   if (result && !result.already_delivered) {
     try {
-      const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
-      pdfPath = await generateVendorRepairPdf(dcNumber);
+      const dc = await svc.getVendorRepairDc(dcNumber);
+      const persist = await vrdcEway.shouldPersistPublicVrdcPdf(dc, dc?.items || []);
+      if (persist) {
+        const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
+        pdfPath = await generateVendorRepairPdf(dcNumber);
+      } else {
+        await vrdcEway.purgeLockedVrdcPublicPdf(dcNumber);
+      }
     } catch (pdfErr) {
       console.error('[vendorRepair] delivered PDF failed:', pdfErr.message);
     }
@@ -302,8 +309,14 @@ exports.signDispatch = async (req, res) => {
   let pdfPath = null;
   if (result && !result.already_dispatched) {
     try {
-      const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
-      pdfPath = await generateVendorRepairPdf(dcNumber);
+      const dc = await svc.getVendorRepairDc(dcNumber);
+      const persist = await vrdcEway.shouldPersistPublicVrdcPdf(dc, dc?.items || []);
+      if (persist) {
+        const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
+        pdfPath = await generateVendorRepairPdf(dcNumber);
+      } else {
+        await vrdcEway.purgeLockedVrdcPublicPdf(dcNumber);
+      }
     } catch (pdfErr) {
       console.error('[vendorRepair] dispatch PDF failed:', pdfErr.message);
     }

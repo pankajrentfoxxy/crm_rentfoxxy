@@ -67,6 +67,13 @@ try {
 }
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
+// VRDC PDFs must be downloaded through the authenticated API (E-way lock enforced there).
+app.use('/uploads/vendor-repair', (_req, res) => {
+  res.status(403).json({
+    success: false,
+    message: 'Download this VRDC from the CRM using the Dispatch PDF button.',
+  });
+});
 // Always serve from backend/uploads regardless of process cwd; fall back to repo-root/uploads for legacy files.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));

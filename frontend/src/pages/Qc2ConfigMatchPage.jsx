@@ -4,7 +4,7 @@ import {
   CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu, KeyRound,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getApiUrl } from '../utils/api';
+import { getApiUrl, getCaptureApiBase } from '../utils/api';
 import { buildMacCaptureCommand } from '../utils/macHwCaptureScript';
 import {
   buildWindowsCaptureCommand,
@@ -57,20 +57,21 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
   const [accessInput, setAccessInput] = useState('');
   const [resolving, setResolving] = useState(false);
   const [token, setToken] = useState(null);
+  const [captureApiBase, setCaptureApiBase] = useState(null);
   const [session, setSession] = useState(null);
   const [sessionWarning, setSessionWarning] = useState(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
 
-  const apiBase = getPublicApiBase();
+  const scriptApiBase = getCaptureApiBase(captureApiBase);
   const psScript = useMemo(
-    () => (token ? buildWindowsCaptureCommand(apiBase, token, ui.apiPrefix) : ''),
-    [apiBase, token, ui.apiPrefix]
+    () => (token ? buildWindowsCaptureCommand(scriptApiBase, token, ui.apiPrefix) : ''),
+    [scriptApiBase, token, ui.apiPrefix]
   );
   const psEncoded = useMemo(() => (psScript ? encodePsCommand(psScript) : ''), [psScript]);
   const macScript = useMemo(
-    () => (token ? buildMacCaptureCommand(apiBase, token, ui.apiPrefix) : ''),
-    [apiBase, token, ui.apiPrefix]
+    () => (token ? buildMacCaptureCommand(scriptApiBase, token, ui.apiPrefix) : ''),
+    [scriptApiBase, token, ui.apiPrefix]
   );
 
   const loadSession = useCallback(async () => {
@@ -116,6 +117,7 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
         return;
       }
       setToken(data.data.token);
+      setCaptureApiBase(data.data.api_base_url || null);
       setSession({
         ...data.data,
         status: 'pending',
@@ -171,7 +173,7 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
 
   const downloadWindowsScript = () => {
     if (!token) return;
-    const content = buildWindowsCapturePs1(apiBase, token, ui.apiPrefix, `Rentfoxxy ${ui.ps1Title}`);
+    const content = buildWindowsCapturePs1(scriptApiBase, token, ui.apiPrefix, `Rentfoxxy ${ui.ps1Title}`);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

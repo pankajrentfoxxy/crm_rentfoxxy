@@ -80,15 +80,19 @@ namespace Rentfoxxy.HwCapture
                 string verifyJson = PostJson(verifyUrl, ToJson(hw));
                 if (verifyJson == null)
                 {
-                    Fail("Verify request failed. Check network / API URL.");
+                    Fail("Verify request failed. Generate a new access number on the QC2 screen, download a fresh Windows app, and run it on this laptop.");
                     return 1;
                 }
 
                 bool matched = JsonBool(verifyJson, "configurationMatched");
                 if (!matched)
                 {
+                    string serverMsg = JsonString(verifyJson, "message");
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("Configuration does NOT match:");
+                    if (!string.IsNullOrEmpty(serverMsg))
+                        Console.WriteLine(serverMsg);
+                    else
+                        Console.WriteLine("Configuration does NOT match:");
                     PrintErrors(verifyJson);
                     Console.ResetColor();
                     Pause();
@@ -167,6 +171,12 @@ namespace Rentfoxxy.HwCapture
             Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
             if (!m.Success) return "";
             return UnescapeJson(m.Groups[1].Value);
+        }
+
+        private static string ExtractJsonMessage(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return "";
+            return JsonString(body, "message");
         }
 
         private static string UnescapeJson(string s)
@@ -323,7 +333,13 @@ namespace Rentfoxxy.HwCapture
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("HTTP error: " + wex.Message);
                 if (!string.IsNullOrEmpty(body))
-                    Console.WriteLine(body);
+                {
+                    string msg = ExtractJsonMessage(body);
+                    if (!string.IsNullOrEmpty(msg))
+                        Console.WriteLine(msg);
+                    else
+                        Console.WriteLine(body);
+                }
                 Console.ResetColor();
                 return null;
             }

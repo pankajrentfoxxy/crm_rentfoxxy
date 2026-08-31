@@ -307,6 +307,10 @@ export default function Qc2SpecVerifyPanel({ ticket, onVerified, onHeaderSync })
                   ? ` · expires ${new Date(tokenInfo.expires_at).toLocaleTimeString('en-IN')}`
                   : ''}
               </p>
+              <p className="text-xs text-indigo-600 max-w-md mx-auto">
+                On the config-match page, enter this number and download the Windows app there.
+                Each access number lasts 2 hours — generating a new number invalidates the previous app.
+              </p>
               <a
                 href={matchUrl}
                 target="_blank"

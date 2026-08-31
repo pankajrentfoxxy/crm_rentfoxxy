@@ -75,7 +75,7 @@ export default function VrdcEwayPanel({
           {' '}is above ₹{Number(threshold).toLocaleString('en-IN')}.
         </p>
         <p className="mt-1">
-          VRDC Download: <strong>{c.can_download_pdf ? 'Enabled' : 'Locked'}</strong>
+          VRDC Download: <strong>{c.can_download_pdf ? (uploaded ? 'Enabled' : 'Enabled for Accounts') : 'Locked'}</strong>
         </p>
         {!uploaded && c.lock_message ? (
           <p className="mt-2 text-amber-900">{c.lock_message}</p>

@@ -9,7 +9,6 @@ const {
   normalizeEwayBillNumber,
   requiresVrdcEway,
 } = require('./vendorRepairDcShared');
-const { canManageDcEwayBill } = require('./saleDcComplianceService');
 
 const ACCOUNTS_EMAIL = process.env.ACCOUNTS_EMAIL || 'accounts@truetechservices.in';
 const ACCOUNTS_EMAIL_CC = process.env.ACCOUNTS_EMAIL_CC || 'adminn@rentfoxxy.com,pankkajyadav@rentfoxxy.com';
@@ -54,6 +53,15 @@ function laptopRowsFromItems(items = []) {
   }));
 }
 
+/** Accounts / dc_eway_bill holders — not warehouse via sale-DC dispatch permissions. */
+async function canUploadVrdcEwayBill(user, permissionCache = {}) {
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+  const { hasPermission } = require('./permissionService');
+  return (await hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_edit', permissionCache))
+    || (await hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_create', permissionCache));
+}
+
 function formatLaptopTableRows(laptops = []) {
   if (!laptops.length) {
     return '<tr><td colspan="3" style="padding:8px 0;color:#64748b;">No laptops listed</td></tr>';
@@ -75,13 +83,8 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
   const needsEway = requiresVrdcEway(productValue);
   const ewayComplete = isVrdcEwayComplete(head, needsEway);
   const isSuperAdmin = user?.role === 'super_admin';
-  const canUpload = isSuperAdmin || await canManageDcEwayBill(user, permissionCache);
-  const canRequest = isSuperAdmin
-    || user?.role === 'warehouse'
-    || user?.role === 'admin'
-    || user?.role === 'manager'
-    || user?.role === 'floor_manager'
-    || user?.role === 'dispatch';
+  const canUpload = isSuperAdmin || await canUploadVrdcEwayBill(user, permissionCache);
+  const canDownload = isSuperAdmin || !needsEway || ewayComplete || canUpload;
 
   return {
     applies: needsEway,
@@ -91,9 +94,14 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
     laptop_count: items?.length || 0,
     eway_complete: ewayComplete,
     eway_status: !needsEway ? 'not_required' : (ewayComplete ? 'uploaded' : 'pending'),
-    can_download_pdf: isSuperAdmin || !needsEway || ewayComplete,
-    can_upload_eway: isSuperAdmin || canUpload,
-    can_request_eway: isSuperAdmin || canRequest,
+    can_download_pdf: canDownload,
+    can_upload_eway: canUpload,
+    can_request_eway: isSuperAdmin
+    || user?.role === 'warehouse'
+    || user?.role === 'admin'
+    || user?.role === 'manager'
+    || user?.role === 'floor_manager'
+    || user?.role === 'dispatch',
     request_sent: Boolean(head?.accounts_notified_at),
     accounts_notified_at: head?.accounts_notified_at || null,
     accounts_email: ACCOUNTS_EMAIL,
@@ -102,14 +110,66 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
     eway_bill_number: head?.eway_bill_number || null,
     eway_bill_date: head?.eway_bill_date || null,
     eway_bill_uploaded_at: head?.eway_bill_uploaded_at || null,
-    lock_message: needsEway && !ewayComplete
+    lock_message: needsEway && !ewayComplete && !canDownload
       ? 'E-way Bill is required for this VRDC. Please ask the Accounts Team to add the E-way Bill before downloading.'
-      : null,
+      : (needsEway && !ewayComplete && canUpload
+        ? 'Download the VRDC PDF if needed for the GST portal, then enter the E-way Bill below to unlock download for the warehouse team.'
+        : null),
   };
 }
 
+async function canDownloadVrdcPdf(user, head, items, permissionCache = {}) {
+  if (user?.role === 'super_admin') return true;
+  const productValue = items?.reduce(
+    (sum, row) => sum + (Number.isFinite(Number(row.price)) ? Number(row.price) : 0),
+    0
+  ) ?? await computeVrdcTotalValue(head.dc_number);
+  if (!requiresVrdcEway(productValue)) return true;
+  if (isVrdcEwayComplete(head, true)) return true;
+  return canUploadVrdcEwayBill(user, permissionCache);
+}
+
+async function shouldPersistPublicVrdcPdf(head, items) {
+  const productValue = items?.reduce(
+    (sum, row) => sum + (Number.isFinite(Number(row.price)) ? Number(row.price) : 0),
+    0
+  ) ?? await computeVrdcTotalValue(head.dc_number);
+  if (!requiresVrdcEway(productValue)) return true;
+  return isVrdcEwayComplete(head, true);
+}
+
+async function purgeLockedVrdcPublicPdf(dcNumber) {
+  const fs = require('fs');
+  const path = require('path');
+  const headRes = await pool.query(
+    `SELECT dc_number, pdf_path, eway_bill_number, item_domain
+       FROM vendor_repair_delivery_challans
+      WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head?.pdf_path || head.item_domain === 'part') return false;
+
+  const itemsRes = await pool.query(
+    `SELECT price FROM vendor_repair_dc_items WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  const shouldKeep = await shouldPersistPublicVrdcPdf(head, itemsRes.rows);
+  if (shouldKeep) return false;
+
+  const rel = String(head.pdf_path).replace(/^\/+/, '');
+  const abs = path.join(__dirname, '..', 'uploads', rel);
+  try {
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  } catch (_) { /* best-effort */ }
+  await pool.query(
+    `UPDATE vendor_repair_delivery_challans SET pdf_path = NULL, updated_at = NOW() WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  return true;
+}
+
 async function assertCanDownloadVrdcPdf(user, dcNumber) {
-  if (user?.role === 'super_admin') return;
   const headRes = await pool.query(
     `SELECT dc_number, eway_bill_number, eway_bill_date, item_domain
        FROM vendor_repair_delivery_challans
@@ -119,9 +179,13 @@ async function assertCanDownloadVrdcPdf(user, dcNumber) {
   const head = headRes.rows[0];
   if (!head || head.item_domain === 'part') return;
 
-  const total = await computeVrdcTotalValue(dcNumber);
-  if (!requiresVrdcEway(total)) return;
-  if (isVrdcEwayComplete(head, true)) return;
+  const itemsRes = await pool.query(
+    `SELECT price FROM vendor_repair_dc_items WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  const cache = {};
+  const allowed = await canDownloadVrdcPdf(user, head, itemsRes.rows, cache);
+  if (allowed) return;
 
   throw new Error(
     'E-way Bill is required for this VRDC. Please ask the Accounts Team to add the E-way Bill before downloading.'
@@ -244,6 +308,13 @@ async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, userId
     [dcNumber, num, date, userId || null]
   );
 
+  try {
+    const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
+    await generateVendorRepairPdf(dcNumber);
+  } catch (pdfErr) {
+    console.error('[vrdcEway] post-upload PDF generation failed:', pdfErr.message);
+  }
+
   return { eway_bill_number: num, eway_bill_date: date };
 }
 
@@ -251,9 +322,13 @@ module.exports = {
   ACCOUNTS_EMAIL,
   buildVrdcEwayCompliance,
   assertCanDownloadVrdcPdf,
+  canDownloadVrdcPdf,
+  shouldPersistPublicVrdcPdf,
+  purgeLockedVrdcPublicPdf,
   computeVrdcTotalValue,
   sendAccountsVrdcEwayEmail,
   saveVrdcEwayBill,
+  canUploadVrdcEwayBill,
   laptopRowsFromItems,
   requiresVrdcEway,
   isVrdcEwayComplete,

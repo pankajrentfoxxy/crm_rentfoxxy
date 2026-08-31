@@ -1,6 +1,8 @@
+import { getCaptureApiBase } from './api';
+
 /** One-liner Mac bash script: verify config then submit platform serial. */
 export function buildMacCaptureCommand(apiBase, token, apiPrefix = 'grn-capture') {
-  const base = `${apiBase}/${apiPrefix}/${token}`;
+  const base = `${getCaptureApiBase(apiBase)}/${apiPrefix}/${token}`;
   return [
     'M=$(sysctl -n hw.model)',
     'MF=$(system_profiler SPHardwareDataType 2>/dev/null|awk -F\': \' \'/Model Name/{print $2;exit}\')',

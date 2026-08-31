@@ -29,6 +29,24 @@ export function getApiUrl() {
         : `http://localhost:5001/api`;
 }
 
+/**
+ * Absolute API base for PowerShell / curl scripts run on the laptop under test.
+ * Browser axios can use relative `/api`; Invoke-RestMethod requires a full URL.
+ */
+export function getCaptureApiBase(serverUrl) {
+    const candidate = String(
+        serverUrl || process.env.REACT_APP_CAPTURE_API_URL || process.env.REACT_APP_API_URL || ''
+    ).trim().replace(/\/$/, '');
+    if (/^https?:\/\//i.test(candidate)) {
+        return candidate.endsWith('/api') ? candidate : `${candidate}/api`;
+    }
+    if (typeof window !== 'undefined' && window.location?.origin) {
+        return `${window.location.origin.replace(/\/$/, '')}/api`;
+    }
+    const port = process.env.REACT_APP_DEV_API_PORT || '5001';
+    return `http://${localDevApiHost()}:${port}/api`;
+}
+
 /** Backend origin without `/api` (for `/uploads/...` URLs). */
 export function getBackendOrigin() {
     return getApiUrl().replace(/\/?api\/?$/i, '');

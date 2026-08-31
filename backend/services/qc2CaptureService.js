@@ -19,7 +19,7 @@ const {
   getById,
 } = require('./productionAssetService');
 
-const TOKEN_TTL_MINUTES = 30;
+const TOKEN_TTL_MINUTES = 120;
 
 async function ensureQc2TokenTable(db = pool) {
   await db.query(`
@@ -156,6 +156,69 @@ async function getTokenRow(tokenId) {
   return r.rows[0] || null;
 }
 
+async function hasNewerPendingToken(db, row, excludeTokenId = row?.token_id) {
+  if (!row?.ticket_id) return false;
+  const r = await db.query(
+    `SELECT 1 FROM qc2_capture_tokens
+      WHERE ticket_id = $1 AND status = 'pending' AND token_id != $2
+      LIMIT 1`,
+    [row.ticket_id, excludeTokenId]
+  );
+  return r.rows.length > 0;
+}
+
+async function reactivateTokenIfAllowed(db, row) {
+  if (!row?.token_id || !['expired', 'failed'].includes(String(row.status || ''))) {
+    return false;
+  }
+  if (await hasNewerPendingToken(db, row)) return false;
+  await db.query(
+    `UPDATE qc2_capture_tokens
+        SET status = 'pending',
+            expires_at = NOW() + ($2 || ' minutes')::interval
+      WHERE token_id = $1`,
+    [row.token_id, TOKEN_TTL_MINUTES]
+  );
+  return true;
+}
+
+/** Extend / reactivate token when user downloads the Windows app. */
+async function touchTokenForCapture(tokenId) {
+  await expireStaleTokens();
+  const row = await getTokenRow(tokenId);
+  if (!row) {
+    return { ok: false, code: 404, message: 'Capture link not found or expired' };
+  }
+  if (row.status === 'matched') {
+    return { ok: true, status: 'matched' };
+  }
+  if (await hasNewerPendingToken(pool, row)) {
+    return {
+      ok: false,
+      code: 409,
+      message: 'A newer access number is active on the QC2 screen — generate/download again using the latest number',
+    };
+  }
+  if (row.status === 'pending') {
+    await pool.query(
+      `UPDATE qc2_capture_tokens
+          SET expires_at = NOW() + ($2 || ' minutes')::interval
+        WHERE token_id = $1`,
+      [tokenId, TOKEN_TTL_MINUTES]
+    );
+    return { ok: true, status: 'pending' };
+  }
+  const reactivated = await reactivateTokenIfAllowed(pool, row);
+  if (!reactivated) {
+    return {
+      ok: false,
+      code: 410,
+      message: 'This access number expired — on the QC2 screen click Generate access number, then download a fresh Windows app',
+    };
+  }
+  return { ok: true, status: 'pending' };
+}
+
 async function getLatestTokenForTicket(ticketId) {
   await ensureQc2TokenTable();
   await expireStaleTokens();
@@ -259,28 +322,66 @@ async function verifyQc2Configuration(tokenId, actual, ip) {
       `SELECT * FROM qc2_capture_tokens WHERE token_id = $1 FOR UPDATE`,
       [tokenId]
     );
-    const row = tokRes.rows[0];
+    let row = tokRes.rows[0];
     if (!row) {
       await client.query('ROLLBACK');
       return { ok: false, code: 404, message: 'Capture link not found or expired' };
     }
-    if (row.status !== 'pending') {
-      await client.query('ROLLBACK');
+    if (row.status === 'matched') {
+      const pa = await getById(client, row.production_asset_id);
+      const { expected } = await getInventoryExpectedConfig(client, pa || {});
+      await client.query('COMMIT');
       return {
-        ok: false,
-        code: 409,
-        message: row.status === 'matched'
-          ? 'Already verified'
-          : 'This access number is no longer active',
+        ok: true,
+        configurationMatched: true,
+        checks: row.match_result?.checks || [],
+        errors: [],
+        expected,
       };
     }
+    if (row.status !== 'pending' && row.status !== 'failed') {
+      if (row.status === 'expired') {
+        const reactivated = await reactivateTokenIfAllowed(client, row);
+        if (!reactivated) {
+          await client.query('ROLLBACK');
+          const staleMsg = await hasNewerPendingToken(client, row)
+            ? 'A newer access number is active on the QC2 screen — use the latest number and download a fresh Windows app'
+            : 'This access number expired — on the QC2 screen click Generate access number, then download a fresh Windows app';
+          return { ok: false, code: 410, message: staleMsg };
+        }
+        const refreshed = await client.query(
+          `SELECT * FROM qc2_capture_tokens WHERE token_id = $1 FOR UPDATE`,
+          [tokenId]
+        );
+        row = refreshed.rows[0];
+      } else {
+        await client.query('ROLLBACK');
+        return {
+          ok: false,
+          code: 409,
+          message: 'This access number is no longer active',
+        };
+      }
+    }
     if (row.expires_at && new Date(row.expires_at) < new Date()) {
-      await client.query(
-        `UPDATE qc2_capture_tokens SET status = 'expired' WHERE token_id = $1`,
+      const reactivated = await reactivateTokenIfAllowed(client, row);
+      if (!reactivated) {
+        await client.query(
+          `UPDATE qc2_capture_tokens SET status = 'expired' WHERE token_id = $1`,
+          [tokenId]
+        );
+        await client.query('COMMIT');
+        return {
+          ok: false,
+          code: 410,
+          message: 'This access number expired — on the QC2 screen click Generate access number, then download a fresh Windows app',
+        };
+      }
+      const refreshed = await client.query(
+        `SELECT * FROM qc2_capture_tokens WHERE token_id = $1 FOR UPDATE`,
         [tokenId]
       );
-      await client.query('COMMIT');
-      return { ok: false, code: 410, message: 'Access number expired — generate a new one on QC2' };
+      row = refreshed.rows[0];
     }
 
     const paRes = await client.query(
@@ -418,6 +519,17 @@ async function submitQc2Serial(tokenId, serialNumber) {
   await expireStaleTokens();
   const row = await getTokenRow(tokenId);
   if (!row) return { ok: false, code: 404, message: 'Capture link not found or expired' };
+  if (row.status === 'expired' || row.status === 'failed') {
+    const reactivated = await reactivateTokenIfAllowed(pool, row);
+    if (!reactivated) {
+      return {
+        ok: false,
+        code: 410,
+        message: 'This access number expired — generate a new one on the QC2 screen and download a fresh Windows app',
+      };
+    }
+    row.status = 'pending';
+  }
   if (row.status !== 'matched' && row.status !== 'pending') {
     return { ok: false, code: 409, message: 'This capture link is no longer active' };
   }
@@ -462,5 +574,6 @@ module.exports = {
   getPublicSession,
   verifyQc2Configuration,
   submitQc2Serial,
+  touchTokenForCapture,
   apiBaseUrl,
 };

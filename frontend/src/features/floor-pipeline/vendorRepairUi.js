@@ -27,22 +27,31 @@ export function fmtVendorRepairDateTimeIst(v) {
 }
 
 export function parseVrdcItemConfig(item) {
-  const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
-  let brand = parts[0] || '';
-  let model = parts[1] || '';
+  const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter((p) => p && p !== '-');
+  let brand = '';
+  let model = '';
+  let processor = '';
+  let generation = '';
+  let ram = '';
+  let storage = '';
+  if (parts.length >= 6) {
+    [brand, model, processor, generation, ram, storage] = parts;
+  } else if (parts.length === 5) {
+    [brand, model, processor, ram, storage] = parts;
+  } else {
+    brand = parts[0] || '';
+    model = parts[1] || '';
+    processor = parts[2] || '';
+    generation = parts[3] || '';
+    ram = parts[4] || '';
+    storage = parts[5] || '';
+  }
   const combined = `${brand} ${model}`.toLowerCase();
   if (/macbook|mac book|\bimac\b|mac mini|mac studio|\bmac pro\b/.test(combined)) {
     brand = 'Apple';
     model = model.replace(/^dell\s+/i, '').replace(/^apple\s+/i, '');
   }
-  return {
-    brand,
-    model,
-    processor: parts[2] || '',
-    generation: parts[3] || '',
-    ram: parts[4] || '',
-    storage: parts[5] || '',
-  };
+  return { brand, model, processor, generation, ram, storage };
 }
 
 /** Registered / billing address lines from a vendor master record. */
