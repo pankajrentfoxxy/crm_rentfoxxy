@@ -1,6 +1,7 @@
 /** Canonical application permission section keys */
 export const APPLICATION_SECTIONS = [
   'dashboard',
+  'taskflow',
   'analytics_dashboard',
   'leads',
   'lead_follow_ups',
@@ -105,6 +106,7 @@ export const APPLICATION_SECTIONS = [
 
 export const SECTION_LABELS = {
   dashboard: 'Dashboard',
+  taskflow: 'TaskFlow',
   analytics_dashboard: 'Analytics Dashboards (Manager & Sales)',
   leads: 'Leads',
   lead_follow_ups: 'Follow-ups',
@@ -208,7 +210,7 @@ export const SECTION_LABELS = {
 };
 
 export const SECTION_GROUPS = {
-  Core: ['dashboard'],
+  Core: ['dashboard', 'taskflow'],
   'Lead & Sales CRM': [
     'leads', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
     'sales_quotations', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement',

@@ -140,6 +140,7 @@ app.use('/api/part-vendor-repair', require('./routes/partVendorRepair'));
 app.use('/api/scrap-challans', require('./routes/scrapChallan'));
 app.use('/api/utils', require('./routes/utils'));
 app.use('/api/guard-gate', require('./routes/guardGate'));
+app.use('/api/taskflow', require('./routes/taskflow'));
 
 // Health check
 app.get('/health', (req, res) => {

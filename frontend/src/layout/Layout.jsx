@@ -55,6 +55,7 @@ import {
 } from 'lucide-react';
 
 import NotificationBell from '../components/notifications/NotificationBell';
+import TaskflowNavButton from '../components/TaskflowNavButton';
 import DispatchAssignmentAlert from '../components/notifications/DispatchAssignmentAlert';
 import DispatchQcReminderAlert from '../components/notifications/DispatchQcReminderAlert';
 import DispatchRealtimeProvider from '../features/dispatch/DispatchRealtimeProvider';
@@ -1521,6 +1522,8 @@ export default function Layout({ children }) {
             <div className="flex items-center gap-3">
 
               <NotificationBell />
+
+              {canView('taskflow') ? <TaskflowNavButton /> : null}
 
               <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
 
