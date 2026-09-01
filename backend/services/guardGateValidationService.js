@@ -2058,7 +2058,8 @@ async function getSession(sessionId) {
 }
 
 async function getDashboard({ userId, role } = {}) {
-  const todayFilter = `scan_time >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date
+  // Midnight IST as timestamptz — do not use `::date AT TIME ZONE` alone (starts at 11:00 IST).
+  const todayFilter = `scan_time >= date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')
                        AT TIME ZONE 'Asia/Kolkata'`;
   const guardFilter = role === 'guard' && userId
     ? 'AND guard_user_id = $1'

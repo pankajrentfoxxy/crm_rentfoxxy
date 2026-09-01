@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
+const { generateCustomerInvoicePdf } = require('../services/customerInvoicePdfService');
 const {
   generateCustomerInvoice,
   generateAllCustomerInvoices,
@@ -13,15 +13,6 @@ const {
   recordFullPayment,
   listPayments,
 } = require('../services/paymentLedgerService');
-const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
-const { mergeCompany } = require('../utils/companyDefaults');
-
-const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
-
-function resolveRentfoxxyLogoAbs() {
-  const p = path.join(__dirname, '../assets/rentfoxxy-logo.png');
-  return fs.existsSync(p) ? p : null;
-}
 
 async function nextCreditNoteNumber() {
   const res = await pool.query(
@@ -33,133 +24,8 @@ async function nextCreditNoteNumber() {
   return res.rows[0].number;
 }
 
-// Format billing / invoice dates for PDF output (IST, explicit label).
-function fmtDate(d) {
-  return formatPdfDateIstOrDash(d);
-}
-function fmtMoney(n) {
-  return `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-async function generateInvoicePdf(invoice) {
-  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const fileName = `${invoice.invoice_number}_${Date.now()}.pdf`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
-  const relativePath = `uploads/customer-invoices/${fileName}`;
-  const lineItems = typeof invoice.line_items === 'string'
-    ? JSON.parse(invoice.line_items)
-    : (invoice.line_items || []);
-  const company = mergeCompany({ code: 'rentfoxxy' });
-  const logoAbs = resolveRentfoxxyLogoAbs();
-
-  await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
-    const stream = fs.createWriteStream(filePath);
-    doc.pipe(stream);
-
-    // ── Header (logo left, title right) ──────────────────────────────────
-    const headerY = 40;
-    let logoDrawn = false;
-    if (logoAbs) {
-      try {
-        doc.image(logoAbs, 40, headerY, { height: 34 });
-        logoDrawn = true;
-      } catch (_) { /* ignore */ }
-    }
-    if (!logoDrawn) {
-      doc.fontSize(18).font('Helvetica-Bold').fillColor('#f26b21')
-        .text('Rentfoxxy', 40, headerY + 4);
-    }
-
-    doc.fontSize(14).font('Helvetica-Bold').fillColor('#111827')
-      .text('Customer Invoice (Prepaid Rental)', 250, headerY, { width: 305, align: 'right' });
-    doc.fontSize(8).font('Helvetica').fillColor('#6b7280')
-      .text(company.legal_name || 'TRUETECH SERVICES PRIVATE LIMITED', 250, headerY + 20, {
-        width: 305,
-        align: 'right',
-      });
-
-    doc.fillColor('#000');
-    let y = headerY + 48;
-    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    y += 14;
-
-    doc.font('Helvetica').fontSize(10).fillColor('#111827');
-    const leftX = 40;
-    const rightX = 320;
-    doc.text(`Invoice No: ${invoice.invoice_number}`, leftX, y);
-    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`, rightX, y);
-    y += 14;
-    doc.text(`Invoice Date: ${fmtDate(invoice.invoice_date)}`, leftX, y);
-    if (invoice.gst_number) doc.text(`GSTIN: ${invoice.gst_number}`, rightX, y);
-    y += 14;
-    doc.text(`Billing Period: ${fmtDate(invoice.from_date)}  to  ${fmtDate(invoice.to_date)}`, leftX, y, { width: 280 });
-    doc.y = y + 20;
-
-    // ── Line item table ───────────────────────────────────────
-    const x = { idx: 40, asset: 64, item: 200, period: 330, days: 450, amount: 510 };
-    const drawHead = () => {
-      const hy = doc.y;
-      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
-      doc.text('#', x.idx, hy);
-      doc.text('TTSPL / Serial', x.asset, hy);
-      doc.text('Item', x.item, hy);
-      doc.text('Period', x.period, hy);
-      doc.text('Days', x.days, hy, { width: 50, align: 'right' });
-      doc.text('Amount', x.amount, hy, { width: 55, align: 'right' });
-      doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).strokeColor('#e5e7eb').stroke();
-      doc.moveDown(0.5);
-    };
-    drawHead();
-    doc.font('Helvetica').fontSize(9);
-
-    lineItems.forEach((line, idx) => {
-      if (doc.y > 740) { doc.addPage(); drawHead(); doc.font('Helvetica').fontSize(9); }
-      const rowY = doc.y;
-      doc.fillColor('#000').text(String(idx + 1), x.idx, rowY);
-      // TTSPL id with Serial Number directly below it
-      doc.font('Helvetica-Bold').text(line.ttspl_id || '—', x.asset, rowY, { width: 130 });
-      doc.font('Helvetica').fillColor('#555').fontSize(8)
-         .text(line.serial_number ? `SN: ${line.serial_number}` : '', x.asset, doc.y, { width: 130 });
-      doc.fillColor('#000').fontSize(9);
-      doc.text(`${line.brand || ''} ${line.model || ''}`.trim() || '—', x.item, rowY, { width: 125 });
-      doc.text(`${fmtDate(line.rent_start)} - ${fmtDate(line.rent_end)}${line.is_catchup ? '  (catch-up)' : ''}${line.returned ? '  (returned)' : ''}`,
-        x.period, rowY, { width: 118 });
-      doc.text(`${line.days_in_month}${line.month_days ? `/${line.month_days}` : ''}`, x.days, rowY, { width: 50, align: 'right' });
-      doc.text(fmtMoney(line.amount), x.amount, rowY, { width: 55, align: 'right' });
-      doc.moveDown(0.8);
-    });
-
-    doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).stroke();
-    doc.moveDown(0.6);
-
-    // ── Totals ────────────────────────────────────────────────
-    const totRow = (label, val, opts = {}) => {
-      const ty = doc.y;
-      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(opts.bold ? 11 : 10);
-      if (opts.color) doc.fillColor(opts.color);
-      doc.text(label, 360, ty, { width: 120, align: 'right' });
-      doc.text(val, 485, ty, { width: 80, align: 'right' });
-      doc.fillColor('#000');
-      doc.moveDown(0.4);
-    };
-    totRow('Subtotal', fmtMoney(invoice.subtotal));
-    totRow(`GST (${invoice.gst_percent}%)`, fmtMoney(invoice.gst_amount));
-    if (parseFloat(invoice.credit_note_adjustment) > 0) {
-      totRow('Credit Notes', `- ${fmtMoney(invoice.credit_note_adjustment)}`, { color: '#b00' });
-    }
-    totRow('Grand Total', fmtMoney(invoice.grand_total), { bold: true });
-
-    doc.end();
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
-
-  return relativePath;
-}
-
 // Exposed for tests / scripts.
-exports._generateInvoicePdf = generateInvoicePdf;
+exports._generateInvoicePdf = generateCustomerInvoicePdf;
 
 exports.ensureBillingEngineSchema = async () => {
   const sqlPath = path.join(__dirname, '../migrations/067_phase5_billing_engine.sql');
@@ -378,7 +244,16 @@ exports.sendInvoice = async (req, res) => {
     const { id } = req.params;
     const { to_email, cc_emails } = req.body || {};
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -388,7 +263,7 @@ exports.sendInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    const pdfPath = await generateInvoicePdf(invoice);
+    const pdfPath = await generateCustomerInvoicePdf(invoice);
     await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
     const to = to_email || invoice.customer_email;
     const cc = Array.isArray(cc_emails) ? cc_emails.join(',') : cc_emails;
@@ -491,7 +366,16 @@ exports.downloadInvoicePdf = async (req, res) => {
     // and made every PDF download 404). Accept either for safety.
     const id = req.params.invoiceId || req.params.id;
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name, c.gst_no AS gst_number
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -502,7 +386,7 @@ exports.downloadInvoicePdf = async (req, res) => {
     }
     const invoice = result.rows[0];
     // Always regenerate so branding/logo updates apply to existing invoices.
-    const pdfPath = await generateInvoicePdf(invoice);
+    const pdfPath = await generateCustomerInvoicePdf(invoice);
     await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
     res.download(path.join(__dirname, '..', pdfPath));
   } catch (err) {
