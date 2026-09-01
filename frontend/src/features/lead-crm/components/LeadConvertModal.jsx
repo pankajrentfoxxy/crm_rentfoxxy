@@ -45,6 +45,8 @@ export default function LeadConvertModal({ open, lead, onClose }) {
       {
         gstKey: 'gst_number',
         companyKey: 'company_name',
+        tradeNameKey: 'trade_name',
+        useTradeNameAsCompany: true,
         cityKey: 'billing_city',
         stateKey: 'billing_state',
         pinKey: 'billing_pincode',
@@ -66,6 +68,7 @@ export default function LeadConvertModal({ open, lead, onClose }) {
       email: lead.email || '',
       phone: lead.phone || '',
       gst_number: gstin,
+      trade_name: '',
       pan_number: lead.panNumber || '',
       billing_address: lead.billingAddress || '',
       billing_city: lead.city || '',
@@ -95,7 +98,8 @@ export default function LeadConvertModal({ open, lead, onClose }) {
           }
           setForm((f) => ({
             ...f,
-            company_name: info.company_name || f.company_name,
+            company_name: info.trade_name || info.company_name || f.company_name,
+            trade_name: info.trade_name || f.trade_name,
             billing_address: info.address || f.billing_address,
             billing_city: info.city || f.billing_city,
             billing_state: info.stateSelect || info.state || f.billing_state,

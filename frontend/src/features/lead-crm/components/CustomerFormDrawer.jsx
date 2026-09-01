@@ -25,7 +25,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
-  gst_number: '', pan_number: '', company_type: '', industry: '',
+  trade_name: '', gst_number: '', pan_number: '', company_type: '', industry: '',
   customer_type: 'both',
   billing_address: '', billing_city: '', billing_state: '', billing_pincode: '',
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
@@ -59,6 +59,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       {
         gstKey: 'gst_number',
         companyKey: 'company_name',
+        tradeNameKey: 'trade_name',
+        useTradeNameAsCompany: true,
         cityKey: 'billing_city',
         stateKey: 'billing_state',
         pinKey: 'billing_pincode',
@@ -78,6 +80,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       setForm({
         customer_name: contactName,
         company_name: customer.company_name || '',
+        trade_name: customer.trade_name || '',
         email: customer.email || '',
         customer_number: contactPhone,
         gst_number: customer.gst_number || '',
@@ -427,8 +430,18 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                 {gstStatus.message}
               </p>
             ) : (
-              <p className="mt-1 text-xs text-gray-400">Enter full GSTIN to autofill company &amp; billing address</p>
+              <p className="mt-1 text-xs text-gray-400">Enter full GSTIN to autofill company, trade name &amp; billing address</p>
             )}
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Trade Name</label>
+            <input
+              value={form.trade_name}
+              onChange={(e) => set('trade_name', e.target.value)}
+              placeholder="Filled from GST tradeNam"
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            />
+            <p className="mt-1 text-xs text-gray-400">From GST API tradeNam when GST is added or changed</p>
           </div>
           <div>
             <label className="text-xs text-gray-500">PAN</label>

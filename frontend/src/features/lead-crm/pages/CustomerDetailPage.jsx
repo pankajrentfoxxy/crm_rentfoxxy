@@ -498,6 +498,7 @@ export default function CustomerDetailPage() {
           <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             {[
               ['Name', customer.contact_person_name || customer.customer_name], ['Company', customer.company_name],
+              ['Trade Name', customer.trade_name],
               ['Email', customer.email], ['Phone', customer.customer_number || customer.phone],
               ['GST', customer.gst_number], ['PAN', customer.pan_number || customer.pan_card_number],
               ['Company Type', customer.company_type], ['Industry', customer.industry],

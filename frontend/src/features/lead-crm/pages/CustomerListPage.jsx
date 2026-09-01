@@ -457,6 +457,7 @@ export default function CustomerListPage() {
     { key: 'phone', header: 'Phone', render: (c) => c.customer_number || c.phone },
     { key: 'email', header: 'Email', render: (c) => c.email || '—' },
     { key: 'gst', header: 'GST', render: (c) => <span className="text-xs">{c.gst_number || '—'}</span> },
+    { key: 'trade_name', header: 'Trade Name', render: (c) => <span className="text-xs">{c.trade_name || '—'}</span> },
     { key: 'city', header: 'City', render: (c) => c.billing_city || '—' },
     { key: 'status', header: 'Status', render: statusBadge },
     { key: 'items', header: 'Items', align: 'center', render: (c) => c.active_item_count ?? 0 },

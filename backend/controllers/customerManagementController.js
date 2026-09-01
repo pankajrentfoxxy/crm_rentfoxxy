@@ -38,6 +38,22 @@ const {
   setCachedCustomerLaptops,
   invalidateCustomerLaptopsCache,
 } = require('../services/customerLaptopsCache');
+const { lookupGstin, sanitizeGstin, isValidGstin } = require('../services/gstinLookupService');
+
+/** Prefer the GST API tradeNam. Lookup is best-effort so save still works if Zoho is down. */
+async function resolveGstTradeName(gstNumber, explicitTradeName) {
+  const fromBody = String(explicitTradeName || '').trim();
+  if (fromBody) return fromBody;
+  const gstin = sanitizeGstin(gstNumber);
+  if (!isValidGstin(gstin)) return '';
+  try {
+    const info = await lookupGstin(gstin);
+    return String(info.trade_name || '').trim();
+  } catch (err) {
+    console.warn('GST tradeNam lookup skipped:', err.message);
+    return '';
+  }
+}
 
 const CUSTOMER_ASSET_SPEC_FIELDS = [
   'brand',
@@ -206,6 +222,7 @@ function formatCustomerRow(row) {
     customer_name: row.name,
     name: row.name,
     company_name: row.company_name || row.name,
+    trade_name: row.trade_name || details.trade_name || '',
     email: row.email,
     customer_number: row.phone,
     phone: row.phone,
@@ -339,6 +356,7 @@ function buildCustomerExportBaseRow(formatted, assetCount) {
     'Phone Number': formatted.customer_number || formatted.phone || '',
     Email: formatted.email || '',
     'GST Number': formatted.gst_number || '',
+    'Trade Name': formatted.trade_name || '',
     City: formatted.billing_city || '',
     'Asset Count': assetCount,
     'Finance Contact Name': formatted.finance_contact_name || '',
@@ -442,6 +460,7 @@ function buildCustomerListFilters(query = {}, allowedCustomerTypes = null) {
     conditions.push(`(
       c.name ILIKE $${idx} OR c.email ILIKE $${idx} OR c.phone ILIKE $${idx}
       OR c.gst_no ILIKE $${idx} OR c.company_name ILIKE $${idx}
+      OR c.trade_name ILIKE $${idx}
       OR c.details->>'contact_person_name' ILIKE $${idx}
       OR c.details->>'pan_card_number' ILIKE $${idx}
     )`);
@@ -566,6 +585,7 @@ exports.exportCustomersExcel = async (req, res) => {
       conditions.push(`(
         c.name ILIKE $${idx} OR c.email ILIKE $${idx} OR c.phone ILIKE $${idx}
         OR c.gst_no ILIKE $${idx} OR c.company_name ILIKE $${idx}
+        OR c.trade_name ILIKE $${idx}
         OR c.details->>'contact_person_name' ILIKE $${idx}
         OR c.details->>'pan_card_number' ILIKE $${idx}
       )`);
@@ -1251,23 +1271,24 @@ exports.storeCustomer = async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO customers (
-         name, company_name, email, phone, gst_no, address, type, customer_type, details,
+         name, company_name, trade_name, email, phone, gst_no, address, type, customer_type, details,
          billing_address, billing_city, billing_state, billing_pincode,
          shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
          pan_number, company_type, industry, whatsapp_number, designation, notes,
          status, created_at, updated_at
        )
        VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-         $10, $11, $12, $13,
-         $14, $15, $16, $17, $18,
-         $19, $20, $21, $22, $23, $24,
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14,
+         $15, $16, $17, $18, $19,
+         $20, $21, $22, $23, $24, $25,
          1, NOW(), NOW()
        )
        RETURNING *`,
       [
         body.customer_name,
         body.company_name || body.customer_name,
+        await resolveGstTradeName(body.gst_number, body.trade_name) || null,
         body.email,
         customerNumber,
         body.gst_number || null,
@@ -1328,7 +1349,7 @@ exports.updateCustomer = async (req, res) => {
     }
 
     const name = body.customer_name || body.name || row.name;
-    const companyName = body.company_name || row.company_name;
+    let companyName = body.company_name || row.company_name;
     const email = body.email ?? row.email;
     const phone = body.customer_number != null || body.phone != null
       ? normalizeIndianMobile(body.customer_number ?? body.phone)
@@ -1337,19 +1358,30 @@ exports.updateCustomer = async (req, res) => {
       ? (String(body.whatsapp_number).trim() ? normalizeIndianMobile(body.whatsapp_number) : null)
       : row.whatsapp_number;
     const gstNo = body.gst_number ?? row.gst_no;
+    const gstChanged = sanitizeGstin(gstNo) !== sanitizeGstin(row.gst_no);
+    let tradeName = row.trade_name || '';
+    if (String(body.trade_name || '').trim()) {
+      tradeName = String(body.trade_name).trim();
+    } else if (gstChanged) {
+      const resolved = await resolveGstTradeName(gstNo, '');
+      if (resolved) {
+        tradeName = resolved;
+        companyName = resolved;
+      }
+    }
     const panNumber = body.pan_number || body.pan_card_number || row.pan_number;
 
     await pool.query(
       `UPDATE customers SET
-        name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,
-        pan_number = $6, company_type = $7, company_size = $8, industry = $9,
-        billing_address = $10, billing_city = $11, billing_state = $12, billing_pincode = $13,
-        shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
-        whatsapp_number = $19, designation = $20, portal_enabled = COALESCE($21, portal_enabled),
-        notes = COALESCE($22, notes), updated_at = NOW()
-       WHERE customer_id = $23`,
+        name = $1, company_name = $2, trade_name = $3, email = $4, phone = $5, gst_no = $6,
+        pan_number = $7, company_type = $8, company_size = $9, industry = $10,
+        billing_address = $11, billing_city = $12, billing_state = $13, billing_pincode = $14,
+        shipping_same = $15, shipping_address = $16, shipping_city = $17, shipping_state = $18, shipping_pincode = $19,
+        whatsapp_number = $20, designation = $21, portal_enabled = COALESCE($22, portal_enabled),
+        notes = COALESCE($23, notes), updated_at = NOW()
+       WHERE customer_id = $24`,
       [
-        name, companyName, email, phone, gstNo, panNumber,
+        name, companyName, tradeName || null, email, phone, gstNo, panNumber,
         body.company_type ?? row.company_type,
         body.company_size ?? row.company_size,
         body.industry ?? row.industry,
