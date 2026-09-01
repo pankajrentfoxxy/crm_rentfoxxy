@@ -93,13 +93,13 @@ function mapConstitutionToCompanyType(value) {
 function normalizeGstPayload(raw, gstin) {
   const data = raw?.data || raw || {};
   const primary = data.pradr?.addr || data.adadr?.[0]?.addr || {};
-  const companyName = data.business_name || data.tradeNam || data.lgnm || data.legal_name || '';
-  const tradeName = data.tradeNam || data.trade_name || '';
+  const companyName = data.business_name || data.lgnm || data.legal_name || data.tradeNam || '';
+  const tradeName = String(data.tradeNam || data.trade_name || '').trim();
   return {
     gstin: data.gstin || gstin,
     status: data.status || null,
     company_name: companyName,
-    trade_name: tradeName && tradeName !== companyName ? tradeName : '',
+    trade_name: tradeName,
     company_type: mapConstitutionToCompanyType(data.constitution_of_business),
     address: joinAddressParts(primary),
     city: primary.dst || primary.loc || '',

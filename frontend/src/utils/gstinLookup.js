@@ -66,7 +66,11 @@ export function createGstinAutofillHandler(setForm, fieldMap = {}, opts = {}) {
       }
       setForm((f) => {
         const next = { ...f, [fieldMap.gstKey || 'gst_number']: gstin };
-        if (fieldMap.companyKey && info.company_name) next[fieldMap.companyKey] = info.company_name;
+        const companyFromGst = fieldMap.useTradeNameAsCompany
+          ? (info.trade_name || info.company_name)
+          : info.company_name;
+        if (fieldMap.companyKey && companyFromGst) next[fieldMap.companyKey] = companyFromGst;
+        if (fieldMap.tradeNameKey && info.trade_name) next[fieldMap.tradeNameKey] = info.trade_name;
         if (fieldMap.brandKey && info.trade_name) next[fieldMap.brandKey] = info.trade_name;
         if (fieldMap.cityKey && info.city) next[fieldMap.cityKey] = info.city;
         if (fieldMap.stateKey && (info.stateSelect || info.state)) {
@@ -78,7 +82,13 @@ export function createGstinAutofillHandler(setForm, fieldMap = {}, opts = {}) {
         if (fieldMap.addressKey && info.address) next[fieldMap.addressKey] = info.address;
         return next;
       });
-      onStatus?.({ type: 'success', message: info.company_name || 'GST details filled' });
+      onStatus?.({
+        type: 'success',
+        message: (fieldMap.useTradeNameAsCompany ? info.trade_name : info.company_name)
+          || info.trade_name
+          || info.company_name
+          || 'GST details filled',
+      });
     } catch (err) {
       if (my !== seq) return;
       onStatus?.({
