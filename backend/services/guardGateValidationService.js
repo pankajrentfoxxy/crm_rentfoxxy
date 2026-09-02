@@ -1355,7 +1355,11 @@ async function resolveDocumentContext(db, scan, preferredDirection) {
     if (qr.docNumber && tok.document_number !== qr.docNumber) {
       return { error: 'This QR does not match a valid gate document.' };
     }
-    const ctx = await loadDocument(db, tok.document_type, tok.document_number, preferredDirection);
+    let docType = String(tok.document_type || '').toLowerCase();
+    const docNumber = tok.document_number;
+    // Legacy/wrong tokens: RDC numbers must load as return DC, not outbound DC.
+    if (/^RDC/i.test(String(docNumber || '')) && docType === 'dc') docType = 'rdc';
+    const ctx = await loadDocument(db, docType, docNumber, preferredDirection);
     if (!ctx) return { error: 'The document on this QR could not be found.' };
     return { ctx };
   }
@@ -2057,7 +2061,7 @@ async function getSession(sessionId) {
   return sessionView(pool, r.rows[0], ctx);
 }
 
-async function getDashboard({ userId, role } = {}) {
+async function getDashboard({ userId, role, search, direction } = {}) {
   // Midnight IST as timestamptz — do not use `::date AT TIME ZONE` alone (starts at 11:00 IST).
   const todayFilter = `scan_time >= date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')
                        AT TIME ZONE 'Asia/Kolkata'`;
@@ -2065,6 +2069,9 @@ async function getDashboard({ userId, role } = {}) {
     ? 'AND guard_user_id = $1'
     : '';
   const params = role === 'guard' && userId ? [userId] : [];
+  const q = String(search || '').trim();
+  const dir = String(direction || '').toLowerCase();
+  const directionFilter = dir === 'inward' || dir === 'outward' ? dir : null;
 
   const stats = await pool.query(
     `SELECT
@@ -2084,14 +2091,34 @@ async function getDashboard({ userId, role } = {}) {
     params
   );
 
+  let recentWhere = `1=1 ${guardFilter}`;
+  const recentParams = [...params];
+  if (directionFilter) {
+    recentParams.push(directionFilter);
+    recentWhere += ` AND direction = $${recentParams.length} AND validation_result = 'valid' AND ${todayFilter}`;
+  }
+  if (q) {
+    recentParams.push(`%${q}%`);
+    const p = recentParams.length;
+    recentWhere += ` AND (
+      COALESCE(ttspl, '') ILIKE $${p}
+      OR COALESCE(serial_number, '') ILIKE $${p}
+      OR COALESCE(reference_number, '') ILIKE $${p}
+      OR COALESCE(awb_number, '') ILIKE $${p}
+      OR COALESCE(guard_name, '') ILIKE $${p}
+      OR COALESCE(source_type, '') ILIKE $${p}
+    )`;
+  }
+
+  const recentLimit = directionFilter ? 200 : (q ? 50 : 20);
   const recent = await pool.query(
     `SELECT scan_time, ttspl, serial_number, direction, source_type,
-            reference_number, validation_result, guard_name
+            reference_number, validation_result, guard_name, awb_number
        FROM gate_movements
-      WHERE 1=1 ${guardFilter}
+      WHERE ${recentWhere}
       ORDER BY scan_time DESC
-      LIMIT 20`,
-    params
+      LIMIT ${recentLimit}`,
+    recentParams
   );
 
   return {
@@ -2100,15 +2127,30 @@ async function getDashboard({ userId, role } = {}) {
     pending_validation: pending.rows[0]?.n || 0,
     invalid_today: stats.rows[0]?.invalid_today || 0,
     recent: recent.rows,
+    search: q || null,
+    direction: directionFilter,
   };
 }
 
-async function getHistory({ userId, role, limit = 50 } = {}) {
+async function getHistory({ userId, role, limit = 50, search } = {}) {
   const params = [];
   let where = '1=1';
   if (role === 'guard' && userId) {
     params.push(userId);
     where += ` AND guard_user_id = $${params.length}`;
+  }
+  const q = String(search || '').trim();
+  if (q) {
+    params.push(`%${q}%`);
+    const p = params.length;
+    where += ` AND (
+      COALESCE(ttspl, '') ILIKE $${p}
+      OR COALESCE(serial_number, '') ILIKE $${p}
+      OR COALESCE(reference_number, '') ILIKE $${p}
+      OR COALESCE(awb_number, '') ILIKE $${p}
+      OR COALESCE(guard_name, '') ILIKE $${p}
+      OR COALESCE(source_type, '') ILIKE $${p}
+    )`;
   }
   params.push(Math.min(Number(limit) || 50, 200));
   const r = await pool.query(

@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
-const { generateCustomerInvoicePdf, invoicePdfDownloadName } = require('../services/customerInvoicePdfService');
+const { ZipArchive } = require('archiver');
+const { generateCustomerInvoicePdf, invoicePdfDownloadName, uniqueCustomerPdfName } = require('../services/customerInvoicePdfService');
 const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
 const {
   generateCustomerInvoice,
@@ -481,6 +482,107 @@ exports.downloadInvoicePdf = async (req, res) => {
     );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const MONTH_NAMES = [
+  '', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+async function mapPool(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+exports.downloadInvoicesZip = async (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  if (!(month >= 1 && month <= 12) || !(year >= 2000 && year <= 2100)) {
+    return res.status(400).json({ success: false, message: 'month and year are required' });
+  }
+  const format = normalizeInvoiceFormat(req.query.format || 'laptop_details');
+  const createdFiles = [];
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const file of createdFiles) fs.unlink(file, () => {});
+  };
+  try {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const result = await pool.query(
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+        WHERE ci.invoice_month = $1
+          AND ci.invoice_year = $2
+          AND ci.status <> 'cancelled'
+        ORDER BY COALESCE(c.company_name, c.name, ci.invoice_number)`,
+      [month, year]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'No invoices found for that month' });
+    }
+
+    const generated = await mapPool(result.rows, 3, async (invoice) => {
+      const pdfPath = await generateCustomerInvoicePdf(invoice, { format });
+      const abs = path.join(__dirname, '..', pdfPath);
+      createdFiles.push(abs);
+      return { invoice, abs };
+    });
+
+    const monthLabel = MONTH_NAMES[month] || String(month);
+    const zipName = `Laptop-Rental-Documents-${monthLabel}-${year}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+      else res.end();
+    });
+    archive.pipe(res);
+    res.on('finish', cleanup);
+    res.on('close', cleanup);
+
+    const usedNames = new Set();
+    for (const item of generated) {
+      archive.file(item.abs, {
+        name: uniqueCustomerPdfName(
+          item.invoice.customer_name || item.invoice.customer_contact_name,
+          item.invoice.invoice_number,
+          usedNames,
+        ),
+      });
+    }
+    await archive.finalize();
+  } catch (err) {
+    cleanup();
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    } else {
+      res.end();
+    }
   }
 };
 

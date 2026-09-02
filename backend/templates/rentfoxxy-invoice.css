@@ -172,6 +172,11 @@ td, th { vertical-align: top; }
   font-size: 9.5pt;
   margin-top: 4px;
 }
+.variant-laptop-details .ld-qty {
+  color: var(--muted);
+  font-size: 9.5pt;
+  margin-top: 4px;
+}
 .variant-laptop-details .ld-doc-label {
   color: var(--muted);
   font-size: 8.5pt;

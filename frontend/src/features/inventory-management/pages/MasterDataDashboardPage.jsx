@@ -12,6 +12,7 @@ import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   exportMasterDataExcel,
+  fetchMasterDataColumnValues,
   fetchMasterDataDashboard,
   fetchMasterDataKpis,
   setVendorExcludeFromVendorPo,
@@ -20,6 +21,14 @@ import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDraw
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 import { deliveryChallanDetailPath } from '../../sales-pipeline/salesPipelineUtils';
+import SheetsColumnFilter from '../../../components/ui/SheetsColumnFilter';
+import {
+  clearColumnFilterParams,
+  columnFiltersToParams,
+  LAPTOP_TABLE_COLUMNS,
+  MD_COLUMN_TYPES,
+  readColumnFiltersFromParams,
+} from '../masterDataColumnFilters';
 
 const PAGE_SIZE = 25;
 const TABS = [
@@ -267,6 +276,9 @@ export default function MasterDataDashboardPage() {
   const month = months.join(',');
   const specFilters = useMemo(() => readSpecFilters(searchParams), [searchParams]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
+  const queryKey = searchParams.toString();
+  const columnFilters = useMemo(() => readColumnFiltersFromParams(searchParams), [queryKey]);
+  const columnFilterParams = useMemo(() => columnFiltersToParams(columnFilters), [columnFilters]);
 
   const patchParams = useCallback((patch, { resetPage = true } = {}) => {
     setSearchParams((prev) => {
@@ -338,6 +350,11 @@ export default function MasterDataDashboardPage() {
     dateFrom, dateTo, customerId, vendorId, fromVendor, ready, qcProcess, debouncedSpecs,
   ]);
 
+  const listFilterParams = useMemo(() => ({
+    ...tabFilterParams,
+    ...columnFilterParams,
+  }), [tabFilterParams, columnFilterParams]);
+
   const loadKpis = useCallback(async () => {
     const reqId = ++kpiReqRef.current;
     setKpiLoading(true);
@@ -357,8 +374,9 @@ export default function MasterDataDashboardPage() {
   const loadTab = useCallback(async () => {
     const reqId = ++tabReqRef.current;
     setLoading(true);
+    const params = tab === 'laptops' ? listFilterParams : tabFilterParams;
     try {
-      const { data } = await fetchMasterDataDashboard(tabFilterParams);
+      const { data } = await fetchMasterDataDashboard(params);
       if (reqId !== tabReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       if (data.tab === 'laptops') {
@@ -379,10 +397,31 @@ export default function MasterDataDashboardPage() {
     } finally {
       if (reqId === tabReqRef.current) setLoading(false);
     }
-  }, [tabFilterParams]);
+  }, [tab, listFilterParams, tabFilterParams]);
 
   useEffect(() => { loadKpis(); }, [loadKpis]);
   useEffect(() => { loadTab(); }, [loadTab]);
+
+  const fetchColumnOptions = useCallback(async (columnKey) => {
+    const { data } = await fetchMasterDataColumnValues({ ...listFilterParams, column: columnKey });
+    return data?.values || [];
+  }, [listFilterParams]);
+
+  const applyColumnFilter = useCallback((columnKey, filter) => {
+    setSearchParams((prev) => {
+      const next = clearColumnFilterParams(prev);
+      const merged = { ...readColumnFiltersFromParams(prev) };
+      if (filter) merged[columnKey] = filter;
+      else delete merged[columnKey];
+      Object.entries(columnFiltersToParams(merged)).forEach(([k, v]) => next.set(k, v));
+      next.delete('page');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearColumnFilter = useCallback((columnKey) => {
+    applyColumnFilter(columnKey, null);
+  }, [applyColumnFilter]);
 
   useEffect(() => {
     fetchMasterDataDashboard({ tab: 'floor' })
@@ -580,7 +619,8 @@ export default function MasterDataDashboardPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const { page: _page, limit: _limit, ...exportParams } = tabFilterParams;
+      const params = tab === 'laptops' ? listFilterParams : tabFilterParams;
+      const { page: _page, limit: _limit, ...exportParams } = params;
       await exportMasterDataExcel(exportParams);
       toast.success('Export downloaded');
     } catch (e) {
@@ -602,7 +642,7 @@ export default function MasterDataDashboardPage() {
           label="Total Laptops"
           value={kpiLoading ? '…' : (kpis.total_laptops ?? '—')}
           icon={Laptop}
-          hint="Click to open all laptops"
+          hint="Every laptop on a purchase order"
           onClick={openAllLaptops}
           active={tab === 'laptops' && !location && !fromVendor && !ready && !qcProcess && !customerId && !vendorId && !pricingType}
         />
@@ -620,7 +660,7 @@ export default function MasterDataDashboardPage() {
           value={kpiLoading ? '…' : (kpis.total_from_vendors ?? '—')}
           icon={Building2}
           tone="purple"
-          hint="Click to open laptop list"
+          hint="Counted vendor POs (exclusions hidden)"
           onClick={openFromVendorList}
           active={fromVendor && tab === 'laptops' && !ready && !qcProcess && !pricingType}
         />
@@ -918,21 +958,19 @@ export default function MasterDataDashboardPage() {
             <table className="w-full text-xs min-w-[1200px]">
               <thead className="bg-slate-50 text-slate-500 uppercase">
                 <tr>
-                  {[
-                    'TTSPL', 'Serial', 'Specs', 'Status', 'Location',
-                    'Current Customer', 'Vendor', 'Vendor Type', 'Vendor Price', 'Customer Price',
-                    'Stage', 'SO', 'DC', 'PO', 'GRN',
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      className={`px-2 py-2 text-left whitespace-nowrap ${
-                        ['Current Customer', 'Vendor', 'Vendor Type', 'Vendor Price', 'Customer Price'].includes(h)
-                          ? 'bg-teal-50 text-teal-800'
-                          : ''
-                      }`}
-                    >
-                      {h}
-                    </th>
+                  {LAPTOP_TABLE_COLUMNS.map((col) => (
+                    <SheetsColumnFilter
+                      key={col.key}
+                      columnKey={col.key}
+                      label={col.label}
+                      filterType={MD_COLUMN_TYPES[col.key] || 'text'}
+                      align={col.align}
+                      className={`px-2 py-2 whitespace-nowrap ${col.highlight ? 'bg-teal-50 text-teal-800' : ''}`}
+                      activeFilter={columnFilters[col.key]}
+                      onApplyFilter={applyColumnFilter}
+                      onClearFilter={clearColumnFilter}
+                      fetchOptions={fetchColumnOptions}
+                    />
                   ))}
                 </tr>
               </thead>

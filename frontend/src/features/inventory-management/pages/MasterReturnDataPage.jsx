@@ -12,11 +12,20 @@ import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   exportReturnMasterExcel,
+  fetchReturnMasterColumnValues,
   fetchReturnMasterLaptops,
   fetchReturnMasterOverview,
 } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
+import SheetsColumnFilter from '../../../components/ui/SheetsColumnFilter';
+import {
+  clearColumnFilterParams,
+  columnFiltersToParams,
+  LAPTOP_TABLE_COLUMNS,
+  readColumnFiltersFromParams,
+  RMD_COLUMN_TYPES,
+} from '../returnMasterColumnFilters';
 
 const PAGE_SIZE = 25;
 
@@ -166,6 +175,8 @@ export default function MasterReturnDataPage() {
   const months = useMemo(() => readCsvParam(searchParams, 'month'), [month]);
   const specFilters = useMemo(() => readSpecFilters(searchParams), [queryKey]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
+  const columnFilters = useMemo(() => readColumnFiltersFromParams(searchParams), [queryKey]);
+  const columnFilterParams = useMemo(() => columnFiltersToParams(columnFilters), [columnFilters]);
 
   const patchParams = useCallback((patch, { resetPage = true } = {}) => {
     setSearchParams((prev) => {
@@ -211,6 +222,11 @@ export default function MasterReturnDataPage() {
     dateMode, month, dateFrom, dateTo, debouncedSpecs,
   ]);
 
+  const listFilterParams = useMemo(() => ({
+    ...filterParams,
+    ...columnFilterParams,
+  }), [filterParams, columnFilterParams]);
+
   const loadOverview = useCallback(async () => {
     const reqId = ++overviewReqRef.current;
     setOverviewLoading(true);
@@ -233,7 +249,7 @@ export default function MasterReturnDataPage() {
     const reqId = ++listReqRef.current;
     setListLoading(true);
     try {
-      const { data } = await fetchReturnMasterLaptops({ ...filterParams, page, limit: PAGE_SIZE });
+      const { data } = await fetchReturnMasterLaptops({ ...listFilterParams, page, limit: PAGE_SIZE });
       if (reqId !== listReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       setRows(data.data || []);
@@ -244,7 +260,7 @@ export default function MasterReturnDataPage() {
     } finally {
       if (reqId === listReqRef.current) setListLoading(false);
     }
-  }, [filterParams, page]);
+  }, [listFilterParams, page]);
 
   useEffect(() => {
     const key = JSON.stringify(filterParams);
@@ -254,11 +270,32 @@ export default function MasterReturnDataPage() {
   }, [filterParams, loadOverview]);
 
   useEffect(() => {
-    const key = JSON.stringify({ ...filterParams, page });
+    const key = JSON.stringify({ ...listFilterParams, page });
     if (lastListKey.current === key) return;
     lastListKey.current = key;
     loadList();
-  }, [filterParams, page, loadList]);
+  }, [listFilterParams, page, loadList]);
+
+  const fetchColumnOptions = useCallback(async (columnKey) => {
+    const { data } = await fetchReturnMasterColumnValues({ ...listFilterParams, column: columnKey });
+    return data?.values || [];
+  }, [listFilterParams]);
+
+  const applyColumnFilter = useCallback((columnKey, filter) => {
+    setSearchParams((prev) => {
+      const next = clearColumnFilterParams(prev);
+      const merged = { ...readColumnFiltersFromParams(prev) };
+      if (filter) merged[columnKey] = filter;
+      else delete merged[columnKey];
+      Object.entries(columnFiltersToParams(merged)).forEach(([k, v]) => next.set(k, v));
+      next.delete('page');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearColumnFilter = useCallback((columnKey) => {
+    applyColumnFilter(columnKey, null);
+  }, [applyColumnFilter]);
 
   const clearFilters = () => {
     setSearchInput('');
@@ -298,7 +335,7 @@ export default function MasterReturnDataPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      await exportReturnMasterExcel(filterParams);
+      await exportReturnMasterExcel(listFilterParams);
       toast.success('Export downloaded');
     } catch (e) {
       toast.error(e.response?.data?.message || 'Export failed');
@@ -637,19 +674,19 @@ export default function MasterReturnDataPage() {
             <table className="w-full text-sm min-w-[1600px]">
               <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
-                  <th className="px-3 py-2 text-left">TTSPL</th>
-                  <th className="px-3 py-2 text-left">Serial</th>
-                  <th className="px-3 py-2 text-left">Previous Customer</th>
-                  <th className="px-3 py-2 text-left">Return Date</th>
-                  <th className="px-3 py-2 text-left">Return DC</th>
-                  <th className="px-3 py-2 text-left">Return Type</th>
-                  <th className="px-3 py-2 text-left">Brand / Model</th>
-                  <th className="px-3 py-2 text-left">Specs</th>
-                  <th className="px-3 py-2 text-left">Current Status</th>
-                  <th className="px-3 py-2 text-left">Current Location</th>
-                  <th className="px-3 py-2 text-left">Current Customer</th>
-                  <th className="px-3 py-2 text-left">Production Stage</th>
-                  <th className="px-3 py-2 text-left">Last Movement</th>
+                  {LAPTOP_TABLE_COLUMNS.map((col) => (
+                    <SheetsColumnFilter
+                      key={col.key}
+                      columnKey={col.key}
+                      label={col.label}
+                      filterType={RMD_COLUMN_TYPES[col.key] || 'text'}
+                      align={col.align}
+                      activeFilter={columnFilters[col.key]}
+                      onApplyFilter={applyColumnFilter}
+                      onClearFilter={clearColumnFilter}
+                      fetchOptions={fetchColumnOptions}
+                    />
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y">

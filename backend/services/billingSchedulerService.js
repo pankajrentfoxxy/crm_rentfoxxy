@@ -17,6 +17,15 @@ const {
   insertCustomerInvoiceLines,
   insertVendorBillLines,
 } = require('./billingLineItemsService');
+const {
+  isSecurityLine,
+  rentalLinesSubtotal,
+  securityLinesSubtotal,
+  previousMonthRange,
+  deliveryInPreviousMonth,
+  collectUnbilledSecurityLines,
+  recordSecurityDeposits,
+} = require('./billingSecurityService');
 
 const billingLog = logger.child ? logger.child({ module: 'billing' }) : logger;
 
@@ -81,16 +90,84 @@ async function runBillingBatch(runName, fn) {
 }
 
 /**
+ * Latest warehouse-received customer return for this customer, ignoring a later
+ * re-delivery to the same customer. Customer Active already uses this rule;
+ * billing must too — VSN can stay `rented` after warehouse e-sign.
+ */
+async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
+  const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
+  const bySerial = new Map();
+  if (!customerId || !ids.length) return bySerial;
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (vsn.serial_id)
+            vsn.serial_id,
+            (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date::text AS return_date
+       FROM vendor_serial_numbers vsn
+       JOIN support_ticket_items sti
+         ON sti.item_type = 'pickup'
+        AND COALESCE(sti.pickup_type, '') <> 'repair'
+        AND sti.warehouse_received_at IS NOT NULL
+        AND (
+          sti.ttspl_id = vsn.inventory_asset_code
+          OR sti.unique_serial_number = vsn.inventory_asset_code
+          OR sti.serial_number = vsn.serial_number
+        )
+       JOIN delivery_challan_lines rl
+         ON rl.dc_number = sti.return_dc_number
+        AND rl.movement_type = 'return'
+        AND rl.customer_id = $1
+        AND COALESCE(rl.status, '') NOT IN ('cancelled')
+      WHERE vsn.serial_id = ANY($2::int[])
+        AND NOT EXISTS (
+          SELECT 1
+            FROM delivery_challan_lines o
+           WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
+             AND o.customer_id = $1
+             AND COALESCE(o.status, '') NOT IN ('cancelled')
+             AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+             AND COALESCE(o.delivered_at, o.created_at) > sti.warehouse_received_at
+        )
+      ORDER BY vsn.serial_id, sti.warehouse_received_at DESC`,
+    [customerId, ids]
+  );
+  for (const row of rows) {
+    const parsed = parseInvoiceLineDate(row.return_date);
+    if (parsed) bySerial.set(Number(row.serial_id), parsed);
+  }
+  return bySerial;
+}
+
+function recalcRentalLineToEnd(line, newEnd) {
+  const start = parseInvoiceLineDate(line.rent_start);
+  const monthDays = Number(
+    line.month_days
+    || new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate()
+  );
+  const days = daysInclusive(start, newEnd);
+  const monthlyRate = parseFloat(line.monthly_rate || 0);
+  const dailyRate = monthDays ? monthlyRate / monthDays : 0;
+  return {
+    ...line,
+    rent_end: toLocalYmd(newEnd),
+    days_in_month: days,
+    month_days: monthDays,
+    daily_rate: parseFloat(dailyRate.toFixed(2)),
+    amount: parseFloat((dailyRate * days).toFixed(2)),
+    returned: true,
+  };
+}
+
+/**
  * Build prorated line items for unbilled rental serials and advance rent_billed_until.
  * Mutates serial rows via the open transaction client.
  */
 async function buildCustomerInvoiceLines(client, {
   customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts = false,
 }) {
-  // Mid-month starts wait for the NEXT month as catch-up
-  // (sent 10 Aug → Sept invoice bills 10–31 Aug + 1–30 Sep).
+  // Deliveries in the invoice month wait for the NEXT month as catch-up
+  // (sent 10 Aug or 1 Sep → next invoice bills that start span + the new month).
   // includeCurrentMonthStarts is only for rare same-month backfills.
-  const startCutoff = includeCurrentMonthStarts ? monthEnd : monthStart;
+  const startCutoff = includeCurrentMonthStarts ? monthEnd : addDays(monthStart, -1);
   const serialsRes = await client.query(
     `SELECT vsn.serial_id,
             COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -98,6 +175,8 @@ async function buildCustomerInvoiceLines(client, {
             vsn.current_dc_number AS dc_number,
             vsn.inventory_status,
             vsn.rent_start_date,
+            vsn.delivered_at,
+            vsn.dispatched_at,
             vsn.rent_billed_until,
             CASE
               WHEN vsn.inventory_status = 'returned'
@@ -127,16 +206,33 @@ async function buildCustomerInvoiceLines(client, {
   let subtotal = 0;
   let periodStart = null;
   let periodEnd = null;
+  const warehouseReturnBySerial = await loadCustomerWarehouseReturnDates(
+    client,
+    customerId,
+    serialsRes.rows.map((row) => row.serial_id)
+  );
 
   for (const row of serialsRes.rows) {
     const rentStart = new Date(row.rent_start_date);
     const billedUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
     const rentEndRaw = row.rent_end_date ? new Date(row.rent_end_date) : null;
     // Ignore a leftover return date from a previous rental cycle.
-    const rentEnd = rentEndRaw && rentEndRaw >= rentStart ? rentEndRaw : null;
+    let rentEnd = rentEndRaw && rentEndRaw >= rentStart ? rentEndRaw : null;
+    const warehouseReturn = warehouseReturnBySerial.get(Number(row.serial_id));
+    if (warehouseReturn && (!rentEnd || warehouseReturn < rentEnd)) {
+      rentEnd = warehouseReturn;
+    }
 
     let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
     if (billStart < rentStart) billStart = rentStart;
+
+    // July (or earlier) deliveries were already billed on the 1st of the
+    // following month. Do not recreate that prior month as catch-up here.
+    const deliveryYmd = toLocalYmd(new Date(row.delivered_at || row.rent_start_date || row.dispatched_at));
+    const { prevStart } = previousMonthRange(month, year);
+    if (!includeCurrentMonthStarts && deliveryYmd < toLocalYmd(prevStart) && billStart < monthStart) {
+      billStart = new Date(monthStart);
+    }
 
     let billEnd = monthEnd;
     if (rentEnd && rentEnd < billEnd) billEnd = rentEnd;
@@ -170,7 +266,7 @@ async function buildCustomerInvoiceLines(client, {
         daily_rate: parseFloat(dailyRate.toFixed(2)),
         amount,
         is_catchup: isCatchup,
-        returned: row.inventory_status === 'returned',
+        returned: row.inventory_status === 'returned' || Boolean(warehouseReturn),
       });
     }
 
@@ -223,10 +319,10 @@ function linePeriodBounds(lines) {
 }
 
 /**
- * Mid-month starts belong on the NEXT month as catch-up (e.g. sent 10 Aug →
- * Sept invoice bills 10–31 Aug catch-up + 1–30 Sep). On-delivery used to put
- * those days on the August invoice, so Sept generate saw billed_until=31 Aug
- * and created no catch-up. Move still-draft start-month lines forward.
+ * First-month rental (delivered in the previous invoice month, including the 1st)
+ * belongs on the NEXT month as catch-up (sent 10 Aug or 1 Sep → next invoice).
+ * Move still-draft start-month rental lines forward. Security stays put —
+ * it is reconciled separately to the previous calendar month only.
  */
 async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, month, year }) {
   const prevEnd = new Date(year, month - 1, 0);
@@ -247,11 +343,36 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
   if (String(inv.status || '').toLowerCase() !== 'draft') return [];
 
   const lines = invoiceLinesArray(inv.line_items);
+  const rentalSerialIds = [...new Set(
+    lines.filter((line) => !isSecurityLine(line)).map((line) => Number(line.serial_id)).filter((id) => id > 0)
+  )];
+  let firstMonthIds = new Set();
+  if (rentalSerialIds.length) {
+    const starts = await client.query(
+      `SELECT serial_id
+         FROM vendor_serial_numbers
+        WHERE serial_id = ANY($1::int[])
+          AND COALESCE(delivered_at::date, rent_start_date, dispatched_at::date) >= $2::date
+          AND COALESCE(delivered_at::date, rent_start_date, dispatched_at::date) <= $3::date`,
+      [rentalSerialIds, toLocalYmd(prevStart), toLocalYmd(prevEnd)]
+    );
+    firstMonthIds = new Set(starts.rows.map((row) => Number(row.serial_id)));
+  }
+
   const stay = [];
   const move = [];
   for (const line of lines) {
+    if (isSecurityLine(line)) {
+      stay.push(line);
+      continue;
+    }
+    if (firstMonthIds.has(Number(line.serial_id))) {
+      move.push({ ...line, is_catchup: true, period: expectedPeriod });
+      continue;
+    }
     const start = parseInvoiceLineDate(line.rent_start);
-    const midStart = start
+    const midStart = !line.serial_id
+      && start
       && start.getFullYear() === prevYear
       && start.getMonth() + 1 === prevMonth
       && start.getDate() > 1;
@@ -265,11 +386,12 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
   }
   if (!move.length) return [];
 
-  const staySubtotal = parseFloat(stay.reduce((sum, line) => sum + Number(line.amount || 0), 0).toFixed(2));
+  const staySubtotal = rentalLinesSubtotal(stay);
+  const securityDeposit = securityLinesSubtotal(stay);
   const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
   const credit = parseFloat(inv.credit_note_adjustment || 0);
-  const money = invoiceMoneyTotals(staySubtotal, gstPercent, credit);
-  const bounds = linePeriodBounds(stay);
+  const money = invoiceMoneyTotals(staySubtotal, gstPercent, credit, securityDeposit);
+  const bounds = linePeriodBounds(stay.filter((line) => !isSecurityLine(line)));
 
   await client.query(
     `UPDATE customer_invoices
@@ -277,15 +399,17 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
             subtotal = $2,
             gst_amount = $3,
             grand_total = $4,
-            from_date = $5,
-            to_date = $6,
+            security_deposit = $5,
+            from_date = $6,
+            to_date = $7,
             updated_at = NOW()
-      WHERE invoice_id = $7`,
+      WHERE invoice_id = $8`,
     [
       JSON.stringify(stay),
       staySubtotal.toFixed(2),
       money.gstAmount,
       money.grandTotal,
+      securityDeposit.toFixed(2),
       toLocalYmd(bounds.fromDate || prevStart),
       toLocalYmd(bounds.toDate || prevEnd),
       inv.invoice_id,
@@ -297,13 +421,14 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
   await client.query(
     `DELETE FROM customer_invoice_lines
       WHERE invoice_id = $1
-        AND COALESCE(period_label, $2) = $2
-        AND rent_start > $3::date
+        AND COALESCE(line_type, 'rental') <> 'security'
+        AND rent_start >= $2::date
+        AND rent_start <= $3::date
         AND (
           (serial_id IS NOT NULL AND serial_id = ANY($4::int[]))
           OR (ttspl_id IS NOT NULL AND ttspl_id = ANY($5::text[]))
         )`,
-    [inv.invoice_id, expectedPeriod, toLocalYmd(prevStart), serialIds, ttspls]
+    [inv.invoice_id, toLocalYmd(prevStart), toLocalYmd(prevEnd), serialIds, ttspls]
   );
 
   billingLog.info(
@@ -314,7 +439,7 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
       month,
       year,
     },
-    'Moved mid-month start lines to next-month catch-up'
+    'Moved first-month start lines to next-month catch-up'
   );
   return move;
 }
@@ -327,10 +452,11 @@ async function mergeCatchupOntoDraft(client, inv, catchupLines) {
   if (!extra.length) return inv;
 
   const merged = [...extra, ...existing];
-  const subtotal = parseFloat(merged.reduce((sum, line) => sum + Number(line.amount || 0), 0).toFixed(2));
+  const subtotal = rentalLinesSubtotal(merged);
+  const securityDeposit = securityLinesSubtotal(merged);
   const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
   const credit = parseFloat(inv.credit_note_adjustment || 0);
-  const money = invoiceMoneyTotals(subtotal, gstPercent, credit);
+  const money = invoiceMoneyTotals(subtotal, gstPercent, credit, securityDeposit);
   const bounds = linePeriodBounds(merged);
 
   await insertCustomerInvoiceLines(client, inv.invoice_id, extra);
@@ -340,15 +466,17 @@ async function mergeCatchupOntoDraft(client, inv, catchupLines) {
             subtotal = $2,
             gst_amount = $3,
             grand_total = $4,
-            from_date = $5,
-            to_date = $6,
+            security_deposit = $5,
+            from_date = $6,
+            to_date = $7,
             updated_at = NOW()
-      WHERE invoice_id = $7`,
+      WHERE invoice_id = $8`,
     [
       JSON.stringify(merged),
       subtotal.toFixed(2),
       money.gstAmount,
       money.grandTotal,
+      securityDeposit.toFixed(2),
       toLocalYmd(bounds.fromDate || new Date(inv.from_date)),
       toLocalYmd(bounds.toDate || new Date(inv.to_date)),
       inv.invoice_id,
@@ -360,16 +488,501 @@ async function mergeCatchupOntoDraft(client, inv, catchupLines) {
     subtotal,
     gst_amount: money.gstAmount,
     grand_total: money.grandTotal,
+    security_deposit: securityDeposit,
   };
 }
 
-function invoiceMoneyTotals(subtotal, gstPercent, creditAdjustment) {
+function invoiceMoneyTotals(subtotal, gstPercent, creditAdjustment, securityDeposit = 0) {
   const gstAmount = parseFloat((Number(subtotal || 0) * Number(gstPercent || 0) / 100).toFixed(2));
   const grandTotal = Math.max(
     0,
-    parseFloat((Number(subtotal || 0) + gstAmount - Number(creditAdjustment || 0)).toFixed(2))
+    parseFloat((
+      Number(subtotal || 0)
+      + gstAmount
+      - Number(creditAdjustment || 0)
+      + Number(securityDeposit || 0)
+    ).toFixed(2))
   );
   return { gstAmount, grandTotal };
+}
+
+/**
+ * Same-month deliveries (including the 1st) stay off this month's draft.
+ * Rewind rent_billed_until so the next invoice can bill that first span.
+ */
+async function stripSameMonthStartRentalsFromDraft(client, inv, month, year) {
+  if (!inv || String(inv.status || '').toLowerCase() !== 'draft') {
+    return { stripped: 0, inv };
+  }
+  const monthStart = new Date(year, month - 1, 1);
+  const monthEnd = new Date(year, month, 0);
+  const lines = invoiceLinesArray(inv.line_items);
+  const rental = lines.filter((line) => !isSecurityLine(line));
+  const security = lines.filter(isSecurityLine);
+  const serialIds = [...new Set(rental.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+  if (!serialIds.length) return { stripped: 0, inv };
+
+  const starts = await client.query(
+    `SELECT serial_id
+       FROM vendor_serial_numbers
+      WHERE serial_id = ANY($1::int[])
+        AND rent_start_date >= $2::date
+        AND rent_start_date <= $3::date`,
+    [serialIds, toLocalYmd(monthStart), toLocalYmd(monthEnd)]
+  );
+  const dropIds = new Set(starts.rows.map((row) => Number(row.serial_id)));
+  if (!dropIds.size) return { stripped: 0, inv };
+
+  const keep = rental.filter((line) => !dropIds.has(Number(line.serial_id)));
+  const drop = rental.filter((line) => dropIds.has(Number(line.serial_id)));
+  if (!drop.length) return { stripped: 0, inv };
+
+  const dropSerialIds = [...dropIds];
+  await client.query(
+    `UPDATE vendor_serial_numbers
+        SET rent_billed_until = NULL,
+            updated_at = NOW()
+      WHERE serial_id = ANY($1::int[])
+        AND rent_start_date >= $2::date
+        AND rent_start_date <= $3::date`,
+    [dropSerialIds, toLocalYmd(monthStart), toLocalYmd(monthEnd)]
+  );
+  await client.query(
+    `DELETE FROM customer_invoice_lines
+      WHERE invoice_id = $1
+        AND COALESCE(line_type, 'rental') <> 'security'
+        AND serial_id = ANY($2::int[])`,
+    [inv.invoice_id, dropSerialIds]
+  );
+
+  const merged = [...keep, ...security];
+  const subtotal = rentalLinesSubtotal(merged);
+  const securityDeposit = securityLinesSubtotal(merged);
+  const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+  const credit = parseFloat(inv.credit_note_adjustment || 0);
+  const money = invoiceMoneyTotals(subtotal, gstPercent, credit, securityDeposit);
+  const bounds = linePeriodBounds(keep);
+
+  await client.query(
+    `UPDATE customer_invoices
+        SET line_items = $1::jsonb,
+            subtotal = $2,
+            gst_amount = $3,
+            grand_total = $4,
+            security_deposit = $5,
+            from_date = $6,
+            to_date = $7,
+            updated_at = NOW()
+      WHERE invoice_id = $8`,
+    [
+      JSON.stringify(merged),
+      subtotal.toFixed(2),
+      money.gstAmount,
+      money.grandTotal,
+      securityDeposit.toFixed(2),
+      toLocalYmd(bounds.fromDate || monthStart),
+      toLocalYmd(bounds.toDate || monthEnd),
+      inv.invoice_id,
+    ]
+  );
+  billingLog.info(
+    {
+      invoiceNumber: inv.invoice_number,
+      stripped: drop.length,
+      serials: dropSerialIds,
+      month,
+      year,
+    },
+    'Removed same-month delivery rental lines from draft'
+  );
+  return {
+    stripped: drop.length,
+    inv: {
+      ...inv,
+      line_items: merged,
+      subtotal,
+      gst_amount: money.gstAmount,
+      grand_total: money.grandTotal,
+      security_deposit: securityDeposit,
+    },
+  };
+}
+
+async function persistDraftInvoiceLines(client, inv, merged, fallbackStart, fallbackEnd) {
+  const subtotal = rentalLinesSubtotal(merged);
+  const securityDeposit = securityLinesSubtotal(merged);
+  const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+  const credit = parseFloat(inv.credit_note_adjustment || 0);
+  const money = invoiceMoneyTotals(subtotal, gstPercent, credit, securityDeposit);
+  const bounds = linePeriodBounds(merged.filter((line) => !isSecurityLine(line)));
+  await client.query(
+    `UPDATE customer_invoices
+        SET line_items = $1::jsonb,
+            subtotal = $2,
+            gst_amount = $3,
+            grand_total = $4,
+            security_deposit = $5,
+            from_date = $6,
+            to_date = $7,
+            updated_at = NOW()
+      WHERE invoice_id = $8`,
+    [
+      JSON.stringify(merged),
+      subtotal.toFixed(2),
+      money.gstAmount,
+      money.grandTotal,
+      securityDeposit.toFixed(2),
+      toLocalYmd(bounds.fromDate || fallbackStart),
+      toLocalYmd(bounds.toDate || fallbackEnd),
+      inv.invoice_id,
+    ]
+  );
+  return {
+    ...inv,
+    line_items: merged,
+    subtotal,
+    gst_amount: money.gstAmount,
+    grand_total: money.grandTotal,
+    security_deposit: securityDeposit,
+  };
+}
+
+/**
+ * Catch-up for months before the invoice month only applies when the laptop
+ * was delivered in the previous calendar month. July deliveries were already
+ * billed on 1 August — drop those leftover catch-up lines from September.
+ */
+async function stripEarlyDeliveryCatchupFromDraft(client, inv, month, year) {
+  if (!inv || String(inv.status || '').toLowerCase() !== 'draft') {
+    return { stripped: 0, inv };
+  }
+  const monthStart = new Date(year, month - 1, 1);
+  const monthEnd = new Date(year, month, 0);
+  const { prevStart } = previousMonthRange(month, year);
+  const monthStartYmd = toLocalYmd(monthStart);
+  const prevStartYmd = toLocalYmd(prevStart);
+  const lines = invoiceLinesArray(inv.line_items);
+  const rental = lines.filter((line) => !isSecurityLine(line));
+  const security = lines.filter(isSecurityLine);
+  const serialIds = [...new Set(rental.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+  if (!serialIds.length) return { stripped: 0, inv };
+
+  const starts = await client.query(
+    `SELECT serial_id,
+            COALESCE(delivered_at::date, rent_start_date, dispatched_at::date)::text AS delivery_date
+       FROM vendor_serial_numbers
+      WHERE serial_id = ANY($1::int[])`,
+    [serialIds]
+  );
+  const deliveryById = new Map(
+    starts.rows.map((row) => [Number(row.serial_id), String(row.delivery_date || '').slice(0, 10)])
+  );
+
+  const keep = [];
+  const drop = [];
+  for (const line of rental) {
+    const lineStart = String(line.rent_start || '').slice(0, 10);
+    const delivery = deliveryById.get(Number(line.serial_id)) || '';
+    if (lineStart && lineStart < monthStartYmd && delivery && delivery < prevStartYmd) {
+      drop.push(line);
+    } else {
+      keep.push(line);
+    }
+  }
+  if (!drop.length) return { stripped: 0, inv };
+
+  const dropSerialIds = [...new Set(drop.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+  const dropStarts = [...new Set(drop.map((line) => String(line.rent_start || '').slice(0, 10)).filter(Boolean))];
+  await client.query(
+    `DELETE FROM customer_invoice_lines
+      WHERE invoice_id = $1
+        AND COALESCE(line_type, 'rental') <> 'security'
+        AND serial_id = ANY($2::int[])
+        AND rent_start = ANY($3::date[])`,
+    [inv.invoice_id, dropSerialIds, dropStarts]
+  );
+
+  const nextInv = await persistDraftInvoiceLines(client, inv, [...keep, ...security], monthStart, monthEnd);
+  billingLog.info(
+    {
+      invoiceNumber: inv.invoice_number,
+      stripped: drop.length,
+      serials: dropSerialIds,
+      month,
+      year,
+    },
+    'Removed pre-window catch-up rental lines from draft'
+  );
+  return { stripped: drop.length, inv: nextInv };
+}
+
+/**
+ * Drop or cap draft rental lines after a warehouse-received return for this
+ * customer. Inventory can still say `rented`; the customer page already hides
+ * these units from Active.
+ */
+async function stripWarehouseReturnedRentalsFromDraft(client, inv, month, year) {
+  if (!inv || String(inv.status || '').toLowerCase() !== 'draft') {
+    return { stripped: 0, inv };
+  }
+  const monthStart = new Date(year, month - 1, 1);
+  const monthEnd = new Date(year, month, 0);
+  const customerRes = await client.query(
+    `SELECT customer_id FROM customer_invoices WHERE invoice_id = $1`,
+    [inv.invoice_id]
+  );
+  const customerId = customerRes.rows[0]?.customer_id;
+  const lines = invoiceLinesArray(inv.line_items);
+  const rental = lines.filter((line) => !isSecurityLine(line));
+  const security = lines.filter(isSecurityLine);
+  const serialIds = [...new Set(rental.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+  if (!customerId || !serialIds.length) return { stripped: 0, inv };
+
+  const returnBySerial = await loadCustomerWarehouseReturnDates(client, customerId, serialIds);
+  if (!returnBySerial.size) return { stripped: 0, inv };
+
+  const credited = await client.query(
+    `SELECT DISTINCT serial_id
+       FROM customer_credit_notes
+      WHERE serial_id = ANY($1::int[])
+        AND status <> 'cancelled'`,
+    [[...returnBySerial.keys()]]
+  );
+  const creditedIds = new Set(credited.rows.map((row) => Number(row.serial_id)));
+
+  const keep = [];
+  const drop = [];
+  const capped = [];
+  for (const line of rental) {
+    const serialId = Number(line.serial_id);
+    const returnedOn = returnBySerial.get(serialId);
+    if (!returnedOn) {
+      keep.push(line);
+      continue;
+    }
+    const start = parseInvoiceLineDate(line.rent_start);
+    const end = parseInvoiceLineDate(line.rent_end);
+    if (start && start > returnedOn) {
+      drop.push(line);
+      continue;
+    }
+    // Mid-month cap only when unused days are not already on a credit note.
+    if (end && end > returnedOn && !creditedIds.has(serialId)) {
+      const next = recalcRentalLineToEnd(line, returnedOn);
+      keep.push(next);
+      capped.push(next);
+      continue;
+    }
+    keep.push(line);
+  }
+  if (!drop.length && !capped.length) return { stripped: 0, inv };
+
+  if (drop.length) {
+    const dropSerialIds = [...new Set(drop.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+    const dropStarts = [...new Set(drop.map((line) => String(line.rent_start || '').slice(0, 10)).filter(Boolean))];
+    await client.query(
+      `DELETE FROM customer_invoice_lines
+        WHERE invoice_id = $1
+          AND COALESCE(line_type, 'rental') <> 'security'
+          AND serial_id = ANY($2::int[])
+          AND rent_start = ANY($3::date[])`,
+      [inv.invoice_id, dropSerialIds, dropStarts]
+    );
+  }
+  for (const line of capped) {
+    await client.query(
+      `UPDATE customer_invoice_lines
+          SET rent_end = $1::date,
+              days_billed = $2,
+              amount = $3,
+              is_returned = TRUE
+        WHERE invoice_id = $4
+          AND serial_id = $5
+          AND COALESCE(line_type, 'rental') <> 'security'
+          AND rent_start = $6::date`,
+      [
+        line.rent_end,
+        line.days_in_month,
+        line.amount,
+        inv.invoice_id,
+        line.serial_id,
+        String(line.rent_start || '').slice(0, 10),
+      ]
+    );
+  }
+
+  const affectedIds = [...new Set([
+    ...drop.map((line) => Number(line.serial_id)),
+    ...capped.map((line) => Number(line.serial_id)),
+  ].filter((id) => id > 0))];
+  for (const serialId of affectedIds) {
+    const returnedOn = returnBySerial.get(serialId);
+    if (!returnedOn) continue;
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET rent_billed_until = $1::date,
+              updated_at = NOW()
+        WHERE serial_id = $2
+          AND (rent_billed_until IS NULL OR rent_billed_until > $1::date)`,
+      [toLocalYmd(returnedOn), serialId]
+    );
+  }
+
+  const nextInv = await persistDraftInvoiceLines(client, inv, [...keep, ...security], monthStart, monthEnd);
+  billingLog.info(
+    {
+      invoiceNumber: inv.invoice_number,
+      dropped: drop.length,
+      capped: capped.length,
+      serials: affectedIds,
+      month,
+      year,
+    },
+    'Removed warehouse-returned rental lines from draft'
+  );
+  return { stripped: drop.length + capped.length, inv: nextInv };
+}
+
+async function reconcileDraftRentalWindow(client, inv, month, year) {
+  const same = await stripSameMonthStartRentalsFromDraft(client, inv, month, year);
+  const early = await stripEarlyDeliveryCatchupFromDraft(client, same.inv, month, year);
+  const returned = await stripWarehouseReturnedRentalsFromDraft(client, early.inv, month, year);
+  return {
+    stripped: (same.stripped || 0) + (early.stripped || 0) + (returned.stripped || 0),
+    inv: returned.inv,
+  };
+}
+
+async function ensureInvoiceSecurityLines(client, {
+  customerId, invoiceId, month, year, actorUserId = null,
+}) {
+  const invRes = await client.query(
+    `SELECT invoice_id, invoice_number, status, line_items, subtotal,
+            gst_percent, credit_note_adjustment, security_deposit,
+            invoice_month, invoice_year
+       FROM customer_invoices
+      WHERE invoice_id = $1
+      FOR UPDATE`,
+    [invoiceId]
+  );
+  const inv = invRes.rows[0];
+  if (!inv || String(inv.status || '').toLowerCase() !== 'draft') {
+    return { added: 0, removed: 0, security_total: parseFloat(inv?.security_deposit || 0) };
+  }
+
+  const invMonth = Number(month || inv.invoice_month);
+  const invYear = Number(year || inv.invoice_year);
+  const existing = invoiceLinesArray(inv.line_items);
+  const rental = existing.filter((line) => !isSecurityLine(line));
+  const securityLines = existing.filter(isSecurityLine);
+  const securitySerialIds = [...new Set(
+    securityLines.map((line) => Number(line.serial_id)).filter((id) => id > 0)
+  )];
+  const deliveryById = new Map();
+  if (securitySerialIds.length) {
+    const deliveries = await client.query(
+      `SELECT serial_id,
+              COALESCE(delivered_at::date, rent_start_date, dispatched_at::date)::text AS delivery_date
+         FROM vendor_serial_numbers
+        WHERE serial_id = ANY($1::int[])`,
+      [securitySerialIds]
+    );
+    for (const row of deliveries.rows) {
+      deliveryById.set(Number(row.serial_id), String(row.delivery_date || '').slice(0, 10));
+    }
+  }
+  const keepSecurity = [];
+  const dropSecurity = [];
+  for (const line of securityLines) {
+    const delivery = deliveryById.get(Number(line.serial_id)) || line.delivery_date || line.rent_start;
+    if (deliveryInPreviousMonth(delivery, invMonth, invYear)) keepSecurity.push(line);
+    else dropSecurity.push(line);
+  }
+
+  if (dropSecurity.length) {
+    const dropIds = [...new Set(dropSecurity.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
+    const dropTtspl = [...new Set(dropSecurity.map((line) => line.ttspl_id).filter(Boolean))];
+    await client.query(
+      `DELETE FROM customer_security_deposits
+        WHERE invoice_id = $1
+          AND status <> 'refunded'
+          AND (
+            (serial_id IS NOT NULL AND serial_id = ANY($2::int[]))
+            OR (ttspl_id IS NOT NULL AND ttspl_id = ANY($3::text[]))
+          )`,
+      [invoiceId, dropIds, dropTtspl]
+    );
+    await client.query(
+      `DELETE FROM customer_invoice_lines
+        WHERE invoice_id = $1
+          AND line_type = 'security'
+          AND (
+            (serial_id IS NOT NULL AND serial_id = ANY($2::int[]))
+            OR (ttspl_id IS NOT NULL AND ttspl_id = ANY($3::text[]))
+          )`,
+      [invoiceId, dropIds, dropTtspl]
+    );
+  }
+
+  const already = new Set(
+    keepSecurity.map((line) => String(line.serial_id || line.ttspl_id || ''))
+  );
+  const collected = await collectUnbilledSecurityLines(client, {
+    customerId,
+    month: invMonth,
+    year: invYear,
+  });
+  const fresh = collected.filter((line) => !already.has(String(line.serial_id || line.ttspl_id || '')));
+  if (!fresh.length && !dropSecurity.length) {
+    return { added: 0, removed: 0, security_total: securityLinesSubtotal(existing) };
+  }
+
+  const merged = [...rental, ...keepSecurity, ...fresh];
+  const subtotal = rentalLinesSubtotal(merged);
+  const securityDeposit = securityLinesSubtotal(merged);
+  const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+  const credit = parseFloat(inv.credit_note_adjustment || 0);
+  const money = invoiceMoneyTotals(subtotal, gstPercent, credit, securityDeposit);
+
+  if (fresh.length) {
+    await insertCustomerInvoiceLines(client, invoiceId, fresh);
+    await recordSecurityDeposits(client, {
+      customerId,
+      invoiceId,
+      invoiceNumber: inv.invoice_number,
+      lines: fresh,
+      actorUserId,
+    });
+  }
+  await client.query(
+    `UPDATE customer_invoices
+        SET line_items = $1::jsonb,
+            subtotal = $2,
+            gst_amount = $3,
+            grand_total = $4,
+            security_deposit = $5,
+            updated_at = NOW()
+      WHERE invoice_id = $6`,
+    [
+      JSON.stringify(merged),
+      subtotal.toFixed(2),
+      money.gstAmount,
+      money.grandTotal,
+      securityDeposit.toFixed(2),
+      invoiceId,
+    ]
+  );
+  billingLog.info(
+    {
+      invoiceNumber: inv.invoice_number,
+      customerId,
+      added: fresh.length,
+      removed: dropSecurity.length,
+      securityDeposit,
+    },
+    'Reconciled one-month security deposit lines'
+  );
+  return { added: fresh.length, removed: dropSecurity.length, security_total: securityDeposit };
 }
 
 /**
@@ -392,7 +1005,7 @@ async function linkOpenCreditNotesToInvoice(client, { customerId, invoiceId }) {
 
 async function refreshInvoiceCreditTotals(client, invoiceId) {
   const inv = await client.query(
-    `SELECT invoice_id, invoice_number, subtotal, gst_percent, credit_note_adjustment
+    `SELECT invoice_id, invoice_number, subtotal, gst_percent, credit_note_adjustment, security_deposit
        FROM customer_invoices WHERE invoice_id = $1 FOR UPDATE`,
     [invoiceId]
   );
@@ -408,7 +1021,8 @@ async function refreshInvoiceCreditTotals(client, invoiceId) {
   const next = invoiceMoneyTotals(
     parseFloat(row.subtotal || 0),
     parseFloat(row.gst_percent != null ? row.gst_percent : 18),
-    creditAdjustment
+    creditAdjustment,
+    parseFloat(row.security_deposit || 0)
   );
   await client.query(
     `UPDATE customer_invoices
@@ -675,25 +1289,42 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       const inv = existing.rows[0];
       const isDraft = String(inv.status || '').toLowerCase() === 'draft';
       let catchupAdded = 0;
+      let strippedCount = 0;
       if (isDraft) {
         if (movedCatchup.length) {
           await mergeCatchupOntoDraft(client, inv, movedCatchup);
           catchupAdded = movedCatchup.length;
         }
+        const stripped = await reconcileDraftRentalWindow(client, inv, month, year);
+        strippedCount = stripped.stripped;
         await linkOpenCreditNotesToInvoice(client, {
           customerId,
           invoiceId: inv.invoice_id,
         });
       }
+      const security = isDraft
+        ? await ensureInvoiceSecurityLines(client, {
+          customerId,
+          invoiceId: inv.invoice_id,
+          month,
+          year,
+        })
+        : { added: 0, removed: 0 };
       await client.query('COMMIT');
+      const changed = catchupAdded > 0 || security.added > 0 || (security.removed || 0) > 0 || strippedCount > 0;
       return {
-        skipped: catchupAdded === 0,
+        skipped: !changed,
         invoice_id: inv.invoice_id,
         invoice_number: inv.invoice_number,
         catchup_lines: catchupAdded,
+        security_lines: security.added,
+        security_removed: security.removed || 0,
+        rental_stripped: strippedCount,
         credit_notes_created: createdNotes.length,
         credit_notes_applied: 0,
-        reason: catchupAdded ? 'Added previous-month catch-up lines' : 'Invoice already exists',
+        reason: changed
+          ? 'Reconciled draft invoice billing window'
+          : 'Invoice already exists',
       };
     }
 
@@ -718,25 +1349,36 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       // the existing draft. Sent/approved invoices stay untouched — cron catch-up
       // remains the safety net for any still-unbilled spans.
       if (!lineItems.length) {
+        const stripped = await reconcileDraftRentalWindow(client, inv, month, year);
         await linkOpenCreditNotesToInvoice(client, {
           customerId,
           invoiceId: inv.invoice_id,
         });
+        const security = await ensureInvoiceSecurityLines(client, {
+          customerId,
+          invoiceId: inv.invoice_id,
+          month,
+          year,
+        });
         await client.query('COMMIT');
+        const changed = security.added > 0 || (security.removed || 0) > 0 || stripped.stripped > 0;
         return {
-          skipped: true,
+          skipped: !changed,
           invoice_id: inv.invoice_id,
           invoice_number: inv.invoice_number,
+          security_lines: security.added,
+          security_removed: security.removed || 0,
+          rental_stripped: stripped.stripped,
           credit_notes_created: createdNotes.length,
           credit_notes_applied: 0,
-          reason: 'No new unbilled rental lines',
+          reason: changed ? 'Reconciled draft invoice billing window' : 'No new unbilled rental lines',
         };
       }
-      const prevLines = Array.isArray(inv.line_items)
-        ? inv.line_items
-        : (typeof inv.line_items === 'string' ? JSON.parse(inv.line_items || '[]') : []);
+      const stripped = await reconcileDraftRentalWindow(client, inv, month, year);
+      const baseInv = stripped.inv || inv;
+      const prevLines = invoiceLinesArray(baseInv.line_items);
       const merged = [...prevLines, ...lineItems];
-      const newSubtotal = parseFloat((parseFloat(inv.subtotal || 0) + subtotal).toFixed(2));
+      const newSubtotal = parseFloat((parseFloat(baseInv.subtotal || 0) + subtotal).toFixed(2));
       const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
       const prevFrom = inv.from_date ? new Date(inv.from_date) : null;
       const prevTo = inv.to_date ? new Date(inv.to_date) : null;
@@ -749,7 +1391,10 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         invoiceId: inv.invoice_id,
       });
       const creditAdjustment = parseFloat(inv.credit_note_adjustment || 0);
-      const { gstAmount, grandTotal } = invoiceMoneyTotals(newSubtotal, gstPercent, creditAdjustment);
+      const existingSecurity = securityLinesSubtotal(merged);
+      const { gstAmount, grandTotal } = invoiceMoneyTotals(
+        newSubtotal, gstPercent, creditAdjustment, existingSecurity
+      );
 
       await client.query(
         `UPDATE customer_invoices
@@ -773,6 +1418,12 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
           inv.invoice_id,
         ]
       );
+      const security = await ensureInvoiceSecurityLines(client, {
+        customerId,
+        invoiceId: inv.invoice_id,
+        month,
+        year,
+      });
       await client.query('COMMIT');
       billingLog.info(
         { invoiceNumber: inv.invoice_number, customerId, appended: lineItems.length },
@@ -782,6 +1433,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         invoice_id: inv.invoice_id,
         invoice_number: inv.invoice_number,
         appended: true,
+        security_lines: security.added,
         credit_notes_created: createdNotes.length,
         credit_notes_applied: 0,
       };
@@ -825,15 +1477,22 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
     const invoiceId = insertRes.rows[0].invoice_id;
     await insertCustomerInvoiceLines(client, invoiceId, lineItems);
     await linkOpenCreditNotesToInvoice(client, { customerId, invoiceId });
+    const security = await ensureInvoiceSecurityLines(client, {
+      customerId,
+      invoiceId,
+      month,
+      year,
+    });
 
     await client.query('COMMIT');
     billingLog.info(
-      { invoiceNumber, customerId, creditNotesCreated: createdNotes.length },
+      { invoiceNumber, customerId, creditNotesCreated: createdNotes.length, securityLines: security.added },
       'Generated PREPAID customer invoice'
     );
     return {
       invoice_id: invoiceId,
       invoice_number: insertRes.rows[0].invoice_number,
+      security_lines: security.added,
       credit_notes_created: createdNotes.length,
       credit_notes_applied: 0,
     };
@@ -929,8 +1588,8 @@ async function maybeInvoiceFirstRentalPeriod({
     }
 
     const result = await generateCustomerInvoice(customerId, anchor.month, anchor.year, {
-      // Mid-month starts wait for the next month as catch-up
-      // (sent 10 Aug → billed 10–31 Aug + 1–30 Sep on the September invoice).
+      // Same-month starts wait for the next month as catch-up
+      // (sent 10 Aug or 1 Sep → billed on the following month's invoice).
       includeCurrentMonthStarts: false,
       appendToDraft: true,
     });
@@ -1163,13 +1822,16 @@ async function createReturnCreditNote(client, {
 }
 
 async function generateAllCustomerInvoices(month, year) {
+  const monthEnd = new Date(year, month, 0);
   const customersRes = await pool.query(
     `SELECT DISTINCT current_customer_id AS customer_id
      FROM vendor_serial_numbers
      WHERE current_customer_id IS NOT NULL
        AND deleted_at IS NULL
        AND inventory_status IN ('rented', 'returned')
-       AND rent_start_date IS NOT NULL`
+       AND rent_start_date IS NOT NULL
+       AND rent_start_date <= $1::date`,
+    [toLocalYmd(monthEnd)]
   );
 
   return runBillingBatch(`customer-invoices-${month}-${year}`, async () => {
@@ -1385,4 +2047,9 @@ module.exports = {
   maybeInvoiceOnRentalDelivery,
   maybeInvoiceOnRentalDcCreate,
   sendGeneratedCustomerInvoice,
+  stripSameMonthStartRentalsFromDraft,
+  stripEarlyDeliveryCatchupFromDraft,
+  stripWarehouseReturnedRentalsFromDraft,
+  reconcileDraftRentalWindow,
+  ensureInvoiceSecurityLines,
 };

@@ -27,6 +27,26 @@ function invoicePdfDownloadName(invoiceNumber, format) {
     : `${invoiceNumber}.pdf`;
 }
 
+function sanitizeCustomerFileName(name) {
+  const cleaned = String(name || '')
+    .normalize('NFKD')
+    .replace(/[^\w\s.&()-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+  return cleaned || 'Customer';
+}
+
+function uniqueCustomerPdfName(customerName, invoiceNumber, used) {
+  const base = sanitizeCustomerFileName(customerName || invoiceNumber);
+  let fileName = `${base}.pdf`;
+  if (used.has(fileName.toLowerCase())) {
+    fileName = `${base} - ${invoiceNumber || 'invoice'}.pdf`;
+  }
+  used.add(fileName.toLowerCase());
+  return fileName;
+}
+
 let browserPromise = null;
 
 async function resolveChromeExecutable() {
@@ -91,5 +111,7 @@ async function generateCustomerInvoicePdf(invoice, options = {}) {
 module.exports = {
   generateCustomerInvoicePdf,
   invoicePdfDownloadName,
+  sanitizeCustomerFileName,
+  uniqueCustomerPdfName,
   UPLOAD_DIR,
 };

@@ -193,6 +193,7 @@ const buildTicketListWhere = ({
             t.customer_name ILIKE $${idx}
             OR t.ticket_phone_override ILIKE $${idx}
             OR t.customer_phone ILIKE $${idx}
+            OR t.return_dc_number ILIKE $${idx}
             OR CAST(t.id AS TEXT) LIKE $${idx}
             OR EXISTS (
                 SELECT 1 FROM support_ticket_items si
@@ -200,6 +201,7 @@ const buildTicketListWhere = ({
                 WHERE si.ticket_id = t.id AND (
                     si.serial_number ILIKE $${idx}
                     OR si.unique_serial_number ILIKE $${idx}
+                    OR si.return_dc_number ILIKE $${idx}
                     OR ut.name ILIKE $${idx}
                 )
             )

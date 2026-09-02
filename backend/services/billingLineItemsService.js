@@ -10,8 +10,8 @@ async function insertCustomerInvoiceLines(client, invoiceId, lineItems) {
       `INSERT INTO customer_invoice_lines
         (invoice_id, serial_id, ttspl_id, brand, model, period_label,
          rent_start, rent_end, days_billed, days_in_month, monthly_rate, daily_rate,
-         amount, is_catchup, is_returned)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+         amount, is_catchup, is_returned, line_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         invoiceId,
         line.serial_id ?? null,
@@ -28,6 +28,7 @@ async function insertCustomerInvoiceLines(client, invoiceId, lineItems) {
         line.amount ?? null,
         !!line.is_catchup,
         !!line.returned,
+        line.line_type || (line.is_security ? 'security' : 'rental'),
       ]
     );
   }

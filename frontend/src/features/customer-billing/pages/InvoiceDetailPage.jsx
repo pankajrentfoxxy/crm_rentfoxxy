@@ -34,8 +34,12 @@ function isCatchupLine(line) {
   return line?.is_catchup === true || line?.is_catchup === 'true';
 }
 
+function isSecurityLine(line) {
+  return line?.line_type === 'security' || line?.is_security === true;
+}
+
 function isFullBilledLine(line) {
-  if (isCatchupLine(line)) return false;
+  if (isSecurityLine(line) || isCatchupLine(line)) return false;
   const days = Number(line?.days_in_month);
   const monthDays = Number(line?.month_days);
   if (!Number.isFinite(days) || !Number.isFinite(monthDays) || monthDays <= 0) return true;
@@ -120,6 +124,7 @@ export default function InvoiceDetailPage() {
     let fullLines = 0;
     let previousLines = 0;
     for (const line of lineItems) {
+      if (isSecurityLine(line)) continue;
       const key = line.ttspl_id || line.serial_number || line.serial_id;
       if (isCatchupLine(line)) {
         previousLines += 1;
@@ -210,6 +215,9 @@ export default function InvoiceDetailPage() {
         <div>
           <h1 className="text-2xl font-semibold">{invoice.invoice_number}</h1>
           <p className="text-sm text-gray-500">{invoice.customer_name} · {formatInvoiceDate(invoice.from_date)} – {formatInvoiceDate(invoice.to_date)}</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Total Quantity : {new Set(lineItems.map((line) => line.serial_id || line.ttspl_id || line.serial_number).filter(Boolean)).size || lineItems.length}
+          </p>
           <div className="mt-2"><InvoiceStatusBadge status={invoice.status} /></div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -285,10 +293,15 @@ export default function InvoiceDetailPage() {
                 {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
                 <p className="text-sm text-slate-700">{itemTitle(line)}</p>
                 {formatSpecLine(line) && <p className="text-xs text-slate-500">{formatSpecLine(line)}</p>}
-                <p className="text-xs text-slate-500">{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</p>
+                <p className="text-xs text-slate-500">
+                  {isSecurityLine(line)
+                    ? `Delivered ${formatInvoiceDate(line.delivery_date || line.rent_start)}`
+                    : `${formatInvoiceDate(line.rent_start)} → ${formatInvoiceDate(line.rent_end)}`}
+                </p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                   <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
                   <span>{fmt(line.daily_rate)}/day</span>
+                  {isSecurityLine(line) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-100 text-teal-800">security</span>}
                   {isCatchupLine(line) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>}
                   {line.returned && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">returned</span>}
                 </div>
@@ -329,7 +342,14 @@ export default function InvoiceDetailPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <div>{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</div>
+                      <div>
+                        {isSecurityLine(line)
+                          ? `Delivered ${formatInvoiceDate(line.delivery_date || line.rent_start)}`
+                          : `${formatInvoiceDate(line.rent_start)} → ${formatInvoiceDate(line.rent_end)}`}
+                      </div>
+                      {isSecurityLine(line) && (
+                        <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-100 text-teal-800">security</span>
+                      )}
                       {isCatchupLine(line) && (
                         <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>
                       )}
@@ -352,6 +372,12 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-between text-red-600">
                 <span>Credit Notes{appliedNotes.length ? ` (${appliedNotes.map((c) => c.credit_note_number).join(', ')})` : ''}</span>
                 <span>-{fmt(invoice.credit_note_adjustment)}</span>
+              </div>
+            )}
+            {parseFloat(invoice.security_deposit) > 0 && (
+              <div className="flex justify-between">
+                <span>Security deposit</span>
+                <span>{fmt(invoice.security_deposit)}</span>
               </div>
             )}
             <div className="flex justify-between font-semibold text-base border-t pt-2"><span>Grand Total</span><span>{fmt(invoice.grand_total)}</span></div>

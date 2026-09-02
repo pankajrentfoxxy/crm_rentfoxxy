@@ -1,6 +1,6 @@
 import api from '../../utils/api';
 
-export const getGuardDashboard = () => api.get('/guard-gate/dashboard');
+export const getGuardDashboard = (params) => api.get('/guard-gate/dashboard', { params });
 export const getGuardHistory = (params) => api.get('/guard-gate/history', { params });
 export const resolveGateScan = (payload) => api.post('/guard-gate/resolve', payload);
 export const scanGateUnit = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/scan`, payload);

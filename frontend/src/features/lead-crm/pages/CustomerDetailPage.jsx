@@ -543,12 +543,12 @@ export default function CustomerDetailPage() {
               <span className="font-medium">{formatCurrency(customer.total_security_amount || 0)}</span>
             </p>
             <p className="text-xs text-gray-500 mt-2">
-              Total held from quotations. For full deposit history,{' '}
+              Refundable one-month security billed on the invoice for the month after delivery. For full deposit history,{' '}
               <Link
-                to={`/finance/security-deposits?customer_id=${customer.customer_id}`}
+                to={`/customer-billing/security-deposits`}
                 className="text-blue-600 hover:underline"
               >
-                view in Finance → Security Deposits
+                view Security Deposits
               </Link>
               .
             </p>

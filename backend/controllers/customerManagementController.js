@@ -506,7 +506,10 @@ exports.listCustomers = async (req, res) => {
     const listResult = await pool.query(
       `SELECT c.*,
         COALESCE((
-          SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
         ), 0) AS total_security_amount,
         COALESCE((
           SELECT COUNT(*)::int
@@ -950,7 +953,10 @@ exports.getCustomer = async (req, res) => {
     const result = await pool.query(
       `SELECT c.*,
         COALESCE((
-          SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
         ), 0) AS total_security_amount
        FROM customers c WHERE c.customer_id = $1`,
       [customerId]
@@ -1447,7 +1453,12 @@ exports.updateCustomer = async (req, res) => {
     }
 
     const updated = await pool.query(
-      `SELECT c.*, COALESCE((SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id), 0) AS total_security_amount
+      `SELECT c.*, COALESCE((
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
+        ), 0) AS total_security_amount
        FROM customers c WHERE c.customer_id = $1`,
       [customerId]
     );

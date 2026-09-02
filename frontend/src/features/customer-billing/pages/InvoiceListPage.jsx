@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Receipt, IndianRupee, BadgeMinus } from 'lucide-react';
+import { Plus, Receipt, IndianRupee, BadgeMinus, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
@@ -8,7 +8,7 @@ import InvoiceCoveragePanel from '../components/InvoiceCoveragePanel';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
-import { downloadInvoicePdf, generateInvoicesBulk, listInvoices, markInvoicePaid } from '../customerBillingApi';
+import { downloadInvoicePdf, downloadInvoicesZip, generateInvoicesBulk, listInvoices, listInvoiceCoverage, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
 
 const TABS = ['all', 'draft', 'sent', 'paid', 'overdue'];
@@ -38,7 +38,14 @@ export default function InvoiceListPage() {
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [customers, setCustomers] = useState([]);
+  const [billableCustomers, setBillableCustomers] = useState([]);
   const [coverageTick, setCoverageTick] = useState(0);
+  const [zipOpen, setZipOpen] = useState(false);
+  const [zipLoading, setZipLoading] = useState(false);
+  const [zipForm, setZipForm] = useState({
+    month: String(new Date().getMonth() + 1),
+    year: String(new Date().getFullYear()),
+  });
   const [genOpen, setGenOpen] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
   const [genForm, setGenForm] = useState({
@@ -66,6 +73,34 @@ export default function InvoiceListPage() {
     })),
     [customers]
   );
+
+  const genCustomerOptions = useMemo(
+    () => billableCustomers.map((c) => ({
+      value: String(c.customer_id),
+      label: c.customer_name || `Customer #${c.customer_id}`,
+    })),
+    [billableCustomers]
+  );
+
+  useEffect(() => {
+    if (!genOpen) return undefined;
+    let cancelled = false;
+    listInvoiceCoverage({ month: genForm.month, year: genForm.year })
+      .then((res) => {
+        if (cancelled) return;
+        const list = res.data?.customers || [];
+        setBillableCustomers(list);
+        const allowed = new Set(list.map((c) => String(c.customer_id)));
+        setGenForm((f) => ({
+          ...f,
+          customer_ids: (f.customer_ids || []).filter((id) => allowed.has(String(id))),
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) setBillableCustomers([]);
+      });
+    return () => { cancelled = true; };
+  }, [genOpen, genForm.month, genForm.year]);
 
   useEffect(() => { setPage(1); }, [tab, customerId, month, year, searchDebounced, pageSize]);
 
@@ -103,8 +138,8 @@ export default function InvoiceListPage() {
     outstanding: summary.outstanding_total || 0,
   }), [summary]);
 
-  const allCustomersSelected = customerOptions.length > 0
-    && genForm.customer_ids.length === customerOptions.length;
+  const allCustomersSelected = genCustomerOptions.length > 0
+    && genForm.customer_ids.length === genCustomerOptions.length;
 
   const openGenerateModal = () => {
     setGenForm({
@@ -147,6 +182,8 @@ export default function InvoiceListPage() {
       if (s.appended) parts.push(`${s.appended} updated`);
       if (s.credit_notes_created) parts.push(`${s.credit_notes_created} credit notes created`);
       if (s.credit_notes_applied) parts.push(`${s.credit_notes_applied} credit notes applied`);
+      const securityLines = (res.data?.results || []).reduce((n, r) => n + Number(r.security_lines || 0), 0);
+      if (securityLines) parts.push(`${securityLines} security lines`);
       if (s.skipped) parts.push(`${s.skipped} skipped`);
       if (s.errors) parts.push(`${s.errors} failed`);
       toast.success(parts.length ? parts.join(', ') : 'No invoices generated');
@@ -173,6 +210,60 @@ export default function InvoiceListPage() {
     }
   };
 
+  const openZipModal = () => {
+    setZipForm({
+      month: String(month || new Date().getMonth() + 1),
+      year: String(year || new Date().getFullYear()),
+    });
+    setZipOpen(true);
+  };
+
+  const handleZipDownload = async () => {
+    if (!zipForm.month || !zipForm.year) {
+      toast.error('Select month and year');
+      return;
+    }
+    setZipLoading(true);
+    try {
+      const res = await downloadInvoicesZip({
+        month: Number(zipForm.month),
+        year: Number(zipForm.year),
+        format: 'laptop_details',
+      });
+      const blob = new Blob([res.data], { type: 'application/zip' });
+      if (blob.type.includes('json') || (res.data?.type && String(res.data.type).includes('json'))) {
+        const text = await blob.text();
+        const json = JSON.parse(text);
+        throw new Error(json.message || 'Download failed');
+      }
+      const monthLabel = MONTHS[Number(zipForm.month)] || zipForm.month;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Laptop-Rental-Documents-${monthLabel}-${zipForm.year}.zip`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('ZIP downloaded');
+      setZipOpen(false);
+    } catch (err) {
+      let message = err.message || 'ZIP download failed';
+      const data = err.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const json = JSON.parse(await data.text());
+          message = json.message || message;
+        } catch {
+          /* keep default */
+        }
+      } else if (data?.message) {
+        message = data.message;
+      }
+      toast.error(message);
+    } finally {
+      setZipLoading(false);
+    }
+  };
+
   const handleMarkPaid = async (id) => {
     const ref = window.prompt('Payment reference (optional):');
     try {
@@ -191,9 +282,12 @@ export default function InvoiceListPage() {
         subtitle="INV-* series"
         icon={Receipt}
         actions={(
-          <PermissionGate section="customer_billing" action="create">
-            <Button icon={Plus} onClick={openGenerateModal}>Generate Invoice</Button>
-          </PermissionGate>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={Download} onClick={openZipModal}>Download</Button>
+            <PermissionGate section="customer_billing" action="create">
+              <Button icon={Plus} onClick={openGenerateModal}>Generate Invoice</Button>
+            </PermissionGate>
+          </div>
         )}
       />
 
@@ -365,65 +459,61 @@ export default function InvoiceListPage() {
         onPageChange={setPage}
       />
 
+      {zipOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4">
+          <button type="button" className="fixed inset-0 bg-black/40" onClick={() => !zipLoading && setZipOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full my-6 p-6 space-y-4">
+            <h3 className="font-semibold text-lg">Download invoices</h3>
+            <p className="text-sm text-gray-500">
+              Download every invoice for the selected month as a ZIP. Each PDF is named with the customer name. A full month can take a few minutes.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1 text-xs text-slate-600">
+                Month
+                <select
+                  value={zipForm.month}
+                  onChange={(e) => setZipForm((f) => ({ ...f, month: e.target.value }))}
+                  className="border rounded-lg px-3 py-2 text-sm min-h-[44px]"
+                  disabled={zipLoading}
+                >
+                  {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-600">
+                Year
+                <select
+                  value={zipForm.year}
+                  onChange={(e) => setZipForm((f) => ({ ...f, year: e.target.value }))}
+                  className="border rounded-lg px-3 py-2 text-sm min-h-[44px]"
+                  disabled={zipLoading}
+                >
+                  {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="flex gap-2 justify-end pt-1">
+              <button type="button" onClick={() => setZipOpen(false)} className="px-4 py-2 text-sm border rounded-lg" disabled={zipLoading}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleZipDownload}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
+                disabled={zipLoading}
+              >
+                {zipLoading ? 'Preparing ZIP…' : 'Download ZIP'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {genOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4">
           <button type="button" className="fixed inset-0 bg-black/40" onClick={() => !genLoading && setGenOpen(false)} aria-label="Close" />
           <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full my-6 p-6 space-y-4 max-h-[calc(100vh-3rem)] overflow-y-auto">
             <h3 className="font-semibold text-lg">Generate Invoices</h3>
             <p className="text-sm text-gray-500">
-              Select one or more customers, or run for all customers with active rental laptops.
+              Only customers with rental laptops for this month are listed.
             </p>
-            <label className="flex items-start gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={genForm.all_billable}
-                onChange={(e) => setGenForm((f) => ({
-                  ...f,
-                  all_billable: e.target.checked,
-                  customer_ids: e.target.checked ? [] : f.customer_ids,
-                }))}
-                disabled={genLoading}
-              />
-              <span>
-                <span className="font-medium text-gray-800">All billable customers</span>
-                <span className="block text-xs text-gray-500 mt-0.5">
-                  Customers with rented/returned laptops and a rent start date
-                </span>
-              </span>
-            </label>
-            {!genForm.all_billable && (
-              <>
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={allCustomersSelected}
-                    onChange={() => setGenForm((f) => ({
-                      ...f,
-                      customer_ids: allCustomersSelected
-                        ? []
-                        : customerOptions.map((c) => c.value),
-                    }))}
-                    disabled={genLoading || !customerOptions.length}
-                  />
-                  <span className="font-medium text-gray-800">
-                    Select all customers ({customerOptions.length})
-                  </span>
-                </label>
-                <SearchableMultiSelect
-                  id="invoice-gen-customers"
-                  label="Customers"
-                  required
-                  value={genForm.customer_ids}
-                  onChange={(ids) => setGenForm((f) => ({ ...f, customer_ids: ids }))}
-                  options={customerOptions}
-                  placeholder="Select customers"
-                  countNoun="customer"
-                  emptyMessage="No customers found."
-                  disabled={genLoading}
-                />
-              </>
-            )}
             <div className="grid grid-cols-2 gap-2">
               <select
                 value={genForm.month}
@@ -441,6 +531,59 @@ export default function InvoiceListPage() {
                 disabled={genLoading}
               />
             </div>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={genForm.all_billable}
+                onChange={(e) => setGenForm((f) => ({
+                  ...f,
+                  all_billable: e.target.checked,
+                  customer_ids: e.target.checked ? [] : f.customer_ids,
+                }))}
+                disabled={genLoading}
+              />
+              <span>
+                <span className="font-medium text-gray-800">
+                  All customers with laptops ({genCustomerOptions.length})
+                </span>
+                <span className="block text-xs text-gray-500 mt-0.5">
+                  Rented or returned units with a rent start date in this month
+                </span>
+              </span>
+            </label>
+            {!genForm.all_billable && (
+              <>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allCustomersSelected}
+                    onChange={() => setGenForm((f) => ({
+                      ...f,
+                      customer_ids: allCustomersSelected
+                        ? []
+                        : genCustomerOptions.map((c) => c.value),
+                    }))}
+                    disabled={genLoading || !genCustomerOptions.length}
+                  />
+                  <span className="font-medium text-gray-800">
+                    Select all with laptops ({genCustomerOptions.length})
+                  </span>
+                </label>
+                <SearchableMultiSelect
+                  id="invoice-gen-customers"
+                  label="Customers"
+                  required
+                  value={genForm.customer_ids}
+                  onChange={(ids) => setGenForm((f) => ({ ...f, customer_ids: ids }))}
+                  options={genCustomerOptions}
+                  placeholder="Select customers with laptops"
+                  countNoun="customer"
+                  emptyMessage="No customers with rental laptops for this month."
+                  disabled={genLoading}
+                />
+              </>
+            )}
             <div className="flex gap-2 justify-end pt-1">
               <button type="button" onClick={() => setGenOpen(false)} className="px-4 py-2 text-sm border rounded-lg" disabled={genLoading}>Cancel</button>
               <button

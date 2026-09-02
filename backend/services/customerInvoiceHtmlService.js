@@ -14,6 +14,7 @@ const {
   parseItemDisplay,
   formatSpecLine,
   groupLineItems,
+  countUniqueLaptops,
   fmtMoneyPlain,
   fmtMoneyInr,
   escapeHtml,
@@ -21,6 +22,7 @@ const {
   placeOfSupplyLabel,
   STATE_NAMES,
   isProRataLine,
+  isSecurityLine,
 } = require('../utils/invoiceItemFormatting');
 
 const SELLER_STATE_CODE = '06';
@@ -153,19 +155,28 @@ function renderLineRow(line, idx, alt) {
   const item = parseItemDisplay(line.brand, line.model);
   const spec = formatSpecLine(line);
   const serial = line.serial_number ? `SN ${escapeHtml(line.serial_number)}` : '';
+  const security = isSecurityLine(line);
   const proRataTag = isProRataLine(line) ? '<span class="tag">pro-rata</span>' : '';
+  const securityTag = security ? '<span class="tag">security</span>' : '';
   const rate = line.monthly_rate != null ? line.monthly_rate : (
     Number(line.month_days) > 0
       ? (Number(line.amount || 0) / Number(line.days_in_month || 1)) * Number(line.month_days)
       : 0
   );
-  const daysCell = `${Number(line.days_in_month || 0)} / ${Number(line.month_days || '—')}`;
+  const daysCell = security
+    ? '—'
+    : `${Number(line.days_in_month || 0)} / ${Number(line.month_days || '—')}`;
+  const delivery = fmtPeriod(line.delivery_date || line.rent_start, line.delivery_date || line.rent_start);
+  const deliveryLabel = delivery.includes(' – ') ? delivery.split(' – ').pop() : delivery;
+  const period = security
+    ? `Delivered ${deliveryLabel}`
+    : fmtPeriod(line.rent_start, line.rent_end);
 
   return `<tr${alt ? ' class="alt"' : ''}>
     <td>${idx}</td>
     <td><span class="asset">${escapeHtml(line.ttspl_id || '—')}</span>${serial ? `<span class="serial">${serial}</span>` : ''}</td>
-    <td><span class="item-title">${escapeHtml(item.title)}</span>${proRataTag}${item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : ''}${spec ? `<span class="item-spec">${escapeHtml(spec)}</span>` : ''}</td>
-    <td class="period">${escapeHtml(fmtPeriod(line.rent_start, line.rent_end))}</td>
+    <td><span class="item-title">${escapeHtml(item.title)}</span>${securityTag}${proRataTag}${item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : ''}${spec ? `<span class="item-spec">${escapeHtml(spec)}</span>` : ''}</td>
+    <td class="period">${escapeHtml(period)}</td>
     <td class="ctr">${daysCell}</td>
     <td class="num">${fmtMoneyPlain(rate)}</td>
     <td class="num">${fmtMoneyPlain(line.amount)}</td>
@@ -226,13 +237,20 @@ function customerAddressHtml(invoice) {
   return parts.map((p) => escapeHtml(p)).join('<br>') || '—';
 }
 
+function groupTitleSecurity({ compact = false } = {}) {
+  const base = 'Security deposit — one month rental';
+  if (compact) return base;
+  return `${base} <small>— refundable, billed once on delivery</small>`;
+}
+
 function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = {}) {
-  const { catchup, full } = groupLineItems(lines);
+  const { catchup, full, security } = groupLineItems(lines);
   let bodyRows = '';
   let rowNum = 1;
   let altToggle = false;
   let catchupSubtotal = 0;
   let fullSubtotal = 0;
+  let securitySubtotal = 0;
   let catchupMonthLabel = '';
   const titleOpts = { compact: compactSectionTitles };
 
@@ -249,6 +267,13 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
     const g = renderGroup(groupTitleFull(invoice, titleOpts), full, rowNum, altToggle, `${monthLabel} subtotal`);
     bodyRows += g.html;
     fullSubtotal = g.subtotal || 0;
+    rowNum = g.nextIdx;
+    altToggle = ((catchup.length + full.length) % 2) === 1;
+  }
+  if (security.length) {
+    const g = renderGroup(groupTitleSecurity(titleOpts), security, rowNum, altToggle, 'Security deposit');
+    bodyRows += g.html;
+    securitySubtotal = g.subtotal || 0;
   }
 
   const billingMonthLabel = monthYearLabel(
@@ -259,9 +284,11 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
     bodyRows,
     catchupSubtotal,
     fullSubtotal,
+    securitySubtotal,
     catchupMonthLabel,
     billingMonthLabel,
-    deviceCount: lines.length,
+    deviceCount: catchup.length + full.length,
+    laptopQuantity: countUniqueLaptops([...catchup, ...full, ...security]),
   };
 }
 
@@ -323,11 +350,12 @@ function normalizeInvoiceFormat(format) {
 async function buildInvoiceHtml(invoice, company) {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const lines = await enrichLineItemsWithSpecs(parseLineItems(invoice));
-  const { bodyRows, deviceCount } = buildItemsTableBody(invoice, lines);
+  const { bodyRows, deviceCount, securitySubtotal } = buildItemsTableBody(invoice, lines);
   const logo = logoDataUri();
   const bank = bankDetails();
   const gstin = invoice.gst_number || invoice.gst_no || '';
   const credit = parseFloat(invoice.credit_note_adjustment || 0);
+  const security = parseFloat(invoice.security_deposit || securitySubtotal || 0);
   const { rows: gstRows, intra } = gstDisplayRows(invoice, company, gstin);
   const totalsRows = [
     `<tr><td>Subtotal (${deviceCount} device${deviceCount === 1 ? '' : 's'})</td><td>${fmtMoneyInr(invoice.subtotal)}</td></tr>`,
@@ -335,6 +363,9 @@ async function buildInvoiceHtml(invoice, company) {
   ];
   if (credit > 0) {
     totalsRows.push(`<tr class="credit"><td>Credit notes</td><td>- ${fmtMoneyPlain(credit)}</td></tr>`);
+  }
+  if (security > 0) {
+    totalsRows.push(`<tr><td>Security deposit</td><td>${fmtMoneyInr(security)}</td></tr>`);
   }
   totalsRows.push(`<tr class="grand"><td>Total payable</td><td>${fmtMoneyInr(invoice.grand_total)}</td></tr>`);
 
@@ -440,6 +471,7 @@ ${renderItemsTable(bodyRows)}
         <li>Rental is prepaid; pay on or before the invoice date to keep devices active.</li>
         <li>Mid-month deliveries are billed pro-rata on calendar days.</li>
         <li>Devices remain the property of ${escapeHtml(company.legal_name)}.</li>
+        <li>Security deposit is refundable and is not subject to GST.</li>
         <li>Disputes must be raised within 7 days of the invoice date.</li>
       </ol>
       <div class="sign"><span class="line">For ${escapeHtml(company.legal_name)}<br>Authorised signatory</span></div>
@@ -461,10 +493,14 @@ async function buildLaptopDetailsHtml(invoice, company) {
     fullSubtotal,
     catchupMonthLabel,
     billingMonthLabel,
+    securitySubtotal,
+    laptopQuantity,
   } = buildItemsTableBody(invoice, lines, { compactSectionTitles: true });
   const logo = logoDataUri();
   const seller = laptopDetailsSellerBlock(company);
   const untaxedTotal = +(catchupSubtotal + fullSubtotal).toFixed(2);
+  const security = parseFloat(invoice.security_deposit || securitySubtotal || 0);
+  const documentTotal = +(untaxedTotal + security).toFixed(2);
 
   const totalsRows = [];
   if (catchupSubtotal > 0 && catchupMonthLabel) {
@@ -477,9 +513,13 @@ async function buildLaptopDetailsHtml(invoice, company) {
       `<tr><td>Rental (${escapeHtml(billingMonthLabel)})</td><td>${fmtMoneyInr(fullSubtotal)}</td></tr>`,
     );
   }
-  totalsRows.push(
-    `<tr class="grand"><td>Taxable Value</td><td>${fmtMoneyInr(untaxedTotal)}</td></tr>`,
-  );
+  if (security > 0) {
+    totalsRows.push(`<tr><td>Taxable Value</td><td>${fmtMoneyInr(untaxedTotal)}</td></tr>`);
+    totalsRows.push(`<tr><td>Security deposit</td><td>${fmtMoneyInr(security)}</td></tr>`);
+    totalsRows.push(`<tr class="grand"><td>Total</td><td>${fmtMoneyInr(documentTotal)}</td></tr>`);
+  } else {
+    totalsRows.push(`<tr class="grand"><td>Taxable Value</td><td>${fmtMoneyInr(untaxedTotal)}</td></tr>`);
+  }
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -504,6 +544,7 @@ async function buildLaptopDetailsHtml(invoice, company) {
     <div class="ld-title">${escapeHtml(LAPTOP_DETAILS_DOCUMENT.title)}</div>
     <div class="ld-customer">${escapeHtml(invoice.customer_name || invoice.customer_id)}</div>
     <div class="ld-month">${escapeHtml(billingMonthLabel || '—')}</div>
+    <div class="ld-qty">Total Quantity : ${Number(laptopQuantity || 0)}</div>
   </div>
 </div>
 
@@ -514,7 +555,7 @@ ${renderItemsTable(bodyRows)}
     <td class="words-cell">
       <div class="words">
         <div class="lbl">Amount in words</div>
-        <div class="val">${escapeHtml(amountInIndianWords(untaxedTotal))}</div>
+        <div class="val">${escapeHtml(amountInIndianWords(security > 0 ? documentTotal : untaxedTotal))}</div>
       </div>
       <div class="gst-note">All amounts in INR. Dates in IST. Mid-month deliveries are billed pro-rata on calendar days.</div>
     </td>

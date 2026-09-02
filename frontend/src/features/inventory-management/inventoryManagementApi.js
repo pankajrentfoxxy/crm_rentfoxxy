@@ -52,6 +52,10 @@ export function fetchMasterDataDashboard(params) {
   return api.get(`${base}/master-data`, { params });
 }
 
+export function fetchMasterDataColumnValues(params) {
+  return api.get(`${base}/master-data/laptops/column-values`, { params });
+}
+
 /** Master Data Dashboard — KPI cards (Redis-cached, separate from tab data) */
 export function fetchMasterDataKpis(params) {
   return api.get(`${base}/master-data/kpis`, { params });
@@ -72,6 +76,10 @@ export function fetchVendorMasterLaptops(params) {
   return api.get(`${base}/vendor-master-data/laptops`, { params });
 }
 
+export function fetchVendorMasterColumnValues(params) {
+  return api.get(`${base}/vendor-master-data/laptops/column-values`, { params });
+}
+
 export async function exportVendorMasterExcel(params = {}) {
   const response = await api.get(`${base}/vendor-master-data/export.xlsx`, {
     params,
@@ -86,6 +94,10 @@ export function fetchReturnMasterOverview(params) {
 
 export function fetchReturnMasterLaptops(params) {
   return api.get(`${base}/return-master-data/laptops`, { params });
+}
+
+export function fetchReturnMasterColumnValues(params) {
+  return api.get(`${base}/return-master-data/laptops/column-values`, { params });
 }
 
 export async function exportReturnMasterExcel(params = {}) {

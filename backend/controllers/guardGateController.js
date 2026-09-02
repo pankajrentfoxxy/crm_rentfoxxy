@@ -78,6 +78,8 @@ exports.dashboard = async (req, res) => {
     const data = await gate.getDashboard({
       userId: req.user?.user_id,
       role: req.user?.role,
+      search: req.query?.q || req.query?.search || '',
+      direction: req.query?.direction || '',
     });
     return res.json({ success: true, data });
   } catch (err) {
@@ -92,6 +94,7 @@ exports.history = async (req, res) => {
       userId: req.user?.user_id,
       role: req.user?.role,
       limit: req.query?.limit,
+      search: req.query?.q || req.query?.search || '',
     });
     return res.json({ success: true, data: rows });
   } catch (err) {
