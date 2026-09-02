@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/vendorBillingController');
 
 // RBAC driven by the role_permissions matrix.
@@ -8,6 +8,11 @@ const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
+router.get(
+  '/vendors',
+  checkAnySectionPermission(['vendor_billing_mgmt', 'debit_notes'], 'view'),
+  ctrl.listBillableVendors
+);
 router.get('/bills', cp('vendor_billing_mgmt', 'view'), ctrl.listVendorBills);
 router.get('/bills/:billId/payments', cp('vendor_billing_mgmt', 'view'), ctrl.listBillPayments);
 router.post('/bills/:id/payments', cp('vendor_billing_mgmt', 'edit'), ctrl.recordBillPayment);

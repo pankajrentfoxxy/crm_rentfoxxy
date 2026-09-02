@@ -503,11 +503,16 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       }
     }
 
+    try {
+      const { notifyDeliveryOtpAsync } = require('../services/salesOrderWhatsApp');
+      notifyDeliveryOtpAsync({ dcNumber, otp });
+    } catch (_) { /* WhatsApp must never block OTP */ }
+
     const includeOtp = await userCanViewDeliveryRegisterOtp(req.user);
     if (includeOtp) {
-      return res.json({ success: true, otp_visible: otp, message: 'OTP generated and emailed to sales.' });
+      return res.json({ success: true, otp_visible: otp, message: 'OTP generated. Share only with office staff if needed.' });
     }
-    res.json({ success: true, message: 'OTP sent. Ask the customer for the OTP.' });
+    res.json({ success: true, message: 'OTP sent to the customer on WhatsApp. Ask the customer for the 6-digit code.' });
   } catch (error) {
     console.error('verifySerialAndGenerateOtp:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -589,6 +594,15 @@ exports.submitDeliveryWithPod = async (req, res) => {
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');
 
+    try {
+      const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
+      notifySoDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+    try {
+      const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
+      notifySupportServiceDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+
     await fireOnDeliveryRentalInvoice(dcNumber, 'submitDeliveryWithPod');
 
     // Rebuild the DC PDF so the just-captured e-signature shows in its
@@ -624,6 +638,13 @@ exports.submitDeliveryWithPod = async (req, res) => {
 exports.adminDeliverOverride = async (req, res) => {
   const client = await pool.connect();
   try {
+    const { isFieldDeliveryRole } = require('../services/deliveryOtpAccess');
+    if (isFieldDeliveryRole(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'In-person delivery requires the customer OTP. Use Confirm delivery after asking the customer for the WhatsApp code.',
+      });
+    }
     const dcNumber = req.params.dcNumber;
     const body = req.body || {};
     if (!req.file) {
@@ -663,6 +684,15 @@ exports.adminDeliverOverride = async (req, res) => {
     );
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');
+
+    try {
+      const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
+      notifySoDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+    try {
+      const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
+      notifySupportServiceDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
 
     await fireOnDeliveryRentalInvoice(dcNumber, 'adminDeliverOverride');
 

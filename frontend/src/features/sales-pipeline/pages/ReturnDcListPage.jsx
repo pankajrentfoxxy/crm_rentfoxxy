@@ -7,26 +7,28 @@ import { DC_STATUS_STYLES, downloadBlob, formatDate, statusLabel } from '../sale
 import { getBackendOrigin } from '../../../utils/api';
 import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
-import MultiSelectFilter from '../../lead-crm/components/MultiSelectFilter';
+import { useAuth } from '../../../context/AuthContext';
+import { usePermission } from '../../../hooks/usePermission';
 
 const PAGE_SIZE = 25;
-const STATUS_OPTIONS = [
+const STATUS_TABS = [
+  { value: 'all', label: 'All' },
   { value: 'pending', label: 'Pending' },
   { value: 'in_transit', label: 'In Transit' },
   { value: 'delivered', label: 'Delivered' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
-const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '', statuses: '', tab: '' };
-
-function parseStatuses(raw, fallbackTab) {
-  const fromStatuses = String(raw || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => STATUS_OPTIONS.some((o) => o.value === s));
-  if (fromStatuses.length) return fromStatuses;
-  if (fallbackTab && STATUS_OPTIONS.some((o) => o.value === fallbackTab)) return [fallbackTab];
-  return [];
-}
+const WAREHOUSE_TABS = [
+  { value: '', label: 'All warehouse' },
+  { value: 'pending', label: 'Awaiting receive' },
+  { value: 'received', label: 'Received' },
+];
+const RETURN_DC_WAREHOUSE_ROLES = new Set([
+  'warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin',
+]);
+const RDC_FILTER_DEFAULTS = {
+  page: 1, search: '', dateFrom: '', dateTo: '', tab: 'all', warehouse: '', technician: '',
+};
 
 function pdfUrl(p) {
   if (!p) return null;
@@ -35,14 +37,20 @@ function pdfUrl(p) {
 }
 
 export default function ReturnDcListPage() {
+  const { user } = useAuth();
+  const { canView } = usePermission();
+  const canViewOtp = canView('delivery_register_otp');
+  const canWarehouseSign = RETURN_DC_WAREHOUSE_ROLES.has(String(user?.role || '').toLowerCase());
   const { filters, setFilters } = useUrlFilters(RDC_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo, statuses, tab } = filters;
-  const selectedStatuses = parseStatuses(statuses, tab);
-  const statusParam = selectedStatuses.join(',') || 'all';
+  const { page, dateFrom, dateTo, tab, warehouse, technician } = filters;
+  const statusParam = tab && tab !== 'all' ? tab : 'all';
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0 });
+  const [stats, setStats] = useState({
+    total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0, warehouse_pending: 0,
+  });
+  const [technicians, setTechnicians] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -57,16 +65,21 @@ export default function ReturnDcListPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         status: statusParam,
+        warehouse_receive: warehouse || undefined,
+        technician: technician || undefined,
       });
       setRows(res.data?.return_dcs || res.data?.rows || []);
-      setStats(res.data?.stats || { total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0 });
+      setTechnicians(res.data?.technicians || []);
+      setStats(res.data?.stats || {
+        total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0, warehouse_pending: 0,
+      });
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load return DCs');
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo, statusParam]);
+  }, [page, search, dateFrom, dateTo, statusParam, warehouse, technician]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -96,7 +109,7 @@ export default function ReturnDcListPage() {
       const stamp = new Date().toISOString().slice(0, 10);
       downloadBlob(
         res.data,
-        match?.[1] || `return_dc_${selectedStatuses.join('_') || 'all'}_laptops_${stamp}.xlsx`
+        match?.[1] || `return_dc_${statusParam === 'all' ? 'all' : statusParam}_laptops_${stamp}.xlsx`
       );
       toast.success('Laptop export downloaded');
     } catch (e) {
@@ -162,6 +175,11 @@ export default function ReturnDcListPage() {
     },
     { key: 'customer_name', header: 'Customer' },
     {
+      key: 'technician',
+      header: 'Technician',
+      render: (row) => row.technician_name || <span className="text-xs text-gray-400">—</span>,
+    },
+    {
       key: 'city',
       header: 'City',
       render: (row) => row.city || row.pickup_city || <span className="text-xs text-gray-400">—</span>,
@@ -177,7 +195,7 @@ export default function ReturnDcListPage() {
       header: 'SO #',
       render: (row) => <span className="font-mono text-xs">{row.sales_order_number || '—'}</span>,
     },
-    { key: 'otp', header: 'OTP', render: otpCell },
+    ...(canViewOtp ? [{ key: 'otp', header: 'OTP', render: otpCell }] : []),
     { key: 'reason', header: 'Reason', render: (row) => row.reason || row.return_reason || '—' },
     {
       key: 'status',
@@ -193,14 +211,18 @@ export default function ReturnDcListPage() {
       header: 'Warehouse',
       render: (row) => (
         row.warehouse_receive_pending ? (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setDetailRdc(row.return_dc_number || row.rdc_number); }}
-            className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1 hover:bg-amber-200"
-          >
-            <PackageCheck className="w-3.5 h-3.5" />
-            Receive
-          </button>
+          canWarehouseSign ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setDetailRdc(row.return_dc_number || row.rdc_number); }}
+              className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1 hover:bg-amber-200"
+            >
+              <PackageCheck className="w-3.5 h-3.5" />
+              Receive
+            </button>
+          ) : (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-800">Awaiting warehouse</span>
+          )
         ) : (
           <span className="text-xs text-emerald-700">Received</span>
         )
@@ -225,6 +247,7 @@ export default function ReturnDcListPage() {
         </div>
         <p className="font-medium text-slate-800">{row.customer_name}</p>
         {row.city && <p className="text-xs text-slate-600">{row.city}</p>}
+        {row.technician_name && <p className="text-xs text-slate-600">Tech: {row.technician_name}</p>}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
           <span>Created {formatDate(row.created_at)}</span>
           <span>Pickup {formatDate(row.pickup_date) || '—'}</span>
@@ -234,14 +257,18 @@ export default function ReturnDcListPage() {
         </div>
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
           {row.warehouse_receive_pending ? (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setDetailRdc(rdc); }}
-              className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1"
-            >
-              <PackageCheck className="w-3.5 h-3.5" />
-              Warehouse receive
-            </button>
+            canWarehouseSign ? (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setDetailRdc(rdc); }}
+                className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1"
+              >
+                <PackageCheck className="w-3.5 h-3.5" />
+                Warehouse receive
+              </button>
+            ) : (
+              <span className="text-xs text-amber-800">Awaiting warehouse</span>
+            )
           ) : (
             <span className="text-xs text-emerald-700">Warehouse received</span>
           )}
@@ -258,7 +285,7 @@ export default function ReturnDcListPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Return DC"
-        subtitle="Return pickup challans (RDC series) — filter by pending, in transit, delivered"
+        subtitle="Return pickup challans — filter by status, warehouse receive, and technician"
         icon={RotateCcw}
         actions={(
           <Button
@@ -272,28 +299,96 @@ export default function ReturnDcListPage() {
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        <StatCard label="Pending" value={stats.pending} tone="amber" />
-        <StatCard label="In Transit" value={stats.in_transit} tone="blue" />
-        <StatCard label="Delivered" value={stats.delivered} tone="green" />
-        <StatCard label="Cancelled" value={stats.cancelled} tone="gray" />
-        <StatCard label="Total" value={stats.total} tone="gray" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+        <StatCard
+          label="Total"
+          value={stats.total}
+          tone="gray"
+          active={tab === 'all' && !warehouse}
+          onClick={() => setFilters({ tab: 'all', warehouse: '', page: 1 })}
+        />
+        <StatCard
+          label="Pending"
+          value={stats.pending}
+          tone="amber"
+          active={tab === 'pending'}
+          onClick={() => setFilters({ tab: 'pending', page: 1 })}
+        />
+        <StatCard
+          label="In Transit"
+          value={stats.in_transit}
+          tone="blue"
+          active={tab === 'in_transit'}
+          onClick={() => setFilters({ tab: 'in_transit', page: 1 })}
+        />
+        <StatCard
+          label="Delivered"
+          value={stats.delivered}
+          tone="green"
+          active={tab === 'delivered'}
+          onClick={() => setFilters({ tab: 'delivered', page: 1 })}
+        />
+        <StatCard
+          label="Cancelled"
+          value={stats.cancelled}
+          tone="gray"
+          active={tab === 'cancelled'}
+          onClick={() => setFilters({ tab: 'cancelled', page: 1 })}
+        />
+        <StatCard
+          label="Awaiting warehouse"
+          value={stats.warehouse_pending}
+          tone="amber"
+          active={warehouse === 'pending'}
+          onClick={() => setFilters({ warehouse: warehouse === 'pending' ? '' : 'pending', page: 1 })}
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3">
+        {STATUS_TABS.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            onClick={() => setFilters({ tab: t.value, page: 1 })}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              (tab || 'all') === t.value ? 'bg-blue-600 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Warehouse</span>
+        {WAREHOUSE_TABS.map((w) => (
+          <button
+            key={w.value || 'all-wh'}
+            type="button"
+            onClick={() => setFilters({ warehouse: w.value, page: 1 })}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              (warehouse || '') === w.value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {w.label}
+          </button>
+        ))}
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide ml-2">Technician</span>
+        <select
+          value={technician || ''}
+          onChange={(e) => setFilters({ technician: e.target.value, page: 1 })}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-h-[36px] bg-white"
+        >
+          <option value="">All technicians</option>
+          <option value="Unassigned">Unassigned</option>
+          {technicians.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <div className="w-full sm:w-56">
-          <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Status</label>
-          <MultiSelectFilter
-            options={STATUS_OPTIONS}
-            value={selectedStatuses}
-            allLabel="All statuses"
-            onChange={(next) => setFilters({
-              statuses: next.length && next.length < STATUS_OPTIONS.length ? next.join(',') : '',
-              tab: '',
-            })}
-          />
-        </div>
-        <div className="relative flex-1 min-w-[220px] sm:mt-5">
+        <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           <input
             type="search"

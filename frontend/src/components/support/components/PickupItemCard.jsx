@@ -31,6 +31,7 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const [techSignOpen, setTechSignOpen] = useState(false);
   const [otpInput, setOtpInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
   const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
   const [assignPickupOpen, setAssignPickupOpen] = useState(false);
@@ -108,6 +109,12 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
     await api.post(`/support/items/${item.id}/verify-pickup-otp`, { otp: otpInput.trim() });
     toast.success('OTP verified! Laptop picked up.');
     setOtpInput('');
+  });
+
+  const handleSendOtp = () => run(async () => {
+    await api.post(`/support/items/${item.id}/send-otp`);
+    setOtpSent(true);
+    toast.success('OTP sent to the customer on WhatsApp');
   });
 
   const podDone = !!(item.pod_image_path || item.proof_of_completion_path);
@@ -307,7 +314,7 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
           </p>
           <p className="font-mono text-2xl font-bold text-amber-900 tracking-widest">{item.customer_otp_code}</p>
           <p className="text-xs text-amber-600 mt-1">
-            Share with the customer; the technician enters it on handover.
+            OTP is sent to the customer on WhatsApp. Share this code only if WhatsApp failed.
           </p>
         </div>
       )}
@@ -616,7 +623,17 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
           {podDone && !otpVerified && canActTech && (
             <div>
               <p className="text-sm font-semibold text-gray-900 mb-1">Enter customer OTP</p>
-              <p className="text-xs text-gray-500 mb-2">Ask the customer for their OTP to confirm handover.</p>
+              <p className="text-xs text-gray-500 mb-2">
+                Send OTP to the customer on WhatsApp, then enter the 6-digit code they received.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleSendOtp}
+                className="mb-2 w-full px-3 py-2 border border-orange-200 bg-orange-50 text-orange-800 rounded-xl text-sm font-semibold disabled:opacity-50"
+              >
+                {otpSent || item.customer_otp_sent_at ? 'Resend OTP' : 'Send OTP to customer'}
+              </button>
               <div className="flex gap-2 items-stretch">
                 <input
                   type="tel" inputMode="numeric" maxLength={6}

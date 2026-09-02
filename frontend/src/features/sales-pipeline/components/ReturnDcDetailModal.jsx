@@ -2,9 +2,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
+import { usePermission } from '../../../hooks/usePermission';
 import { confirmReturnDcWarehouse, getReturnDcDetail } from '../salesPipelineApi';
 import { formatDate, formatDateTime } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
+
+const RETURN_DC_WAREHOUSE_ROLES = new Set([
+  'warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin',
+]);
 
 function assetUrl(p) {
   if (!p) return null;
@@ -91,6 +96,10 @@ function WarehouseSignPanel({ rdcNumber, onSigned }) {
 }
 
 export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
+  const { user } = useAuth();
+  const { canView } = usePermission();
+  const canViewOtp = canView('delivery_register_otp');
+  const canWarehouseSign = RETURN_DC_WAREHOUSE_ROLES.has(String(user?.role || '').toLowerCase());
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -149,9 +158,13 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                   <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center gap-1 text-xs">
                     <CheckCircle2 className="w-3.5 h-3.5" /> Customer OTP verified
                   </span>
-                ) : detail.customer_otp_code ? (
+                ) : detail.customer_otp_code && canViewOtp ? (
                   <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-mono inline-flex items-center gap-1 text-xs">
                     <KeyRound className="w-3.5 h-3.5" /> OTP {detail.customer_otp_code}
+                  </span>
+                ) : !detail.customer_otp_verified_at ? (
+                  <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">
+                    Customer OTP pending
                   </span>
                 ) : null}
                 {detail.gate_inward_at ? (
@@ -273,7 +286,13 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                 </p>
               ) : null}
 
-              {detail.can_warehouse_confirm ? (
+              {detail.warehouse_receive_pending && !canWarehouseSign ? (
+                <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                  Warehouse staff will e-sign when this Return DC is received at the warehouse.
+                </p>
+              ) : null}
+
+              {canWarehouseSign && detail.can_warehouse_confirm ? (
                 <WarehouseSignPanel
                   rdcNumber={rdcNumber}
                   onSigned={() => { load(); onUpdated?.(); }}

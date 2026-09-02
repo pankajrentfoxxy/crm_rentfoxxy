@@ -16,11 +16,56 @@ async function nextDebitNoteNumber() {
   return res.rows[0].number;
 }
 
+function parseMonthList(raw) {
+  if (raw == null || raw === '') return [];
+  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  return [...new Set(
+    list.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 12)
+  )];
+}
+
+const GENERATE_SKIP_MESSAGES = {
+  'No rental serials': 'This vendor has no rental or rent-to-own laptops received by the end of that month.',
+  'No active serials in this month': 'No laptops were on rent for this vendor in that month.',
+};
+
+function generateSkipMessage(reason) {
+  return GENERATE_SKIP_MESSAGES[reason] || reason || 'Nothing to bill for this vendor and month.';
+}
+
+exports.listBillableVendors = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT v.vendor_id,
+              COALESCE(NULLIF(v.business_name, ''), v.first_name) AS vendor_name
+       FROM vendors v
+       WHERE v.deleted_at IS NULL
+         AND (
+           EXISTS (
+             SELECT 1 FROM vendor_purchase_orders vpo
+             WHERE vpo.vendor_id = v.vendor_id
+               AND vpo.deleted_at IS NULL
+               AND vpo.purchase_order_type IN ('rental_purchase', 'rent_to_own')
+           )
+           OR EXISTS (
+             SELECT 1 FROM vendor_monthly_bills vb
+             WHERE vb.vendor_id = v.vendor_id
+           )
+         )
+       ORDER BY vendor_name ASC, v.vendor_id`
+    );
+    res.json({ success: true, vendors: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.listVendorBills = async (req, res) => {
   try {
     const {
       vendor_id,
       month,
+      months,
       year,
       status,
       search,
@@ -35,9 +80,13 @@ exports.listVendorBills = async (req, res) => {
       params.push(vendor_id);
       where.push(`vb.vendor_id = $${params.length}`);
     }
-    if (month) {
-      params.push(month);
+    const monthList = parseMonthList(months != null && String(months).trim() !== '' ? months : month);
+    if (monthList.length === 1) {
+      params.push(monthList[0]);
       where.push(`vb.bill_month = $${params.length}`);
+    } else if (monthList.length > 1) {
+      params.push(monthList);
+      where.push(`vb.bill_month = ANY($${params.length}::int[])`);
     }
     if (year) {
       params.push(year);
@@ -141,7 +190,12 @@ exports.generateVendorBill = async (req, res) => {
     }
     const result = await generateVendorBill(Number(vendor_id), Number(month), Number(year));
     if (result.skipped && !result.bill_id) {
-      return res.json({ success: true, skipped: true, reason: result.reason });
+      return res.status(422).json({
+        success: false,
+        skipped: true,
+        reason: result.reason,
+        message: generateSkipMessage(result.reason),
+      });
     }
     const bill = await pool.query(
       `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name FROM vendor_monthly_bills vb
@@ -149,6 +203,18 @@ exports.generateVendorBill = async (req, res) => {
        WHERE vb.bill_id = $1`,
       [result.bill_id]
     );
+    if (result.skipped) {
+      const num = bill.rows[0]?.bill_number;
+      return res.status(409).json({
+        success: false,
+        skipped: true,
+        bill_id: result.bill_id,
+        bill: bill.rows[0],
+        message: num
+          ? `Bill ${num} already exists for this vendor and month`
+          : 'Bill already exists for this vendor and month',
+      });
+    }
     res.json({ success: true, ...result, bill: bill.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

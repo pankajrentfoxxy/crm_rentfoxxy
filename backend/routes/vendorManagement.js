@@ -27,7 +27,7 @@ const authorize = [
 const authorizeVendorRead = [
   authMiddleware,
   checkAnySectionPermission(
-    ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch', 'diagnosis_failed'],
+    ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch', 'diagnosis_failed', 'vendor_billing_mgmt', 'debit_notes'],
     'view'
   ),
 ];

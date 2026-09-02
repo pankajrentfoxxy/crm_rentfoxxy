@@ -2,6 +2,7 @@ import api from '../../utils/api';
 
 const base = '/vendor-billing';
 
+export const listBillableVendors = () => api.get(`${base}/vendors`);
 export const listVendorBills = (p) => api.get(`${base}/bills`, { params: p });
 export const getVendorBill = (id) => api.get(`${base}/bills/${id}`);
 export const generateVendorBill = (d) => api.post(`${base}/bills/generate`, d);

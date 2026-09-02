@@ -1204,7 +1204,11 @@ async function generateVendorBill(vendorId, month, year) {
               vsn.inventory_status,
               COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
               (vsn.extra->>'returned_at')::date AS returned_at,
-              (vpo.line_items->0->>'rate')::numeric AS rental_monthly_rate,
+              COALESCE(
+                NULLIF((vpo.line_items->0->>'rate')::numeric, 0),
+                NULLIF((vpo.line_items->0->>'monthly_rental_amount')::numeric, 0),
+                NULLIF((vpo.line_items->0->>'monthly_rate')::numeric, 0)
+              ) AS rental_monthly_rate,
               vpo.purchase_order_type AS po_type
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id

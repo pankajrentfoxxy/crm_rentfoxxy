@@ -597,6 +597,10 @@ exports.raiseTicket = async (req, res) => {
     );
 
     await client.query('COMMIT');
+    try {
+      const supportWa = require('../services/supportWhatsApp');
+      supportWa.notifySupportTicketCreatedAsync({ ticketId });
+    } catch (_) { /* WhatsApp must never block portal ticket */ }
     res.status(201).json({
       success: true,
       ticket_id: ticketId,

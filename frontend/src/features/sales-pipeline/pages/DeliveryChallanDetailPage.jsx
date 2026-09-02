@@ -344,7 +344,7 @@ export default function DeliveryChallanDetailPage() {
         setApiDeliveryOtp(r.data.otp_visible);
         toast.success(`OTP: ${r.data.otp_visible}`);
       } else {
-        toast.success('OTP sent to customer');
+        toast.success(r.data?.message || 'OTP sent to the customer on WhatsApp. Ask them for the code.');
       }
       load();
     } catch (err) {

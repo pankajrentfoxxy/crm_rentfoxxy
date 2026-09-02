@@ -81,6 +81,7 @@ function ItemCard({
   const { user } = useAuth();
   const [comment, setComment] = useState('');
   const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
   const [verifyInput, setVerifyInput] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -399,6 +400,18 @@ function ItemCard({
             {st === 'pod_uploaded' && (
               <>
                 <p className="support-v3-section-label">Customer OTP</p>
+                <p className="text-xs text-slate-500">Send OTP on WhatsApp, then enter the code the customer received.</p>
+                <button
+                  type="button"
+                  className="w-full min-h-[44px] border border-orange-200 bg-orange-50 text-orange-800 rounded-lg text-sm font-semibold disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => run(async () => {
+                    await api.post(`/support/items/${item.id}/send-otp`);
+                    setOtpSent(true);
+                  })}
+                >
+                  {otpSent || item.customer_otp_sent_at ? 'Resend OTP' : 'Send OTP to customer'}
+                </button>
                 <OtpInput value={otp} onChange={setOtp} disabled={busy} />
                 <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy || otp.replace(/\D/g, '').length !== 6} onClick={() => run(() => api.post(`/support/items/${item.id}/verify-customer-otp`, { otp }))}>
                   Verify OTP & close item

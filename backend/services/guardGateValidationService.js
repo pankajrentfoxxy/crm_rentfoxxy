@@ -2139,6 +2139,18 @@ async function confirmSession({ sessionId, remarks, user }) {
       }
     }
 
+    if (outward?.dcNumber && remaining === 0 && session.direction === 'outward'
+        && ['dc', 'sdc'].includes(session.reference_type)) {
+      try {
+        const { notifySoInTransitAsync } = require('./salesOrderWhatsApp');
+        notifySoInTransitAsync({ dcNumber: outward.dcNumber });
+      } catch (_) { /* WhatsApp must never block gate confirm */ }
+      try {
+        const { notifySupportServiceInTransitAsync } = require('./supportWhatsApp');
+        notifySupportServiceInTransitAsync({ dcNumber: outward.dcNumber });
+      } catch (_) { /* WhatsApp must never block gate confirm */ }
+    }
+
     if (outward?.salesOrderNumber) {
       try {
         const dispatchWf = require('./dispatchWorkflowService');

@@ -972,6 +972,11 @@ exports.storeSalesOrder = async (req, res) => {
 
     await client.query('COMMIT');
 
+    try {
+      const { notifySoCreatedAsync } = require('../services/salesOrderWhatsApp');
+      notifySoCreatedAsync({ salesOrderNumber });
+    } catch (_) { /* WhatsApp must never block SO create */ }
+
     if (wfStart?.notifyUserId) {
       await dispatchWf.postStartWorkflowNotifications({
         salesOrderNumber,
@@ -3681,11 +3686,13 @@ exports.sendDeliveryOtp = async (req, res) => {
     const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
     const payload = {
       success: true,
-      message: customerEmail
-        ? 'OTP sent to customer and sales email.'
-        : 'OTP generated and emailed to sales.',
+      message: 'OTP sent to the customer on WhatsApp. Ask the customer for the 6-digit code.',
     };
     if (await userCanViewDeliveryRegisterOtp(req.user)) payload.otp_visible = otp;
+    try {
+      const { notifyDeliveryOtpAsync } = require('../services/salesOrderWhatsApp');
+      notifyDeliveryOtpAsync({ dcNumber, otp });
+    } catch (_) { /* WhatsApp must never block OTP */ }
     res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -3782,18 +3789,29 @@ async function assertReturnDcAssignedAccess(req, rdcNumber) {
 
 exports.listReturnDeliveryChallans = async (req, res) => {
   try {
+    const q = req.query || {};
     const assignedUserId = await resolveReturnDcAssignedUserId(req);
     const data = await listReturnDeliveryChallans({
-      page: parseInt(req.query.page, 10) || 1,
-      limit: Math.min(parseInt(req.query.limit, 10) || 25, 100),
-      search: req.query.search || '',
-      dateFrom: req.query.date_from,
-      dateTo: req.query.date_to,
-      status: req.query.status || req.query.tab || 'all',
+      page: parseInt(q.page, 10) || 1,
+      limit: Math.min(parseInt(q.limit, 10) || 25, 100),
+      search: q.search || '',
+      dateFrom: q.date_from,
+      dateTo: q.date_to,
+      status: q.status || q.tab || 'all',
       assignedUserId,
+      warehouseReceive: q.warehouse_receive || q.warehouse || '',
+      technician: q.technician || '',
     });
+    const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
+    const canViewOtp = await userCanViewDeliveryRegisterOtp(req.user, req.permissionCache);
+    if (!canViewOtp) {
+      for (const row of data.return_dcs || []) {
+        delete row.customer_otp_code;
+      }
+    }
     res.json({
       success: true,
+      can_view_otp: canViewOtp,
       ...data,
       rows: data.return_dcs,
       orders: data.return_dcs,
@@ -3805,12 +3823,13 @@ exports.listReturnDeliveryChallans = async (req, res) => {
 
 exports.exportReturnDcLaptops = async (req, res) => {
   try {
-    const status = req.query.status || req.query.tab || 'all';
+    const q = req.query || {};
+    const status = q.status || q.tab || 'all';
     const assignedUserId = await resolveReturnDcAssignedUserId(req);
     const rows = await listReturnDcLaptopExportRows({
-      search: req.query.search || '',
-      dateFrom: req.query.date_from,
-      dateTo: req.query.date_to,
+      search: q.search || '',
+      dateFrom: q.date_from,
+      dateTo: q.date_to,
       status,
       assignedUserId,
     });
@@ -3896,11 +3915,16 @@ exports.getReturnDcDetail = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
     await assertReturnDcAssignedAccess(req, rdcNumber);
-    const detail = await getReturnDcDetail(rdcNumber);
+    const detail = await getReturnDcDetail(rdcNumber, { role: req.user?.role });
     if (!detail) {
       return res.status(404).json({ success: false, message: 'Return DC not found' });
     }
-    res.json({ success: true, ...detail });
+    const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
+    const canViewOtp = await userCanViewDeliveryRegisterOtp(req.user, req.permissionCache);
+    if (!canViewOtp) {
+      detail.customer_otp_code = null;
+    }
+    res.json({ success: true, can_view_otp: canViewOtp, ...detail });
   } catch (error) {
     console.error('getReturnDcDetail:', error);
     res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to load Return DC detail' });
@@ -5177,6 +5201,16 @@ exports.updateDcDispatch = async (req, res) => {
       ).catch(() => {});
 
       await client.query('COMMIT');
+      if (newStatus === 'in_transit' || newStatus === 'shipped') {
+        try {
+          const { notifySoInTransitAsync } = require('../services/salesOrderWhatsApp');
+          notifySoInTransitAsync({ dcNumber });
+        } catch (_) { /* WhatsApp must never block dispatch */ }
+        try {
+          const { notifySupportServiceInTransitAsync } = require('../services/supportWhatsApp');
+          notifySupportServiceInTransitAsync({ dcNumber });
+        } catch (_) { /* WhatsApp must never block dispatch */ }
+      }
       res.json({ success: true, message: 'Dispatch updated', status: newStatus });
 
       const soNumber = ctx?.sales_order_number;
@@ -5541,6 +5575,15 @@ exports.markDcDelivered = async (req, res) => {
     await exports.finalizeDeliveryInventory(client, dcNumber, req.user);
 
     await client.query('COMMIT');
+
+    try {
+      const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
+      notifySoDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+    try {
+      const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
+      notifySupportServiceDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
 
     // Post-commit: first prorated rental invoice (delivery → month-end). Billing
     // must never roll back a successful delivery; failures are logged and the
