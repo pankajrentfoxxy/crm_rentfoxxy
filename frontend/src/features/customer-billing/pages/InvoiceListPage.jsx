@@ -4,6 +4,7 @@ import { Plus, Receipt, IndianRupee, BadgeMinus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
+import InvoiceCoveragePanel from '../components/InvoiceCoveragePanel';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
@@ -37,6 +38,7 @@ export default function InvoiceListPage() {
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [customers, setCustomers] = useState([]);
+  const [coverageTick, setCoverageTick] = useState(0);
   const [genOpen, setGenOpen] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
   const [genForm, setGenForm] = useState({
@@ -114,6 +116,16 @@ export default function InvoiceListPage() {
     setGenOpen(true);
   };
 
+  const openGenerateForCustomers = (ids) => {
+    setGenForm({
+      customer_ids: ids || [],
+      all_billable: false,
+      month: String(month || new Date().getMonth() + 1),
+      year: String(year || new Date().getFullYear()),
+    });
+    setGenOpen(true);
+  };
+
   const handleGenerate = async () => {
     if (!genForm.all_billable && genForm.customer_ids.length === 0) {
       toast.error('Select at least one customer, or choose “All billable customers”');
@@ -139,6 +151,7 @@ export default function InvoiceListPage() {
       if (s.errors) parts.push(`${s.errors} failed`);
       toast.success(parts.length ? parts.join(', ') : 'No invoices generated');
       setGenOpen(false);
+      setCoverageTick((n) => n + 1);
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Generate failed');
@@ -149,11 +162,11 @@ export default function InvoiceListPage() {
 
   const handleDownload = async (id, num) => {
     try {
-      const res = await downloadInvoicePdf(id);
+      const res = await downloadInvoicePdf(id, { format: 'laptop_details' });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${num}.pdf`;
+      a.download = `${num}-document.pdf`;
       a.click();
     } catch {
       toast.error('PDF download failed');
@@ -209,6 +222,13 @@ export default function InvoiceListPage() {
         <StatCard label="Outstanding" value={fmt(stats.outstanding)} tone="amber" active={tab === 'all'} onClick={() => setTab('all')} />
       </div>
 
+      <InvoiceCoveragePanel
+        month={month}
+        year={year || (month ? String(new Date().getFullYear()) : '')}
+        refreshKey={coverageTick}
+        onGeneratePending={openGenerateForCustomers}
+      />
+
       <div className="flex flex-wrap gap-3 mb-3 items-end">
         <SearchField
           value={searchInput}
@@ -226,7 +246,15 @@ export default function InvoiceListPage() {
         </div>
         <label className="flex flex-col gap-1 text-xs text-slate-600">
           Month
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px] min-w-[120px]">
+          <select
+            value={month}
+            onChange={(e) => {
+              const next = e.target.value;
+              setMonth(next);
+              if (next && !year) setYear(String(new Date().getFullYear()));
+            }}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px] min-w-[120px]"
+          >
             <option value="">All months</option>
             {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
           </select>
@@ -338,9 +366,9 @@ export default function InvoiceListPage() {
       />
 
       {genOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => !genLoading && setGenOpen(false)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4">
+          <button type="button" className="fixed inset-0 bg-black/40" onClick={() => !genLoading && setGenOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full my-6 p-6 space-y-4 max-h-[calc(100vh-3rem)] overflow-y-auto">
             <h3 className="font-semibold text-lg">Generate Invoices</h3>
             <p className="text-sm text-gray-500">
               Select one or more customers, or run for all customers with active rental laptops.

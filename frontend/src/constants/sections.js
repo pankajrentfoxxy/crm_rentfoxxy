@@ -283,11 +283,8 @@ export const GROUP_COLORS = {
 export const PERMISSION_ACTIONS = ['can_view', 'can_create', 'can_edit', 'can_delete'];
 
 /** Legacy umbrella keys — kept in DB for backward compat but hidden from role-permission UI. */
-/** These modules can be granted only to admin / super_admin. */
-export const ADMIN_ONLY_RBAC_SECTIONS = [
-  'inventory_vendor_master_data',
-  'inventory_return_master_data',
-];
+/** Empty: Master Vendor / Return Data can be granted to any role (Accounts, etc.). */
+export const ADMIN_ONLY_RBAC_SECTIONS = [];
 
 export const HIDDEN_ROLE_PERMISSION_SECTIONS = new Set([
   'sales_orders',

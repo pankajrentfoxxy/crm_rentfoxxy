@@ -4,12 +4,16 @@ const base = '/customer-billing';
 const einvBase = '/einvoice';
 
 export const listInvoices = (p) => api.get(`${base}/invoices`, { params: p });
+export const listInvoiceCoverage = (p) => api.get(`${base}/invoices/coverage`, { params: p });
 export const getInvoice = (id) => api.get(`${base}/invoices/${id}`);
 export const generateInvoice = (d) => api.post(`${base}/invoices/generate`, d);
 export const generateInvoicesBulk = (d) => api.post(`${base}/invoices/generate-bulk`, d);
 export const sendInvoice = (id, d) => api.post(`${base}/invoices/${id}/send`, d);
 export const markInvoicePaid = (id, d) => api.patch(`${base}/invoices/${id}/paid`, d);
-export const downloadInvoicePdf = (id) => api.get(`${base}/invoices/${id}/pdf`, { responseType: 'blob' });
+export const downloadInvoicePdf = (id, { format } = {}) => api.get(`${base}/invoices/${id}/pdf`, {
+  params: format ? { format } : undefined,
+  responseType: 'blob',
+});
 export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: p });
 export const createCreditNote = (d) => api.post(`${base}/credit-notes`, d);
 export const approveCreditNote = (id) => api.patch(`${base}/credit-notes/${id}/approve`);

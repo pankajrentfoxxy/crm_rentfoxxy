@@ -9,6 +9,7 @@ const cp = checkSectionPermission;
 router.use(authMiddleware);
 
 router.get('/invoices', cp('customer_billing', 'view'), ctrl.listInvoices);
+router.get('/invoices/coverage', cp('customer_billing', 'view'), ctrl.listInvoiceCoverage);
 router.post('/invoices/generate', cp('customer_billing', 'create'), ctrl.generateInvoice);
 router.post('/invoices/generate-bulk', cp('customer_billing', 'create'), ctrl.generateInvoicesBulk);
 router.get('/invoices/:invoiceId/payments', cp('customer_billing', 'view'), ctrl.listInvoicePayments);

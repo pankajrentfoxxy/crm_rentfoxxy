@@ -12,6 +12,7 @@ const {
 const {
   fmtPeriod,
   parseItemDisplay,
+  formatSpecLine,
   groupLineItems,
   fmtMoneyPlain,
   fmtMoneyInr,
@@ -38,6 +39,50 @@ function parseLineItems(invoice) {
     try { return JSON.parse(invoice.line_items); } catch { return []; }
   }
   return invoice.line_items || [];
+}
+
+async function enrichLineItemsWithSpecs(lines) {
+  if (!Array.isArray(lines) || !lines.length) return lines || [];
+  const needsLookup = lines.some((l) => !formatSpecLine(l) && (l.serial_id || l.ttspl_id));
+  if (!needsLookup) return lines;
+
+  const ids = [...new Set(lines.map((l) => Number(l.serial_id)).filter((n) => Number.isFinite(n) && n > 0))];
+  const codes = [...new Set(lines.map((l) => String(l.ttspl_id || '').trim()).filter(Boolean))];
+  if (!ids.length && !codes.length) return lines;
+
+  const r = await pool.query(
+    `SELECT serial_id,
+            inventory_asset_code,
+            extra->>'processor' AS processor,
+            extra->>'generation' AS generation,
+            extra->>'ram' AS ram,
+            extra->>'storage' AS storage
+       FROM vendor_serial_numbers
+      WHERE deleted_at IS NULL
+        AND (
+          (cardinality($1::int[]) > 0 AND serial_id = ANY($1::int[]))
+          OR (cardinality($2::text[]) > 0 AND inventory_asset_code = ANY($2::text[]))
+        )`,
+    [ids, codes]
+  );
+  const byId = new Map();
+  const byCode = new Map();
+  for (const row of r.rows) {
+    byId.set(Number(row.serial_id), row);
+    if (row.inventory_asset_code) byCode.set(String(row.inventory_asset_code), row);
+  }
+  return lines.map((line) => {
+    if (formatSpecLine(line)) return line;
+    const spec = byId.get(Number(line.serial_id)) || byCode.get(String(line.ttspl_id || ''));
+    if (!spec) return line;
+    return {
+      ...line,
+      processor: spec.processor || '',
+      generation: spec.generation || '',
+      ram: spec.ram || '',
+      storage: spec.storage || '',
+    };
+  });
 }
 
 function logoDataUri() {
@@ -86,22 +131,27 @@ function monthYearLabel(ym) {
   return `${names[monthIdx] || m[2]} ${m[1]}`;
 }
 
-function groupTitleCatchup(lines) {
+function groupTitleCatchup(lines, { compact = false } = {}) {
   const first = lines[0];
   const label = monthYearLabel(first?.period)
     || fmtPeriod(first?.rent_start, first?.rent_end).replace(/\s\d{4}$/, '');
-  return `Catch-up charges${label ? ` for ${label}` : ''} <small>— devices delivered mid-month, billed pro-rata</small>`;
+  const base = `Catch-up charges${label ? ` for ${label}` : ''}`;
+  if (compact) return base;
+  return `${base} <small>— devices delivered mid-month, billed pro-rata</small>`;
 }
 
-function groupTitleFull(invoice) {
+function groupTitleFull(invoice, { compact = false } = {}) {
   const from = fmtInvoiceDate(invoice.from_date);
   const to = fmtInvoiceDate(invoice.to_date);
   const label = monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`);
-  return `Rental for ${label || 'billing period'} <small>— ${from} – ${to}, full month</small>`;
+  const base = `Rental for ${label || 'billing period'}`;
+  if (compact) return base;
+  return `${base} <small>— ${from} – ${to}, full month</small>`;
 }
 
 function renderLineRow(line, idx, alt) {
   const item = parseItemDisplay(line.brand, line.model);
+  const spec = formatSpecLine(line);
   const serial = line.serial_number ? `SN ${escapeHtml(line.serial_number)}` : '';
   const proRataTag = isProRataLine(line) ? '<span class="tag">pro-rata</span>' : '';
   const rate = line.monthly_rate != null ? line.monthly_rate : (
@@ -114,7 +164,7 @@ function renderLineRow(line, idx, alt) {
   return `<tr${alt ? ' class="alt"' : ''}>
     <td>${idx}</td>
     <td><span class="asset">${escapeHtml(line.ttspl_id || '—')}</span>${serial ? `<span class="serial">${serial}</span>` : ''}</td>
-    <td>${escapeHtml(item.title)}${item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : ''}${proRataTag}</td>
+    <td><span class="item-title">${escapeHtml(item.title)}</span>${proRataTag}${item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : ''}${spec ? `<span class="item-spec">${escapeHtml(spec)}</span>` : ''}</td>
     <td class="period">${escapeHtml(fmtPeriod(line.rent_start, line.rent_end))}</td>
     <td class="ctr">${daysCell}</td>
     <td class="num">${fmtMoneyPlain(rate)}</td>
@@ -176,33 +226,109 @@ function customerAddressHtml(invoice) {
   return parts.map((p) => escapeHtml(p)).join('<br>') || '—';
 }
 
-function buildInvoiceHtml(invoice, company) {
-  const css = fs.readFileSync(CSS_PATH, 'utf8');
-  const lines = parseLineItems(invoice);
+function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = {}) {
   const { catchup, full } = groupLineItems(lines);
-  const logo = logoDataUri();
-  const bank = bankDetails();
-  const gstin = invoice.gst_number || invoice.gst_no || '';
-  const deviceCount = lines.length;
-  const credit = parseFloat(invoice.credit_note_adjustment || 0);
-  const { rows: gstRows, intra } = gstDisplayRows(invoice, company, gstin);
-
   let bodyRows = '';
   let rowNum = 1;
   let altToggle = false;
+  let catchupSubtotal = 0;
+  let fullSubtotal = 0;
+  let catchupMonthLabel = '';
+  const titleOpts = { compact: compactSectionTitles };
+
   if (catchup.length) {
-    const catchupLabel = monthYearLabel(catchup[0]?.period) || 'prior period';
-    const g = renderGroup(groupTitleCatchup(catchup), catchup, rowNum, altToggle, `Catch-up subtotal (${catchupLabel})`);
+    catchupMonthLabel = monthYearLabel(catchup[0]?.period) || 'prior period';
+    const g = renderGroup(groupTitleCatchup(catchup, titleOpts), catchup, rowNum, altToggle, `Catch-up subtotal (${catchupMonthLabel})`);
     bodyRows += g.html;
+    catchupSubtotal = g.subtotal || 0;
     rowNum = g.nextIdx;
     altToggle = (catchup.length % 2) === 1;
   }
   if (full.length) {
     const monthLabel = monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`) || 'period';
-    const g = renderGroup(groupTitleFull(invoice), full, rowNum, altToggle, `${monthLabel} subtotal`);
+    const g = renderGroup(groupTitleFull(invoice, titleOpts), full, rowNum, altToggle, `${monthLabel} subtotal`);
     bodyRows += g.html;
+    fullSubtotal = g.subtotal || 0;
   }
 
+  const billingMonthLabel = monthYearLabel(
+    `${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`,
+  );
+
+  return {
+    bodyRows,
+    catchupSubtotal,
+    fullSubtotal,
+    catchupMonthLabel,
+    billingMonthLabel,
+    deviceCount: lines.length,
+  };
+}
+
+function renderItemsTable(bodyRows) {
+  return `<table class="items">
+  <colgroup>
+    <col class="c-idx"><col class="c-asset"><col class="c-item"><col class="c-period"><col class="c-days"><col class="c-rate"><col class="c-amt">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Asset ID / Serial</th>
+      <th>Item</th>
+      <th>Period</th>
+      <th class="ctr">Days</th>
+      <th class="num">Rate / mo</th>
+      <th class="num">Amount (₹)</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${bodyRows}
+  </tbody>
+</table>`;
+}
+
+function laptopDetailsSellerBlock(company) {
+  return {
+    name: company.legal_name || 'TRUETECH SERVICES PRIVATE LIMITED',
+    lines: [
+      'Unit No. 429, 4th Floor, JMD Megapolis Building',
+      'Sec-48, Sohna Road, Gurgaon, Haryana – 122018',
+    ],
+    contact: `${company.email || 'accounts@truetechservices.in'} | www.rentfoxxy.com`,
+  };
+}
+
+const LAPTOP_DETAILS_DOCUMENT = {
+  title: 'Laptop Rental Document',
+  documentNoLabel: 'Document No.',
+  fileSuffix: 'document',
+};
+
+function laptopDetailsDocumentNumber(invoice) {
+  return String(invoice.invoice_number || '').trim() || '—';
+}
+
+function laptopDetailsPdfDownloadName(invoiceNumber) {
+  const num = String(invoiceNumber || '').trim() || 'document';
+  return `${num}-${LAPTOP_DETAILS_DOCUMENT.fileSuffix}.pdf`;
+}
+
+const INVOICE_FORMATS = new Set(['tax_invoice', 'laptop_details']);
+
+function normalizeInvoiceFormat(format) {
+  const f = String(format || 'tax_invoice').trim().toLowerCase();
+  return INVOICE_FORMATS.has(f) ? f : 'tax_invoice';
+}
+
+async function buildInvoiceHtml(invoice, company) {
+  const css = fs.readFileSync(CSS_PATH, 'utf8');
+  const lines = await enrichLineItemsWithSpecs(parseLineItems(invoice));
+  const { bodyRows, deviceCount } = buildItemsTableBody(invoice, lines);
+  const logo = logoDataUri();
+  const bank = bankDetails();
+  const gstin = invoice.gst_number || invoice.gst_no || '';
+  const credit = parseFloat(invoice.credit_note_adjustment || 0);
+  const { rows: gstRows, intra } = gstDisplayRows(invoice, company, gstin);
   const totalsRows = [
     `<tr><td>Subtotal (${deviceCount} device${deviceCount === 1 ? '' : 's'})</td><td>${fmtMoneyInr(invoice.subtotal)}</td></tr>`,
     ...gstRows.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${fmtMoneyInr(r.value)}</td></tr>`),
@@ -277,25 +403,7 @@ function buildInvoiceHtml(invoice, company) {
   </tr>
 </table>
 
-<table class="items">
-  <colgroup>
-    <col class="c-idx"><col class="c-asset"><col class="c-item"><col class="c-period"><col class="c-days"><col class="c-rate"><col class="c-amt">
-  </colgroup>
-  <thead>
-    <tr>
-      <th>#</th>
-      <th>Asset ID / Serial</th>
-      <th>Item</th>
-      <th>Period</th>
-      <th class="ctr">Days</th>
-      <th class="num">Rate / mo</th>
-      <th class="num">Amount (₹)</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${bodyRows}
-  </tbody>
-</table>
+${renderItemsTable(bodyRows)}
 
 <table class="totals-wrap">
   <tr>
@@ -344,8 +452,100 @@ function buildInvoiceHtml(invoice, company) {
 </html>`;
 }
 
+async function buildLaptopDetailsHtml(invoice, company) {
+  const css = fs.readFileSync(CSS_PATH, 'utf8');
+  const lines = await enrichLineItemsWithSpecs(parseLineItems(invoice));
+  const {
+    bodyRows,
+    catchupSubtotal,
+    fullSubtotal,
+    catchupMonthLabel,
+    billingMonthLabel,
+  } = buildItemsTableBody(invoice, lines, { compactSectionTitles: true });
+  const logo = logoDataUri();
+  const seller = laptopDetailsSellerBlock(company);
+  const untaxedTotal = +(catchupSubtotal + fullSubtotal).toFixed(2);
+
+  const totalsRows = [];
+  if (catchupSubtotal > 0 && catchupMonthLabel) {
+    totalsRows.push(
+      `<tr><td>Catch-up (${escapeHtml(catchupMonthLabel)})</td><td>${fmtMoneyInr(catchupSubtotal)}</td></tr>`,
+    );
+  }
+  if (fullSubtotal > 0 && billingMonthLabel) {
+    totalsRows.push(
+      `<tr><td>Rental (${escapeHtml(billingMonthLabel)})</td><td>${fmtMoneyInr(fullSubtotal)}</td></tr>`,
+    );
+  }
+  totalsRows.push(
+    `<tr class="grand"><td>Taxable Value</td><td>${fmtMoneyInr(untaxedTotal)}</td></tr>`,
+  );
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(LAPTOP_DETAILS_DOCUMENT.title)} – ${escapeHtml(invoice.customer_name || 'Rentfoxxy')}</title>
+<style>${css}</style>
+</head>
+<body class="variant-laptop-details">
+<div class="ld-header">
+  <div class="ld-header-left">
+    ${logo
+    ? `<img class="brand-img ld-logo" src="${logo}" alt="Rentfoxxy">`
+    : '<div class="brand">rent<span>foxxy</span></div>'}
+    <div class="ld-company">
+      <div class="ld-company-name">${escapeHtml(seller.name)}</div>
+      ${seller.lines.map((line) => `<div class="ld-company-line">${escapeHtml(line)}</div>`).join('\n      ')}
+      <div class="ld-company-contact">${escapeHtml(seller.contact)}</div>
+    </div>
+  </div>
+  <div class="ld-header-right">
+    <div class="ld-title">${escapeHtml(LAPTOP_DETAILS_DOCUMENT.title)}</div>
+    <div class="ld-customer">${escapeHtml(invoice.customer_name || invoice.customer_id)}</div>
+    <div class="ld-month">${escapeHtml(billingMonthLabel || '—')}</div>
+  </div>
+</div>
+
+${renderItemsTable(bodyRows)}
+
+<table class="totals-wrap">
+  <tr>
+    <td class="words-cell">
+      <div class="words">
+        <div class="lbl">Amount in words</div>
+        <div class="val">${escapeHtml(amountInIndianWords(untaxedTotal))}</div>
+      </div>
+      <div class="gst-note">All amounts in INR. Dates in IST. Mid-month deliveries are billed pro-rata on calendar days.</div>
+    </td>
+    <td>
+      <table class="totals" align="right">
+        ${totalsRows.join('\n        ')}
+      </table>
+    </td>
+  </tr>
+</table>
+
+<div class="computer">This is a computer-generated document and does not require a physical signature.</div>
+</body>
+</html>`;
+}
+
+async function buildInvoiceHtmlByFormat(invoice, company, format) {
+  return normalizeInvoiceFormat(format) === 'laptop_details'
+    ? buildLaptopDetailsHtml(invoice, company)
+    : buildInvoiceHtml(invoice, company);
+}
+
 module.exports = {
   buildInvoiceHtml,
+  buildLaptopDetailsHtml,
+  buildInvoiceHtmlByFormat,
+  normalizeInvoiceFormat,
+  LAPTOP_DETAILS_DOCUMENT,
+  laptopDetailsDocumentNumber,
+  laptopDetailsPdfDownloadName,
   loadCompany,
   parseLineItems,
+  enrichLineItemsWithSpecs,
 };

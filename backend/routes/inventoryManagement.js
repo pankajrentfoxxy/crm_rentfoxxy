@@ -18,12 +18,10 @@ const invView = [authMiddleware, checkSectionPermission('inventory_management', 
 const masterDataView = [authMiddleware, checkSectionPermission('inventory_master_data', 'view')];
 const vendorMasterDataView = [
   authMiddleware,
-  checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_vendor_master_data', 'view'),
 ];
 const returnMasterDataView = [
   authMiddleware,
-  checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_return_master_data', 'view'),
 ];
 const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];

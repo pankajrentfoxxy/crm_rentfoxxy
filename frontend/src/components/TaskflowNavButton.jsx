@@ -38,6 +38,7 @@ export default function TaskflowNavButton() {
     try {
       const data = await getTaskflowSsoUrl();
       if (!data?.url) throw new Error(data?.message || 'TaskFlow SSO URL missing');
+      if (data.warning) toast.error(data.warning, { duration: 8000 });
       tab.opener = null;
       tab.location.replace(data.url);
     } catch (err) {

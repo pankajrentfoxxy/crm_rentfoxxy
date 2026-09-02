@@ -106,7 +106,11 @@ async function buildCustomerInvoiceLines(client, {
             END AS rent_end_date,
             vsn.rent_monthly_rate,
             COALESCE(vsn.extra->>'brand', '') AS brand,
-            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
+            COALESCE(vsn.extra->>'processor', '') AS processor,
+            COALESCE(vsn.extra->>'generation', '') AS generation,
+            COALESCE(vsn.extra->>'ram', '') AS ram,
+            COALESCE(vsn.extra->>'storage', '') AS storage
        FROM vendor_serial_numbers vsn
       WHERE vsn.current_customer_id = $1
         AND vsn.deleted_at IS NULL
@@ -153,6 +157,10 @@ async function buildCustomerInvoiceLines(client, {
         dc_number: row.dc_number,
         brand: row.brand || '',
         model: row.model || '',
+        processor: row.processor || '',
+        generation: row.generation || '',
+        ram: row.ram || '',
+        storage: row.storage || '',
         period: `${seg.year}-${String(seg.month).padStart(2, '0')}`,
         rent_start: toLocalYmd(seg.segStart),
         rent_end: toLocalYmd(seg.segEnd),

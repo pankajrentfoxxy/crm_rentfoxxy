@@ -15,8 +15,11 @@ module.exports = {
       max_memory_restart: '1G',
       time: true,
       env: {
-        NODE_ENV: 'production'
-      }
+        NODE_ENV: 'production',
+        PUPPETEER_CACHE_DIR: '/var/www/crm_rentfoxxy/backend/.cache/puppeteer',
+        PUPPETEER_EXECUTABLE_PATH:
+          '/var/www/crm_rentfoxxy/backend/.cache/puppeteer/chrome/linux-131.0.6778.204/chrome-linux64/chrome',
+      },
     }
   ]
 };

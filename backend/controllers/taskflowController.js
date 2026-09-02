@@ -1,9 +1,20 @@
-const { buildSsoRedirectUrl, fetchPendingCount } = require('../services/taskflowSsoService');
+const { buildSsoRedirectUrl, fetchPendingCount, verifySsoTokenLocally } = require('../services/taskflowSsoService');
 
 exports.getSsoUrl = async (req, res) => {
   try {
     const url = await buildSsoRedirectUrl(req.user);
-    res.json({ success: true, url });
+    let ssoReady = true;
+    let warning = null;
+    const token = new URL(url).searchParams.get('token');
+    if (token) {
+      try {
+        verifySsoTokenLocally(token);
+      } catch (e) {
+        ssoReady = false;
+        warning = e.message;
+      }
+    }
+    res.json({ success: true, url, sso_ready: ssoReady, warning });
   } catch (err) {
     res.status(err.status || 500).json({
       success: false,

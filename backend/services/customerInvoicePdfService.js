@@ -11,18 +11,47 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
-const { buildInvoiceHtml, loadCompany } = require('./customerInvoiceHtmlService');
+const {
+  buildInvoiceHtmlByFormat,
+  loadCompany,
+  normalizeInvoiceFormat,
+  LAPTOP_DETAILS_DOCUMENT,
+  laptopDetailsPdfDownloadName,
+} = require('./customerInvoiceHtmlService');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
 
+function invoicePdfDownloadName(invoiceNumber, format) {
+  return normalizeInvoiceFormat(format) === 'laptop_details'
+    ? laptopDetailsPdfDownloadName(invoiceNumber)
+    : `${invoiceNumber}.pdf`;
+}
+
 let browserPromise = null;
+
+async function resolveChromeExecutable() {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    path.join(__dirname, '../.cache/puppeteer/chrome/linux-131.0.6778.204/chrome-linux64/chrome'),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
+}
 
 async function getBrowser() {
   if (!browserPromise) {
+    const executablePath = await resolveChromeExecutable();
+    if (!executablePath) {
+      throw new Error(
+        'Chrome is not installed for invoice PDF generation. Run: cd backend && PUPPETEER_CACHE_DIR=.cache/puppeteer npx puppeteer browsers install chrome'
+      );
+    }
     browserPromise = puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      executablePath,
     });
   }
   return browserPromise;
@@ -45,19 +74,22 @@ async function renderHtmlToPdf(html, filePath) {
   }
 }
 
-async function generateCustomerInvoicePdf(invoice) {
+async function generateCustomerInvoicePdf(invoice, options = {}) {
+  const format = normalizeInvoiceFormat(options.format);
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const fileName = `${invoice.invoice_number}_${Date.now()}.pdf`;
+  const suffix = format === 'laptop_details' ? `-${LAPTOP_DETAILS_DOCUMENT.fileSuffix}` : '';
+  const fileName = `${invoice.invoice_number}${suffix}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/customer-invoices/${fileName}`;
 
   const company = await loadCompany(invoice.entity_code || 'rentfoxxy');
-  const html = buildInvoiceHtml(invoice, company);
+  const html = await buildInvoiceHtmlByFormat(invoice, company, format);
   await renderHtmlToPdf(html, filePath);
   return relativePath;
 }
 
 module.exports = {
   generateCustomerInvoicePdf,
+  invoicePdfDownloadName,
   UPLOAD_DIR,
 };

@@ -57,11 +57,42 @@ function parseItemDisplay(brand, model) {
   return { title: m || '—', note };
 }
 
+function tidySpecPart(value) {
+  const v = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!v || v === '-' || v === '—') return '';
+  return v;
+}
+
+function tidyRam(value) {
+  const v = tidySpecPart(value);
+  if (!v) return '';
+  if (/^\d+(\.\d+)?$/.test(v)) return `${v}GB`;
+  return v;
+}
+
+/** Compact second line: I5 · 11TH · 16GB · 512 SSD */
+function formatSpecLine(line = {}) {
+  const parts = [
+    tidySpecPart(line.processor),
+    tidySpecPart(line.generation),
+    tidyRam(line.ram),
+    tidySpecPart(line.storage || line.hard_disk || line.hdd),
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
 function isProRataLine(line) {
   if (line.is_catchup) return true;
   const billed = Number(line.days_in_month || 0);
   const monthDays = Number(line.month_days || 0);
   return monthDays > 0 && billed < monthDays;
+}
+
+function lineAssetKey(line) {
+  if (line?.serial_id != null && line.serial_id !== '') return `id:${line.serial_id}`;
+  if (line?.ttspl_id) return `t:${String(line.ttspl_id).trim()}`;
+  if (line?.serial_number) return `s:${String(line.serial_number).trim()}`;
+  return null;
 }
 
 function groupLineItems(lines) {
@@ -71,7 +102,17 @@ function groupLineItems(lines) {
     if (isProRataLine(line)) catchup.push(line);
     else full.push(line);
   }
-  return { catchup, full };
+  // September (billing-month) lines for catch-up units go first so the
+  // customer sees August catch-up and the same units' next-month rent together.
+  const catchupKeys = new Set(catchup.map(lineAssetKey).filter(Boolean));
+  const fullHead = [];
+  const fullRest = [];
+  for (const line of full) {
+    const key = lineAssetKey(line);
+    if (key && catchupKeys.has(key)) fullHead.push(line);
+    else fullRest.push(line);
+  }
+  return { catchup, full: [...fullHead, ...fullRest] };
 }
 
 function fmtMoneyPlain(n) {
@@ -116,6 +157,7 @@ function placeOfSupplyLabel(gstin, fallbackState) {
 module.exports = {
   fmtPeriod,
   parseItemDisplay,
+  formatSpecLine,
   isProRataLine,
   groupLineItems,
   fmtMoneyPlain,

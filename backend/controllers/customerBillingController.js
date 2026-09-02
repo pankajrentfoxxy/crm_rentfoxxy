@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
-const { generateCustomerInvoicePdf } = require('../services/customerInvoicePdfService');
+const { generateCustomerInvoicePdf, invoicePdfDownloadName } = require('../services/customerInvoicePdfService');
+const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
 const {
   generateCustomerInvoice,
   generateAllCustomerInvoices,
@@ -133,6 +134,87 @@ exports.listInvoices = async (req, res) => {
   }
 };
 
+function monthEndYmd(year, month) {
+  const d = new Date(year, month, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Customers with rental assets vs invoices generated for a billing month. */
+exports.listInvoiceCoverage = async (req, res) => {
+  try {
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    if (!month || month < 1 || month > 12 || !year || year < 2000) {
+      return res.status(400).json({ success: false, message: 'month and year required' });
+    }
+
+    const result = await pool.query(
+      `WITH assets AS (
+         SELECT vsn.current_customer_id AS customer_id,
+                COUNT(*)::int AS asset_count,
+                COUNT(*) FILTER (WHERE vsn.inventory_status = 'rented')::int AS rented_count,
+                COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned_count
+           FROM vendor_serial_numbers vsn
+          WHERE vsn.current_customer_id IS NOT NULL
+            AND vsn.deleted_at IS NULL
+            AND vsn.inventory_status IN ('rented', 'returned')
+            AND vsn.rent_start_date IS NOT NULL
+            AND vsn.rent_start_date <= $1::date
+          GROUP BY vsn.current_customer_id
+       ),
+       inv AS (
+         SELECT DISTINCT ON (ci.customer_id)
+                ci.customer_id, ci.invoice_id, ci.invoice_number, ci.status, ci.grand_total
+           FROM customer_invoices ci
+          WHERE ci.invoice_month = $2
+            AND ci.invoice_year = $3
+            AND ci.status <> 'cancelled'
+          ORDER BY ci.customer_id, ci.invoice_id DESC
+       )
+       SELECT a.customer_id,
+              COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || a.customer_id) AS customer_name,
+              c.email,
+              a.asset_count,
+              a.rented_count,
+              a.returned_count,
+              i.invoice_id,
+              i.invoice_number,
+              i.status AS invoice_status,
+              i.grand_total
+         FROM assets a
+         JOIN customers c ON c.customer_id = a.customer_id
+         LEFT JOIN inv i ON i.customer_id = a.customer_id
+        ORDER BY 2 ASC`,
+      [monthEndYmd(year, month), month, year]
+    );
+
+    const customers = result.rows.map((row) => ({
+      ...row,
+      bucket: row.invoice_id ? 'invoiced' : 'pending',
+    }));
+    const invoiced = customers.filter((c) => c.bucket === 'invoiced');
+    const pending = customers.filter((c) => c.bucket === 'pending');
+
+    res.json({
+      success: true,
+      month,
+      year,
+      counts: {
+        with_assets: customers.length,
+        invoiced: invoiced.length,
+        pending: pending.length,
+        laptops: customers.reduce((n, c) => n + Number(c.asset_count || 0), 0),
+      },
+      customers,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.getInvoice = async (req, res) => {
   try {
     const { invoiceId } = req.params;
@@ -153,7 +235,9 @@ exports.getInvoice = async (req, res) => {
        WHERE applied_in_invoice_id = $1 OR invoice_id = $1`,
       [invoiceId]
     );
-    res.json({ success: true, invoice: result.rows[0], credit_notes: creditNotes.rows });
+    const invoice = result.rows[0];
+    invoice.line_items = await enrichLineItemsWithSpecs(parseLineItems(invoice));
+    res.json({ success: true, invoice, credit_notes: creditNotes.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -385,10 +469,16 @@ exports.downloadInvoicePdf = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    // Always regenerate so branding/logo updates apply to existing invoices.
-    const pdfPath = await generateCustomerInvoicePdf(invoice);
-    await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    res.download(path.join(__dirname, '..', pdfPath));
+    const format = normalizeInvoiceFormat(req.query.format);
+    // Always regenerate tax invoice PDF so branding/logo updates apply; laptop details is on-demand only.
+    const pdfPath = await generateCustomerInvoicePdf(invoice, { format });
+    if (format === 'tax_invoice') {
+      await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
+    }
+    res.download(
+      path.join(__dirname, '..', pdfPath),
+      invoicePdfDownloadName(invoice.invoice_number, format),
+    );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

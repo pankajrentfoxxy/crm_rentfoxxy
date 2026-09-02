@@ -42,6 +42,25 @@ function isFullBilledLine(line) {
   return days >= monthDays;
 }
 
+function formatSpecLine(line) {
+  const tidy = (v) => {
+    const s = String(v || '').replace(/\s+/g, ' ').trim();
+    return !s || s === '-' || s === '—' ? '' : s;
+  };
+  const ramRaw = tidy(line.ram);
+  const ram = ramRaw && /^\d+(\.\d+)?$/.test(ramRaw) ? `${ramRaw}GB` : ramRaw;
+  return [tidy(line.processor), tidy(line.generation), ram, tidy(line.storage)].filter(Boolean).join(' · ');
+}
+
+function itemTitle(line) {
+  const brand = String(line.brand || '').trim();
+  const model = String(line.model || '').trim();
+  if (brand && model && !model.toLowerCase().startsWith(brand.toLowerCase())) {
+    return `${brand} ${model}`;
+  }
+  return model || brand || '—';
+}
+
 function lineMatchesSearch(line, q) {
   if (!q) return true;
   const hay = [
@@ -49,6 +68,10 @@ function lineMatchesSearch(line, q) {
     line.serial_number,
     line.brand,
     line.model,
+    line.processor,
+    line.generation,
+    line.ram,
+    line.storage,
     line.dc_number,
     line.period,
   ].map((v) => String(v || '').toLowerCase()).join(' ');
@@ -134,11 +157,11 @@ export default function InvoiceDetailPage() {
 
   const handleDownload = async () => {
     try {
-      const res = await downloadInvoicePdf(id);
+      const res = await downloadInvoicePdf(id, { format: 'laptop_details' });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${invoice.invoice_number}.pdf`;
+      a.download = `${invoice.invoice_number}-document.pdf`;
       a.click();
     } catch {
       toast.error('PDF download failed');
@@ -193,7 +216,7 @@ export default function InvoiceDetailPage() {
           <PermissionGate section="customer_billing" action="edit">
             <Button onClick={() => setSendOpen(true)}>Send to Customer</Button>
           </PermissionGate>
-          <Button variant="secondary" onClick={handleDownload}>Download PDF</Button>
+          <Button variant="secondary" onClick={handleDownload}>Laptop Rental Document PDF</Button>
           <PermissionGate section="customer_billing" action="edit">
             <Button variant="secondary" onClick={handleMarkPaid}>Mark as Paid</Button>
           </PermissionGate>
@@ -231,7 +254,7 @@ export default function InvoiceDetailPage() {
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search TTSPL, serial, brand, model…"
+          placeholder="Search TTSPL, serial, brand, model, specs…"
           className="max-w-lg"
         />
         {lineFilter !== 'all' && (
@@ -260,7 +283,8 @@ export default function InvoiceDetailPage() {
                   <span className="font-semibold text-slate-900">{fmt(line.amount)}</span>
                 </div>
                 {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
-                <p className="text-sm text-slate-700">{line.brand} {line.model}</p>
+                <p className="text-sm text-slate-700">{itemTitle(line)}</p>
+                {formatSpecLine(line) && <p className="text-xs text-slate-500">{formatSpecLine(line)}</p>}
                 <p className="text-xs text-slate-500">{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                   <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
@@ -276,8 +300,7 @@ export default function InvoiceDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-3 text-left">TTSPL / Serial</th>
-                  <th className="px-4 py-3 text-left">Brand</th>
-                  <th className="px-4 py-3 text-left">Model</th>
+                  <th className="px-4 py-3 text-left">Item</th>
                   <th className="px-4 py-3 text-left">Period</th>
                   <th className="px-4 py-3 text-right">Days</th>
                   <th className="px-4 py-3 text-right">Daily Rate</th>
@@ -287,7 +310,7 @@ export default function InvoiceDetailPage() {
               <tbody className="divide-y">
                 {filteredLines.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                       No lines match this filter/search.
                     </td>
                   </tr>
@@ -299,8 +322,12 @@ export default function InvoiceDetailPage() {
                         <div className="text-xs text-gray-500">SN: {line.serial_number}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3">{line.brand}</td>
-                    <td className="px-4 py-3">{line.model}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-800">{itemTitle(line)}</div>
+                      {formatSpecLine(line) && (
+                        <div className="text-xs text-gray-500 mt-0.5">{formatSpecLine(line)}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div>{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</div>
                       {isCatchupLine(line) && (

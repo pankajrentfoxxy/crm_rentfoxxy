@@ -70,7 +70,9 @@ td, th { vertical-align: top; }
 .items .period { white-space: nowrap; }
 .items .asset { font-weight: bold; }
 .items .serial { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; }
+.items .item-title { font-weight: 600; }
 .items .item-note { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; }
+.items .item-spec { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; line-height: 1.25; }
 .items col.c-idx { width: 7mm; }
 .items col.c-asset { width: 34mm; }
 .items col.c-item { width: 52mm; }
@@ -122,3 +124,64 @@ td, th { vertical-align: top; }
 .sign { text-align: right; margin-top: 30px; }
 .sign .line { display: inline-block; border-top: 1px solid var(--rule-strong); padding-top: 4px; min-width: 60mm; font-size: 8.5pt; }
 .computer { text-align: center; color: var(--muted); font-size: 7.5pt; margin-top: 14px; page-break-inside: avoid; }
+
+/* Laptop Details variant (non-tax document) */
+.variant-laptop-details {
+  --teal: #1a8f8f;
+  --orange: #e8871a;
+}
+.variant-laptop-details .ld-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 3px solid var(--rule-strong);
+  padding-bottom: 10px;
+  margin-bottom: 0;
+}
+.variant-laptop-details .ld-header-left {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+.variant-laptop-details .ld-header-right {
+  flex: 0 0 auto;
+  text-align: right;
+  max-width: 45%;
+}
+.variant-laptop-details .ld-logo { height: 44px; margin-bottom: 8px; }
+.variant-laptop-details .ld-company { margin-top: 6px; }
+.variant-laptop-details .ld-company-name { font-weight: bold; font-size: 10pt; }
+.variant-laptop-details .ld-company-line,
+.variant-laptop-details .ld-company-contact {
+  color: var(--muted);
+  margin-top: 2px;
+  font-size: 9pt;
+}
+.variant-laptop-details .ld-title {
+  font-size: 15pt;
+  font-weight: bold;
+  line-height: 1.1;
+}
+.variant-laptop-details .ld-customer {
+  font-weight: bold;
+  font-size: 11pt;
+  margin-top: 8px;
+}
+.variant-laptop-details .ld-month {
+  color: var(--muted);
+  font-size: 9.5pt;
+  margin-top: 4px;
+}
+.variant-laptop-details .ld-doc-label {
+  color: var(--muted);
+  font-size: 8.5pt;
+  margin-top: 8px;
+  font-weight: bold;
+}
+.variant-laptop-details .ld-doc-num {
+  font-size: 12pt;
+  font-weight: bold;
+  margin-top: 2px;
+  color: var(--teal);
+}
+.variant-laptop-details .items { margin-top: 16px; }
