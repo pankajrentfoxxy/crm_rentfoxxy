@@ -595,7 +595,7 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   let gateQrPng = null;
   try {
     const { ensureGateQrPng } = require('./gateQrService');
-    gateQrPng = (await ensureGateQrPng({ docType: 'vrdc', docNumber: dc.dc_number })).png;
+    gateQrPng = (await ensureGateQrPng({ docType: 'vrdc_receive', docNumber: receiveDcNumber })).png;
   } catch (_) { /* optional */ }
 
   await new Promise((resolve, reject) => {

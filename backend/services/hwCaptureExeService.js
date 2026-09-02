@@ -20,6 +20,11 @@ const FLOW = {
     brand: 'GRN',
     filename: 'rentfoxxy-grn-capture.exe',
   },
+  'vendor-return-capture': {
+    apiPrefix: 'vendor-return-capture',
+    brand: 'Vendor Return',
+    filename: 'rentfoxxy-vendor-return-verify.exe',
+  },
 };
 
 function getStubPath() {

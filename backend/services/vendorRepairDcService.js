@@ -44,6 +44,11 @@ const {
   resolveVrdcItemSpecs,
   enrichVrdcItemRow,
 } = require('./vendorRepairDcShared');
+const {
+  normalizeCondition,
+  requiresConfigVerification,
+  conditionHighlight,
+} = require('../constants/laptopConditions');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const HW_SW_STAGES = new Set([
@@ -68,6 +73,9 @@ async function ensureVendorRepairSchema() {
         '131_vendor_repair_signatures.sql',
         '148_vrdc_price_hsn_eway.sql',
         '215_vrdc_eway_accounts.sql',
+        '222_vrdc_gate_flow.sql',
+        '223_vrdc_receive_condition.sql',
+        '224_vrdc_return_captured_serial.sql',
       ]) {
         const migrationPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(migrationPath)) {
@@ -147,11 +155,23 @@ async function safeLogTtsplEvent(args) {
   }
 }
 
+function snapshotFromSpecs(specs = {}) {
+  return {
+    brand: specs.brand || null,
+    model: specs.model || null,
+    processor: specs.processor || null,
+    generation: specs.generation || null,
+    ram: specs.ram || null,
+    ssd: specs.storage || specs.ssd || null,
+    gpu: specs.gpu || null,
+  };
+}
+
 async function nextReceiveDcNumber(client, dispatchDcNumber) {
   const r = await client.query(
     `SELECT COALESCE(MAX((regexp_match(receive_dc_number, '-R([0-9]+)$'))[1]::int), 0) + 1 AS n
-       FROM vendor_repair_dc_items
-      WHERE dc_number = $1 AND receive_dc_number IS NOT NULL`,
+       FROM vendor_repair_receive_challans
+      WHERE dc_number = $1`,
     [dispatchDcNumber]
   );
   const seq = String(r.rows[0]?.n || 1).padStart(2, '0');
@@ -186,6 +206,8 @@ function normalizeReceiveItems(bodyItems, ticketIds) {
         replacement_brand: row.replacement_brand || row.replacementBrand || '',
         replacement_model: row.replacement_model || row.replacementModel || '',
         replacement_generation: row.replacement_generation || row.replacementGeneration || '',
+        laptop_condition: normalizeCondition(row.laptop_condition || row.laptopCondition || row.received_condition),
+        bypass_gate_flow: row.bypass_gate_flow === true || row.bypassGateFlow === true,
       });
     }
   }
@@ -712,14 +734,17 @@ async function createOutForRepairDc(client, {
       || ticket.diagnosis_failed_reason
       || null;
     const fields = itemFieldMap[ticket.ticket_id] || { price: null, hsn: defaultHsn };
+    const specs = resolveVrdcItemSpecs({ ...ticket, extra: ticket.serial_extra });
+    const extra = ticket.serial_extra && typeof ticket.serial_extra === 'object' ? ticket.serial_extra : {};
+    const dispatchSnapshot = snapshotFromSpecs({ ...specs, gpu: extra.gpu || ticket.gpu });
     await client.query(
       `INSERT INTO vendor_repair_dc_items (
           dc_number, ticket_id, serial_id, ttspl_id, serial_number, configuration, item_remarks, item_status,
-          price, hsn_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9)`,
+          price, hsn_code, dispatch_config_snapshot
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10::jsonb)`,
       [
         dcNumber, ticket.ticket_id, ticket.vendor_serial_id, ticket.ttspl_id, ticket.serial_number,
-        configuration, itemRemark, fields.price, fields.hsn,
+        configuration, itemRemark, fields.price, fields.hsn, JSON.stringify(dispatchSnapshot),
       ]
     );
     await client.query(
@@ -939,6 +964,20 @@ async function getVendorRepairDc(dcNumber) {
   const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || refreshedHead.shipping_address || refreshedHead.vendor_address;
   const delivery_person_name = [refreshedHead.delivery_person_first_name, refreshedHead.delivery_person_last_name]
     .filter(Boolean).join(' ').trim() || null;
+  let receiveChallans = [];
+  try {
+    const recvRes = await pool.query(
+      `SELECT * FROM vendor_repair_receive_challans WHERE dc_number = $1 ORDER BY created_at ASC`,
+      [dcNumber]
+    );
+    receiveChallans = recvRes.rows;
+  } catch (_) { /* table may not exist until migration 222 */ }
+  let captureByItem = new Map();
+  try {
+    const { listLatestTokensForDc } = require('./vendorReturnCaptureService');
+    const tokens = await listLatestTokensForDc(pool, dcNumber);
+    captureByItem = new Map(tokens.map((t) => [t.item_id, t]));
+  } catch (_) { /* capture table may not exist yet */ }
   return {
     ...refreshedHead,
     company_from_display: formatCompanyBlock(),
@@ -946,7 +985,24 @@ async function getVendorRepairDc(dcNumber) {
     vendor_shipping_display,
     delivery_person_name,
     vendor_delivery_status: refreshedHead.vendor_delivered_at ? 'delivered' : (refreshedHead.dispatched_at ? 'in_transit' : 'pending'),
-    items: itemsRes.rows.map(enrichVrdcItemRow),
+    receive_challans: receiveChallans,
+    items: itemsRes.rows.map((row) => {
+      const enriched = enrichVrdcItemRow(row);
+      const tok = captureByItem.get(row.id);
+      return {
+        ...enriched,
+        return_capture: tok
+          ? {
+            token_id: tok.token_id,
+            access_number: tok.access_number,
+            status: tok.status,
+            matched_at: tok.matched_at,
+            match_result: tok.match_result,
+            serial_number: tok.serial_number,
+          }
+          : null,
+      };
+    }),
   };
 }
 
@@ -1137,7 +1193,9 @@ async function signDispatchDc(client, {
   );
   const head = headRes.rows[0];
   if (!head) throw new Error('Vendor repair DC not found');
-  if (head.status === 'dispatched') return { already_dispatched: true };
+  if (['dispatch_ready', 'dispatched'].includes(head.status)) {
+    return { already_dispatched: true, status: head.status };
+  }
   if (head.status === 'returned') throw new Error('DC already returned');
   if (head.status !== 'draft') throw new Error('DC must be in draft to dispatch');
 
@@ -1185,8 +1243,7 @@ async function signDispatchDc(client, {
         porter_booking_url = $11,
         delivery_person_id = $12,
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
-        status = 'dispatched',
-        dispatched_at = NOW(),
+        status = 'dispatch_ready',
         items_dispatched_count = (SELECT COUNT(*)::int FROM vendor_repair_dc_items WHERE dc_number = $1),
         updated_at = NOW()
       WHERE dc_number = $1`,
@@ -1210,7 +1267,7 @@ async function signDispatchDc(client, {
   );
 
   await client.query(
-    `UPDATE vendor_repair_dc_items SET item_status = 'dispatched' WHERE dc_number = $1`,
+    `UPDATE vendor_repair_dc_items SET item_status = 'dispatch_ready' WHERE dc_number = $1`,
     [dcNumber]
   );
 
@@ -1223,57 +1280,25 @@ async function signDispatchDc(client, {
   );
 
   for (const item of itemsRes.rows) {
-    await client.query(
-      `UPDATE tickets SET status = 'out_for_repair', current_location = $2, updated_at = NOW()
-        WHERE ticket_id = $1`,
-      [item.ticket_id, `Out for repair — ${head.vendor_name}`]
-    );
     const serialId = item.vendor_serial_id || item.serial_id;
-    if (serialId) {
-      await transitionRepairSerial(client, {
-        serialId,
-        toStatus: STATUS.IN_REPAIR,
-        reason: `Dispatched to vendor on VRDC ${dcNumber}`,
-        dcNumber,
-        actorUserId,
-        actorName,
-        qcStatus: 'out_for_repair',
-        extraPatch: {
-          location: 'out_for_repair',
-          vendor_repair_dc: dcNumber,
-          action_status: 'in_repair',
-        },
-      });
-    }
-    await safeLogTtsplEvent({
-      ttsplId: item.ttspl_id || item.ticket_ttspl,
-      vendorSerialId: serialId,
-      eventType: 'dispatched_to_vendor',
-      description: `Dispatched to vendor via ${dcNumber}`,
-      metadata: { dc_number: dcNumber, vendor_name: head.vendor_name },
-      actorUserId,
-      actorName,
-      db: client,
-    });
     await safeLogTtsplEvent({
       ttsplId: item.ttspl_id || item.ticket_ttspl,
       vendorSerialId: serialId,
       eventType: 'esign_completed',
-      description: `Dispatch e-sign completed for ${dcNumber}`,
+      description: `Dispatch e-sign completed for ${dcNumber} — waiting for guard outward`,
       metadata: { dc_number: dcNumber },
       actorUserId,
       actorName,
       db: client,
     });
-    await logTicketActivity(client, {
-      ticketId: item.ticket_id,
-      userId: actorUserId,
-      action: 'out_for_repair',
-      notes: `Dispatched to ${head.vendor_name} (${dcNumber})`,
-    });
   }
 
-  return { dc_number: dcNumber, status: 'dispatched', pdf_pending: true };
+  return { dc_number: dcNumber, status: 'dispatch_ready', pdf_pending: true };
+}
+
+function isSuperAdminGateBypass({ actorRole, bypassGateFlow, receiveSpec }) {
+  if (String(actorRole || '').toLowerCase() !== 'super_admin') return false;
+  return Boolean(bypassGateFlow || receiveSpec?.bypass_gate_flow);
 }
 
 async function receiveItemsFromVendor(client, {
@@ -1284,6 +1309,8 @@ async function receiveItemsFromVendor(client, {
   vendorEsign,
   actorUserId,
   actorName,
+  actorRole = null,
+  bypassGateFlow = false,
 }) {
   const headRes = await client.query(
     `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
@@ -1307,18 +1334,60 @@ async function receiveItemsFromVendor(client, {
     SELECT i.*, t.serial_number AS ticket_serial_number, t.*
       FROM vendor_repair_dc_items i
       JOIN tickets t ON t.ticket_id = i.ticket_id
-     WHERE i.dc_number = $1 AND COALESCE(i.item_status, 'dispatched') = 'dispatched'`;
+     WHERE i.dc_number = $1
+       AND COALESCE(i.item_status, 'dispatched') IN ('dispatched', 'gate_received')`;
   const params = [dcNumber, selectedTicketIds];
   itemsQuery += ` AND i.ticket_id = ANY($2::int[])`;
   const itemsRes = await client.query(itemsQuery, params);
   if (!itemsRes.rows.length) throw new Error('No dispatched items selected for receive');
 
-  const receiveDcNumber = await nextReceiveDcNumber(client, dcNumber);
+  const existingRecv = [...new Set(itemsRes.rows.map((i) => i.receive_dc_number).filter(Boolean))];
+  let receiveDcNumber = existingRecv.length === 1 && itemsRes.rows.every((i) => i.receive_dc_number === existingRecv[0])
+    ? existingRecv[0]
+    : await nextReceiveDcNumber(client, dcNumber);
+
+  if (existingRecv.length !== 1 || !itemsRes.rows.every((i) => i.receive_dc_number === existingRecv[0])) {
+    await client.query(
+      `INSERT INTO vendor_repair_receive_challans
+         (dc_number, receive_dc_number, receive_mode, items_count, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (receive_dc_number) DO NOTHING`,
+      [
+        dcNumber,
+        receiveDcNumber,
+        itemsRes.rows.some((i) => (receiveMap.get(i.ticket_id) || {}).receive_mode === 'replacement')
+          ? 'mixed'
+          : 'repaired',
+        itemsRes.rows.length,
+        actorUserId || null,
+      ]
+    );
+  }
   const receivedItemIds = [];
 
   for (const item of itemsRes.rows) {
     const receiveSpec = receiveMap.get(item.ticket_id) || { receive_mode: 'repaired' };
     const isReplacement = receiveSpec.receive_mode === 'replacement';
+    const laptopCondition = normalizeCondition(receiveSpec.laptop_condition);
+    const superAdminBypass = isSuperAdminGateBypass({ actorRole, bypassGateFlow, receiveSpec });
+
+    if (!head.gate_legacy && !superAdminBypass) {
+      if (!item.gate_inward_at) {
+        throw new Error(`Guard has not passed ${item.ttspl_id} inward yet.`);
+      }
+      if (!isReplacement && requiresConfigVerification(laptopCondition)) {
+        if (!item.return_config_verified_at) {
+          throw new Error(
+            `Configuration check has not passed for ${item.ttspl_id}. Run the vendor-return script to verify specs.`
+          );
+        }
+        if (!String(item.return_captured_serial || '').trim()) {
+          throw new Error(
+            `Serial has not been fetched for ${item.ttspl_id}. Run the vendor-return script so it can read the BIOS serial.`
+          );
+        }
+      }
+    }
 
     const itemWhEsign = receiveSpec.wh_esign || warehouseEsign;
     const itemWhSigner = (receiveSpec.wh_signer_name || '').trim() || actorName || null;
@@ -1355,7 +1424,12 @@ async function receiveItemsFromVendor(client, {
         replacementDcNumber,
       });
     } else {
-      if (!serialMatchesExpected(receiveSpec.verified_serial, item)) {
+      const scriptSerial = String(item.return_captured_serial || '').trim();
+      const verifiedSerial = laptopCondition === 'on'
+        ? (scriptSerial || String(receiveSpec.verified_serial || item.serial_number || '').trim())
+        : String(receiveSpec.verified_serial || '').trim();
+      receiveSpec.verified_serial = verifiedSerial;
+      if (!serialMatchesExpected(verifiedSerial, item)) {
         throw new Error(
           `Serial verification failed for ticket #${item.ticket_id}. `
           + `Expected ${item.serial_number || item.ttspl_id || '—'}`
@@ -1398,7 +1472,8 @@ async function receiveItemsFromVendor(client, {
           replacement_dc_number = $17::text,
           replacement_serial_id = $18::int,
           replaced_original_ttspl_id = $19::text,
-          replaced_original_serial = $20::text
+          replaced_original_serial = $20::text,
+          receive_laptop_condition = $21::text
         WHERE id = $1`,
       [
         item.id,
@@ -1421,13 +1496,20 @@ async function receiveItemsFromVendor(client, {
         isReplacement ? replacementRow.serial_id : null,
         isReplacement ? item.ttspl_id : null,
         isReplacement ? item.serial_number : null,
+        laptopCondition,
       ]
     );
     receivedItemIds.push(item.id);
 
+    const condHi = conditionHighlight(laptopCondition);
     const highlightReason = isReplacement
-      ? `Vendor replacement ${replacementRow.serial_number} (${replacementRow.inventory_asset_code}) for ${item.ttspl_id} — Floor Manager`
-      : 'Returned from vendor repair — Floor Manager triage';
+      ? (
+        `Vendor replacement ${replacementRow.serial_number} (${replacementRow.inventory_asset_code}) for ${item.ttspl_id} — Floor Manager`
+        + (condHi.reason ? ` · ${condHi.reason}` : '')
+      )
+      : (condHi.reason
+        ? `${condHi.reason} — Floor Manager triage`
+        : 'Returned from vendor repair — Floor Manager triage');
 
     await client.query(
       `UPDATE tickets SET
@@ -1442,6 +1524,7 @@ async function receiveItemsFromVendor(client, {
           serial_number = COALESCE($5::text, serial_number),
           ttspl_id = COALESCE($6::text, ttspl_id),
           vendor_serial_id = COALESCE($7::int, vendor_serial_id),
+          received_condition = $8::text,
           updated_at = NOW()
         WHERE ticket_id = $1`,
       [
@@ -1452,6 +1535,7 @@ async function receiveItemsFromVendor(client, {
         isReplacement ? replacementRow.serial_number : null,
         isReplacement ? replacementRow.inventory_asset_code : null,
         isReplacement ? replacementRow.serial_id : null,
+        laptopCondition,
       ]
     );
 
@@ -1572,7 +1656,7 @@ async function receiveItemsFromVendor(client, {
 
   const countsRes = await client.query(
     `SELECT
-        COUNT(*) FILTER (WHERE COALESCE(item_status, 'draft') = 'dispatched')::int AS pending,
+        COUNT(*) FILTER (WHERE COALESCE(item_status, 'draft') IN ('dispatched', 'dispatch_ready', 'gate_received'))::int AS pending,
         COUNT(*) FILTER (WHERE item_status IN ('received', 'replacement_received'))::int AS received,
         COUNT(*)::int AS total
        FROM vendor_repair_dc_items WHERE dc_number = $1`,
@@ -1589,6 +1673,14 @@ async function receiveItemsFromVendor(client, {
         updated_at = NOW()
       WHERE dc_number = $1`,
     [dcNumber, nextStatus, received]
+  );
+
+  await client.query(
+    `UPDATE vendor_repair_receive_challans SET
+        closed_at = COALESCE(closed_at, NOW()),
+        items_count = $2
+      WHERE receive_dc_number = $1`,
+    [receiveDcNumber, itemsRes.rows.length]
   );
 
   return {
@@ -1612,6 +1704,8 @@ async function receiveFromVendor(client, {
   vendorEsign,
   actorUserId,
   actorName,
+  actorRole = null,
+  bypassGateFlow = false,
 }) {
   return receiveItemsFromVendor(client, {
     dcNumber,
@@ -1621,6 +1715,8 @@ async function receiveFromVendor(client, {
     vendorEsign,
     actorUserId,
     actorName,
+    actorRole,
+    bypassGateFlow,
   });
 }
 
@@ -1649,7 +1745,7 @@ function erpOutForRepareSql(alias = 'vsn') {
         JOIN vendor_repair_delivery_challans vrd ON vrd.dc_number = vri.dc_number
         JOIN tickets vt ON vt.ticket_id = vri.ticket_id
        WHERE vrd.status IN ('dispatched', 'partially_returned')
-         AND COALESCE(vri.item_status, 'dispatched') = 'dispatched'
+         AND COALESCE(vri.item_status, 'dispatched') IN ('dispatched', 'gate_received')
          AND vt.status = 'out_for_repair'
          AND (
            vri.serial_id = ${alias}.serial_id
@@ -2008,7 +2104,8 @@ async function listVendorRepairDcs({
             (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
               WHERE i.dc_number = d.dc_number AND i.item_status IN ('received', 'replacement_received')) AS received_count,
             (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
-              WHERE i.dc_number = d.dc_number AND COALESCE(i.item_status, 'draft') = 'dispatched') AS pending_count
+              WHERE i.dc_number = d.dc_number
+                AND COALESCE(i.item_status, 'draft') IN ('dispatched', 'gate_received')) AS pending_count
        FROM vendor_repair_delivery_challans d
       WHERE ${where}
       ORDER BY d.created_at DESC
@@ -2133,4 +2230,7 @@ module.exports = {
   countOutForRepairInventory,
   receiveErpRepairBack,
   dedupeDraftVrdcItems,
+  transitionRepairSerial,
+  snapshotFromSpecs,
+  nextReceiveDcNumber,
 };

@@ -50,6 +50,17 @@ const CAPTURE_UI = {
     laptopHint: 'laptop under Dispatch QC',
     ps1Title: 'Dispatch QC',
   },
+  'vendor-return': {
+    apiPrefix: 'vendor-return-capture',
+    brand: 'Vendor Return',
+    accessHint: 'vendor return challan',
+    screenHint: 'Vendor Return screen',
+    successHint: 'vendor return — laptop can be received into stock',
+    scriptFile: 'rentfoxxy-vendor-return-verify.ps1',
+    exeFile: 'rentfoxxy-vendor-return-verify.exe',
+    laptopHint: 'laptop returned by the vendor',
+    ps1Title: 'Vendor Return',
+  },
 };
 
 export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {

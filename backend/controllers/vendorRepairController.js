@@ -322,7 +322,9 @@ exports.signDispatch = async (req, res) => {
     }
   }
 
-  const msg = result?.already_dispatched ? 'Already dispatched' : 'Dispatched to vendor';
+  const msg = result?.already_dispatched
+    ? (result.status === 'dispatch_ready' ? 'Already e-signed — waiting for guard outward' : 'Already dispatched')
+    : 'E-signed — send to gate for outward scan';
   res.json({ success: true, message: msg, pdf_path: pdfPath, ...result });
 };
 
@@ -341,6 +343,8 @@ exports.receiveBack = async (req, res) => {
       vendorEsign: req.body.vendor_esign,
       actorUserId: req.user.user_id,
       actorName: req.user.name || req.user.email,
+      actorRole: req.user.role,
+      bypassGateFlow: req.body.bypass_gate_flow === true,
     });
     await client.query('COMMIT');
   } catch (err) {
@@ -354,21 +358,22 @@ exports.receiveBack = async (req, res) => {
   if (result?.received_item_ids?.length) {
     try {
       const dc = await svc.getVendorRepairDc(dcNumber);
-      const allReceivedIds = (dc?.items || [])
-        .filter((i) => ['received', 'replacement_received'].includes(i.item_status))
-        .map((i) => i.id);
       const receiveDcNumber = result.receive_dc_number || dc?.receive_dc_number;
       const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
       receivePdfPath = await generateVendorRepairReceivePdf(
         dcNumber,
         receiveDcNumber || `${dcNumber}-R01`,
-        allReceivedIds.length ? allReceivedIds : result.received_item_ids
+        result.received_item_ids
       );
       if (receivePdfPath) {
         await pool.query(
           `UPDATE vendor_repair_delivery_challans SET receive_pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
           [dcNumber, receivePdfPath]
         );
+        await pool.query(
+          `UPDATE vendor_repair_receive_challans SET pdf_path = $2 WHERE receive_dc_number = $1`,
+          [receiveDcNumber, receivePdfPath]
+        ).catch(() => {});
       }
     } catch (pdfErr) {
       console.error('[vendorRepair] receive PDF failed:', pdfErr.message);
@@ -410,11 +415,19 @@ exports.downloadReceivePdf = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
     const dc = await svc.getVendorRepairDc(req.params.dcNumber);
-    if (!dc?.receive_pdf_path) {
+    const latestChallan = (dc?.receive_challans || []).slice().reverse().find((c) => c.pdf_path) || (dc?.receive_challans || []).slice(-1)[0];
+    const existingPdf = latestChallan?.pdf_path || dc?.receive_pdf_path;
+    if (!existingPdf) {
       const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
-      const itemIds = (dc?.items || []).filter((i) => ['received', 'replacement_received'].includes(i.item_status)).map((i) => i.id);
+      const itemIds = (dc?.items || []).filter((i) => (
+        i.receive_dc_number && ['received', 'replacement_received', 'gate_received', 'dispatched'].includes(i.item_status)
+      )).map((i) => i.id);
       if (!itemIds.length) return res.status(404).json({ success: false, message: 'Receive PDF not found' });
-      const rel = await generateVendorRepairReceivePdf(req.params.dcNumber, dc.receive_dc_number || `${req.params.dcNumber}-R01`, itemIds);
+      const rel = await generateVendorRepairReceivePdf(
+        req.params.dcNumber,
+        latestChallan?.receive_dc_number || dc.receive_dc_number || `${req.params.dcNumber}-R01`,
+        itemIds
+      );
       if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });
       const abs = path.join(__dirname, '../uploads', rel);
       return res.download(abs, path.basename(abs));

@@ -6,6 +6,7 @@ import QuotationAccept from '../components/QuotationAccept';
 import GrnSerialCapturePage from '../pages/GrnSerialCapturePage';
 import Qc2ConfigMatchPage from '../pages/Qc2ConfigMatchPage';
 import DispatchQcConfigMatchPage from '../pages/DispatchQcConfigMatchPage';
+import VendorReturnConfigMatchPage from '../pages/VendorReturnConfigMatchPage';
 import AccessPage from '../features/access/AccessPage';
 import PublicSupportRequestPage from '../features/support/pages/PublicSupportRequestPage';
 import HomeRedirect from '../router/HomeRedirect';
@@ -20,6 +21,7 @@ export const publicRoutes = [
   { path: '/grn-capture/:token', element: <GrnSerialCapturePage /> },
   { path: '/qc2-config-match', element: <Qc2ConfigMatchPage /> },
   { path: '/dispatch-qc-config-match', element: <DispatchQcConfigMatchPage /> },
+  { path: '/vendor-return-config-match', element: <VendorReturnConfigMatchPage /> },
   { path: '/access', element: <AccessPage /> },
   { path: '/support/request', element: <PublicSupportRequestPage /> },
   { path: '/', element: <HomeRedirect /> },

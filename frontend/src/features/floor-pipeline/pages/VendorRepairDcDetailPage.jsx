@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
+import { CheckCircle2, Download, Loader2, PenLine, Printer, RotateCcw, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
 import { getBackendOrigin } from '../../../utils/api';
@@ -15,7 +15,6 @@ import {
   updateVendorRepairCommercialDetails,
   updateVendorRepairDispatchDetails,
 } from '../vendorRepairApi';
-import { ticketStatusLabel } from '../floorPipelineUi';
 import {
   DEFAULT_BILLING_ADDRESS,
   fmtVendorRepairDate,
@@ -30,6 +29,7 @@ import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDisp
 import VrdcEwayPanel from '../components/VrdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
+import { DEFAULT_CONDITION, requiresConfigCapture } from '../../../constants/laptopConditions';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 
@@ -130,7 +130,7 @@ export default function VendorRepairDcDetailPage() {
   const { dcNumber: rawDc } = useParams();
   const dcNumber = decodeURIComponent(rawDc || '');
   const { user } = useAuth();
-  const { canCreate, canEdit } = usePermission();
+  const { canCreate, canEdit, canView } = usePermission();
   const canProcess = WAREHOUSE_ROLES.has(user?.role);
   const canDispatch = canCreate('vendor_repair_dc_dispatch') || canEdit('vendor_repair_dc_dispatch');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
@@ -138,8 +138,12 @@ export default function VendorRepairDcDetailPage() {
   const [dc, setDc] = useState(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [receiveTargetItem, setReceiveTargetItem] = useState(null);
+  const [receiveSelectedIds, setReceiveSelectedIds] = useState([]);
+  const [batchSerials, setBatchSerials] = useState({});
   const [receiveForm, setReceiveForm] = useState({
     receive_mode: 'repaired',
+    laptop_condition: DEFAULT_CONDITION,
+    bypass_gate_flow: false,
     verified_serial: '',
     wh_signer_name: user?.name || user?.email || '',
     wh_esign: null,
@@ -148,6 +152,7 @@ export default function VendorRepairDcDetailPage() {
     replacement_model: '',
     replacement_generation: '',
   });
+  const isSuperAdmin = user?.role === 'super_admin';
   const [receiveBusy, setReceiveBusy] = useState(false);
   const [receivePdfBusy, setReceivePdfBusy] = useState(false);
   const [whDispatchSignerName, setWhDispatchSignerName] = useState(() => user?.name || user?.email || '');
@@ -200,7 +205,9 @@ export default function VendorRepairDcDetailPage() {
 
   const itemStatusLabel = (item) => {
     const s = item.item_status || '';
+    if (s === 'dispatch_ready') return 'Awaiting Guard outward';
     if (s === 'dispatched') return 'Out for repair';
+    if (s === 'gate_received') return 'Guard inward done';
     if (s === 'received') return 'Received (repaired)';
     if (s === 'replacement_received') return 'Replacement received';
     if (s === 'draft') return 'Pending dispatch';
@@ -260,6 +267,8 @@ export default function VendorRepairDcDetailPage() {
     setReceiveTargetItem(item);
     setReceiveForm({
       receive_mode: 'repaired',
+      laptop_condition: DEFAULT_CONDITION,
+      bypass_gate_flow: false,
       verified_serial: '',
       wh_signer_name: user?.name || user?.email || '',
       wh_esign: null,
@@ -280,6 +289,7 @@ export default function VendorRepairDcDetailPage() {
 
   const statusLabel = (s) => {
     if (s === 'draft') return 'Draft — pending e-sign';
+    if (s === 'dispatch_ready') return 'Dispatch ready — awaiting Guard outward';
     if (s === 'dispatched') return 'Dispatched to Vendor';
     if (s === 'partially_returned') return 'Partially returned';
     if (s === 'returned') return 'Returned';
@@ -287,7 +297,7 @@ export default function VendorRepairDcDetailPage() {
   };
 
   const dispatchedItems = useMemo(
-    () => (dc?.items || []).filter((i) => (i.item_status || 'dispatched') === 'dispatched'),
+    () => (dc?.items || []).filter((i) => ['dispatched', 'gate_received'].includes(i.item_status || 'dispatched')),
     [dc]
   );
 
@@ -361,7 +371,7 @@ export default function VendorRepairDcDetailPage() {
         vendor_signer_name: vendorDispatchSignerName.trim() || undefined,
         dispatch_pod: pendingDispatchPod || undefined,
       });
-      toast.success('Dispatched to vendor');
+      toast.success('E-signed — send to gate for outward scan');
       setPendingWhDispatch(null);
       setPendingVendorDispatch(null);
       setPendingDispatchPod(null);
@@ -422,14 +432,23 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Warehouse signature is required');
       return;
     }
-    if (receiveForm.receive_mode === 'repaired') {
-      const expected = (receiveTargetItem.serial_number || '').trim().toUpperCase();
-      const entered = receiveForm.verified_serial.trim().toUpperCase();
-      if (!entered || entered !== expected) {
-        toast.error(`Serial must match ${receiveTargetItem.serial_number || receiveTargetItem.ttspl_id}`);
-        return;
+    const batchItems = receiveSelectedIds.length > 1
+      ? dispatchedItems.filter((i) => receiveSelectedIds.includes(i.id))
+      : [receiveTargetItem];
+
+    const isOn = receiveForm.laptop_condition === 'on';
+    if (receiveForm.receive_mode === 'repaired' && !isOn) {
+      for (const item of batchItems) {
+        const expected = (item.serial_number || '').trim().toUpperCase();
+        const entered = (item.id === receiveTargetItem.id
+          ? receiveForm.verified_serial
+          : (batchSerials[item.id] || '')).trim().toUpperCase();
+        if (!entered || entered !== expected) {
+          toast.error(`Serial must match ${item.serial_number || item.ttspl_id}`);
+          return;
+        }
       }
-    } else {
+    } else if (receiveForm.receive_mode === 'replacement') {
       if (!receiveForm.replacement_serial_number?.trim()) {
         toast.error('Enter replacement serial number');
         return;
@@ -439,24 +458,52 @@ export default function VendorRepairDcDetailPage() {
         return;
       }
     }
+    const bypassGateFlow = isSuperAdmin && receiveForm.bypass_gate_flow;
+    const needsScript = receiveForm.receive_mode !== 'replacement'
+      && requiresConfigCapture(receiveForm.laptop_condition);
+    if (!dc?.gate_legacy && !bypassGateFlow) {
+      for (const item of batchItems) {
+        if (!item.gate_inward_at) {
+          toast.error(`Guard has not passed ${item.ttspl_id} inward yet.`);
+          return;
+        }
+        if (needsScript && !item.return_config_verified_at) {
+          toast.error(`Run the vendor-return script on ${item.ttspl_id} to verify specs.`);
+          return;
+        }
+        if (needsScript && !String(item.return_captured_serial || '').trim()) {
+          toast.error(`Run the vendor-return script on ${item.ttspl_id} so it can fetch the serial.`);
+          return;
+        }
+      }
+    }
     setReceiveBusy(true);
     try {
       const { data } = await receiveVendorRepairBack(dcNumber, {
-        items: [{
-          ticket_id: receiveTargetItem.ticket_id,
+        bypass_gate_flow: bypassGateFlow,
+        items: batchItems.map((item) => ({
+          ticket_id: item.ticket_id,
           receive_mode: receiveForm.receive_mode,
-          verified_serial: receiveForm.verified_serial.trim(),
+          laptop_condition: receiveForm.laptop_condition,
+          bypass_gate_flow: bypassGateFlow,
+          verified_serial: receiveForm.laptop_condition === 'on'
+            ? String(item.return_captured_serial || item.serial_number || '').trim()
+            : (item.id === receiveTargetItem.id
+              ? receiveForm.verified_serial.trim()
+              : String(batchSerials[item.id] || '').trim()),
           wh_esign: receiveForm.wh_esign,
           wh_signer_name: receiveForm.wh_signer_name.trim(),
           replacement_serial_number: receiveForm.replacement_serial_number,
           replacement_brand: receiveForm.replacement_brand,
           replacement_model: receiveForm.replacement_model,
           replacement_generation: receiveForm.replacement_generation,
-        }],
+        })),
       });
       toast.success(data.message || 'Laptop received');
       setReceiveOpen(false);
       setReceiveTargetItem(null);
+      setReceiveSelectedIds([]);
+      setBatchSerials({});
       invalidateInventoryManagement();
       load();
     } catch (err) {
@@ -489,6 +536,16 @@ export default function VendorRepairDcDetailPage() {
           {dc.ship_by || dc.dispatch_mode ? (
             <span className="inline-block mt-2 ml-2 px-2 py-0.5 rounded-full text-xs bg-orange-50 text-orange-800 border border-orange-200">
               {vendorRepairDispatchModeLabel(dc.ship_by, dc.dispatch_mode)}
+            </span>
+          ) : null}
+          {dc.status === 'dispatch_ready' ? (
+            <span className="inline-block mt-2 ml-2 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800 font-semibold">
+              Awaiting Guard outward
+            </span>
+          ) : null}
+          {dc.status === 'dispatched' && (dc.items || []).some((i) => i.gate_outward_at) ? (
+            <span className="inline-flex items-center gap-1 mt-2 ml-2 px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Guard outward done
             </span>
           ) : null}
         </div>
@@ -532,6 +589,84 @@ export default function VendorRepairDcDetailPage() {
           ) : null}
         </div>
       </div>
+
+      {dc.status === 'dispatch_ready' && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm space-y-2">
+          <p className="text-sky-800 text-xs">
+            Status stays here until Guard scans this DC QR on <strong>OUTWARD</strong> and submits. That submit sends the laptops out for vendor repair.
+          </p>
+          {canView('guard_gate_checking') ? (
+            <Link
+              to={`/guard/scanner?dir=outward&q=${encodeURIComponent(dc.dc_number)}`}
+              className="inline-flex items-center gap-1 px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700"
+            >
+              <ShieldCheck className="w-4 h-4" /> Open outward gate scanner
+            </Link>
+          ) : null}
+        </div>
+      )}
+
+      {(dc.receive_challans || []).length ? (
+        <div className="rounded-xl border bg-white p-4 text-sm space-y-2">
+          <h3 className="font-semibold">Receive challans</h3>
+          <ul className="space-y-2">
+            {(dc.receive_challans || []).map((ch) => (
+              <li key={ch.receive_dc_number} className="flex flex-wrap items-center justify-between gap-2 border rounded-lg px-3 py-2">
+                <div>
+                  <p className="font-mono text-xs text-purple-800">{ch.receive_dc_number}</p>
+                  <p className="text-[11px] text-slate-500">{ch.items_count || 0} laptop(s)</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {ch.gate_inward_at ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Guard inward done
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800 font-semibold">
+                      Awaiting Guard inward
+                    </span>
+                  )}
+                  {canView('guard_gate_checking') ? (
+                    <Link
+                      to={`/guard/scanner?dir=inward&q=${encodeURIComponent(ch.receive_dc_number)}`}
+                      className="text-xs font-semibold text-orange-700 hover:underline"
+                    >
+                      Open inward scanner
+                    </Link>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {(dc.items || []).some((i) => i.return_capture?.access_number && !i.return_config_verified_at && i.item_status === 'gate_received') ? (
+        <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm space-y-2">
+          <h3 className="font-semibold text-teal-900">Vendor-return configuration check</h3>
+          <p className="text-xs text-teal-800">
+            Boot each ON laptop, enter the access number, and run the script. It fetches the BIOS serial and verifies specs.
+            NOT ON units skip this — type the serial on receive instead.
+          </p>
+          <ul className="space-y-1 text-xs">
+            {(dc.items || []).filter((i) => i.return_capture?.access_number && i.item_status === 'gate_received').map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono">{item.ttspl_id}</span>
+                <span className="font-mono font-semibold tracking-widest">{item.return_capture.access_number}</span>
+                <span className="capitalize text-slate-600">{item.return_capture.status}</span>
+              </li>
+            ))}
+          </ul>
+          <a
+            href="/vendor-return-config-match"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex px-3 py-1.5 bg-teal-700 text-white rounded-lg text-xs font-semibold"
+          >
+            Open vendor-return capture page
+          </a>
+        </div>
+      ) : null}
 
       {ewayCompliance?.applies ? (
         <VrdcEwayPanel
@@ -662,6 +797,21 @@ export default function VendorRepairDcDetailPage() {
                     {dc.dispatched_at ? <p>Sent: {fmtVendorRepairDate(dc.dispatched_at)}</p> : null}
                     {item.returned_at ? <p>Received: {fmtVendorRepairDateTimeIst(item.returned_at)}</p> : null}
                     {item.receive_wh_signer_name ? <p>By: {item.receive_wh_signer_name}</p> : null}
+                    {item.gate_outward_at ? (
+                      <p className="text-emerald-700">Guard outward done</p>
+                    ) : item.item_status === 'dispatch_ready' ? (
+                      <p className="text-amber-700">Awaiting Guard outward</p>
+                    ) : null}
+                    {item.gate_inward_at ? (
+                      <p className="text-emerald-700">Guard inward done</p>
+                    ) : item.item_status === 'dispatched' ? (
+                      <p className="text-amber-700">Awaiting Guard inward</p>
+                    ) : null}
+                    {item.receive_laptop_condition === 'not_on' ? (
+                      <p className="text-rose-700">Received NOT ON</p>
+                    ) : item.receive_laptop_condition === 'on' ? (
+                      <p className="text-emerald-700">Received ON</p>
+                    ) : null}
                     {item.receive_dc_number ? <p className="font-mono text-[10px]">{item.receive_dc_number}</p> : null}
                     {item.replacement_dc_number ? (
                       <p className="text-purple-800 font-mono text-[10px]">Rep: {item.replacement_dc_number}</p>
@@ -799,14 +949,14 @@ export default function VendorRepairDcDetailPage() {
                 onClick={completeDispatchSign}
                 className="w-full py-2.5 rounded-lg bg-purple-700 text-white font-semibold text-sm disabled:opacity-50"
               >
-                {dispatchBusy ? 'Confirming dispatch…' : 'Confirm dispatch to vendor'}
+                {dispatchBusy ? 'Sending to gate…' : 'E-sign & send to gate'}
               </button>
             </>
           ) : null}
         </div>
       ) : null}
 
-      {canDispatch && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
+      {canDispatch && ['dispatch_ready', 'dispatched'].includes(dc.status) && dc.warehouse_dispatch_esign_url ? (
         <div className="space-y-3 print:hidden">
           <div className="grid md:grid-cols-2 gap-3">
             <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} signerName={dc.warehouse_dispatch_signer_name} />
@@ -831,17 +981,39 @@ export default function VendorRepairDcDetailPage() {
           <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto">
             {!receiveTargetItem ? (
               <>
-                <h3 className="font-semibold">Receive Back — one laptop at a time</h3>
-                <p className="text-xs text-slate-500">Verify serial, sign with your name, and receive each laptop individually. Timestamp recorded in IST.</p>
+                <h3 className="font-semibold">Receive Back</h3>
+                <p className="text-xs text-slate-500">
+                  Select one or more laptops. Guard inward is required first (unless this is a legacy DC).
+                  ON units must run the vendor-return script (serial + specs). NOT ON units need a typed serial.
+                </p>
                 <div className="border rounded-lg divide-y">
                   {dispatchedItems.map((item) => {
                     const prod = formatVrdcProductLines(item);
+                    const checked = receiveSelectedIds.includes(item.id);
+                    const blocked = !dc.gate_legacy && !item.gate_inward_at;
+                    const scriptPending = !dc.gate_legacy && item.gate_inward_at
+                      && (!item.return_config_verified_at || !item.return_captured_serial);
                     return (
                       <div key={item.id} className="p-3 flex items-center justify-between gap-2">
-                        <div className="text-xs">
-                          <p className="font-mono font-semibold">{item.ttspl_id} · {item.serial_number}</p>
-                          <p className="text-slate-500">{prod.title}</p>
-                        </div>
+                        <label className="flex items-start gap-2 text-xs min-w-0">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={checked}
+                            onChange={() => setReceiveSelectedIds((prev) => (
+                              prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                            ))}
+                          />
+                          <span>
+                            <p className="font-mono font-semibold">{item.ttspl_id} · {item.serial_number}</p>
+                            <p className="text-slate-500">{prod.title}</p>
+                            {blocked ? (
+                              <p className="text-amber-700">Awaiting Guard inward</p>
+                            ) : scriptPending ? (
+                              <p className="text-amber-700">ON receive: run vendor-return script for serial + specs</p>
+                            ) : null}
+                          </span>
+                        </label>
                         <button type="button" onClick={() => openReceiveForItem(item)} className="px-3 py-1.5 bg-green-700 text-white rounded-lg text-xs font-semibold shrink-0">
                           Receive
                         </button>
@@ -849,7 +1021,19 @@ export default function VendorRepairDcDetailPage() {
                     );
                   })}
                 </div>
-                <button type="button" onClick={() => setReceiveOpen(false)} className="w-full px-4 py-2 border rounded-lg text-sm">Close</button>
+                {receiveSelectedIds.length > 1 ? (
+                  <button
+                    type="button"
+                    className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold"
+                    onClick={() => {
+                      const first = dispatchedItems.find((i) => i.id === receiveSelectedIds[0]);
+                      if (first) openReceiveForItem(first);
+                    }}
+                  >
+                    Receive selected ({receiveSelectedIds.length})
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => { setReceiveOpen(false); setReceiveSelectedIds([]); }} className="w-full px-4 py-2 border rounded-lg text-sm">Close</button>
               </>
             ) : (
               <>
@@ -865,16 +1049,109 @@ export default function VendorRepairDcDetailPage() {
                     Vendor replacement
                   </label>
                 </div>
-                {receiveForm.receive_mode === 'repaired' ? (
+                <div>
+                  <p className="text-xs font-semibold uppercase text-slate-600 mb-2">Is the laptop ON or NOT ON?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReceiveForm((p) => ({ ...p, laptop_condition: 'on', verified_serial: '' }))}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                        receiveForm.laptop_condition === 'on'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReceiveForm((p) => ({ ...p, laptop_condition: 'not_on', verified_serial: '' }))}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                        receiveForm.laptop_condition === 'not_on'
+                          ? 'border-rose-500 bg-rose-50 text-rose-800'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      NOT ON
+                    </button>
+                  </div>
+                  {receiveForm.laptop_condition === 'not_on' ? (
+                    <p className="mt-2 text-[11px] text-rose-700">
+                      Laptop does not power on. Type the serial number manually to receive it.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-slate-600">
+                      Laptop is ON. Run the vendor-return script on this laptop — it fetches the serial and verifies specs. Do not type the serial.
+                    </p>
+                  )}
+                </div>
+                {isSuperAdmin ? (
+                  <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={receiveForm.bypass_gate_flow}
+                      onChange={(e) => setReceiveForm((p) => ({ ...p, bypass_gate_flow: e.target.checked }))}
+                    />
+                    <span>
+                      <span className="font-semibold">Bypass guard and capture script</span>
+                      <span className="block text-amber-800">Super admin only. Still requires warehouse e-sign. NOT ON still needs a typed serial.</span>
+                    </span>
+                  </label>
+                ) : null}
+                {receiveForm.receive_mode === 'repaired' && receiveForm.laptop_condition === 'not_on' ? (
                   <div className="space-y-2">
-                    <p className="text-xs text-slate-600">Scan/type serial to verify it matches the laptop sent for repair.</p>
+                    <p className="text-xs text-slate-600">
+                      Type the serial number manually. It must match the laptop we sent for repair.
+                    </p>
                     <input
                       className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
                       placeholder={`Expected: ${receiveTargetItem.serial_number || '—'}`}
                       value={receiveForm.verified_serial}
                       onChange={(e) => setReceiveForm((p) => ({ ...p, verified_serial: e.target.value }))}
                     />
+                    {receiveSelectedIds.filter((id) => id !== receiveTargetItem.id).map((id) => {
+                      const extra = dispatchedItems.find((i) => i.id === id);
+                      if (!extra) return null;
+                      return (
+                        <input
+                          key={id}
+                          className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                          placeholder={`Expected: ${extra.serial_number || extra.ttspl_id}`}
+                          value={batchSerials[id] || ''}
+                          onChange={(e) => setBatchSerials((prev) => ({ ...prev, [id]: e.target.value }))}
+                        />
+                      );
+                    })}
                   </div>
+                ) : receiveForm.receive_mode === 'repaired' ? (
+                  receiveTargetItem.return_config_verified_at && receiveTargetItem.return_captured_serial ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                      <p className="font-semibold">Script verified</p>
+                      <p className="font-mono mt-0.5">Serial {receiveTargetItem.return_captured_serial} · specs matched</p>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-900 space-y-2">
+                      <p>
+                        {!receiveTargetItem.return_config_verified_at
+                          ? 'Run the vendor-return script to fetch the serial and verify specs.'
+                          : 'Specs matched. Re-run the script so it can send the BIOS serial.'}
+                      </p>
+                      {receiveTargetItem.return_capture?.access_number ? (
+                        <p className="font-mono font-semibold tracking-widest">
+                          Access {receiveTargetItem.return_capture.access_number}
+                        </p>
+                      ) : null}
+                      <a
+                        href="/vendor-return-config-match"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex px-3 py-1.5 bg-teal-700 text-white rounded-lg text-xs font-semibold"
+                      >
+                        Open capture page
+                      </a>
+                    </div>
+                  )
                 ) : (
                   <div className="space-y-2 text-xs">
                     <p className="text-slate-600 font-medium">Original config (sent for repair)</p>

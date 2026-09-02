@@ -10,7 +10,7 @@ const { formatTtspl, parseTtsplNum } = require('./vendorInventoryAssetCodeServic
 const { parseGateQrPayload, lookupToken } = require('./gateQrService');
 const inventorySM = require('./inventoryStateMachine');
 const { compareConfig } = require('./grnConfigService');
-const { resolveVrdcItemSpecs, enrichVrdcItemRow } = require('./vendorRepairDcShared');
+const { resolveVrdcItemSpecs, enrichVrdcItemRow, buildVrdcConfigurationString } = require('./vendorRepairDcShared');
 
 const DIRECTIONS = new Set(['inward', 'outward']);
 const CANCELLED_DC = new Set(['cancelled']);
@@ -214,8 +214,8 @@ function classifyDocumentNumber(raw) {
   const original = String(raw || '').trim();
   if (!original) return null;
   const n = original.toUpperCase();
-  if (/^VRDC\/.+-R\d+$/i.test(n) || /^VRDC\/.+-REP\d+$/i.test(n)) {
-    return { docType: 'vrdc', docNumber: original, variant: 'receive' };
+  if (/^VRDC\/.+-(R|REP)\d+$/i.test(n)) {
+    return { docType: 'vrdc_receive', docNumber: original };
   }
   if (/^VRDC/i.test(n)) return { docType: 'vrdc', docNumber: original };
   if (/^RDC/i.test(n)) return { docType: 'rdc', docNumber: original };
@@ -698,21 +698,32 @@ async function loadServiceDc(db, sdcNumber) {
   return ctx;
 }
 
+function vrdcExpectedConfiguration(row) {
+  const snap = parseJson(row.dispatch_config_snapshot, null);
+  if (snap && typeof snap === 'object' && (snap.brand || snap.model || snap.ram || snap.ssd || snap.storage)) {
+    return buildVrdcConfigurationString({ ...snap, storage: snap.ssd || snap.storage });
+  }
+  return enrichVrdcItemRow(row).configuration;
+}
+
 async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
+  try {
+    await require('./vendorRepairDcService').ensureVendorRepairSchema();
+  } catch (_) { /* schema ensure is best-effort */ }
   const headRes = await db.query(
     `SELECT dc_number, vendor_id, vendor_name, status, awb_number, porter_tracking_id,
-            ship_by, dispatch_mode
+            ship_by, dispatch_mode, gate_legacy, COALESCE(item_domain, 'laptop') AS item_domain
        FROM vendor_repair_delivery_challans
       WHERE dc_number = $1
-         OR receive_dc_number = $1
       LIMIT 1`,
     [dcNumber]
   );
   if (!headRes.rows.length) return null;
   const head = headRes.rows[0];
+  if (String(head.item_domain || 'laptop') !== 'laptop') return null;
   const items = await db.query(
     `SELECT i.id, i.serial_id, i.ttspl_id, i.serial_number, i.configuration, i.item_status,
-            i.receive_dc_number, i.replacement_dc_number,
+            i.receive_dc_number, i.replacement_dc_number, i.dispatch_config_snapshot,
             vsn.extra AS serial_extra
        FROM vendor_repair_dc_items i
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
@@ -721,42 +732,49 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     [head.dc_number]
   );
   const dcStatus = String(head.status || '').toLowerCase();
-  const scannedIsReceive = /-(R|REP)\d+$/i.test(String(dcNumber));
-  const direction = scannedIsReceive
-    ? 'inward'
-    : (preferredDirection === 'inward' ? 'inward' : 'outward');
+  const direction = preferredDirection === 'inward' ? 'inward' : 'outward';
 
-  const outwardItems = items.rows.filter((i) => {
-    const s = String(i.item_status || 'draft').toLowerCase();
-    return !['received', 'replacement_received'].includes(s);
-  });
-  const inwardItems = items.rows.filter((i) => {
-    const s = String(i.item_status || '').toLowerCase();
-    return s === 'dispatched' || s === 'out_for_repair';
-  });
+  const outwardItems = items.rows.filter((i) =>
+    String(i.item_status || '').toLowerCase() === 'dispatch_ready'
+  );
+  const inwardItems = items.rows.filter((i) =>
+    String(i.item_status || '').toLowerCase() === 'dispatched'
+  );
 
-  const pick = direction === 'inward' ? (inwardItems.length ? inwardItems : items.rows) : outwardItems;
-  const units = pick.map((row) => enrichVrdcItemRow(row)).map((row) => ({
+  const pick = direction === 'inward' ? inwardItems : outwardItems;
+  const units = pick.map((row) => ({
     serial_id: row.serial_id,
     ttspl: row.ttspl_id,
     serial_number: row.serial_number,
-    configuration: row.configuration,
+    configuration: vrdcExpectedConfiguration(row),
   }));
   const laptops = uniqueLaptops(await enrichLaptops(db, units));
 
   let active = true;
   let inactive_reason = null;
   if (direction === 'outward') {
-    if (dcStatus === 'returned' || dcStatus === 'cancelled') {
+    if (head.gate_legacy) {
+      active = false;
+      inactive_reason = 'This DC was dispatched before gate control was introduced.';
+    } else if (dcStatus === 'draft') {
+      active = false;
+      inactive_reason = 'Warehouse has not e-signed this DC for dispatch yet.';
+    } else if (dcStatus === 'dispatched') {
+      active = false;
+      inactive_reason = 'This DC has already gone out through the gate.';
+    } else if (dcStatus === 'returned' || dcStatus === 'cancelled' || dcStatus === 'partially_returned') {
       active = false;
       inactive_reason = 'This vendor repair DC is no longer open for outward.';
+    } else if (!outwardItems.length) {
+      active = false;
+      inactive_reason = 'No laptops on this DC are waiting for guard outward.';
     }
   } else if (dcStatus === 'cancelled') {
     active = false;
     inactive_reason = 'This vendor repair DC is cancelled.';
-  } else if (dcStatus === 'returned' && inwardItems.length === 0) {
+  } else if (inwardItems.length === 0) {
     active = false;
-    inactive_reason = 'All units on this vendor repair DC have already been received.';
+    inactive_reason = 'No units on this vendor repair DC are waiting for guard inward.';
   }
 
   return {
@@ -773,6 +791,80 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     active,
     inactive_reason,
     laptops,
+    dc_number: head.dc_number,
+  };
+}
+
+async function loadVendorRepairReceiveDc(db, receiveDcNumber) {
+  let headRes;
+  try {
+    headRes = await db.query(
+      `SELECT r.receive_dc_number, r.dc_number, r.gate_inward_at, r.closed_at,
+              d.vendor_name, d.status, d.awb_number, d.porter_tracking_id,
+              d.ship_by, d.dispatch_mode, d.gate_legacy,
+              COALESCE(d.item_domain, 'laptop') AS item_domain
+         FROM vendor_repair_receive_challans r
+         JOIN vendor_repair_delivery_challans d ON d.dc_number = r.dc_number
+        WHERE r.receive_dc_number = $1
+        LIMIT 1`,
+      [receiveDcNumber]
+    );
+  } catch (_) {
+    return null;
+  }
+  if (!headRes.rows.length) return null;
+  const head = headRes.rows[0];
+  if (String(head.item_domain || 'laptop') !== 'laptop') return null;
+
+  const items = await db.query(
+    `SELECT i.id, i.serial_id, i.ttspl_id, i.serial_number, i.configuration, i.item_status,
+            i.receive_dc_number, i.dispatch_config_snapshot,
+            vsn.extra AS serial_extra
+       FROM vendor_repair_dc_items i
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
+      WHERE i.receive_dc_number = $1
+      ORDER BY i.id ASC`,
+    [receiveDcNumber]
+  );
+
+  const pick = items.rows.filter((i) => String(i.item_status || '').toLowerCase() === 'dispatched');
+  const units = items.rows.map((row) => ({
+    serial_id: row.serial_id,
+    ttspl: row.ttspl_id,
+    serial_number: row.serial_number,
+    configuration: vrdcExpectedConfiguration(row),
+  }));
+  const laptops = uniqueLaptops(await enrichLaptops(db, units));
+
+  let active = true;
+  let inactive_reason = null;
+  if (head.closed_at) {
+    active = false;
+    inactive_reason = 'This receive challan has already been closed into stock.';
+  } else if (head.gate_inward_at || !pick.length) {
+    active = false;
+    inactive_reason = 'This receive challan has already been passed inward.';
+  } else if (!laptops.length) {
+    active = false;
+    inactive_reason = 'No laptops are waiting on this receive challan.';
+  }
+
+  return {
+    direction: 'inward',
+    source_type: 'vendor_repair_return',
+    source_label: 'Vendor Repair Return',
+    reference_type: 'vrdc_receive',
+    reference_number: head.receive_dc_number,
+    party_name: head.vendor_name || null,
+    so_number: null,
+    awb_number: head.awb_number || head.porter_tracking_id || null,
+    movement_mode: movementModeLabel(head.ship_by, head.dispatch_mode),
+    allow_partial: false,
+    active,
+    inactive_reason,
+    laptops,
+    dc_number: head.dc_number,
+    receive_dc_number: head.receive_dc_number,
   };
 }
 
@@ -865,6 +957,7 @@ async function loadDocument(db, docType, docNumber, preferredDirection) {
   if (docType === 'rdc') return loadReturnDc(db, docNumber);
   if (docType === 'sdc') return loadServiceDc(db, docNumber);
   if (docType === 'vrdc') return loadVendorRepairDc(db, docNumber, preferredDirection);
+  if (docType === 'vrdc_receive') return loadVendorRepairReceiveDc(db, docNumber);
   if (docType === 'grn') return loadGrn(db, docNumber);
   return null;
 }
@@ -941,8 +1034,9 @@ async function findByAwb(db, awb, preferredDirection) {
   const vrdc = await db.query(
     `SELECT dc_number, awb_number, porter_tracking_id, status
        FROM vendor_repair_delivery_challans
-      WHERE awb_number ILIKE '%' || $1 || '%'
-         OR porter_tracking_id ILIKE '%' || $1 || '%'
+      WHERE COALESCE(item_domain, 'laptop') = 'laptop'
+        AND (awb_number ILIKE '%' || $1 || '%'
+         OR porter_tracking_id ILIKE '%' || $1 || '%')
       ORDER BY id DESC LIMIT 1`,
     [token]
   );
@@ -1036,13 +1130,14 @@ async function findBySerial(db, serial, preferredDirection) {
        JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
       WHERE (i.serial_id = $1 OR i.ttspl_id = $2 OR i.serial_number = $3)
         AND d.status NOT IN ('cancelled')
+        AND COALESCE(d.item_domain, 'laptop') = 'laptop'
       ORDER BY i.id DESC
       LIMIT 3`,
     [serial.serial_id, serial.ttspl, serial.serial_number]
   );
   for (const row of vrdc.rows) {
     const itemStatus = String(row.item_status || '').toLowerCase();
-    const pref = ['received', 'replacement_received'].includes(itemStatus)
+    const pref = ['received', 'replacement_received', 'gate_received'].includes(itemStatus)
       ? null
       : (itemStatus === 'dispatched' ? 'inward' : 'outward');
     const ctx = await loadVendorRepairDc(db, row.dc_number, preferredDirection || pref);
@@ -1997,7 +2092,52 @@ async function confirmSession({ sessionId, remarks, user }) {
       await applyInwardReturnDcGate(client, { session, actor });
     }
 
+    const vrGate = require('./vendorRepairGateService');
+    const serialIds = stamped.rows.map((r) => r.serial_id).filter(Boolean);
+    if (session.reference_type === 'vrdc' && session.direction === 'outward') {
+      await vrGate.applyOutwardGateVrdc(client, {
+        dcNumber: session.reference_number,
+        serialIds,
+        sessionId: session.session_id,
+        actorUserId: actor.userId,
+        actorName: actor.name,
+      });
+    }
+    let inwardVrdc = null;
+    if (
+      (session.reference_type === 'vrdc' || session.reference_type === 'vrdc_receive')
+      && session.direction === 'inward'
+    ) {
+      const ctxRecv = ctx.receive_dc_number || (session.reference_type === 'vrdc_receive' ? session.reference_number : null);
+      inwardVrdc = await vrGate.applyInwardGateVrdc(client, {
+        receiveDcNumber: ctxRecv,
+        dcNumber: ctx.dc_number || session.reference_number,
+        serialIds,
+        sessionId: session.session_id,
+        actorUserId: actor.userId,
+      });
+    }
+
     await client.query('COMMIT');
+
+    if (inwardVrdc?.receive_dc_number && inwardVrdc?.dc_number) {
+      try {
+        const { generateVendorRepairReceivePdf } = require('./vendorRepairPdfService');
+        const pdfPath = await generateVendorRepairReceivePdf(
+          inwardVrdc.dc_number,
+          inwardVrdc.receive_dc_number,
+          inwardVrdc.item_ids || []
+        );
+        if (pdfPath) {
+          await pool.query(
+            `UPDATE vendor_repair_receive_challans SET pdf_path = $2 WHERE receive_dc_number = $1`,
+            [inwardVrdc.receive_dc_number, pdfPath]
+          );
+        }
+      } catch (pdfErr) {
+        console.warn('[guardGate] receive PDF skipped:', pdfErr.message);
+      }
+    }
 
     if (outward?.salesOrderNumber) {
       try {
