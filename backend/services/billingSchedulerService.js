@@ -105,7 +105,6 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
        FROM vendor_serial_numbers vsn
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
-        AND COALESCE(sti.pickup_type, '') <> 'repair'
         AND sti.warehouse_received_at IS NOT NULL
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
@@ -118,6 +117,11 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
         AND rl.customer_id = $1
         AND COALESCE(rl.status, '') NOT IN ('cancelled')
       WHERE vsn.serial_id = ANY($2::int[])
+        -- Still rented to this customer (complaint/repair, not a real return).
+        AND NOT (
+          vsn.current_customer_id = $1
+          AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
+        )
         AND NOT EXISTS (
           SELECT 1
             FROM delivery_challan_lines o
@@ -125,7 +129,8 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
              AND o.customer_id = $1
              AND COALESCE(o.status, '') NOT IN ('cancelled')
              AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
-             AND COALESCE(o.delivered_at, o.created_at) > sti.warehouse_received_at
+             AND COALESCE(o.delivered_at, o.created_at) >
+                 COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
         )
       ORDER BY vsn.serial_id, sti.warehouse_received_at DESC`,
     [customerId, ids]
@@ -133,6 +138,35 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
   for (const row of rows) {
     const parsed = parseInvoiceLineDate(row.return_date);
     if (parsed) bySerial.set(Number(row.serial_id), parsed);
+  }
+  return bySerial;
+}
+
+/**
+ * Latest outbound DC delivery for this customer. `null` means the DC exists
+ * but POD / delivered_at was never marked — do not bill previous-month
+ * catch-up or security until that date is set.
+ */
+async function loadCustomerOutboundDeliveryDates(client, customerId, serialIds) {
+  const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
+  const bySerial = new Map();
+  if (!customerId || !ids.length) return bySerial;
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (vsn.serial_id)
+            vsn.serial_id,
+            (dcl.delivered_at AT TIME ZONE 'Asia/Kolkata')::date::text AS delivery_date
+       FROM vendor_serial_numbers vsn
+       JOIN delivery_challan_lines dcl
+         ON COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+        AND dcl.customer_id = $1
+        AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+        AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+      WHERE vsn.serial_id = ANY($2::int[])
+      ORDER BY vsn.serial_id, dcl.delivered_at DESC NULLS LAST, dcl.created_at DESC`,
+    [customerId, ids]
+  );
+  for (const row of rows) {
+    bySerial.set(Number(row.serial_id), parseInvoiceLineDate(row.delivery_date));
   }
   return bySerial;
 }
@@ -206,10 +240,16 @@ async function buildCustomerInvoiceLines(client, {
   let subtotal = 0;
   let periodStart = null;
   let periodEnd = null;
+  const serialIdsForWindow = serialsRes.rows.map((row) => row.serial_id);
   const warehouseReturnBySerial = await loadCustomerWarehouseReturnDates(
     client,
     customerId,
-    serialsRes.rows.map((row) => row.serial_id)
+    serialIdsForWindow
+  );
+  const outboundDeliveryBySerial = await loadCustomerOutboundDeliveryDates(
+    client,
+    customerId,
+    serialIdsForWindow
   );
 
   for (const row of serialsRes.rows) {
@@ -226,11 +266,17 @@ async function buildCustomerInvoiceLines(client, {
     let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
     if (billStart < rentStart) billStart = rentStart;
 
-    // July (or earlier) deliveries were already billed on the 1st of the
-    // following month. Do not recreate that prior month as catch-up here.
-    const deliveryYmd = toLocalYmd(new Date(row.delivered_at || row.rent_start_date || row.dispatched_at));
+    // Previous-month catch-up only when THIS customer's outbound DC has a
+    // marked delivery in that month. Unmarked POD or an older delivery
+    // must not create a full August span on September.
+    const dcDelivery = outboundDeliveryBySerial.get(Number(row.serial_id));
+    const deliveryYmd = dcDelivery
+      ? toLocalYmd(dcDelivery)
+      : toLocalYmd(new Date(row.delivered_at || row.rent_start_date || row.dispatched_at));
     const { prevStart } = previousMonthRange(month, year);
-    if (!includeCurrentMonthStarts && deliveryYmd < toLocalYmd(prevStart) && billStart < monthStart) {
+    const prevStartYmd = toLocalYmd(prevStart);
+    const markedInPrevMonth = Boolean(dcDelivery && deliveryYmd >= prevStartYmd && deliveryYmd < toLocalYmd(monthStart));
+    if (!includeCurrentMonthStarts && billStart < monthStart && !markedInPrevMonth) {
       billStart = new Date(monthStart);
     }
 
@@ -348,15 +394,16 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
   )];
   let firstMonthIds = new Set();
   if (rentalSerialIds.length) {
-    const starts = await client.query(
-      `SELECT serial_id
-         FROM vendor_serial_numbers
-        WHERE serial_id = ANY($1::int[])
-          AND COALESCE(delivered_at::date, rent_start_date, dispatched_at::date) >= $2::date
-          AND COALESCE(delivered_at::date, rent_start_date, dispatched_at::date) <= $3::date`,
-      [rentalSerialIds, toLocalYmd(prevStart), toLocalYmd(prevEnd)]
-    );
-    firstMonthIds = new Set(starts.rows.map((row) => Number(row.serial_id)));
+    const outbound = await loadCustomerOutboundDeliveryDates(client, customerId, rentalSerialIds);
+    for (const [serialId, deliveredOn] of outbound.entries()) {
+      if (
+        deliveredOn
+        && deliveredOn >= prevStart
+        && deliveredOn <= prevEnd
+      ) {
+        firstMonthIds.add(Number(serialId));
+      }
+    }
   }
 
   const stay = [];
@@ -366,7 +413,15 @@ async function takeMidMonthStartLinesFromPreviousInvoice(client, { customerId, m
       stay.push(line);
       continue;
     }
-    if (firstMonthIds.has(Number(line.serial_id))) {
+    const lineStart = parseInvoiceLineDate(line.rent_start);
+    const startInPrevMonth = Boolean(
+      lineStart
+      && lineStart.getFullYear() === prevYear
+      && lineStart.getMonth() + 1 === prevMonth
+    );
+    // Only move the previous-month span. A later re-rent updates VSN
+    // delivered_at, which must not drag leftover July lines onto September.
+    if (firstMonthIds.has(Number(line.serial_id)) && startInPrevMonth) {
       move.push({ ...line, is_catchup: true, period: expectedPeriod });
       continue;
     }
@@ -658,32 +713,42 @@ async function stripEarlyDeliveryCatchupFromDraft(client, inv, month, year) {
   }
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
-  const { prevStart } = previousMonthRange(month, year);
-  const monthStartYmd = toLocalYmd(monthStart);
+  const { prevStart, prevEnd } = previousMonthRange(month, year);
   const prevStartYmd = toLocalYmd(prevStart);
+  const prevEndYmd = toLocalYmd(prevEnd);
   const lines = invoiceLinesArray(inv.line_items);
   const rental = lines.filter((line) => !isSecurityLine(line));
   const security = lines.filter(isSecurityLine);
   const serialIds = [...new Set(rental.map((line) => Number(line.serial_id)).filter((id) => id > 0))];
   if (!serialIds.length) return { stripped: 0, inv };
 
-  const starts = await client.query(
-    `SELECT serial_id,
-            COALESCE(delivered_at::date, rent_start_date, dispatched_at::date)::text AS delivery_date
-       FROM vendor_serial_numbers
-      WHERE serial_id = ANY($1::int[])`,
-    [serialIds]
+  const customerRes = await client.query(
+    `SELECT customer_id FROM customer_invoices WHERE invoice_id = $1`,
+    [inv.invoice_id]
   );
-  const deliveryById = new Map(
-    starts.rows.map((row) => [Number(row.serial_id), String(row.delivery_date || '').slice(0, 10)])
+  const outbound = await loadCustomerOutboundDeliveryDates(
+    client,
+    customerRes.rows[0]?.customer_id,
+    serialIds
   );
 
   const keep = [];
   const drop = [];
   for (const line of rental) {
     const lineStart = String(line.rent_start || '').slice(0, 10);
-    const delivery = deliveryById.get(Number(line.serial_id)) || '';
-    if (lineStart && lineStart < monthStartYmd && delivery && delivery < prevStartYmd) {
+    const deliveredOn = outbound.get(Number(line.serial_id));
+    const deliveredYmd = deliveredOn ? toLocalYmd(deliveredOn) : '';
+    const catchupWithoutMarkedPrevMonth = Boolean(
+      line.is_catchup
+      && lineStart
+      && lineStart >= prevStartYmd
+      && lineStart <= prevEndYmd
+      && (!deliveredYmd || deliveredYmd < prevStartYmd || deliveredYmd > prevEndYmd)
+    );
+    // September must never bill July (or earlier), even if VSN delivered_at
+    // was overwritten by a later re-rent to another customer.
+    // Also drop previous-month catch-up when this customer's DC has no POD.
+    if ((lineStart && lineStart < prevStartYmd) || catchupWithoutMarkedPrevMonth) {
       drop.push(line);
     } else {
       keep.push(line);
@@ -741,15 +806,6 @@ async function stripWarehouseReturnedRentalsFromDraft(client, inv, month, year) 
   const returnBySerial = await loadCustomerWarehouseReturnDates(client, customerId, serialIds);
   if (!returnBySerial.size) return { stripped: 0, inv };
 
-  const credited = await client.query(
-    `SELECT DISTINCT serial_id
-       FROM customer_credit_notes
-      WHERE serial_id = ANY($1::int[])
-        AND status <> 'cancelled'`,
-    [[...returnBySerial.keys()]]
-  );
-  const creditedIds = new Set(credited.rows.map((row) => Number(row.serial_id)));
-
   const keep = [];
   const drop = [];
   const capped = [];
@@ -762,12 +818,18 @@ async function stripWarehouseReturnedRentalsFromDraft(client, inv, month, year) 
     }
     const start = parseInvoiceLineDate(line.rent_start);
     const end = parseInvoiceLineDate(line.rent_end);
-    if (start && start > returnedOn) {
+    // Warehouse receive on the 1st (or earlier) means this month is not billable.
+    if (start && start >= returnedOn) {
       drop.push(line);
       continue;
     }
-    // Mid-month cap only when unused days are not already on a credit note.
-    if (end && end > returnedOn && !creditedIds.has(serialId)) {
+    // Catch-up on a later invoice is leftover prepaid, not current-month rent.
+    // Remove it; unused days after warehouse receive are credited separately.
+    if (line.is_catchup && end && end >= returnedOn) {
+      drop.push(line);
+      continue;
+    }
+    if (end && end > returnedOn) {
       const next = recalcRentalLineToEnd(line, returnedOn);
       keep.push(next);
       capped.push(next);
@@ -881,11 +943,26 @@ async function ensureInvoiceSecurityLines(client, {
   const deliveryById = new Map();
   if (securitySerialIds.length) {
     const deliveries = await client.query(
-      `SELECT serial_id,
-              COALESCE(delivered_at::date, rent_start_date, dispatched_at::date)::text AS delivery_date
-         FROM vendor_serial_numbers
-        WHERE serial_id = ANY($1::int[])`,
-      [securitySerialIds]
+      `SELECT vsn.serial_id,
+              COALESCE(
+                (
+                  SELECT (dcl.delivered_at AT TIME ZONE 'Asia/Kolkata')::date
+                    FROM delivery_challan_lines dcl
+                   WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+                     AND dcl.customer_id = $2
+                     AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+                     AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+                     AND dcl.delivered_at IS NOT NULL
+                   ORDER BY dcl.delivered_at DESC
+                   LIMIT 1
+                ),
+                vsn.delivered_at::date,
+                vsn.rent_start_date,
+                vsn.dispatched_at::date
+              )::text AS delivery_date
+         FROM vendor_serial_numbers vsn
+        WHERE vsn.serial_id = ANY($1::int[])`,
+      [securitySerialIds, customerId]
     );
     for (const row of deliveries.rows) {
       deliveryById.set(Number(row.serial_id), String(row.delivery_date || '').slice(0, 10));
@@ -1172,87 +1249,126 @@ async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
 }
 
 /**
- * Raise credit notes for returned units that still have unused prepaid days
- * and no CN yet. Must run before invoice lines advance rent_billed_until.
+ * Credit unused prepaid days when this customer returned a unit to
+ * warehouse. Inventory may already say `rented` on a later customer;
+ * use this customer's RDC + billed rate, not current VSN state.
  */
-const WAREHOUSE_RETURN_DATE_SQL = `COALESCE(
-  (pickup.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date,
-  (rdc.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
-)`;
+async function createMissingReturnCreditNotes(client, {
+  customerId, actorUserId = null, month = null, year = null,
+}) {
+  const params = [customerId];
+  let returnWindowSql = '';
+  if (month && year) {
+    const { prevStart } = previousMonthRange(month, year);
+    const windowEnd = new Date(year, month, 0);
+    params.push(toLocalYmd(prevStart), toLocalYmd(windowEnd));
+    returnWindowSql = `AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
+                         BETWEEN $2::date AND $3::date`;
+  }
 
-async function createMissingReturnCreditNotes(client, { customerId, actorUserId = null }) {
   const { rows } = await client.query(
-    `SELECT vsn.serial_id,
-            ${WAREHOUSE_RETURN_DATE_SQL} AS return_date,
-            pickup.ticket_id,
-            COALESCE(pickup.return_dc_number, rdc.dc_number) AS return_dc_number
+    `SELECT DISTINCT ON (vsn.serial_id)
+            vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS return_date,
+            sti.ticket_id,
+            sti.return_dc_number,
+            last_line.monthly_rate,
+            last_line.rent_end AS billed_until
        FROM vendor_serial_numbers vsn
-       LEFT JOIN LATERAL (
-         SELECT sti.warehouse_received_at,
-                sti.ticket_id,
-                sti.return_dc_number
-           FROM support_ticket_items sti
-          WHERE (sti.ttspl_id = vsn.inventory_asset_code
-                 OR sti.unique_serial_number = vsn.inventory_asset_code
-                 OR sti.serial_number = vsn.serial_number)
-            AND sti.item_type = 'pickup'
-            AND sti.warehouse_received_at IS NOT NULL
-            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END, '') <> 'repair'
-          ORDER BY sti.warehouse_received_at DESC
+       JOIN support_ticket_items sti
+         ON sti.item_type = 'pickup'
+        AND sti.warehouse_received_at IS NOT NULL
+        AND (
+          sti.ttspl_id = vsn.inventory_asset_code
+          OR sti.unique_serial_number = vsn.inventory_asset_code
+          OR sti.serial_number = vsn.serial_number
+        )
+       JOIN delivery_challan_lines rl
+         ON rl.dc_number = sti.return_dc_number
+        AND rl.movement_type = 'return'
+        AND rl.customer_id = $1
+        AND COALESCE(rl.status, '') NOT IN ('cancelled')
+       JOIN LATERAL (
+         SELECT cil.monthly_rate, cil.rent_end
+           FROM customer_invoice_lines cil
+           JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+          WHERE cil.serial_id = vsn.serial_id
+            AND ci.customer_id = $1
+            AND COALESCE(cil.line_type, 'rental') <> 'security'
+            AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
+          ORDER BY cil.rent_end DESC NULLS LAST
           LIMIT 1
-       ) pickup ON TRUE
-       LEFT JOIN LATERAL (
-         SELECT rl.warehouse_received_at, rl.dc_number
-           FROM delivery_challan_lines rl
-          WHERE rl.movement_type = 'return'
-            AND rl.customer_id = $1
-            AND COALESCE(rl.status, '') NOT IN ('cancelled')
-            AND rl.warehouse_received_at IS NOT NULL
-            AND (
-              vsn.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-              OR vsn.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-            )
-          ORDER BY rl.warehouse_received_at DESC
-          LIMIT 1
-       ) rdc ON TRUE
+       ) last_line ON TRUE
       WHERE vsn.deleted_at IS NULL
-        AND vsn.rent_billed_until IS NOT NULL
-        AND ${WAREHOUSE_RETURN_DATE_SQL} IS NOT NULL
-        AND vsn.rent_billed_until > ${WAREHOUSE_RETURN_DATE_SQL}
-        AND (
-          vsn.inventory_status IN ('returned', 'in_stock')
-          OR vsn.current_customer_id IS NULL
-        )
-        AND (
+        ${returnWindowSql}
+        AND NOT (
           vsn.current_customer_id = $1
-          OR EXISTS (
-            SELECT 1
-              FROM customer_invoice_lines cil
-              JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
-             WHERE cil.serial_id = vsn.serial_id
-               AND ci.customer_id = $1
-          )
+          AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
         )
+        AND last_line.rent_end > (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
         AND NOT EXISTS (
           SELECT 1 FROM customer_credit_notes cn
            WHERE cn.serial_id = vsn.serial_id
+             AND cn.customer_id = $1
              AND cn.status <> 'cancelled'
-        )`,
-    [customerId]
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM delivery_challan_lines o
+           WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
+             AND o.customer_id = $1
+             AND COALESCE(o.status, '') NOT IN ('cancelled')
+             AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+             AND COALESCE(o.delivered_at, o.created_at) >
+                 COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
+        )
+      ORDER BY vsn.serial_id, sti.warehouse_received_at DESC`,
+    params
   );
 
   const created = [];
   for (const row of rows) {
-    const cn = await createReturnCreditNote(client, {
-      serialId: row.serial_id,
-      returnDate: row.return_date,
-      actorUserId,
-      supportTicketId: row.ticket_id || null,
-      returnDcNumber: row.return_dc_number || null,
-      source: 'invoice_generation',
-      customerId,
+    const returnDate = new Date(row.return_date);
+    const billedUntil = new Date(returnDate.getFullYear(), returnDate.getMonth() + 1, 0);
+    const calc = calcReturnCreditNoteAmount({
+      rentMonthlyRate: row.monthly_rate,
+      returnDate,
+      rentBilledUntil: billedUntil,
     });
-    if (cn) created.push(cn);
+    if (!calc) continue;
+
+    const num = await client.query(
+      `UPDATE sm_document_sequences SET last_value = last_value + 1
+        WHERE doc_type = 'credit_note'
+        RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+    );
+    const cnNumber = num.rows[0].number;
+    const ins = await client.query(
+      `INSERT INTO customer_credit_notes
+        (credit_note_number, customer_id, reason, description, amount,
+         quantity, unit_rate, from_date, to_date, ttspl_ids, status, created_by,
+         serial_id, source, support_ticket_id, return_dc_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,$14,$15)
+       RETURNING *`,
+      [
+        cnNumber, customerId,
+        'Rental return — unused prepaid days',
+        `Unit ${row.ttspl_id || row.serial_id} warehouse received on ${toLocalYmd(returnDate)}` +
+          (row.return_dc_number ? ` via ${row.return_dc_number}` : '') +
+          `; ${calc.unusedDays} prepaid day(s) (${toLocalYmd(calc.refundStart)} to ${toLocalYmd(calc.billedUntil)}) refunded at ₹${calc.dailyRate.toFixed(2)}/day (base, excl. GST).`,
+        calc.amount, calc.unusedDays, calc.dailyRate,
+        toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
+        JSON.stringify([row.ttspl_id].filter(Boolean)), actorUserId,
+        row.serial_id, 'invoice_generation',
+        row.ticket_id || null, row.return_dc_number || null,
+      ]
+    );
+    billingLog.info(
+      { cnNumber, amount: calc.amount, customerId, serialId: row.serial_id },
+      'Return credit note created'
+    );
+    created.push(ins.rows[0]);
   }
   return created;
 }
@@ -1267,7 +1383,9 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
   try {
     await client.query('BEGIN');
 
-    const createdNotes = await createMissingReturnCreditNotes(client, { customerId });
+    const createdNotes = await createMissingReturnCreditNotes(client, {
+      customerId, month, year,
+    });
     const movedCatchup = await takeMidMonthStartLinesFromPreviousInvoice(client, {
       customerId, month, year,
     });
@@ -2051,5 +2169,6 @@ module.exports = {
   stripEarlyDeliveryCatchupFromDraft,
   stripWarehouseReturnedRentalsFromDraft,
   reconcileDraftRentalWindow,
+  createMissingReturnCreditNotes,
   ensureInvoiceSecurityLines,
 };

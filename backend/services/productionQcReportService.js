@@ -685,27 +685,27 @@ async function getProductionQcReportDetailUncached(historyId) {
   if (id < 0) {
     row = await getSupplementalProductionQcDetail(id);
   } else {
-    const res = await pool.query(
-      `SELECT
-         h.*,
-         COALESCE(NULLIF(TRIM(t.ttspl_id), ''), vsn.inventory_asset_code) AS ttspl_id,
-         COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS serial_number,
-         COALESCE(ut.name, ut.email) AS technician_name,
-         COALESCE(uc.name, uc.email) AS checked_by_name,
-         COALESCE(
-           NULLIF(TRIM(c.company_name), ''),
-           NULLIF(TRIM(c.name), ''),
-           NULLIF(TRIM(v.business_name), '')
-         ) AS customer_vendor,
-         COALESCE(t.brand, vsn.extra->>'brand') AS brand,
-         COALESCE(t.model, vsn.extra->>'model', vsn.extra->>'model_name') AS model,
-         st.stage_name AS current_stage,
-         t.ticket_id
-       ${ticketJoinSql()}
-       WHERE h.history_id = $1
-       LIMIT 1`,
-      [id]
-    );
+  const res = await pool.query(
+    `SELECT
+       h.*,
+       COALESCE(NULLIF(TRIM(t.ttspl_id), ''), vsn.inventory_asset_code) AS ttspl_id,
+       COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS serial_number,
+       COALESCE(ut.name, ut.email) AS technician_name,
+       COALESCE(uc.name, uc.email) AS checked_by_name,
+       COALESCE(
+         NULLIF(TRIM(c.company_name), ''),
+         NULLIF(TRIM(c.name), ''),
+         NULLIF(TRIM(v.business_name), '')
+       ) AS customer_vendor,
+       COALESCE(t.brand, vsn.extra->>'brand') AS brand,
+       COALESCE(t.model, vsn.extra->>'model', vsn.extra->>'model_name') AS model,
+       st.stage_name AS current_stage,
+       t.ticket_id
+     ${ticketJoinSql()}
+     WHERE h.history_id = $1
+     LIMIT 1`,
+    [id]
+  );
     row = res.rows[0];
   }
   if (!row) return null;
@@ -724,13 +724,13 @@ async function getProductionQcReportDetailUncached(historyId) {
 
   let attempts = [{ history_id: row.history_id, attempt_no: row.attempt_no, qc_result: row.qc_result, submitted_at: row.submitted_at }];
   if (id > 0 && row.ticket_id) {
-    const attemptsRes = await pool.query(
-      `SELECT history_id, attempt_no, qc_result, submitted_at
-         FROM qc_results_history
-        WHERE ticket_id = $1 AND qc_stage = $2
-        ORDER BY attempt_no DESC`,
-      [row.ticket_id, row.qc_stage]
-    );
+  const attemptsRes = await pool.query(
+    `SELECT history_id, attempt_no, qc_result, submitted_at
+       FROM qc_results_history
+      WHERE ticket_id = $1 AND qc_stage = $2
+      ORDER BY attempt_no DESC`,
+    [row.ticket_id, row.qc_stage]
+  );
     if (attemptsRes.rows.length) attempts = attemptsRes.rows;
   }
 
