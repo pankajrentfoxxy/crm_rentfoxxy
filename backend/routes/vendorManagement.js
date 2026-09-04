@@ -12,6 +12,7 @@ const spareCatalog = require('../controllers/vendorManagement/sparePartsCatalog.
 const serials = require('../controllers/vendorManagement/serialNumbers.controller');
 const billing = require('../controllers/vendorManagement/billing.controller');
 const replaced = require('../controllers/vendorManagement/replacedProducts.controller');
+const vendorReturn = require('../controllers/vendorManagement/vendorReturnToVendor.controller');
 
 const router = express.Router();
 
@@ -244,5 +245,19 @@ router.get('/replaced-products/:id', authorize, replaced.getValidators, replaced
 router.post('/replaced-products', authorize, ...replaced.createValidators, replaced.create);
 router.put('/replaced-products/:id', authorize, replaced.updateValidators, replaced.update);
 router.delete('/replaced-products/:id', authorize, replaced.getValidators, replaced.remove);
+
+// ---------- Return laptop to vendor (warehouse → original supplier) -----------------
+const authorizeReturnToVendor = [
+  authMiddleware,
+  checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'view'),
+];
+
+router.get('/return-to-vendor/eligible-laptops', authorizeReturnToVendor, vendorReturn.listEligible);
+router.get('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.listDcs);
+router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
+router.post('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.createDc);
+router.post('/return-to-vendor/dc/:dcNumber/dispatch', authorizeReturnToVendor, vendorReturn.dispatchDc);
+router.post('/return-to-vendor/dc/:dcNumber/complete', authorizeReturnToVendor, vendorReturn.completeDc);
+router.post('/return-to-vendor/dc/:dcNumber/cancel', authorizeReturnToVendor, vendorReturn.cancelDc);
 
 module.exports = router;

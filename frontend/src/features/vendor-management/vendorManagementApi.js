@@ -282,3 +282,32 @@ export function fetchReplacedInventorySerials(params) {
 export function createReplaced(payload) {
   return api.post(`${base}/replaced-products`, payload);
 }
+
+// ---------- Return laptop to vendor -------------------------------------------------
+export function fetchReturnToVendorEligible(params) {
+  return api.get(`${base}/return-to-vendor/eligible-laptops`, { params });
+}
+
+export function fetchReturnToVendorDcs(params) {
+  return api.get(`${base}/return-to-vendor/dc`, { params });
+}
+
+export function fetchReturnToVendorDc(dcNumber) {
+  return api.get(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}`);
+}
+
+export function createReturnToVendorDc(payload) {
+  return api.post(`${base}/return-to-vendor/dc`, payload);
+}
+
+export function dispatchReturnToVendorDc(dcNumber, payload) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/dispatch`, payload);
+}
+
+export function completeReturnToVendorDc(dcNumber) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/complete`);
+}
+
+export function cancelReturnToVendorDc(dcNumber) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/cancel`);
+}

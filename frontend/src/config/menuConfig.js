@@ -38,6 +38,7 @@ export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders', section: 'vendor_management' },
   { label: 'Serial Numbers', path: '/vendor-management/serial-numbers', section: 'vendor_management' },
   { label: 'Replaced Products', path: '/vendor-management/replaced-products', section: 'vendor_management' },
+  { label: 'Return to Vendor', path: '/vendor-management/return-to-vendor', section: 'vendor_return_to_vendor', sections: ['vendor_return_to_vendor', 'vendor_management'] },
   { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc', sections: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'] },
 ];
 
@@ -295,7 +296,7 @@ export const MENU_GROUPS = [
     key: 'vendor',
     label: 'Vendor Management',
     items: [
-      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_return_to_vendor', 'vendor_repair_dc', 'vendor_repair_dc_dispatch'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
     ],
   },
   {
