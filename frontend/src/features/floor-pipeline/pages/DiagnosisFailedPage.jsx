@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, Truck } from 'lucide-react';
+import { Loader2, Search, Truck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { DateRangeFilter } from '../../../components/ui/primitives';
 import VendorSearchSelect from '../../vendor-management/components/VendorSearchSelect';
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
@@ -13,7 +14,7 @@ import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDisp
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
-import FloorPipelineFilterPanel from '../components/FloorPipelineFilterPanel';
+import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../components/TtsplHistoryLink';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
@@ -58,6 +59,8 @@ export default function DiagnosisFailedPage() {
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
   const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
   const debouncedSpecParams = useDebouncedSpecParams(specFilters);
   const [form, setForm] = useState({
@@ -80,6 +83,7 @@ export default function DiagnosisFailedPage() {
       const { data } = await fetchDiagnosisFailedTickets({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        search: search || undefined,
         ...debouncedSpecParams,
       });
       setRows(data.data || []);
@@ -89,7 +93,7 @@ export default function DiagnosisFailedPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, debouncedSpecParams]);
+  }, [dateFrom, dateTo, search, debouncedSpecParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -292,6 +296,16 @@ export default function DiagnosisFailedPage() {
         onSpecFiltersChange={setSpecFilters}
         onSpecFiltersClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
       >
+        <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            className={`${FILTER_CTL} w-full pl-8 pr-2`}
+            placeholder="TTSPL, serial, reason, location…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+        </div>
         <DateRangeFilter
           layout="inline"
           controlClassName="h-9 px-2 text-sm min-h-0"
@@ -304,34 +318,44 @@ export default function DiagnosisFailedPage() {
         />
       </FloorPipelineFilterPanel>
 
+      {!loading && rows.length > 0 ? (
+        <p className="mb-3 text-xs text-slate-500">{rows.length} laptop{rows.length === 1 ? '' : 's'}</p>
+      ) : null}
+
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+        <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
           <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
                 {canProcess ? (
-                  <th className="p-3 w-10">
+                  <th className="px-3 py-3 text-left w-10">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
                   </th>
                 ) : null}
-                <th className="p-3">Ticket</th>
-                <th className="p-3">TTSPL</th>
-                <th className="p-3">Configuration</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Failure reason</th>
-                <th className="p-3">Location</th>
-                <th className="p-3">Created</th>
-                <th className="p-3">Prev. technician</th>
-                <th className="p-3">Prev. stage</th>
+                <th className="px-3 py-3 text-left">TTSPL</th>
+                <th className="px-3 py-3 text-left">Serial</th>
+                <th className="px-3 py-3 text-left">Config</th>
+                <th className="px-3 py-3 text-left">Status</th>
+                <th className="px-3 py-3 text-left">Failure reason</th>
+                <th className="px-3 py-3 text-left">Location</th>
+                <th className="px-3 py-3 text-left">Failed</th>
+                <th className="px-3 py-3 text-left">Prev. technician</th>
+                <th className="px-3 py-3 text-left">Prev. stage</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.ticket_id} className="border-t hover:bg-slate-50/80">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={canProcess ? 10 : 9} className="px-3 py-8 text-center text-slate-500">
+                    {search || dateFrom || dateTo ? 'No laptops match your filters' : 'No laptops in Diagnosis Failed'}
+                  </td>
+                </tr>
+              ) : rows.map((r) => (
+                <tr key={r.ticket_id} className="border-t hover:bg-slate-50">
                   {canProcess ? (
-                    <td className="p-3">
+                    <td className="px-3 py-3">
                       <input
                         type="checkbox"
                         checked={selected.has(r.ticket_id)}
@@ -340,41 +364,70 @@ export default function DiagnosisFailedPage() {
                       />
                     </td>
                   ) : null}
-                  <td className="p-3">
-                    <Link to={`/floor-pipeline/tickets/${r.ticket_id}`} className="font-mono text-blue-700 hover:underline">
+                  <td className="px-3 py-3">
+                    <TtsplHistoryLink
+                      ttsplId={r.ttspl_id}
+                      className="font-mono font-semibold text-blue-700"
+                      onOpen={setHistoryTtspl}
+                    />
+                    <Link
+                      to={`/floor-pipeline/tickets/${r.ticket_id}`}
+                      className="block text-[10px] text-slate-400 font-mono mt-0.5 hover:text-blue-600"
+                    >
                       #{r.ticket_id}
                     </Link>
                   </td>
-                  <td className="p-3">
-                    <TtsplHistoryLink
-                      ttsplId={r.ttspl_id}
-                      onOpen={setHistoryTtspl}
-                    />
-                  </td>
-                  <td className="p-3 text-xs max-w-[220px]">{r.configuration || '—'}</td>
-                  <td className="p-3">
-                    <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-900">
+                  <td className="px-3 py-3 font-mono text-xs text-slate-700">{r.serial_number || '—'}</td>
+                  <td className="px-3 py-3 text-xs max-w-[220px]">{r.configuration || '—'}</td>
+                  <td className="px-3 py-3">
+                    <span className="rounded-full px-2 py-0.5 text-xs font-semibold bg-amber-100 text-amber-900">
                       {ticketStatusLabel(r.status)}
                     </span>
                   </td>
-                  <td className="p-3 text-xs max-w-[200px]">{r.diagnosis_failed_reason || '—'}</td>
-                  <td className="p-3 text-xs">{r.current_location || '—'}</td>
-                  <td className="p-3 text-xs whitespace-nowrap">{fmtDate(r.created_at)}</td>
-                  <td className="p-3 text-xs">{r.previous_technician_name || '—'}</td>
-                  <td className="p-3 text-xs">{r.previous_stage_name || '—'}</td>
+                  <td className="px-3 py-3 text-xs max-w-[200px]">{r.diagnosis_failed_reason || '—'}</td>
+                  <td className="px-3 py-3 text-xs">{r.current_location || '—'}</td>
+                  <td className="px-3 py-3 text-xs whitespace-nowrap">{fmtDate(r.diagnosis_failed_at || r.created_at)}</td>
+                  <td className="px-3 py-3 text-xs">{r.previous_technician_name || '—'}</td>
+                  <td className="px-3 py-3 text-xs">{r.previous_stage_name || '—'}</td>
                 </tr>
               ))}
-              {!rows.length ? (
-                <tr>
-                  <td colSpan={canProcess ? 10 : 9} className="p-8 text-center text-slate-500">
-                    No laptops in Diagnosis Failed
-                  </td>
-                </tr>
-              ) : null}
             </tbody>
           </table>
         </div>
       )}
+
+      {!loading && rows.length > 0 ? (
+        <div className="grid gap-3 sm:hidden mt-4">
+          {rows.map((r) => (
+            <div key={r.ticket_id} className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <TtsplHistoryLink
+                    ttsplId={r.ttspl_id}
+                    className="font-mono font-semibold text-blue-700"
+                    onOpen={setHistoryTtspl}
+                  />
+                  <Link to={`/floor-pipeline/tickets/${r.ticket_id}`} className="text-[10px] text-slate-400 font-mono">
+                    #{r.ticket_id}
+                  </Link>
+                </div>
+                {canProcess ? (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(r.ticket_id)}
+                    onChange={() => toggleOne(r.ticket_id)}
+                    aria-label={`Select ticket ${r.ticket_id}`}
+                  />
+                ) : null}
+              </div>
+              <p className="text-xs font-mono text-slate-600">SN {r.serial_number || '—'}</p>
+              <p className="text-xs text-slate-700">{r.configuration || '—'}</p>
+              <p className="text-xs text-slate-600">{r.diagnosis_failed_reason || '—'}</p>
+              <p className="text-xs text-slate-500">{r.current_location || '—'} · {fmtDate(r.diagnosis_failed_at || r.created_at)}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {modalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

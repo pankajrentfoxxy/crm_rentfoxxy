@@ -81,6 +81,7 @@ exports.listDiagnosisFailed = async (req, res) => {
     const data = await svc.listDiagnosisFailedTickets({
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      search: req.query.search,
       ...pickSpecFilters(req.query),
     });
     res.json({ success: true, data });

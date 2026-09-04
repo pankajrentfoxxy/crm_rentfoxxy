@@ -241,6 +241,7 @@ function formatCustomerRow(row) {
     business_type: details.business_type || row.company_type || '',
     company_type: row.company_type || details.business_type || '',
     customer_type: normalizeCustomerType(row.customer_type),
+    billing_type: String(row.billing_type || 'prepaid').toLowerCase() === 'postpaid' ? 'postpaid' : 'prepaid',
     company_size: row.company_size || null,
     industry: row.industry || null,
     profile: details.profile || null,
@@ -1407,6 +1408,17 @@ exports.updateCustomer = async (req, res) => {
         customerId,
       ]
     );
+
+    if (body.billing_type != null && String(body.billing_type).trim() !== '') {
+      const billingType = String(body.billing_type).trim().toLowerCase();
+      if (!['prepaid', 'postpaid'].includes(billingType)) {
+        return res.status(400).json({ success: false, message: 'billing_type must be prepaid or postpaid' });
+      }
+      await pool.query(
+        `UPDATE customers SET billing_type = $1, updated_at = NOW() WHERE customer_id = $2`,
+        [billingType, customerId]
+      );
+    }
 
     if (body.customer_type != null && String(body.customer_type).trim() !== '') {
       if (!canEditCustomerType(req.user)) {

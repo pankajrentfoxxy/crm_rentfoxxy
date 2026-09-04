@@ -27,6 +27,7 @@ const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
   trade_name: '', gst_number: '', pan_number: '', company_type: '', industry: '',
   customer_type: 'both',
+  billing_type: 'prepaid',
   billing_address: '', billing_city: '', billing_state: '', billing_pincode: '',
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
   whatsapp_number: '', designation: '', notes: '',
@@ -88,6 +89,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         company_type: customer.company_type || '',
         industry: customer.industry || '',
         customer_type: normalizeCustomerType(customer.customer_type),
+        billing_type: customer.billing_type === 'postpaid' ? 'postpaid' : 'prepaid',
         billing_address: typeof customer.billing_address === 'string' ? customer.billing_address : customer.billing_address?.address || '',
         billing_city: customer.billing_city || '',
         billing_state: resolveStateSelectValue(customer.billing_state || ''),
@@ -176,7 +178,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         ['shipping_state', 'Shipping state'],
         ['shipping_pincode', 'Shipping pincode'],
       ].forEach(([key, label]) => {
-        if (!String(form[key] || '').trim()) errors[key] = `${label} is required`;
+        if (!String(form[key] || '').trim()) errors[key] = `${label} is required when shipping differs from billing`;
       });
     }
 
@@ -213,11 +215,20 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       if (err) errors[key] = err;
     });
     setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    return { ok: Object.keys(errors).length === 0, errors };
+  };
+
+  const scrollToFirstError = (errors) => {
+    const firstKey = Object.keys(errors)[0];
+    if (!firstKey) return;
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-field="${firstKey}"]`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
   };
 
   const renderField = (key, label, { type = 'text', mobile = false, required = false } = {}) => (
-    <div key={key}>
+    <div key={key} data-field={key}>
       <label className="text-xs text-gray-500">
         {label}
         {required && <span className="text-red-500"> *</span>}
@@ -325,8 +336,11 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   };
 
   const handleSave = async () => {
-    if (!validateForm()) {
-      toast.error('Please fix the highlighted fields');
+    const validation = validateForm();
+    if (!validation.ok) {
+      const firstMsg = Object.values(validation.errors)[0];
+      toast.error(firstMsg || 'Please fix the highlighted fields');
+      scrollToFirstError(validation.errors);
       return;
     }
     setSaving(true);
@@ -393,7 +407,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
             ['whatsapp_number', 'WhatsApp', true, false],
             ['designation', 'Designation', false, false],
           ].map(([k, label, mobile, required]) => (
-            <div key={k}>
+            <div key={k} data-field={k}>
               <label className="text-xs text-gray-500">
                 {label}
                 {required ? <span className="text-red-500"> *</span> : null}
@@ -481,14 +495,28 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               <p className="mt-1 text-[11px] text-gray-400">{customerTypeLabel(form.customer_type)} (read-only)</p>
             ) : null}
           </div>
-          <div className="sm:col-span-2">
+          <div>
+            <label className="text-xs text-gray-500">Billing type</label>
+            <select
+              value={form.billing_type || 'prepaid'}
+              onChange={(e) => set('billing_type', e.target.value)}
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="prepaid">Prepaid — bill this month on the 1st</option>
+              <option value="postpaid">Postpaid — bill last month on the 1st</option>
+            </select>
+            <p className="mt-1 text-[11px] text-gray-400">
+              Postpaid invoices cover 1st to month-end, or warehouse received date if the laptop returned mid-month.
+            </p>
+          </div>
+          <div className="sm:col-span-2" data-field="billing_address">
             <label className="text-xs text-gray-500">Billing Address <span className="text-red-500">*</span></label>
             <textarea value={form.billing_address} onChange={(e) => set('billing_address', e.target.value)} rows={2}
               className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors.billing_address ? 'border-red-300' : 'border-gray-200'}`} />
             {fieldErrors.billing_address && <p className="mt-1 text-xs text-red-600">{fieldErrors.billing_address}</p>}
           </div>
           {['billing_city', 'billing_state', 'billing_pincode'].map((k) => (
-            <div key={k}>
+            <div key={k} data-field={k}>
               <label className="text-xs text-gray-500 capitalize">
                 {k.replace('billing_', '')}
                 <span className="text-red-500"> *</span>
@@ -531,14 +559,28 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           </div>
 
           <div className="sm:col-span-2 pt-2 border-t">
-            <h3 className="text-sm font-semibold text-gray-800 mb-2">Shipping Address</h3>
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">
+              Shipping Address
+              {!shippingSame ? <span className="text-red-500 text-xs font-normal"> — required when different from billing</span> : null}
+            </h3>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
                 checked={shippingSame}
                 onChange={(e) => {
-                  setShippingSame(e.target.checked);
-                  set('shipping_same', e.target.checked);
+                  const checked = e.target.checked;
+                  setShippingSame(checked);
+                  set('shipping_same', checked);
+                  if (checked) {
+                    setFieldErrors((prev) => {
+                      const next = { ...prev };
+                      delete next.shipping_address;
+                      delete next.shipping_city;
+                      delete next.shipping_state;
+                      delete next.shipping_pincode;
+                      return next;
+                    });
+                  }
                 }}
               />
               Shipping address same as billing
@@ -546,21 +588,22 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           </div>
           {!shippingSame && (
             <>
-              <div className="sm:col-span-2">
-                <label className="text-xs text-gray-500">Shipping Address</label>
+              <div className="sm:col-span-2" data-field="shipping_address">
+                <label className="text-xs text-gray-500">Shipping Address <span className="text-red-500">*</span></label>
                 <textarea value={form.shipping_address} onChange={(e) => set('shipping_address', e.target.value)} rows={2}
-                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors.shipping_address ? 'border-red-300' : 'border-gray-200'}`} />
+                {fieldErrors.shipping_address && <p className="mt-1 text-xs text-red-600">{fieldErrors.shipping_address}</p>}
               </div>
               {[
                 ['shipping_city', 'City'],
                 ['shipping_state', 'State'],
                 ['shipping_pincode', 'Pincode'],
               ].map(([k, label]) => (
-                <div key={k}>
-                  <label className="text-xs text-gray-500">{label}</label>
+                <div key={k} data-field={k}>
+                  <label className="text-xs text-gray-500">{label} <span className="text-red-500">*</span></label>
                   {k === 'shipping_state' ? (
                     <select value={form.shipping_state} onChange={(e) => set('shipping_state', e.target.value)}
-                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-white ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`}>
                       <option value="">Select state</option>
                       {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -568,11 +611,12 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                     <input value={form.shipping_pincode}
                       onChange={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
                       onBlur={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
-                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`} />
                   ) : (
                     <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`} />
                   )}
+                  {fieldErrors[k] && <p className="mt-1 text-xs text-red-600">{fieldErrors[k]}</p>}
                 </div>
               ))}
             </>
