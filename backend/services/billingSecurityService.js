@@ -54,13 +54,24 @@ function deliveryInPreviousMonth(deliveryYmd, month, year) {
   return day >= toLocalYmd(prevStart) && day <= toLocalYmd(prevEnd);
 }
 
+function deliveryInInvoiceMonth(deliveryYmd, month, year) {
+  if (!deliveryYmd || !month || !year) return false;
+  const start = toLocalYmd(new Date(year, month - 1, 1));
+  const end = toLocalYmd(new Date(year, month, 0));
+  const day = String(deliveryYmd).slice(0, 10);
+  return day >= start && day <= end;
+}
+
 /**
- * One-month security is billed on the invoice for the calendar month AFTER
- * delivery (Aug 8 delivery → September invoice; Sept 1 → October).
- * July deliveries are not re-billed on September.
+ * Monthly cron: one-month security on the invoice AFTER delivery
+ * (Aug delivery → September). First-order invoices pass
+ * includeCurrentMonth: true so security sits on the same invoice as
+ * the pro-rata first rent.
  */
-async function collectUnbilledSecurityLines(client, { customerId, month, year }) {
+async function collectUnbilledSecurityLines(client, { customerId, month, year, includeCurrentMonth = false }) {
   const { prevStart, prevEnd } = previousMonthRange(month, year);
+  const windowStart = includeCurrentMonth ? new Date(year, month - 1, 1) : prevStart;
+  const windowEnd = includeCurrentMonth ? new Date(year, month, 0) : prevEnd;
   const result = await client.query(
     `SELECT DISTINCT ON (vsn.serial_id)
             vsn.serial_id,
@@ -102,6 +113,11 @@ async function collectUnbilledSecurityLines(client, { customerId, month, year })
              AND sd.status <> 'refunded'
         )
         AND NOT EXISTS (
+          SELECT 1 FROM customer_serial_billing_ack ack
+           WHERE ack.serial_id = vsn.serial_id
+             AND ack.security_billed = TRUE
+        )
+        AND NOT EXISTS (
           SELECT 1
             FROM customer_invoices ci,
                  LATERAL jsonb_array_elements(COALESCE(ci.line_items, '[]'::jsonb)) elem
@@ -117,7 +133,7 @@ async function collectUnbilledSecurityLines(client, { customerId, month, year })
              )
         )
       ORDER BY vsn.serial_id, sos.allocation_id DESC`,
-    [customerId, toLocalYmd(prevStart), toLocalYmd(prevEnd)]
+    [customerId, toLocalYmd(windowStart), toLocalYmd(windowEnd)]
   );
 
   const lines = [];
@@ -198,8 +214,10 @@ module.exports = {
   rentalLinesSubtotal,
   securityLinesSubtotal,
   securityAssetKey,
+  perUnitSecurity,
   previousMonthRange,
   deliveryInPreviousMonth,
+  deliveryInInvoiceMonth,
   collectUnbilledSecurityLines,
   recordSecurityDeposits,
 };

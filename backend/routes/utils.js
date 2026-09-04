@@ -1,4 +1,6 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const { lookupPincode, sanitizePincode } = require('../services/pincodeLookupService');
@@ -45,6 +47,21 @@ router.get('/gstin/:gstin', async (req, res) => {
     const status = err.status || 500;
     return res.status(status).json({ success: false, message: err.message || 'GSTIN lookup failed' });
   }
+});
+
+/** Download TaskFlow CSV of completed CRM tasks for a given date (YYYY-MM-DD). */
+router.get('/tasks-done/:date.csv', (req, res) => {
+  const date = String(req.params.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ success: false, message: 'Date must be YYYY-MM-DD' });
+  }
+  const filePath = path.join(__dirname, '..', '..', 'reports', `tasks-done-${date}.csv`);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, message: `No tasks export for ${date}` });
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="tasks-done-${date}.csv"`);
+  return res.sendFile(filePath);
 });
 
 module.exports = router;

@@ -502,6 +502,7 @@ export default function CustomerDetailPage() {
               ['Email', customer.email], ['Phone', customer.customer_number || customer.phone],
               ['GST', customer.gst_number], ['PAN', customer.pan_number || customer.pan_card_number],
               ['Company Type', customer.company_type], ['Industry', customer.industry],
+              ['Billing type', customer.billing_type === 'postpaid' ? 'Postpaid' : 'Prepaid'],
               ['Billing', typeof customer.billing_address === 'object'
                 ? customer.billing_address?.address
                 : customer.billing_address],
@@ -542,8 +543,15 @@ export default function CustomerDetailPage() {
               <span className="text-gray-500">Security Deposit: </span>
               <span className="font-medium">{formatCurrency(customer.total_security_amount || 0)}</span>
             </p>
+            <p className="text-sm mt-3">
+              <span className="text-gray-500">Billing type: </span>
+              <span className="font-medium">{customer.billing_type === 'postpaid' ? 'Postpaid' : 'Prepaid'}</span>
+            </p>
             <p className="text-xs text-gray-500 mt-2">
-              Refundable one-month security billed on the invoice for the month after delivery. For full deposit history,{' '}
+              {customer.billing_type === 'postpaid'
+                ? 'Postpaid: invoice last calendar month on the 1st. Mid-month returns are billed from the 1st through warehouse received date.'
+                : 'Prepaid: invoice the current month on the 1st. Unused days after warehouse receive are credited by credit note.'}
+              {' '}Refundable one-month security billed on the invoice for the month after delivery. For full deposit history,{' '}
               <Link
                 to={`/customer-billing/security-deposits`}
                 className="text-blue-600 hover:underline"

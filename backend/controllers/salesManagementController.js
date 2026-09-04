@@ -1175,11 +1175,11 @@ exports.updateSalesOrder = async (req, res) => {
              gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
              technical_warranty, remark, status, token, created_by, hsn_code
            ) SELECT
-             $1, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
+             $1::text, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
              customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
              shiping_charges, quotation_type, branch, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11,
              $12, $13, $14, $15, 'pending', $16, created_by, $17
-             FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1
+             FROM sales_order_lines WHERE sales_order_number = $18::text LIMIT 1
            RETURNING id`,
           [
             soNumber,
@@ -1188,6 +1188,7 @@ exports.updateSalesOrder = async (req, res) => {
             qty, +rate.toFixed(2),
             item.locking_period, item.battery_charger_warranty, item.technical_warranty,
             item.remark, generateToken(), lineHsn,
+            soNumber,
           ]
         );
         keptLineIds.add(ins.rows[0].id);

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Receipt, IndianRupee, BadgeMinus, Download, FileSpreadsheet, Shield, Laptop } from 'lucide-react';
+import { Plus, Receipt, IndianRupee, BadgeMinus, Download, FileSpreadsheet, Shield, Laptop, CalendarDays, History } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
@@ -22,6 +22,113 @@ function fmt(n) {
 
 function fmtMoney(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function countLabel(n, singular) {
+  const value = Number(n || 0);
+  return `${value.toLocaleString('en-IN')} ${singular}${value === 1 ? '' : 's'}`;
+}
+
+function filterSplitRows(list, q) {
+  const query = q.trim().toLowerCase();
+  if (!query) return list;
+  return list.filter((row) => (
+    String(row.customer_name || '').toLowerCase().includes(query)
+    || String(row.invoice_number || '').toLowerCase().includes(query)
+    || (row.ttspls || []).some((id) => String(id || '').toLowerCase().includes(query))
+  ));
+}
+
+function SplitDetailsPanel({
+  title,
+  subtitle,
+  description,
+  borderClass,
+  titleClass,
+  footerClass,
+  rows,
+  empty,
+  search,
+  onSearch,
+  amountLabel,
+}) {
+  return (
+    <div className={`mb-4 rounded-2xl border bg-white shadow-sm overflow-hidden ${borderClass}`}>
+      <div className="px-4 pt-4 pb-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+        <div>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${titleClass}`}>{title}</p>
+          <h3 className="text-lg font-bold text-slate-900">{subtitle}</h3>
+          <p className="text-sm text-slate-500">{description}</p>
+        </div>
+        <SearchField
+          value={search}
+          onChange={onSearch}
+          placeholder="Search customer, invoice, TTSPL…"
+        />
+      </div>
+      <div className="overflow-x-auto border-t border-slate-100 max-h-96 overflow-y-auto">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="text-left font-medium px-3 py-2">Customer</th>
+              <th className="text-left font-medium px-3 py-2">Invoice</th>
+              <th className="text-right font-medium px-3 py-2">Laptops</th>
+              <th className="text-left font-medium px-3 py-2">TTSPL</th>
+              <th className="text-right font-medium px-3 py-2">{amountLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-8 text-center text-slate-400">{empty}</td>
+              </tr>
+            ) : rows.map((row) => (
+              <tr key={row.invoice_id} className="border-t border-slate-50 hover:bg-slate-50/80">
+                <td className="px-3 py-2.5">
+                  <Link to={`/lead-crm/customers/${row.customer_id}`} className="font-medium text-blue-600 hover:underline">
+                    {row.customer_name}
+                  </Link>
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link to={`/customer-billing/invoices/${row.invoice_id}`} className="text-blue-600 hover:underline font-medium">
+                      {row.invoice_number}
+                    </Link>
+                    <InvoiceStatusBadge status={row.status} />
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {MONTHS[row.invoice_month] || ''} {row.invoice_year || ''}
+                  </p>
+                </td>
+                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                  <span className="inline-flex items-center justify-end gap-1 text-slate-800">
+                    <Laptop className="w-3.5 h-3.5 text-slate-400" />
+                    {row.laptop_count}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-xs text-slate-600">
+                  {(row.ttspls || []).join(', ') || '—'}
+                </td>
+                <td className="px-3 py-2.5 text-right font-medium text-slate-800 whitespace-nowrap">
+                  {fmtMoney(row.amount)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          {rows.length > 0 ? (
+            <tfoot className={`text-sm font-semibold text-slate-800 ${footerClass}`}>
+              <tr>
+                <td className="px-3 py-2.5" colSpan={2}>Total</td>
+                <td className="px-3 py-2.5 text-right">{rows.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0)}</td>
+                <td />
+                <td className="px-3 py-2.5 text-right">{fmtMoney(rows.reduce((sum, row) => sum + Number(row.amount || 0), 0))}</td>
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export default function InvoiceListPage() {
@@ -57,6 +164,8 @@ export default function InvoiceListPage() {
   });
   const [showSecurityDetails, setShowSecurityDetails] = useState(false);
   const [securitySearch, setSecuritySearch] = useState('');
+  const [showCatchupDetails, setShowCatchupDetails] = useState(false);
+  const [catchupSearch, setCatchupSearch] = useState('');
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
@@ -141,6 +250,16 @@ export default function InvoiceListPage() {
     securityLaptops: summary.security_laptop_count || 0,
     securityInvoices: summary.security_invoice_count || 0,
     securityDetails: summary.security_details || [],
+    thisMonthRental: summary.this_month_rental_total || 0,
+    thisMonthLaptops: summary.this_month_laptop_count || 0,
+    thisMonthInvoices: summary.this_month_invoice_count || 0,
+    catchup: summary.catchup_total || 0,
+    catchupCustomers: summary.catchup_customer_count || 0,
+    catchupLaptops: summary.catchup_laptop_count || 0,
+    catchupInvoices: summary.catchup_invoice_count || 0,
+    catchupLines: summary.catchup_line_count || 0,
+    catchupDetails: summary.catchup_details || [],
+    billedSubtotal: summary.billed_subtotal || 0,
     draft: { count: summary.draft_count || 0, total: summary.draft_total || 0 },
     sent: { count: summary.sent_count || 0, total: summary.sent_total || 0 },
     paid: { count: summary.paid_count || 0, total: summary.paid_total || 0 },
@@ -148,16 +267,15 @@ export default function InvoiceListPage() {
     outstanding: summary.outstanding_total || 0,
   }), [summary]);
 
-  const securityRows = useMemo(() => {
-    const q = securitySearch.trim().toLowerCase();
-    const list = stats.securityDetails || [];
-    if (!q) return list;
-    return list.filter((row) => (
-      String(row.customer_name || '').toLowerCase().includes(q)
-      || String(row.invoice_number || '').toLowerCase().includes(q)
-      || (row.ttspls || []).some((id) => String(id || '').toLowerCase().includes(q))
-    ));
-  }, [stats.securityDetails, securitySearch]);
+  const securityRows = useMemo(
+    () => filterSplitRows(stats.securityDetails || [], securitySearch),
+    [stats.securityDetails, securitySearch]
+  );
+
+  const catchupRows = useMemo(
+    () => filterSplitRows(stats.catchupDetails || [], catchupSearch),
+    [stats.catchupDetails, catchupSearch]
+  );
 
   const creditHint = useMemo(() => {
     const applied = `${Number(stats.creditNoteInvoices || 0).toLocaleString('en-IN')} invoice${stats.creditNoteInvoices === 1 ? '' : 's'} with credit`;
@@ -368,22 +486,38 @@ export default function InvoiceListPage() {
         )}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+      <div className="grid grid-cols-2 xl:grid-cols-5 gap-3 mb-3">
         <StatCard
-          label="Total Subtotal"
-          value={fmtMoney(stats.subtotal)}
-          hint={`${Number(stats.invoiceCount || 0).toLocaleString('en-IN')} invoice${stats.invoiceCount === 1 ? '' : 's'}`}
-          icon={IndianRupee}
+          label="This Month Rent"
+          value={fmtMoney(stats.thisMonthRental)}
+          hint={`${countLabel(stats.thisMonthLaptops, 'laptop')} billed this month`}
+          icon={CalendarDays}
           tone="blue"
+        />
+        <StatCard
+          label="Catch-up"
+          value={fmtMoney(stats.catchup)}
+          hint={`${countLabel(stats.catchupCustomers, 'customer')} · ${countLabel(stats.catchupLaptops, 'laptop')} · ${countLabel(stats.catchupLines, 'line')}`}
+          icon={History}
+          tone="purple"
+          active={showCatchupDetails}
+          onClick={() => setShowCatchupDetails((open) => !open)}
         />
         <StatCard
           label="Security Charged"
           value={fmtMoney(stats.security)}
-          hint={`${Number(stats.securityCustomers || 0).toLocaleString('en-IN')} customer${stats.securityCustomers === 1 ? '' : 's'} · ${Number(stats.securityLaptops || 0).toLocaleString('en-IN')} laptop${stats.securityLaptops === 1 ? '' : 's'}`}
+          hint={`${countLabel(stats.securityCustomers, 'customer')} · ${countLabel(stats.securityLaptops, 'laptop')}`}
           icon={Shield}
           tone="teal"
           active={showSecurityDetails}
           onClick={() => setShowSecurityDetails((open) => !open)}
+        />
+        <StatCard
+          label="Subtotal"
+          value={fmtMoney(stats.billedSubtotal)}
+          hint="This month + catch-up + security"
+          icon={IndianRupee}
+          tone="green"
         />
         <StatCard
           label="Credit Note Total"
@@ -394,90 +528,36 @@ export default function InvoiceListPage() {
         />
       </div>
 
+      {showCatchupDetails ? (
+        <SplitDetailsPanel
+          title="Previous-month catch-up"
+          subtitle={`${countLabel(stats.catchupCustomers, 'customer')} · ${countLabel(stats.catchupLaptops, 'laptop')}`}
+          description="Rent billed now for the previous calendar month. Click a customer or invoice to open the record."
+          borderClass="border-violet-100"
+          titleClass="text-violet-700"
+          footerClass="bg-violet-50/70"
+          rows={catchupRows}
+          empty={stats.catchupInvoices ? 'No catch-up rows match this search.' : 'No previous-month catch-up on invoices for these filters.'}
+          search={catchupSearch}
+          onSearch={(e) => setCatchupSearch(e.target.value)}
+          amountLabel="Catch-up"
+        />
+      ) : null}
+
       {showSecurityDetails ? (
-        <div className="mb-4 rounded-2xl border border-teal-100 bg-white shadow-sm overflow-hidden">
-          <div className="px-4 pt-4 pb-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Security charged this period</p>
-              <h3 className="text-lg font-bold text-slate-900">
-                {Number(stats.securityCustomers || 0).toLocaleString('en-IN')} customers · {Number(stats.securityLaptops || 0).toLocaleString('en-IN')} laptops
-              </h3>
-              <p className="text-sm text-slate-500">
-                One-month security billed on these invoices. Click a customer or invoice to open the record.
-              </p>
-            </div>
-            <SearchField
-              value={securitySearch}
-              onChange={(e) => setSecuritySearch(e.target.value)}
-              placeholder="Search customer, invoice, TTSPL…"
-            />
-          </div>
-          <div className="overflow-x-auto border-t border-slate-100 max-h-96 overflow-y-auto">
-            <table className="min-w-full text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="text-left font-medium px-3 py-2">Customer</th>
-                  <th className="text-left font-medium px-3 py-2">Invoice</th>
-                  <th className="text-right font-medium px-3 py-2">Laptops</th>
-                  <th className="text-left font-medium px-3 py-2">TTSPL</th>
-                  <th className="text-right font-medium px-3 py-2">Security</th>
-                </tr>
-              </thead>
-              <tbody>
-                {securityRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-slate-400">
-                      {stats.securityInvoices
-                        ? 'No security rows match this search.'
-                        : 'No security charged on invoices for these filters.'}
-                    </td>
-                  </tr>
-                ) : securityRows.map((row) => (
-                  <tr key={row.invoice_id} className="border-t border-slate-50 hover:bg-slate-50/80">
-                    <td className="px-3 py-2.5">
-                      <Link to={`/lead-crm/customers/${row.customer_id}`} className="font-medium text-blue-600 hover:underline">
-                        {row.customer_name}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link to={`/customer-billing/invoices/${row.invoice_id}`} className="text-blue-600 hover:underline font-medium">
-                          {row.invoice_number}
-                        </Link>
-                        <InvoiceStatusBadge status={row.status} />
-                      </div>
-                      <p className="text-[11px] text-slate-400">
-                        {MONTHS[row.invoice_month] || ''} {row.invoice_year || ''}
-                      </p>
-                    </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <span className="inline-flex items-center justify-end gap-1 text-slate-800">
-                        <Laptop className="w-3.5 h-3.5 text-slate-400" />
-                        {row.laptop_count}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      {(row.ttspls || []).join(', ') || '—'}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-medium text-slate-800 whitespace-nowrap">
-                      {fmtMoney(row.amount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              {securityRows.length > 0 ? (
-                <tfoot className="bg-teal-50/70 text-sm font-semibold text-slate-800">
-                  <tr>
-                    <td className="px-3 py-2.5" colSpan={2}>Total</td>
-                    <td className="px-3 py-2.5 text-right">{securityRows.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0)}</td>
-                    <td />
-                    <td className="px-3 py-2.5 text-right">{fmtMoney(securityRows.reduce((sum, row) => sum + Number(row.amount || 0), 0))}</td>
-                  </tr>
-                </tfoot>
-              ) : null}
-            </table>
-          </div>
-        </div>
+        <SplitDetailsPanel
+          title="Security charged this period"
+          subtitle={`${countLabel(stats.securityCustomers, 'customer')} · ${countLabel(stats.securityLaptops, 'laptop')}`}
+          description="One-month security billed on these invoices. Click a customer or invoice to open the record."
+          borderClass="border-teal-100"
+          titleClass="text-teal-700"
+          footerClass="bg-teal-50/70"
+          rows={securityRows}
+          empty={stats.securityInvoices ? 'No security rows match this search.' : 'No security charged on invoices for these filters.'}
+          search={securitySearch}
+          onSearch={(e) => setSecuritySearch(e.target.value)}
+          amountLabel="Security"
+        />
       ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
@@ -563,7 +643,12 @@ export default function InvoiceListPage() {
       <ResponsiveTable
         columns={[
           { key: 'invoice_number', header: 'Invoice #', render: (r) => (
-            <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline font-medium">{r.invoice_number}</Link>
+            <span>
+              <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline font-medium">{r.invoice_number}</Link>
+              {r.billing_source === 'zoho' && (
+                <span className="ml-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-800">Zoho</span>
+              )}
+            </span>
           ) },
           { key: 'month', header: 'Month', render: (r) => `${MONTHS[r.invoice_month] || ''} ${r.invoice_year || ''}` },
           { key: 'customer_name', header: 'Customer' },

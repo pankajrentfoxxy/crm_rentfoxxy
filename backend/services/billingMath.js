@@ -38,7 +38,7 @@ function monthSegments(start, end) {
   return segs;
 }
 
-/** Return-credit unused prepaid days (mirrors createReturnCreditNote). */
+/** Return-credit unused prepaid days that were actually invoiced past return. */
 function calcReturnCreditNoteAmount({ rentMonthlyRate, returnDate, rentBilledUntil }) {
   if (!rentBilledUntil || !returnDate) return null;
   const billedUntil = new Date(rentBilledUntil);

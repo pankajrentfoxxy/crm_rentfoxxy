@@ -11,6 +11,10 @@ const {
   approveAndApplyCreditNote,
 } = require('../services/billingSchedulerService');
 const {
+  listZohoCandidates,
+  markInvoiceGeneratedOnZoho,
+} = require('../services/billingZohoService');
+const {
   recordPayment,
   recordFullPayment,
   listPayments,
@@ -40,6 +44,16 @@ const SECURITY_LINE_SQL = `(
   COALESCE(elem->>'line_type', 'rental') = 'security'
   OR LOWER(COALESCE(elem->>'is_security', 'false')) IN ('true', 't', '1', 'yes')
 )`;
+const CATCHUP_LINE_SQL = `(
+  NOT ${SECURITY_LINE_SQL}
+  AND LOWER(COALESCE(elem->>'is_catchup', 'false')) IN ('true', 't', '1', 'yes')
+)`;
+const THIS_MONTH_RENTAL_SQL = `(
+  NOT ${SECURITY_LINE_SQL}
+  AND LOWER(COALESCE(elem->>'is_catchup', 'false')) NOT IN ('true', 't', '1', 'yes')
+)`;
+const LINE_AMOUNT_SQL = `COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric`;
+const LINE_LAPTOP_KEY_SQL = `COALESCE(NULLIF(elem->>'serial_id', ''), NULLIF(elem->>'ttspl_id', ''), elem->>'serial_number')`;
 
 function invoiceListFilters(query, { includeStatus = true } = {}) {
   const { customer_id, month, year, status, search } = query;
@@ -88,7 +102,7 @@ exports.listInvoices = async (req, res) => {
     const kpiWhere = kpi.where.join(' AND ');
     list.params.push(limit, offset);
 
-    const [listRes, countRes, summaryRes, securityRes, pendingCnRes] = await Promise.all([
+    const [listRes, countRes, summaryRes, securityRes, catchupRes, lineKpiRes, pendingCnRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
                 COALESCE((
@@ -176,6 +190,52 @@ exports.listInvoices = async (req, res) => {
       ),
       pool.query(
         `SELECT
+           ci.customer_id,
+           COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || ci.customer_id) AS customer_name,
+           ci.invoice_id,
+           ci.invoice_number,
+           ci.status,
+           ci.invoice_month,
+           ci.invoice_year,
+           COUNT(*)::int AS laptop_count,
+           COALESCE(SUM(${LINE_AMOUNT_SQL}), 0) AS amount,
+           json_agg(
+             COALESCE(NULLIF(elem->>'ttspl_id', ''), NULLIF(elem->>'serial_number', ''), 'Laptop')
+             ORDER BY COALESCE(NULLIF(elem->>'ttspl_id', ''), elem->>'serial_number')
+           ) AS ttspls
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+         ) elem
+         WHERE ${kpiWhere}
+           AND ${CATCHUP_LINE_SQL}
+         GROUP BY ci.customer_id, c.company_name, c.name, ci.invoice_id, ci.invoice_number,
+                  ci.status, ci.invoice_month, ci.invoice_year
+         ORDER BY customer_name, ci.invoice_number`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(${LINE_AMOUNT_SQL}) FILTER (WHERE ${THIS_MONTH_RENTAL_SQL}), 0) AS this_month_rental_total,
+           COUNT(*) FILTER (WHERE ${THIS_MONTH_RENTAL_SQL})::int AS this_month_line_count,
+           COUNT(DISTINCT ${LINE_LAPTOP_KEY_SQL}) FILTER (WHERE ${THIS_MONTH_RENTAL_SQL})::int AS this_month_laptop_count,
+           COUNT(DISTINCT ci.invoice_id) FILTER (WHERE ${THIS_MONTH_RENTAL_SQL})::int AS this_month_invoice_count,
+           COALESCE(SUM(${LINE_AMOUNT_SQL}) FILTER (WHERE ${CATCHUP_LINE_SQL}), 0) AS catchup_total,
+           COUNT(*) FILTER (WHERE ${CATCHUP_LINE_SQL})::int AS catchup_line_count,
+           COUNT(DISTINCT ${LINE_LAPTOP_KEY_SQL}) FILTER (WHERE ${CATCHUP_LINE_SQL})::int AS catchup_laptop_count,
+           COUNT(DISTINCT ci.invoice_id) FILTER (WHERE ${CATCHUP_LINE_SQL})::int AS catchup_invoice_count,
+           COUNT(DISTINCT ci.customer_id) FILTER (WHERE ${CATCHUP_LINE_SQL})::int AS catchup_customer_count
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+         ) elem
+         WHERE ${kpiWhere}`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
            COALESCE(SUM(cn.amount), 0) AS pending_total,
            COUNT(*)::int AS pending_count
          FROM customer_credit_notes cn
@@ -191,14 +251,30 @@ exports.listInvoices = async (req, res) => {
     ]);
 
     const securityDetails = securityRes.rows || [];
+    const catchupDetails = catchupRes.rows || [];
     const securityCustomers = new Set(securityDetails.map((row) => row.customer_id));
+    const lineKpi = lineKpiRes.rows[0] || {};
+    const thisMonthRental = Number(lineKpi.this_month_rental_total || 0);
+    const catchupTotal = Number(lineKpi.catchup_total || 0);
+    const securityTotal = securityDetails.reduce((sum, row) => sum + Number(row.amount || 0), 0);
     const summary = {
       ...(summaryRes.rows[0] || {}),
-      security_total: securityDetails.reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2),
+      this_month_rental_total: thisMonthRental.toFixed(2),
+      this_month_line_count: lineKpi.this_month_line_count || 0,
+      this_month_laptop_count: lineKpi.this_month_laptop_count || 0,
+      this_month_invoice_count: lineKpi.this_month_invoice_count || 0,
+      catchup_total: catchupTotal.toFixed(2),
+      catchup_line_count: lineKpi.catchup_line_count || 0,
+      catchup_laptop_count: lineKpi.catchup_laptop_count || 0,
+      catchup_invoice_count: lineKpi.catchup_invoice_count || 0,
+      catchup_customer_count: lineKpi.catchup_customer_count || 0,
+      catchup_details: catchupDetails,
+      security_total: securityTotal.toFixed(2),
       security_invoice_count: securityDetails.length,
       security_customer_count: securityCustomers.size,
       security_laptop_count: securityDetails.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0),
       security_details: securityDetails,
+      billed_subtotal: (thisMonthRental + catchupTotal + securityTotal).toFixed(2),
       credit_note_pending_total: pendingCnRes.rows[0]?.pending_total || 0,
       credit_note_pending_count: pendingCnRes.rows[0]?.pending_count || 0,
     };
@@ -479,7 +555,78 @@ exports.getInvoice = async (req, res) => {
     );
     const invoice = result.rows[0];
     invoice.line_items = await enrichLineItemsWithSpecs(parseLineItems(invoice));
-    res.json({ success: true, invoice, credit_notes: creditNotes.rows });
+    const [zohoCandidates, zohoAcks] = await Promise.all([
+      listZohoCandidates(pool, {
+        customerId: invoice.customer_id,
+        invoiceId: invoice.invoice_id,
+        invoiceMonth: invoice.invoice_month,
+        invoiceYear: invoice.invoice_year,
+      }),
+      pool.query(
+        `SELECT serial_id, rent_billed_through::text, security_billed,
+                external_invoice_ref, invoice_id
+           FROM customer_serial_billing_ack
+          WHERE customer_id = $1
+          ORDER BY serial_id`,
+        [invoice.customer_id]
+      ),
+    ]);
+    res.json({
+      success: true,
+      invoice,
+      credit_notes: creditNotes.rows,
+      zoho_candidates: zohoCandidates,
+      zoho_acks: zohoAcks.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.markInvoiceGeneratedOnZoho = async (req, res) => {
+  try {
+    const invoiceId = Number(req.params.id);
+    const body = req.body || {};
+    const serialIds = Array.isArray(body.serial_ids) ? body.serial_ids : [];
+    const result = await markInvoiceGeneratedOnZoho({
+      invoiceId,
+      serialIds,
+      rentBilledThrough: body.rent_billed_through,
+      includeSecurity: body.include_security !== false,
+      externalReference: body.external_reference,
+      actorUserId: req.user?.user_id || req.user?.id || null,
+    });
+    if (result.error) {
+      return res.status(result.status || 400).json({ success: false, message: result.error });
+    }
+
+    const inv = await pool.query(
+      `SELECT customer_id FROM customer_invoices WHERE invoice_id = $1`,
+      [invoiceId]
+    );
+    const customerId = inv.rows[0]?.customer_id;
+    const laterDrafts = customerId
+      ? (await pool.query(
+        `SELECT invoice_month, invoice_year
+           FROM customer_invoices
+          WHERE customer_id = $1
+            AND invoice_id <> $2
+            AND LOWER(COALESCE(status, '')) = 'draft'
+          ORDER BY invoice_year, invoice_month`,
+        [customerId, invoiceId]
+      )).rows
+      : [];
+    const reconciled = [];
+    for (const draft of laterDrafts) {
+      const gen = await generateCustomerInvoice(customerId, draft.invoice_month, draft.invoice_year);
+      reconciled.push({
+        invoice_month: draft.invoice_month,
+        invoice_year: draft.invoice_year,
+        ...gen,
+      });
+    }
+
+    res.json({ success: true, ...result, reconciled });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -579,7 +726,8 @@ exports.sendInvoice = async (req, res) => {
               c.billing_address,
               c.billing_city,
               c.billing_state,
-              c.billing_pincode
+              c.billing_pincode,
+              COALESCE(c.billing_type, 'prepaid') AS billing_type
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -701,7 +849,8 @@ exports.downloadInvoicePdf = async (req, res) => {
               c.billing_address,
               c.billing_city,
               c.billing_state,
-              c.billing_pincode
+              c.billing_pincode,
+              COALESCE(c.billing_type, 'prepaid') AS billing_type
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -772,7 +921,8 @@ exports.downloadInvoicesZip = async (req, res) => {
               c.billing_address,
               c.billing_city,
               c.billing_state,
-              c.billing_pincode
+              c.billing_pincode,
+              COALESCE(c.billing_type, 'prepaid') AS billing_type
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
         WHERE ci.invoice_month = $1

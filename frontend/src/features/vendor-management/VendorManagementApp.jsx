@@ -15,6 +15,9 @@ import ReplacedProductsPage from './pages/ReplacedProductsPage';
 import BillingMonthlyPage from './pages/BillingMonthlyPage';
 import VendorRepairDcListPage from '../floor-pipeline/pages/VendorRepairDcListPage';
 import VendorRepairDcDetailPage from '../floor-pipeline/pages/VendorRepairDcDetailPage';
+import ReturnToVendorListPage from './pages/ReturnToVendorListPage';
+import ReturnToVendorCreatePage from './pages/ReturnToVendorCreatePage';
+import ReturnToVendorDetailPage from './pages/ReturnToVendorDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -62,6 +65,22 @@ export default function VendorManagementApp() {
         <Route path="spare-parts-po" element={g('parts_procurement', <SparePartsPoPage />)} />
         <Route path="serial-numbers" element={g('vendor_management', <SerialNumberPage />)} />
         <Route path="replaced-products" element={g('vendor_management', <ReplacedProductsPage />)} />
+
+        <Route path="return-to-vendor/new" element={
+          <ProtectedRoute sections={['vendor_return_to_vendor', 'vendor_management']} action="view">
+            <ReturnToVendorCreatePage />
+          </ProtectedRoute>
+        } />
+        <Route path="return-to-vendor/:dcNumber" element={
+          <ProtectedRoute sections={['vendor_return_to_vendor', 'vendor_management']} action="view">
+            <ReturnToVendorDetailPage />
+          </ProtectedRoute>
+        } />
+        <Route path="return-to-vendor" element={
+          <ProtectedRoute sections={['vendor_return_to_vendor', 'vendor_management']} action="view">
+            <ReturnToVendorListPage />
+          </ProtectedRoute>
+        } />
 
         <Route
           path="vendor-repair-dc"

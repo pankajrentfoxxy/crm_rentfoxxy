@@ -426,7 +426,7 @@ async function buildInvoiceHtml(invoice, company) {
         <tr><td>Invoice number</td><td>${escapeHtml(invoice.invoice_number)}</td></tr>
         <tr><td>Invoice date</td><td>${fmtInvoiceDate(invoice.invoice_date)}</td></tr>
         <tr><td>Billing period</td><td>${fmtInvoiceDate(invoice.from_date)} – ${fmtInvoiceDate(invoice.to_date)} (${PDF_TZ_LABEL})</td></tr>
-        <tr><td>Payment due</td><td>${fmtInvoiceDate(invoice.invoice_date)} (prepaid)</td></tr>
+        <tr><td>Payment due</td><td>${fmtInvoiceDate(invoice.invoice_date)} (${invoice.billing_type === 'postpaid' ? 'postpaid' : 'prepaid'})</td></tr>
         <tr><td>Reverse charge</td><td>No</td></tr>
         <tr><td>Devices billed</td><td>${deviceCount}</td></tr>
       </table>
@@ -468,7 +468,9 @@ ${renderItemsTable(bodyRows)}
     <td>
       <h4>Terms</h4>
       <ol>
-        <li>Rental is prepaid; pay on or before the invoice date to keep devices active.</li>
+        <li>${invoice.billing_type === 'postpaid'
+          ? 'Rental is postpaid; this invoice covers the previous calendar month. Mid-month returns are billed through the warehouse received date.'
+          : 'Rental is prepaid; pay on or before the invoice date to keep devices active.'}</li>
         <li>Mid-month deliveries are billed pro-rata on calendar days.</li>
         <li>Devices remain the property of ${escapeHtml(company.legal_name)}.</li>
         <li>Security deposit is refundable and is not subject to GST.</li>

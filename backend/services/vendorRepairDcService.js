@@ -487,6 +487,7 @@ async function markDiagnosisFailed(client, {
 async function listDiagnosisFailedTickets({
   dateFrom,
   dateTo,
+  search,
   brand,
   model,
   processor,
@@ -511,6 +512,25 @@ async function listDiagnosisFailedTickets({
     params,
   });
   const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+  const searchTerm = String(search || '').trim();
+  let searchSql = '';
+  if (searchTerm) {
+    params.push(`%${searchTerm}%`);
+    const i = params.length;
+    searchSql = ` AND (
+      COALESCE(t.ttspl_id, '') ILIKE $${i}
+      OR COALESCE(t.serial_number, '') ILIKE $${i}
+      OR COALESCE(t.brand, '') ILIKE $${i}
+      OR COALESCE(t.model, '') ILIKE $${i}
+      OR COALESCE(t.diagnosis_failed_reason, '') ILIKE $${i}
+      OR COALESCE(t.current_location, '') ILIKE $${i}
+      OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') ILIKE $${i}
+      OR COALESCE(pu.name, '') ILIKE $${i}
+      OR COALESCE(ps.stage_name, '') ILIKE $${i}
+      OR CAST(t.ticket_id AS TEXT) ILIKE $${i}
+    )`;
+  }
   const { rows } = await pool.query(
     `SELECT t.ticket_id, t.ttspl_id, t.serial_number, t.status, t.brand, t.model,
             t.processor, t.ram, t.storage, t.diagnosis_failed_at,
@@ -535,7 +555,7 @@ async function listDiagnosisFailedTickets({
           JOIN vendor_repair_delivery_challans vd ON vd.dc_number = vi.dc_number
           WHERE vi.ticket_id = t.ticket_id
             AND vd.status IN ('draft', 'dispatched', 'partially_returned')
-        )${dateSql}${specFilter.whereSql}
+        )${dateSql}${searchSql}${specFilter.whereSql}
       ORDER BY t.diagnosis_failed_at DESC NULLS LAST, t.ticket_id DESC`,
     params
   );
