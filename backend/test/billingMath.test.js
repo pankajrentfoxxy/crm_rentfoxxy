@@ -62,6 +62,15 @@ describe('billingMath', () => {
     assert.equal(calc, null);
   });
 
+  it('calcReturnCreditNoteAmount returns null when occupancy was never invoiced past return', () => {
+    const calc = calcReturnCreditNoteAmount({
+      rentMonthlyRate: 1699,
+      returnDate: '2026-08-19',
+      rentBilledUntil: '2026-08-19',
+    });
+    assert.equal(calc, null);
+  });
+
   it('calcVendorLineAmount pro-rates mid-month receive', () => {
     const monthStart = new Date(2026, 5, 1);
     const monthEnd = new Date(2026, 5, 30);

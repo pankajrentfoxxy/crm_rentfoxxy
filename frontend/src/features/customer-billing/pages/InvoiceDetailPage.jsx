@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
 import SendInvoiceModal from '../components/SendInvoiceModal';
+import MarkZohoInvoiceModal from '../components/MarkZohoInvoiceModal';
 import { Button, SearchField, StatCard } from '../../../components/ui/primitives';
 import {
   downloadInvoicePdf, generateEWayBill,
@@ -87,6 +88,8 @@ export default function InvoiceDetailPage() {
   const [invoice, setInvoice] = useState(null);
   const [creditNotes, setCreditNotes] = useState([]);
   const [sendOpen, setSendOpen] = useState(false);
+  const [zohoOpen, setZohoOpen] = useState(false);
+  const [zohoCandidates, setZohoCandidates] = useState([]);
   const [ewbOpen, setEwbOpen] = useState(false);
   const [ewbForm, setEwbForm] = useState({ transporter_name: '', vehicle_number: '', distance_km: '', mode_of_transport: 'road' });
   const [lineFilter, setLineFilter] = useState('all'); // all | full | previous
@@ -98,6 +101,7 @@ export default function InvoiceDetailPage() {
       const res = await getInvoice(id);
       setInvoice(res.data?.invoice);
       setCreditNotes(res.data?.credit_notes || []);
+      setZohoCandidates(res.data?.zoho_candidates || []);
     } catch {
       toast.error('Invoice not found');
     }
@@ -218,11 +222,21 @@ export default function InvoiceDetailPage() {
           <p className="text-sm text-gray-500 mt-1">
             Total Quantity : {new Set(lineItems.map((line) => line.serial_id || line.ttspl_id || line.serial_number).filter(Boolean)).size || lineItems.length}
           </p>
-          <div className="mt-2"><InvoiceStatusBadge status={invoice.status} /></div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <InvoiceStatusBadge status={invoice.status} />
+            {invoice.billing_source === 'zoho' && (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-800">
+                Generated on Zoho{invoice.external_reference ? ` · ${invoice.external_reference}` : ''}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <PermissionGate section="customer_billing" action="edit">
             <Button onClick={() => setSendOpen(true)}>Send to Customer</Button>
+          </PermissionGate>
+          <PermissionGate section="customer_billing" action="edit">
+            <Button variant="secondary" onClick={() => setZohoOpen(true)}>Generated on Zoho</Button>
           </PermissionGate>
           <Button variant="secondary" onClick={handleDownload}>Laptop Rental Document PDF</Button>
           <PermissionGate section="customer_billing" action="edit">
@@ -438,6 +452,14 @@ export default function InvoiceDetailPage() {
 
       {sendOpen && (
         <SendInvoiceModal invoice={invoice} onClose={() => setSendOpen(false)} onSent={load} />
+      )}
+      {zohoOpen && (
+        <MarkZohoInvoiceModal
+          invoice={invoice}
+          candidates={zohoCandidates}
+          onClose={() => setZohoOpen(false)}
+          onSaved={load}
+        />
       )}
 
       {ewbOpen && (

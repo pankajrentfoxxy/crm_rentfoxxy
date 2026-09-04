@@ -11,6 +11,10 @@ const {
   approveAndApplyCreditNote,
 } = require('../services/billingSchedulerService');
 const {
+  listZohoCandidates,
+  markInvoiceGeneratedOnZoho,
+} = require('../services/billingZohoService');
+const {
   recordPayment,
   recordFullPayment,
   listPayments,
@@ -551,7 +555,78 @@ exports.getInvoice = async (req, res) => {
     );
     const invoice = result.rows[0];
     invoice.line_items = await enrichLineItemsWithSpecs(parseLineItems(invoice));
-    res.json({ success: true, invoice, credit_notes: creditNotes.rows });
+    const [zohoCandidates, zohoAcks] = await Promise.all([
+      listZohoCandidates(pool, {
+        customerId: invoice.customer_id,
+        invoiceId: invoice.invoice_id,
+        invoiceMonth: invoice.invoice_month,
+        invoiceYear: invoice.invoice_year,
+      }),
+      pool.query(
+        `SELECT serial_id, rent_billed_through::text, security_billed,
+                external_invoice_ref, invoice_id
+           FROM customer_serial_billing_ack
+          WHERE customer_id = $1
+          ORDER BY serial_id`,
+        [invoice.customer_id]
+      ),
+    ]);
+    res.json({
+      success: true,
+      invoice,
+      credit_notes: creditNotes.rows,
+      zoho_candidates: zohoCandidates,
+      zoho_acks: zohoAcks.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.markInvoiceGeneratedOnZoho = async (req, res) => {
+  try {
+    const invoiceId = Number(req.params.id);
+    const body = req.body || {};
+    const serialIds = Array.isArray(body.serial_ids) ? body.serial_ids : [];
+    const result = await markInvoiceGeneratedOnZoho({
+      invoiceId,
+      serialIds,
+      rentBilledThrough: body.rent_billed_through,
+      includeSecurity: body.include_security !== false,
+      externalReference: body.external_reference,
+      actorUserId: req.user?.user_id || req.user?.id || null,
+    });
+    if (result.error) {
+      return res.status(result.status || 400).json({ success: false, message: result.error });
+    }
+
+    const inv = await pool.query(
+      `SELECT customer_id FROM customer_invoices WHERE invoice_id = $1`,
+      [invoiceId]
+    );
+    const customerId = inv.rows[0]?.customer_id;
+    const laterDrafts = customerId
+      ? (await pool.query(
+        `SELECT invoice_month, invoice_year
+           FROM customer_invoices
+          WHERE customer_id = $1
+            AND invoice_id <> $2
+            AND LOWER(COALESCE(status, '')) = 'draft'
+          ORDER BY invoice_year, invoice_month`,
+        [customerId, invoiceId]
+      )).rows
+      : [];
+    const reconciled = [];
+    for (const draft of laterDrafts) {
+      const gen = await generateCustomerInvoice(customerId, draft.invoice_month, draft.invoice_year);
+      reconciled.push({
+        invoice_month: draft.invoice_month,
+        invoice_year: draft.invoice_year,
+        ...gen,
+      });
+    }
+
+    res.json({ success: true, ...result, reconciled });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

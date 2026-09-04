@@ -9,6 +9,7 @@ export const getInvoice = (id) => api.get(`${base}/invoices/${id}`);
 export const generateInvoice = (d) => api.post(`${base}/invoices/generate`, d);
 export const generateInvoicesBulk = (d) => api.post(`${base}/invoices/generate-bulk`, d);
 export const sendInvoice = (id, d) => api.post(`${base}/invoices/${id}/send`, d);
+export const markInvoiceGeneratedOnZoho = (id, d) => api.post(`${base}/invoices/${id}/mark-zoho`, d);
 export const markInvoicePaid = (id, d) => api.patch(`${base}/invoices/${id}/paid`, d);
 export const downloadInvoicePdf = (id, { format } = {}) => api.get(`${base}/invoices/${id}/pdf`, {
   params: format ? { format } : undefined,

@@ -19,6 +19,7 @@ router.post('/invoices/:id/payments', cp('customer_billing', 'edit'), ctrl.recor
 router.get('/invoices/:invoiceId/pdf', cp('customer_billing', 'view'), ctrl.downloadInvoicePdf);
 router.get('/invoices/:invoiceId', cp('customer_billing', 'view'), ctrl.getInvoice);
 router.post('/invoices/:id/send', cp('customer_billing', 'edit'), ctrl.sendInvoice);
+router.post('/invoices/:id/mark-zoho', cp('customer_billing', 'edit'), ctrl.markInvoiceGeneratedOnZoho);
 router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid);
 
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);

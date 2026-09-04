@@ -643,7 +643,12 @@ export default function InvoiceListPage() {
       <ResponsiveTable
         columns={[
           { key: 'invoice_number', header: 'Invoice #', render: (r) => (
-            <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline font-medium">{r.invoice_number}</Link>
+            <span>
+              <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline font-medium">{r.invoice_number}</Link>
+              {r.billing_source === 'zoho' && (
+                <span className="ml-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-800">Zoho</span>
+              )}
+            </span>
           ) },
           { key: 'month', header: 'Month', render: (r) => `${MONTHS[r.invoice_month] || ''} ${r.invoice_year || ''}` },
           { key: 'customer_name', header: 'Customer' },
