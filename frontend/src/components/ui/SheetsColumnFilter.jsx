@@ -286,9 +286,16 @@ export default function SheetsColumnFilter({
         </button>
         {open ? (
           <div
-            className={`absolute top-full z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg normal-case font-normal tracking-normal ${
-              align === 'right' ? 'right-0' : 'left-0'
+            className={`fixed z-[200] mt-0 bg-white border border-slate-200 rounded-lg shadow-lg normal-case font-normal tracking-normal ${
+              align === 'right' ? '' : ''
             }`}
+            style={{
+              top: rootRef.current?.getBoundingClientRect().bottom ?? 0,
+              left: align === 'right'
+                ? (rootRef.current?.getBoundingClientRect().right ?? 0) - 224
+                : (rootRef.current?.getBoundingClientRect().left ?? 0),
+              minWidth: filterType === 'number' ? '13rem' : '14rem',
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             {filterType === 'text' ? (

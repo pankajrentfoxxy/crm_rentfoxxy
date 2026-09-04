@@ -36,6 +36,11 @@ exports.ensureBillingEngineSchema = async () => {
   await pool.query(sql);
 };
 
+const SECURITY_LINE_SQL = `(
+  COALESCE(elem->>'line_type', 'rental') = 'security'
+  OR LOWER(COALESCE(elem->>'is_security', 'false')) IN ('true', 't', '1', 'yes')
+)`;
+
 function invoiceListFilters(query, { includeStatus = true } = {}) {
   const { customer_id, month, year, status, search } = query;
   const params = [];
@@ -77,12 +82,36 @@ exports.listInvoices = async (req, res) => {
     const offset = (page - 1) * limit;
     const list = invoiceListFilters(req.query, { includeStatus: true });
     const kpi = invoiceListFilters(req.query, { includeStatus: false });
+    if (String(req.query.status || '') !== 'cancelled') {
+      kpi.where.push(`ci.status <> 'cancelled'`);
+    }
+    const kpiWhere = kpi.where.join(' AND ');
     list.params.push(limit, offset);
 
-    const [listRes, countRes, summaryRes] = await Promise.all([
+    const [listRes, countRes, summaryRes, securityRes, pendingCnRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
-                COALESCE(jsonb_array_length(ci.line_items), 0) AS laptop_count
+                COALESCE((
+                  SELECT COUNT(*)::int
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE NOT ${SECURITY_LINE_SQL}
+                ), 0) AS laptop_count,
+                COALESCE((
+                  SELECT COUNT(*)::int
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE ${SECURITY_LINE_SQL}
+                ), 0) AS security_laptop_count,
+                COALESCE((
+                  SELECT SUM(COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric)
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE ${SECURITY_LINE_SQL}
+                ), 0) AS security_amount
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
          WHERE ${list.where.join(' AND ')}
@@ -115,16 +144,70 @@ exports.listInvoices = async (req, res) => {
            COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status IN ('sent','overdue')), 0) AS outstanding_total
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
-         WHERE ${kpi.where.join(' AND ')}`,
+         WHERE ${kpiWhere}`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
+           ci.customer_id,
+           COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || ci.customer_id) AS customer_name,
+           ci.invoice_id,
+           ci.invoice_number,
+           ci.status,
+           ci.invoice_month,
+           ci.invoice_year,
+           COUNT(*)::int AS laptop_count,
+           COALESCE(SUM(COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric), 0) AS amount,
+           json_agg(
+             COALESCE(NULLIF(elem->>'ttspl_id', ''), NULLIF(elem->>'serial_number', ''), 'Laptop')
+             ORDER BY COALESCE(NULLIF(elem->>'ttspl_id', ''), elem->>'serial_number')
+           ) AS ttspls
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+         ) elem
+         WHERE ${kpiWhere}
+           AND ${SECURITY_LINE_SQL}
+         GROUP BY ci.customer_id, c.company_name, c.name, ci.invoice_id, ci.invoice_number,
+                  ci.status, ci.invoice_month, ci.invoice_year
+         ORDER BY customer_name, ci.invoice_number`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(cn.amount), 0) AS pending_total,
+           COUNT(*)::int AS pending_count
+         FROM customer_credit_notes cn
+         WHERE cn.status = 'pending'
+           AND cn.invoice_id IN (
+             SELECT ci.invoice_id
+             FROM customer_invoices ci
+             LEFT JOIN customers c ON c.customer_id = ci.customer_id
+             WHERE ${kpiWhere}
+           )`,
         kpi.params
       ),
     ]);
+
+    const securityDetails = securityRes.rows || [];
+    const securityCustomers = new Set(securityDetails.map((row) => row.customer_id));
+    const summary = {
+      ...(summaryRes.rows[0] || {}),
+      security_total: securityDetails.reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2),
+      security_invoice_count: securityDetails.length,
+      security_customer_count: securityCustomers.size,
+      security_laptop_count: securityDetails.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0),
+      security_details: securityDetails,
+      credit_note_pending_total: pendingCnRes.rows[0]?.pending_total || 0,
+      credit_note_pending_count: pendingCnRes.rows[0]?.pending_count || 0,
+    };
 
     const total = countRes.rows[0]?.n || 0;
     res.json({
       success: true,
       invoices: listRes.rows,
-      summary: summaryRes.rows[0] || {},
+      summary,
       page,
       limit,
       total,
@@ -132,6 +215,164 @@ exports.listInvoices = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const MONTH_LABELS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Excel of billed rental serials for the current invoice filters. */
+exports.exportInvoiceSerialsExcel = async (req, res) => {
+  try {
+    const list = invoiceListFilters(req.query, { includeStatus: true });
+    if (!req.query.status) {
+      list.where.push(`ci.status <> 'cancelled'`);
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || ci.customer_id) AS customer_name,
+         ci.invoice_number,
+         ci.invoice_month,
+         ci.invoice_year,
+         ci.status AS invoice_status,
+         COALESCE(
+           NULLIF(elem->>'brand', ''),
+           NULLIF(vsn.extra->>'brand', ''),
+           NULLIF(inv.brand, '')
+         ) AS brand,
+         COALESCE(
+           NULLIF(elem->>'model', ''),
+           NULLIF(vsn.extra->>'model', ''),
+           NULLIF(vsn.extra->>'model_name', ''),
+           NULLIF(inv.model, '')
+         ) AS model,
+         COALESCE(
+           NULLIF(elem->>'processor', ''),
+           NULLIF(vsn.extra->>'processor', ''),
+           NULLIF(inv.processor, '')
+         ) AS processor,
+         COALESCE(
+           NULLIF(elem->>'generation', ''),
+           NULLIF(vsn.extra->>'generation', ''),
+           NULLIF(inv.generation, '')
+         ) AS generation,
+         COALESCE(
+           NULLIF(elem->>'ram', ''),
+           NULLIF(vsn.extra->>'ram', ''),
+           NULLIF(inv.ram, '')
+         ) AS ram,
+         COALESCE(
+           NULLIF(elem->>'storage', ''),
+           NULLIF(vsn.extra->>'storage', ''),
+           NULLIF(inv.storage, '')
+         ) AS storage,
+         COALESCE(
+           NULLIF(elem->>'ttspl_id', ''),
+           NULLIF(vsn.inventory_asset_code, ''),
+           NULLIF(vsn.extra->>'ttspl_id', '')
+         ) AS ttspl,
+         COALESCE(
+           NULLIF(elem->>'serial_number', ''),
+           NULLIF(vsn.serial_number, '')
+         ) AS serial_number,
+         LEFT(elem->>'rent_start', 10) AS rent_start,
+         LEFT(elem->>'rent_end', 10) AS rent_end,
+         NULLIF(elem->>'monthly_rate', '') AS monthly_rate,
+         NULLIF(elem->>'amount', '') AS amount,
+         CASE
+           WHEN LOWER(COALESCE(elem->>'is_catchup', 'false')) IN ('true', 't', '1', 'yes')
+           THEN 'Yes' ELSE 'No'
+         END AS catchup
+       FROM customer_invoices ci
+       LEFT JOIN customers c ON c.customer_id = ci.customer_id
+       CROSS JOIN LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+       ) elem
+       LEFT JOIN LATERAL (
+         SELECT v.serial_id, v.serial_number, v.inventory_asset_code, v.extra
+           FROM vendor_serial_numbers v
+          WHERE v.deleted_at IS NULL
+            AND (
+              (NULLIF(elem->>'serial_id', '') ~ '^[0-9]+$' AND v.serial_id = (elem->>'serial_id')::int)
+              OR (
+                NULLIF(elem->>'ttspl_id', '') IS NOT NULL
+                AND v.inventory_asset_code = elem->>'ttspl_id'
+              )
+            )
+          ORDER BY CASE
+            WHEN NULLIF(elem->>'serial_id', '') ~ '^[0-9]+$'
+             AND v.serial_id = (elem->>'serial_id')::int THEN 0
+            ELSE 1
+          END, v.serial_id
+          LIMIT 1
+       ) vsn ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT i.brand, i.model, i.processor, i.generation, i.ram, i.storage
+           FROM inventory i
+          WHERE vsn.serial_id IS NOT NULL
+            AND (
+              i.serial_number = vsn.serial_number
+              OR (
+                vsn.inventory_asset_code IS NOT NULL
+                AND i.machine_number = vsn.inventory_asset_code
+              )
+            )
+          ORDER BY CASE WHEN i.serial_number = vsn.serial_number THEN 0 ELSE 1 END, i.inventory_id
+          LIMIT 1
+       ) inv ON TRUE
+      WHERE ${list.where.join(' AND ')}
+        AND COALESCE(elem->>'line_type', 'rental') <> 'security'
+        AND COALESCE(elem->>'is_security', 'false') <> 'true'
+      ORDER BY customer_name, ci.invoice_year, ci.invoice_month, ci.invoice_number,
+               ttspl, rent_start`,
+      list.params
+    );
+
+    const orderedRows = rows.map((r) => ({
+      'Customer Name': r.customer_name || '',
+      'Invoice Number': r.invoice_number || '',
+      'Billing Month': `${MONTH_LABELS[Number(r.invoice_month)] || ''} ${r.invoice_year || ''}`.trim(),
+      Status: r.invoice_status || '',
+      Brand: r.brand || '',
+      Model: r.model || '',
+      Processor: r.processor || '',
+      Generation: r.generation || '',
+      RAM: r.ram || '',
+      'Hard Disk': r.storage || '',
+      TTSPL: r.ttspl || '',
+      'Serial Number': r.serial_number || '',
+      'Rent Start': r.rent_start || '',
+      'Rent End': r.rent_end || '',
+      'Monthly Rate': r.monthly_rate != null && r.monthly_rate !== '' ? Number(r.monthly_rate) : '',
+      Amount: r.amount != null && r.amount !== '' ? Number(r.amount) : '',
+      'Catch-up': r.catchup || 'No',
+    }));
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows);
+    ws['!cols'] = [
+      { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
+      { wch: 12 }, { wch: 28 }, { wch: 18 }, { wch: 12 },
+      { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 },
+      { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Billed Serials');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    const stamp = month && year
+      ? `${MONTH_LABELS[month] || month}_${year}`
+      : new Date().toISOString().slice(0, 10);
+    const filename = `invoice_billing_serials_${stamp}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buf);
+  } catch (err) {
+    console.error('exportInvoiceSerialsExcel:', err);
+    res.status(500).json({ success: false, message: err.message || 'Export failed' });
   }
 };
 

@@ -260,6 +260,44 @@ function todayYmdIst() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
+const PICKUP_REASON_TYPES = {
+  employee_left: 'Employee Left',
+  faulty_laptop: 'Faulty Laptop',
+  service_issue: 'Service Issue',
+  not_in_use: 'Not in Use',
+  other: 'Other Reason',
+};
+
+function parsePickupReason(body) {
+  const type = String(body.pickup_reason_type || '').trim().toLowerCase();
+  const other = String(body.pickup_reason_other || '').trim();
+  const remarks = String(body.issue_description || body.remarks || '').trim();
+
+  if (!type || !PICKUP_REASON_TYPES[type]) {
+    return { error: 'Please select a pickup reason.' };
+  }
+  if (type === 'other' && !other) {
+    return { error: 'Please describe the reason for pickup.' };
+  }
+  if (type === 'other' && other.length < 3) {
+    return { error: 'Please enter a more detailed reason (at least 3 characters).' };
+  }
+
+  const label = PICKUP_REASON_TYPES[type];
+  const reasonText = type === 'other' ? other : label;
+  const issueDescription = remarks ? `${reasonText} — ${remarks}` : reasonText;
+
+  return {
+    value: {
+      pickup_reason_type: type,
+      pickup_reason_label: label,
+      pickup_reason_other: type === 'other' ? other : null,
+    },
+    issueDescription,
+    remarks,
+  };
+}
+
 function parsePreferredVisitSchedule(body) {
   const dateRaw = String(body.preferred_visit_date || body.visit_date || '').trim();
   const timeRaw = String(body.preferred_visit_time || body.visit_time || '').trim();
@@ -298,7 +336,12 @@ function parsePreferredVisitSchedule(body) {
  * form submission can never put a pickup straight into the warehouse flow.
  */
 async function createPublicPickup(req, res, client, ctx) {
-  const { customer_name, company_name, issue_description, mobile } = ctx;
+  const { customer_name, company_name, mobile } = ctx;
+  const reasonParsed = parsePickupReason(req.body || {});
+  if (reasonParsed.error) {
+    return res.status(400).json({ success: false, message: reasonParsed.error });
+  }
+
   const codes = collectSerialCodes(req.body || {});
   if (!codes.length) {
     return res.status(400).json({
@@ -356,7 +399,7 @@ async function createPublicPickup(req, res, client, ctx) {
     });
   }
 
-  const remarks = issue_description || 'Public pickup request';
+  const remarks = reasonParsed.issueDescription;
   const extra = {
     devices: resolved.map((row) => row.ttspl_id),
     // Serials are captured now so convert can rebuild the pickup without
@@ -368,6 +411,7 @@ async function createPublicPickup(req, res, client, ctx) {
     })),
     pickup_address: addrParsed.value,
     mobile_is_poc: addrParsed.mobileIsPoc,
+    ...reasonParsed.value,
   };
   const crmCompany = resolved[0].company_name || resolved[0].customer_name || null;
 

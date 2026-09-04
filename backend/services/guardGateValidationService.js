@@ -698,6 +698,32 @@ async function loadServiceDc(db, sdcNumber) {
   return ctx;
 }
 
+async function hasConfirmedVendorRepairInward(db, dcNumber) {
+  const r = await db.query(
+    `SELECT 1
+       FROM gate_scan_sessions
+      WHERE reference_type = 'vrdc'
+        AND reference_number = $1
+        AND direction = 'inward'
+        AND status = 'confirmed'
+      LIMIT 1`,
+    [dcNumber]
+  );
+  if (r.rows.length) return true;
+  const m = await db.query(
+    `SELECT 1
+       FROM gate_movements
+      WHERE reference_type = 'vrdc'
+        AND reference_number = $1
+        AND direction = 'inward'
+        AND validation_result = 'valid'
+        AND confirmed_at IS NOT NULL
+      LIMIT 1`,
+    [dcNumber]
+  );
+  return m.rows.length > 0;
+}
+
 async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   const headRes = await db.query(
     `SELECT dc_number, vendor_id, vendor_name, status, awb_number, porter_tracking_id,
@@ -705,6 +731,11 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
        FROM vendor_repair_delivery_challans
       WHERE dc_number = $1
          OR receive_dc_number = $1
+         OR EXISTS (
+              SELECT 1 FROM vendor_repair_dc_items i
+               WHERE i.dc_number = vendor_repair_delivery_challans.dc_number
+                 AND (i.receive_dc_number = $1 OR i.replacement_dc_number = $1)
+            )
       LIMIT 1`,
     [dcNumber]
   );
@@ -755,8 +786,13 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     active = false;
     inactive_reason = 'This vendor repair DC is cancelled.';
   } else if (dcStatus === 'returned' && inwardItems.length === 0) {
-    active = false;
-    inactive_reason = 'All units on this vendor repair DC have already been received.';
+    // Warehouse may e-sign receive before the guard stamps inward.
+    // Allow a one-time late gate inward until a confirmed stamp exists.
+    const gated = await hasConfirmedVendorRepairInward(db, head.dc_number);
+    if (gated) {
+      active = false;
+      inactive_reason = 'All units on this vendor repair DC have already been received.';
+    }
   }
 
   return {

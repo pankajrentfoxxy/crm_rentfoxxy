@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Receipt, IndianRupee, BadgeMinus, Download } from 'lucide-react';
+import { Plus, Receipt, IndianRupee, BadgeMinus, Download, FileSpreadsheet, Shield, Laptop } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
@@ -8,7 +8,7 @@ import InvoiceCoveragePanel from '../components/InvoiceCoveragePanel';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
-import { downloadInvoicePdf, downloadInvoicesZip, generateInvoicesBulk, listInvoices, listInvoiceCoverage, markInvoicePaid } from '../customerBillingApi';
+import { downloadInvoicePdf, downloadInvoicesZip, exportInvoiceSerialsExcel, generateInvoicesBulk, listInvoices, listInvoiceCoverage, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
 
 const TABS = ['all', 'draft', 'sent', 'paid', 'overdue'];
@@ -42,6 +42,7 @@ export default function InvoiceListPage() {
   const [coverageTick, setCoverageTick] = useState(0);
   const [zipOpen, setZipOpen] = useState(false);
   const [zipLoading, setZipLoading] = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
   const [zipForm, setZipForm] = useState({
     month: String(new Date().getMonth() + 1),
     year: String(new Date().getFullYear()),
@@ -54,6 +55,8 @@ export default function InvoiceListPage() {
     month: String(new Date().getMonth() + 1),
     year: String(new Date().getFullYear()),
   });
+  const [showSecurityDetails, setShowSecurityDetails] = useState(false);
+  const [securitySearch, setSecuritySearch] = useState('');
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
@@ -131,12 +134,36 @@ export default function InvoiceListPage() {
     subtotal: summary.subtotal_total || 0,
     creditNotes: summary.credit_note_total || 0,
     creditNoteInvoices: summary.credit_note_invoice_count || 0,
+    creditNotePending: summary.credit_note_pending_total || 0,
+    creditNotePendingCount: summary.credit_note_pending_count || 0,
+    security: summary.security_total || 0,
+    securityCustomers: summary.security_customer_count || 0,
+    securityLaptops: summary.security_laptop_count || 0,
+    securityInvoices: summary.security_invoice_count || 0,
+    securityDetails: summary.security_details || [],
     draft: { count: summary.draft_count || 0, total: summary.draft_total || 0 },
     sent: { count: summary.sent_count || 0, total: summary.sent_total || 0 },
     paid: { count: summary.paid_count || 0, total: summary.paid_total || 0 },
     overdue: { count: summary.overdue_count || 0, total: summary.overdue_total || 0 },
     outstanding: summary.outstanding_total || 0,
   }), [summary]);
+
+  const securityRows = useMemo(() => {
+    const q = securitySearch.trim().toLowerCase();
+    const list = stats.securityDetails || [];
+    if (!q) return list;
+    return list.filter((row) => (
+      String(row.customer_name || '').toLowerCase().includes(q)
+      || String(row.invoice_number || '').toLowerCase().includes(q)
+      || (row.ttspls || []).some((id) => String(id || '').toLowerCase().includes(q))
+    ));
+  }, [stats.securityDetails, securitySearch]);
+
+  const creditHint = useMemo(() => {
+    const applied = `${Number(stats.creditNoteInvoices || 0).toLocaleString('en-IN')} invoice${stats.creditNoteInvoices === 1 ? '' : 's'} with credit`;
+    if (!Number(stats.creditNotePendingCount || 0)) return applied;
+    return `${applied} · ${fmtMoney(stats.creditNotePending)} pending (${stats.creditNotePendingCount})`;
+  }, [stats.creditNoteInvoices, stats.creditNotePending, stats.creditNotePendingCount]);
 
   const allCustomersSelected = genCustomerOptions.length > 0
     && genForm.customer_ids.length === genCustomerOptions.length;
@@ -264,6 +291,53 @@ export default function InvoiceListPage() {
     }
   };
 
+  const handleExcelExport = async () => {
+    setExcelLoading(true);
+    try {
+      const params = {};
+      if (tab !== 'all') params.status = tab;
+      if (customerId) params.customer_id = customerId;
+      if (month) params.month = month;
+      if (year) params.year = year;
+      if (searchDebounced) params.search = searchDebounced;
+      const res = await exportInvoiceSerialsExcel(params);
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      if (blob.type.includes('json') || (res.data?.type && String(res.data.type).includes('json'))) {
+        const text = await blob.text();
+        const json = JSON.parse(text);
+        throw new Error(json.message || 'Export failed');
+      }
+      const match = String(res.headers['content-disposition'] || '').match(/filename="?([^"]+)"?/);
+      const monthLabel = month ? (MONTHS[Number(month)] || month) : 'all';
+      const yearLabel = year || 'years';
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = match?.[1] || `invoice_billing_serials_${monthLabel}_${yearLabel}.xlsx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('Excel downloaded');
+    } catch (err) {
+      let message = err.message || 'Excel export failed';
+      const data = err.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const json = JSON.parse(await data.text());
+          message = json.message || message;
+        } catch {
+          /* keep default */
+        }
+      } else if (data?.message) {
+        message = data.message;
+      }
+      toast.error(message);
+    } finally {
+      setExcelLoading(false);
+    }
+  };
+
   const handleMarkPaid = async (id) => {
     const ref = window.prompt('Payment reference (optional):');
     try {
@@ -283,6 +357,9 @@ export default function InvoiceListPage() {
         icon={Receipt}
         actions={(
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={FileSpreadsheet} onClick={handleExcelExport} loading={excelLoading}>
+              Export Excel
+            </Button>
             <Button variant="secondary" icon={Download} onClick={openZipModal}>Download</Button>
             <PermissionGate section="customer_billing" action="create">
               <Button icon={Plus} onClick={openGenerateModal}>Generate Invoice</Button>
@@ -291,7 +368,7 @@ export default function InvoiceListPage() {
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 mb-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
         <StatCard
           label="Total Subtotal"
           value={fmtMoney(stats.subtotal)}
@@ -300,13 +377,108 @@ export default function InvoiceListPage() {
           tone="blue"
         />
         <StatCard
+          label="Security Charged"
+          value={fmtMoney(stats.security)}
+          hint={`${Number(stats.securityCustomers || 0).toLocaleString('en-IN')} customer${stats.securityCustomers === 1 ? '' : 's'} · ${Number(stats.securityLaptops || 0).toLocaleString('en-IN')} laptop${stats.securityLaptops === 1 ? '' : 's'}`}
+          icon={Shield}
+          tone="teal"
+          active={showSecurityDetails}
+          onClick={() => setShowSecurityDetails((open) => !open)}
+        />
+        <StatCard
           label="Credit Note Total"
           value={fmtMoney(stats.creditNotes)}
-          hint={`${Number(stats.creditNoteInvoices || 0).toLocaleString('en-IN')} invoice${stats.creditNoteInvoices === 1 ? '' : 's'} with credit`}
+          hint={creditHint}
           icon={BadgeMinus}
           tone="amber"
         />
       </div>
+
+      {showSecurityDetails ? (
+        <div className="mb-4 rounded-2xl border border-teal-100 bg-white shadow-sm overflow-hidden">
+          <div className="px-4 pt-4 pb-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Security charged this period</p>
+              <h3 className="text-lg font-bold text-slate-900">
+                {Number(stats.securityCustomers || 0).toLocaleString('en-IN')} customers · {Number(stats.securityLaptops || 0).toLocaleString('en-IN')} laptops
+              </h3>
+              <p className="text-sm text-slate-500">
+                One-month security billed on these invoices. Click a customer or invoice to open the record.
+              </p>
+            </div>
+            <SearchField
+              value={securitySearch}
+              onChange={(e) => setSecuritySearch(e.target.value)}
+              placeholder="Search customer, invoice, TTSPL…"
+            />
+          </div>
+          <div className="overflow-x-auto border-t border-slate-100 max-h-96 overflow-y-auto">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="text-left font-medium px-3 py-2">Customer</th>
+                  <th className="text-left font-medium px-3 py-2">Invoice</th>
+                  <th className="text-right font-medium px-3 py-2">Laptops</th>
+                  <th className="text-left font-medium px-3 py-2">TTSPL</th>
+                  <th className="text-right font-medium px-3 py-2">Security</th>
+                </tr>
+              </thead>
+              <tbody>
+                {securityRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-slate-400">
+                      {stats.securityInvoices
+                        ? 'No security rows match this search.'
+                        : 'No security charged on invoices for these filters.'}
+                    </td>
+                  </tr>
+                ) : securityRows.map((row) => (
+                  <tr key={row.invoice_id} className="border-t border-slate-50 hover:bg-slate-50/80">
+                    <td className="px-3 py-2.5">
+                      <Link to={`/lead-crm/customers/${row.customer_id}`} className="font-medium text-blue-600 hover:underline">
+                        {row.customer_name}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link to={`/customer-billing/invoices/${row.invoice_id}`} className="text-blue-600 hover:underline font-medium">
+                          {row.invoice_number}
+                        </Link>
+                        <InvoiceStatusBadge status={row.status} />
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        {MONTHS[row.invoice_month] || ''} {row.invoice_year || ''}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <span className="inline-flex items-center justify-end gap-1 text-slate-800">
+                        <Laptop className="w-3.5 h-3.5 text-slate-400" />
+                        {row.laptop_count}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">
+                      {(row.ttspls || []).join(', ') || '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-medium text-slate-800 whitespace-nowrap">
+                      {fmtMoney(row.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {securityRows.length > 0 ? (
+                <tfoot className="bg-teal-50/70 text-sm font-semibold text-slate-800">
+                  <tr>
+                    <td className="px-3 py-2.5" colSpan={2}>Total</td>
+                    <td className="px-3 py-2.5 text-right">{securityRows.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0)}</td>
+                    <td />
+                    <td className="px-3 py-2.5 text-right">{fmtMoney(securityRows.reduce((sum, row) => sum + Number(row.amount || 0), 0))}</td>
+                  </tr>
+                </tfoot>
+              ) : null}
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
         <StatCard label="Draft" value={stats.draft.count} hint={fmt(stats.draft.total)} tone="gray" active={tab === 'draft'} onClick={() => setTab('draft')} />
@@ -397,6 +569,16 @@ export default function InvoiceListPage() {
           { key: 'customer_name', header: 'Customer' },
           { key: 'laptop_count', header: 'Laptops', align: 'right', render: (r) => r.laptop_count || 0 },
           { key: 'subtotal', header: 'Subtotal', align: 'right', render: (r) => fmt(r.subtotal) },
+          { key: 'security_amount', header: 'Security', align: 'right', render: (r) => (
+            Number(r.security_amount || r.security_deposit || 0) > 0
+              ? (
+                <span className="text-teal-700">
+                  {fmt(r.security_amount || r.security_deposit)}
+                  {r.security_laptop_count ? <span className="block text-[11px] font-normal text-slate-400">{r.security_laptop_count} laptop{r.security_laptop_count === 1 ? '' : 's'}</span> : null}
+                </span>
+              )
+              : <span className="text-slate-300">—</span>
+          ) },
           { key: 'gst_amount', header: 'GST', align: 'right', render: (r) => fmt(r.gst_amount) },
           { key: 'credit_note_adjustment', header: 'Credit Adj', align: 'right', render: (r) => fmt(r.credit_note_adjustment) },
           { key: 'grand_total', header: 'Total', align: 'right', render: (r) => <span className="font-medium">{fmt(r.grand_total)}</span> },
@@ -433,6 +615,12 @@ export default function InvoiceListPage() {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               <span>{MONTHS[r.invoice_month]} {r.invoice_year}</span>
               <span>{r.laptop_count || 0} laptops</span>
+              {Number(r.security_amount || r.security_deposit || 0) > 0 && (
+                <span className="text-teal-700 font-medium">
+                  Security {fmt(r.security_amount || r.security_deposit)}
+                  {r.security_laptop_count ? ` · ${r.security_laptop_count} laptop${r.security_laptop_count === 1 ? '' : 's'}` : ''}
+                </span>
+              )}
               {r.irn && <span className="text-green-700 font-medium">✓ IRN</span>}
             </div>
             <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">

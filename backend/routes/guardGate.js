@@ -10,6 +10,8 @@ router.use(authMiddleware);
 
 router.get('/dashboard', view, ctrl.dashboard);
 router.get('/history', view, ctrl.history);
+router.get('/report', view, ctrl.report);
+router.get('/report/column-values', view, ctrl.reportColumnValues);
 router.post('/resolve', create, ctrl.resolve);
 router.get('/sessions/:sessionId', view, ctrl.getSession);
 router.post('/sessions/:sessionId/scan', create, ctrl.scanUnit);

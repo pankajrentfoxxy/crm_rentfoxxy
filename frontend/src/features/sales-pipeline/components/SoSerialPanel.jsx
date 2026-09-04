@@ -154,6 +154,13 @@ export default function SoSerialPanel({ soNumber, onSummaryChange }) {
   const [assignModal, setAssignModal] = useState(null);
   const { user, effectivePermissions } = useAuth();
   const canEditLineRateConfig = canEditSoLineRateConfig(user, effectivePermissions);
+  const isSuperAdmin = user?.role === 'super_admin';
+
+  const canRemoveAllocation = (allocation) => {
+    if (allocation.status === 'dispatched') return false;
+    if (String(allocation.qc_status || '').toLowerCase() === 'passed') return isSuperAdmin;
+    return true;
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,11 +181,14 @@ export default function SoSerialPanel({ soNumber, onSummaryChange }) {
     onSummaryChange?.();
   }, [load, onSummaryChange]);
 
-  const detach = async (allocId) => {
-    if (!window.confirm('Detach this laptop and cancel its QC ticket?')) return;
+  const detach = async (allocId, qcPassed) => {
+    const message = qcPassed
+      ? 'Remove this QC-passed laptop from the order? It will return to inventory. This action is limited to super admin.'
+      : 'Detach this laptop and cancel its QC ticket?';
+    if (!window.confirm(message)) return;
     try {
       await detachSoSerial(soNumber, allocId);
-      toast.success('Laptop detached');
+      toast.success(qcPassed ? 'QC-passed laptop removed' : 'Laptop detached');
       refresh();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Detach failed');
@@ -252,11 +262,24 @@ export default function SoSerialPanel({ soNumber, onSummaryChange }) {
                       <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="text-xs text-blue-600">QC #{a.qc_ticket_id}</Link>
                     )}
                     <span className={`px-2 py-0.5 rounded-full text-xs ${QC_BADGE[a.qc_status] || QC_BADGE.pending}`}>{a.qc_status}</span>
-                    <PermissionGate section={SO_SERIAL_EDIT_SECTIONS} action="edit">
-                      {a.qc_status !== 'passed' && (
-                        <button type="button" onClick={() => detach(a.allocation_id)} className="text-xs text-red-600 hover:underline">Remove</button>
-                      )}
-                    </PermissionGate>
+                    {canRemoveAllocation(a) && (
+                      a.qc_status === 'passed' ? (
+                        isSuperAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => detach(a.allocation_id, true)}
+                            className="text-xs text-red-700 hover:underline font-semibold"
+                            title="Super admin only — remove after dispatch QC passed"
+                          >
+                            Remove
+                          </button>
+                        ) : null
+                      ) : (
+                        <PermissionGate section={SO_SERIAL_EDIT_SECTIONS} action="edit">
+                          <button type="button" onClick={() => detach(a.allocation_id, false)} className="text-xs text-red-600 hover:underline">Remove</button>
+                        </PermissionGate>
+                      )
+                    )}
                   </div>
                 </div>
               ))}

@@ -1,4 +1,18 @@
 const gate = require('../services/guardGateValidationService');
+const report = require('../services/guardGateReportService');
+
+function reportDateArgs(query = {}) {
+  const period = String(query.period || query.date || '').trim().toLowerCase();
+  const dateFrom = query.date_from || query.dateFrom || '';
+  const dateTo = query.date_to || query.dateTo || '';
+  if (period === 'all') {
+    return { period: 'all', dateFrom: '', dateTo: '' };
+  }
+  if (dateFrom || dateTo) {
+    return { period: '', dateFrom, dateTo };
+  }
+  return { period: period || 'today', dateFrom: '', dateTo: '' };
+}
 
 function actorFromReq(req) {
   return {
@@ -100,5 +114,48 @@ exports.history = async (req, res) => {
   } catch (err) {
     console.error('guardGate.history', err);
     return res.status(500).json({ success: false, message: 'Unable to load scan history.' });
+  }
+};
+
+exports.report = async (req, res) => {
+  try {
+    const dates = reportDateArgs(req.query);
+    const data = await report.getReport({
+      userId: req.user?.user_id,
+      role: req.user?.role,
+      period: dates.period,
+      dateFrom: dates.dateFrom,
+      dateTo: dates.dateTo,
+      search: req.query?.q || req.query?.search || '',
+      direction: req.query?.direction || '',
+      page: req.query?.page,
+      limit: req.query?.limit,
+      query: req.query,
+    });
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('guardGate.report', err);
+    return res.status(500).json({ success: false, message: 'Unable to load gate report.' });
+  }
+};
+
+exports.reportColumnValues = async (req, res) => {
+  try {
+    const dates = reportDateArgs(req.query);
+    const values = await report.getColumnValues({
+      userId: req.user?.user_id,
+      role: req.user?.role,
+      period: dates.period,
+      dateFrom: dates.dateFrom,
+      dateTo: dates.dateTo,
+      search: req.query?.q || req.query?.search || '',
+      direction: req.query?.direction || '',
+      column: req.query?.column || '',
+      query: req.query,
+    });
+    return res.json({ success: true, data: values });
+  } catch (err) {
+    console.error('guardGate.reportColumnValues', err);
+    return res.status(500).json({ success: false, message: 'Unable to load column values.' });
   }
 };

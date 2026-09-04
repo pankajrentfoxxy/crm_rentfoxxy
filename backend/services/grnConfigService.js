@@ -140,11 +140,34 @@ function genFromActual(actual = {}) {
   return genNum(actual.generation);
 }
 
-/** First integer found, e.g. "256 GB SSD" → 256, "32GB" → 32. */
+/**
+ * Capacity in GB for RAM/SSD strings. Handles "1 TB SSD", merged fields like
+ * "1 TB SSD+4 GB GRAPHIC CARD", and plain script output ("1024").
+ */
 function sizeNum(s) {
   if (typeof s === 'number') return Math.round(s);
-  const m = String(s == null ? '' : s).match(/(\d+(?:\.\d+)?)/);
-  return m ? Math.round(parseFloat(m[1])) : null;
+  let str = String(s == null ? '' : s).trim();
+  if (!str) return null;
+  // Legacy inventory sometimes merged SSD + GPU in one field — use storage segment only.
+  if (/\+/.test(str)) str = str.split('+')[0].trim();
+  const m = str.match(/(\d+(?:\.\d+)?)\s*(tb|gb)?/i);
+  if (!m) {
+    const fallback = str.match(/(\d+(?:\.\d+)?)/);
+    return fallback ? Math.round(parseFloat(fallback[1])) : null;
+  }
+  let n = parseFloat(m[1]);
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'tb') n *= 1024;
+  else if (!unit && /\btb\b/i.test(str) && n <= 10) n *= 1024;
+  return Math.round(n);
+}
+
+/** Normalize GPU names for tolerant contains-match (Intel(R) UHD Graphics 630 ≈ Intel UHD Graphics). */
+function normGpu(s) {
+  return norm(String(s || '').replace(/\(r\)/gi, ''))
+    .replace(/\s+\d{3,4}\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // ── Expected config loader ────────────────────────────────────────
@@ -402,8 +425,8 @@ function compareConfig(expected, actual) {
 
   // GPU — informational only (never blocks).
   {
-    const e = norm(expected.gpu);
-    const a = norm(actual.gpu);
+    const e = normGpu(expected.gpu);
+    const a = normGpu(actual.gpu);
     const matched = !e || bothContain(a, e);
     checks.push({ field: 'gpu', label: FIELD_LABELS.gpu, required: false, matched, expected: expected.gpu, actual: actual.gpu ?? '' });
   }

@@ -1,40 +1,46 @@
-/** URL param helpers for Master Data laptop column filters (cf_*). */
+/** URL param helpers for Return DC list column filters (cf_*). */
 
-export const MD_COLUMN_KEYS = [
-  'ttspl_id',
-  'serial_number',
-  'specs',
-  'current_status',
-  'current_location',
+export const RDC_COLUMN_KEYS = [
+  'return_dc_number',
+  'created_at',
+  'pickup_date',
   'customer_name',
-  'vendor_name',
-  'vendor_type',
-  'vendor_price',
-  'customer_price',
-  'current_stage',
+  'city',
+  'unit_count',
+  'original_dc_number',
   'sales_order_number',
-  'delivery_challan_number',
-  'purchase_order_number',
-  'grn_number',
+  'reason',
+  'status',
+  'warehouse',
 ];
 
-export const MD_COLUMN_TYPES = {
-  ttspl_id: 'text',
-  serial_number: 'text',
-  specs: 'text',
-  current_status: 'text',
-  current_location: 'text',
+export const RDC_COLUMN_TYPES = {
+  return_dc_number: 'text',
+  created_at: 'date',
+  pickup_date: 'date',
   customer_name: 'text',
-  vendor_name: 'text',
-  vendor_type: 'text',
-  vendor_price: 'text',
-  customer_price: 'text',
-  current_stage: 'text',
+  city: 'text',
+  unit_count: 'number',
+  original_dc_number: 'text',
   sales_order_number: 'text',
-  delivery_challan_number: 'text',
-  purchase_order_number: 'text',
-  grn_number: 'text',
+  reason: 'text',
+  status: 'text',
+  warehouse: 'text',
 };
+
+export const RDC_TABLE_COLUMNS = [
+  { key: 'return_dc_number', label: 'RDC #' },
+  { key: 'created_at', label: 'Created' },
+  { key: 'pickup_date', label: 'Pickup Date' },
+  { key: 'customer_name', label: 'Customer' },
+  { key: 'city', label: 'City' },
+  { key: 'unit_count', label: 'Units', align: 'right' },
+  { key: 'original_dc_number', label: 'Original DC' },
+  { key: 'sales_order_number', label: 'SO #' },
+  { key: 'reason', label: 'Reason' },
+  { key: 'status', label: 'Status' },
+  { key: 'warehouse', label: 'Warehouse' },
+];
 
 function splitCsv(val) {
   return String(val || '')
@@ -45,8 +51,8 @@ function splitCsv(val) {
 
 export function readColumnFiltersFromParams(searchParams) {
   const state = {};
-  MD_COLUMN_KEYS.forEach((key) => {
-    const type = MD_COLUMN_TYPES[key];
+  RDC_COLUMN_KEYS.forEach((key) => {
+    const type = RDC_COLUMN_TYPES[key];
     if (type === 'text') {
       const vals = splitCsv(searchParams.get(`cf_${key}`));
       if (vals.length) state[key] = { type: 'text', values: vals };
@@ -100,7 +106,7 @@ export function columnFiltersToParams(state = {}) {
 
 export function clearColumnFilterParams(searchParams) {
   const next = new URLSearchParams(searchParams);
-  MD_COLUMN_KEYS.forEach((key) => {
+  RDC_COLUMN_KEYS.forEach((key) => {
     next.delete(`cf_${key}`);
     next.delete(`cf_${key}_from`);
     next.delete(`cf_${key}_to`);
@@ -111,21 +117,3 @@ export function clearColumnFilterParams(searchParams) {
   });
   return next;
 }
-
-export const LAPTOP_TABLE_COLUMNS = [
-  { key: 'ttspl_id', label: 'TTSPL', align: 'left' },
-  { key: 'serial_number', label: 'Serial', align: 'left' },
-  { key: 'specs', label: 'Specs', align: 'left' },
-  { key: 'current_status', label: 'Status', align: 'left' },
-  { key: 'current_location', label: 'Location', align: 'left' },
-  { key: 'customer_name', label: 'Current Customer', align: 'left', highlight: true },
-  { key: 'vendor_name', label: 'Vendor', align: 'left', highlight: true },
-  { key: 'vendor_type', label: 'Vendor Type', align: 'left', highlight: true },
-  { key: 'vendor_price', label: 'Vendor Price', align: 'left', highlight: true },
-  { key: 'customer_price', label: 'Customer Price (ex. GST)', align: 'left', highlight: true },
-  { key: 'current_stage', label: 'Stage', align: 'left' },
-  { key: 'sales_order_number', label: 'SO', align: 'left' },
-  { key: 'delivery_challan_number', label: 'DC', align: 'left' },
-  { key: 'purchase_order_number', label: 'PO', align: 'left' },
-  { key: 'grn_number', label: 'GRN', align: 'left' },
-];

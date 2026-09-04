@@ -9,6 +9,22 @@ import api from '../../../utils/api';
 import { isSupportLead } from '../../../utils/supportAccess';
 import { assigneeOptionLabel } from '../../../components/support/utils';
 import { useAuth } from '../../../context/AuthContext';
+import { pickupReasonDetail, pickupReasonLabel, pickupReasonRemarks, pickupReasonTypeLabel, parseRequestExtra } from '../pickupReasonTypes';
+
+function normalizeRequestRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  return { ...row, extra: parseRequestExtra(row.extra) };
+}
+
+function pickupTableRemarks(row) {
+  if (row.request_type !== 'pickup') return row.issue_description || '—';
+  const remarks = pickupReasonRemarks(row.extra, row.issue_description);
+  if (remarks) return remarks;
+  const reason = pickupReasonDetail(row.extra, row.issue_description, row.request_type);
+  const desc = String(row.issue_description || '').trim();
+  if (reason && desc === reason) return '—';
+  return '—';
+}
 
 function formatVisitAddress(extra) {
   if (!extra || typeof extra !== 'object') return null;
@@ -255,6 +271,16 @@ function ConvertModal({ request, onClose, onConverted }) {
               {visitAddress.phone ? ` · POC ${visitAddress.phone}` : ''}
             </p>
           ) : null}
+          {(() => {
+            const reason = pickupReasonLabel(request.extra);
+            if (!reason) return null;
+            return (
+              <p>
+                <span className="text-slate-500">Pickup reason:</span>{' '}
+                <strong>{reason}</strong>
+              </p>
+            );
+          })()}
           <p className="text-slate-700 whitespace-pre-wrap pt-1">{request.issue_description}</p>
         </div>
 
@@ -399,9 +425,22 @@ function DetailDrawer({ request, onClose, onConvert, onReject, canAct }) {
               </p>
             );
           })()}
+          {(() => {
+            const reason = pickupReasonLabel(request.extra);
+            if (!reason) return null;
+            return (
+              <p>
+                <span className="text-slate-500">Pickup reason:</span>{' '}
+                <strong>{reason}</strong>
+                {request.extra?.pickup_reason_type === 'other' && request.extra?.pickup_reason_label ? (
+                  <span className="text-slate-500"> ({request.extra.pickup_reason_label})</span>
+                ) : null}
+              </p>
+            );
+          })()}
           <p><span className="text-slate-500">Submitted:</span> {formatWhen(request.created_at)}</p>
           <div>
-            <p className="text-slate-500 mb-1">Issue</p>
+            <p className="text-slate-500 mb-1">{request.request_type === 'pickup' ? 'Details' : 'Issue'}</p>
             <p className="whitespace-pre-wrap rounded-lg bg-slate-50 border p-3">{request.issue_description}</p>
           </div>
           {request.notes ? (
@@ -475,7 +514,7 @@ export default function SupportRequestsPage() {
           limit: 100,
         },
       });
-      setRows(data.requests || []);
+      setRows((data.requests || []).map(normalizeRequestRow));
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load requests');
       setRows([]);
@@ -510,7 +549,7 @@ export default function SupportRequestsPage() {
   };
 
   return (
-    <div className="p-4 max-w-6xl mx-auto space-y-4">
+    <div className="p-4 max-w-[1600px] mx-auto space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Support Requests</h1>
@@ -560,7 +599,7 @@ export default function SupportRequestsPage() {
         <button type="button" onClick={load} className="px-4 py-2 text-sm bg-slate-900 text-white rounded-lg">Apply</button>
       </div>
 
-      <div className="bg-white border rounded-xl overflow-hidden">
+      <div className="bg-white border rounded-xl">
         {loading ? (
           <div className="p-10 text-center text-slate-500 inline-flex items-center gap-2 justify-center w-full">
             <Loader2 className="w-5 h-5 animate-spin" /> Loading…
@@ -577,8 +616,10 @@ export default function SupportRequestsPage() {
                   <th className="px-3 py-2">Submitted by</th>
                   <th className="px-3 py-2">Mobile</th>
                   <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Reason type</th>
+                  <th className="px-3 py-2">Reason</th>
                   <th className="px-3 py-2">TTSPL</th>
-                  <th className="px-3 py-2">Issue</th>
+                  <th className="px-3 py-2">Issue / remarks</th>
                   <th className="px-3 py-2">Created</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Actions</th>
@@ -612,14 +653,24 @@ export default function SupportRequestsPage() {
                         {r.request_type === 'pickup' ? 'Pickup' : 'Complaint'}
                       </span>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs">
+                    <td className="px-3 py-2 max-w-[140px] whitespace-nowrap">
+                      {pickupReasonTypeLabel(r.extra) || '—'}
+                    </td>
+                    <td className="px-3 py-2 max-w-xs">
+                      <p className="line-clamp-3 text-slate-700">
+                        {pickupReasonDetail(r.extra, r.issue_description, r.request_type) || '—'}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
                       {r.device_serial || '—'}
                       {Array.isArray(r.extra?.devices) && r.extra.devices.length > 1
                         ? ` +${r.extra.devices.length - 1}`
                         : ''}
                     </td>
                     <td className="px-3 py-2 max-w-xs">
-                      <p className="line-clamp-2 text-slate-700">{r.issue_description}</p>
+                      <p className="line-clamp-2 text-slate-700">
+                        {pickupTableRemarks(r)}
+                      </p>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-500">{formatWhen(r.created_at)}</td>
                     <td className="px-3 py-2">

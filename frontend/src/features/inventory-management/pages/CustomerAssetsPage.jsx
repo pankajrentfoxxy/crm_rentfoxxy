@@ -18,6 +18,7 @@ const STATUS_TABS = [
   { key: 'rented', label: 'On Rent' },
   { key: 'on_demo', label: 'On Demo' },
   { key: 'sold', label: 'Sold' },
+  { key: 'out_stock', label: 'Out Stock' },
 ];
 
 const STATUS_STYLES = {
@@ -27,7 +28,20 @@ const STATUS_STYLES = {
   rented: 'bg-blue-100 text-blue-800',
   on_demo: 'bg-violet-100 text-violet-800',
   sold: 'bg-emerald-100 text-emerald-800',
+  out_stock: 'bg-orange-100 text-orange-800',
 };
+
+const STATUS_LABELS = {
+  reserved: 'Allocated',
+  dispatch_ready: 'Dispatch Ready',
+  in_transit: 'In Transit',
+  rented: 'On Rent',
+  on_demo: 'On Demo',
+  sold: 'Sold',
+  out_stock: 'Out Stock',
+};
+
+const statusLabel = (status) => STATUS_LABELS[status] || String(status || '').replace(/_/g, ' ');
 
 const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
 const fmtMoney = (n) => (n != null && n !== '' ? `₹${Number(n).toLocaleString('en-IN')}` : '—');
@@ -36,7 +50,7 @@ export default function CustomerAssetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = searchParams.get('status') || '';
   const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
+  const [counts, setCounts] = useState({ all: 0, reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, out_stock: 0 });
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
@@ -157,8 +171,8 @@ export default function CustomerAssetsPage() {
                 className="font-semibold text-blue-700 hover:underline text-left"
                 onOpen={setHistoryTtspl}
               />
-              <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium capitalize', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
-                {String(r.inventory_status || '').replace('_', ' ')}
+              <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
+                {statusLabel(r.inventory_status)}
               </span>
             </div>
             <p className="text-sm text-gray-900">{r.brand} {r.model}</p>
@@ -232,8 +246,8 @@ export default function CustomerAssetsPage() {
                   ) : <span className="text-gray-400">—</span>}
                 </td>
                 <td className="px-3 py-2">
-                  <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium capitalize', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
-                    {String(r.inventory_status || '').replace('_', ' ')}
+                  <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
+                    {statusLabel(r.inventory_status)}
                   </span>
                 </td>
                 <td className="px-3 py-2 text-gray-600">{r.dc_number || '—'}</td>

@@ -230,6 +230,7 @@ router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDelive
 router.patch(/^\/delivery-challans\/(.+)$/, rejectDcActionSuffix, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
+router.get('/return-dc/column-values', rdcView, ctrl.getReturnDcColumnValues);
 router.get('/return-dc/export.xlsx', rdcView, ctrl.exportReturnDcLaptops);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
 router.get('/return-dc/:rdcNumber/download-pdf', rdcView, ctrl.downloadReturnDcPdf);

@@ -19,6 +19,11 @@ export const downloadInvoicesZip = ({ month, year, format } = {}) => api.get(`${
   responseType: 'blob',
   timeout: 15 * 60 * 1000,
 });
+export const exportInvoiceSerialsExcel = (p) => api.get(`${base}/invoices/export.xlsx`, {
+  params: p,
+  responseType: 'blob',
+  timeout: 5 * 60 * 1000,
+});
 export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: p });
 export const createCreditNote = (d) => api.post(`${base}/credit-notes`, d);
 export const approveCreditNote = (id) => api.patch(`${base}/credit-notes/${id}/approve`);
