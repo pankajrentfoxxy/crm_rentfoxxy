@@ -10,6 +10,7 @@ import { fmtDate, inr } from '../utils/format';
 
 const LIFECYCLE_TABS = [
   { value: 'active', label: 'Currently with me' },
+  { value: 'delivered', label: 'Delivered to date' },
   { value: 'returned', label: 'Returned' },
 ];
 
@@ -21,6 +22,7 @@ export default function LaptopsPage() {
   });
 
   const isReturned = filters.lifecycle === 'returned';
+  const isDelivered = filters.lifecycle === 'delivered';
 
   const columns = [
     {
@@ -99,7 +101,11 @@ export default function LaptopsPage() {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-bold">My Laptops</h1>
-        <p className="text-sm text-slate-500 mt-1">Laptops deployed on your account</p>
+        <p className="text-sm text-slate-500 mt-1">
+          {isDelivered
+            ? 'Every laptop delivered on a challan — matches the dashboard Delivered Laptops count'
+            : 'Laptops deployed on your account'}
+        </p>
       </div>
 
       <div className="flex gap-2">

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api, { downloadInvoicePdf } from '../utils/api';
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -35,8 +36,12 @@ export default function InvoicesPage() {
     };
   }, [invoices]);
 
-  function handleDownload(inv) {
-    downloadInvoicePdf(inv.invoice_id, `${inv.invoice_number || 'invoice'}.pdf`).catch(() => {});
+  async function handleDownload(inv) {
+    try {
+      await downloadInvoicePdf(inv.invoice_id, `${inv.invoice_number || 'invoice'}.pdf`);
+    } catch (err) {
+      toast.error(err.message || 'Failed to download invoice PDF');
+    }
   }
 
   return (
@@ -76,7 +81,7 @@ export default function InvoicesPage() {
             <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
               <span className="text-base font-bold text-slate-900">{inr(inv.grand_total)}</span>
               <div className="flex items-center gap-3">
-                {inv.pdf_path && <button type="button" onClick={() => handleDownload(inv)} className="text-brand text-sm font-semibold">PDF</button>}
+                <button type="button" onClick={() => handleDownload(inv)} className="text-brand text-sm font-semibold">PDF</button>
                 <Link to={`/invoices/${inv.invoice_id}`} className="text-brand text-sm font-semibold">View</Link>
               </div>
             </div>
@@ -104,9 +109,7 @@ export default function InvoicesPage() {
                     {inv.status === 'sent' && <span className="ml-1 text-[10px] text-red-600 font-bold">OVERDUE</span>}
                   </td>
                   <td className="p-3 space-x-2">
-                    {inv.pdf_path && (
-                      <button type="button" onClick={() => handleDownload(inv)} className="text-brand text-xs font-semibold">Download PDF</button>
-                    )}
+                    <button type="button" onClick={() => handleDownload(inv)} className="text-brand text-xs font-semibold">Download PDF</button>
                     <Link to={`/invoices/${inv.invoice_id}`} className="text-brand text-xs font-semibold">View Details</Link>
                   </td>
                 </tr>

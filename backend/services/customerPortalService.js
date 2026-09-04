@@ -418,9 +418,25 @@ function buildTicketWhere(customerId, filters, params) {
     params.push(String(filters.ticket_type).toLowerCase());
     where += ` AND LOWER(COALESCE(st.ticket_category, 'complaint')) = $${params.length}`;
   }
-  if (filters.status) {
-    params.push(String(filters.status).toLowerCase());
+  const status = String(filters.status || '').trim().toLowerCase();
+  if (status === 'open') {
+    // Dashboard "Open Support Tickets" is every ticket still being worked on.
+    where += ` AND LOWER(st.status) IN ('open', 'in_progress')`;
+  } else if (status) {
+    params.push(status);
     where += ` AND LOWER(st.status) = $${params.length}`;
+  }
+  const pendingType = String(filters.ticket_type || '').trim().toLowerCase();
+  const wantPendingItems = ['1', 'true', 'yes'].includes(String(filters.item_pending || '').trim().toLowerCase())
+    && (pendingType === 'pickup' || pendingType === 'replacement');
+  if (wantPendingItems) {
+    params.push(pendingType);
+    where += ` AND EXISTS (
+      SELECT 1 FROM support_ticket_items sti
+       WHERE sti.ticket_id = st.id
+         AND sti.item_type = $${params.length}
+         AND LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')
+    )`;
   }
   if (filters.date_from) {
     params.push(filters.date_from);
@@ -855,15 +871,94 @@ async function getCustomerDashboard(customerId) {
  * Reuses the admin deployed-asset query so the portal shows the same rows as the
  * CRM customer screen. Required lazily to keep the controller/service graph acyclic.
  */
+/**
+ * Same grain as the dashboard Delivered Laptops KPI: one row per serial on a
+ * delivered outbound DC (jsonb array length), not one row per challan.
+ */
+async function queryDeliveredLaptopsFromDcs(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
+  const params = [customerId];
+  let where = `
+    WHERE dcl.customer_id = $1
+      AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+      AND dcl.status = 'delivered'
+      AND jsonb_typeof(dcl.serial_number) = 'array'`;
+  if (from) {
+    params.push(from);
+    where += ` AND dcl.delivered_at >= $${params.length}::date`;
+  }
+  if (to) {
+    params.push(to);
+    where += ` AND dcl.delivered_at < ($${params.length}::date + INTERVAL '1 day')`;
+  }
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    where += ` AND (
+      dcl.dc_number ILIKE $${i}
+      OR COALESCE(dcl.sales_order_number, '') ILIKE $${i}
+      OR elem ILIKE $${i}
+      OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR COALESCE(vsn.serial_number, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') ILIKE $${i}
+    )`;
+  }
+
+  const fromSql = `
+    FROM delivery_challan_lines dcl
+    CROSS JOIN LATERAL jsonb_array_elements_text(dcl.serial_number) AS elem
+    LEFT JOIN LATERAL (
+      SELECT v.serial_id, v.inventory_asset_code, v.serial_number, v.extra,
+             v.inventory_status, v.rent_monthly_rate, v.delivered_at AS vsn_delivered_at
+        FROM vendor_serial_numbers v
+       WHERE v.deleted_at IS NULL
+         AND (
+           (split_part(elem, '|', 1) ~ '^[0-9]+$' AND v.serial_id = split_part(elem, '|', 1)::int)
+           OR v.inventory_asset_code = NULLIF(split_part(elem, '|', 3), '')
+           OR v.serial_number = NULLIF(split_part(elem, '|', 2), '')
+         )
+       ORDER BY
+         CASE WHEN split_part(elem, '|', 1) ~ '^[0-9]+$' AND v.serial_id = split_part(elem, '|', 1)::int THEN 0 ELSE 1 END
+       LIMIT 1
+    ) vsn ON TRUE
+    ${where}`;
+
+  const countRes = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
+  const listParams = [...params];
+  let listSql = `
+    SELECT
+      COALESCE(vsn.inventory_asset_code, NULLIF(split_part(elem, '|', 3), '')) AS ttspl_id,
+      COALESCE(vsn.serial_number, NULLIF(split_part(elem, '|', 2), '')) AS serial_number,
+      vsn.extra->>'brand' AS brand,
+      COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model,
+      vsn.extra->>'processor' AS processor,
+      vsn.extra->>'generation' AS generation,
+      vsn.extra->>'ram' AS ram,
+      vsn.extra->>'storage' AS storage,
+      vsn.extra->>'gpu' AS gpu,
+      dcl.dc_number,
+      dcl.sales_order_number,
+      COALESCE(dcl.delivered_at, vsn.vsn_delivered_at) AS delivered_at,
+      vsn.rent_monthly_rate AS monthly_rate,
+      COALESCE(vsn.inventory_status, 'delivered') AS status
+    ${fromSql}
+    ORDER BY COALESCE(dcl.delivered_at, dcl.created_at) DESC NULLS LAST, dcl.dc_number, elem`;
+  if (limit != null) {
+    listParams.push(limit, offset || 0);
+    listSql += ` LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`;
+  }
+  const listRes = await pool.query(listSql, listParams);
+  return { rows: listRes.rows, total: countRes.rows[0]?.total || 0 };
+}
+
 async function listCustomerLaptops(customerId, filters = {}) {
   const {
     queryCustomerActiveAssets,
     queryCustomerReturnedAssets,
   } = require('../controllers/customerManagementController');
 
-  const lifecycle = String(filters.lifecycle || 'active').toLowerCase() === 'returned'
-    ? 'returned'
-    : 'active';
+  const lifecycleRaw = String(filters.lifecycle || 'active').toLowerCase();
+  const lifecycle = ['returned', 'delivered'].includes(lifecycleRaw) ? lifecycleRaw : 'active';
   const usePaging = filters.page != null || filters.limit != null;
   const { page, limit, offset } = paginate(filters);
   const opts = {
@@ -875,7 +970,9 @@ async function listCustomerLaptops(customerId, filters = {}) {
 
   const { rows, total } = lifecycle === 'returned'
     ? await queryCustomerReturnedAssets(customerId, opts)
-    : await queryCustomerActiveAssets(customerId, opts);
+    : lifecycle === 'delivered'
+      ? await queryDeliveredLaptopsFromDcs(customerId, opts)
+      : await queryCustomerActiveAssets(customerId, opts);
 
   return {
     laptops: rows.map((r) => ({ ...r, config: configLabel(r) })),

@@ -1,12 +1,13 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const portalSvc = require('../services/customerPortalService');
 const supportRequestCtrl = require('./supportRequestController');
+const { generateCustomerInvoicePdf, invoicePdfDownloadName } = require('../services/customerInvoicePdfService');
+const { normalizeInvoiceFormat } = require('../services/customerInvoiceHtmlService');
 
 /**
  * Document numbers arrive percent-encoded (SO%2F26-27%2F1023) and are sometimes
@@ -362,23 +363,39 @@ exports.getInvoice = async (req, res) => {
 exports.downloadInvoicePdf = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT invoice_id, pdf_path, invoice_number FROM customer_invoices
-       WHERE invoice_id = $1 AND customer_id = $2`,
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+        WHERE ci.invoice_id = $1 AND ci.customer_id = $2`,
       [req.params.invoiceId, req.customer.customer_id]
     );
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    if (!invoice.pdf_path) {
-      return res.status(404).json({ success: false, message: 'PDF not generated yet' });
+    const format = normalizeInvoiceFormat(req.query.format);
+    const pdfPath = await generateCustomerInvoicePdf(invoice, { format });
+    if (format === 'tax_invoice') {
+      await pool.query(
+        'UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2 AND customer_id = $3',
+        [pdfPath, invoice.invoice_id, req.customer.customer_id]
+      );
     }
-    const abs = path.join(__dirname, '..', invoice.pdf_path);
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ success: false, message: 'PDF file missing' });
-    }
-    res.download(abs, `${invoice.invoice_number}.pdf`);
+    res.download(
+      path.join(__dirname, '..', pdfPath),
+      invoicePdfDownloadName(invoice.invoice_number, format),
+    );
   } catch (err) {
+    console.error('customerPortal downloadInvoicePdf:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -639,6 +656,7 @@ exports.listTickets = async (req, res) => {
         ticket_type: req.query.ticket_type || '',
         status: req.query.status || '',
         stage: req.query.stage || '',
+        item_pending: req.query.item_pending || '',
       }
     );
     res.json({

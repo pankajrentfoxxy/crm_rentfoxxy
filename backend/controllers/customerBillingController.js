@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
-const { ZipArchive } = require('archiver');
+const archiver = require('archiver');
 const { generateCustomerInvoicePdf, invoicePdfDownloadName, uniqueCustomerPdfName } = require('../services/customerInvoicePdfService');
 const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
 const {
@@ -797,7 +797,7 @@ exports.downloadInvoicesZip = async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
 
-    const archive = new ZipArchive({ zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 9 } });
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
       else res.end();
