@@ -75,6 +75,7 @@ export default function SecurityDepositsPage() {
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               {r.sales_order_number && <span>SO {r.sales_order_number}</span>}
+              {r.ttspl_id && <span>{r.ttspl_id}</span>}
               <span>Received {r.received_date?.slice?.(0, 10) || r.received_date || '—'}</span>
               {Number(r.refund_amount) > 0 && <span>Refunded {fmt(r.refund_amount)}</span>}
             </div>
@@ -96,6 +97,7 @@ export default function SecurityDepositsPage() {
             <tr>
               <th className="px-4 py-3 text-left">Customer</th>
               <th className="px-4 py-3 text-left">SO #</th>
+              <th className="px-4 py-3 text-left">Laptop</th>
               <th className="px-4 py-3 text-left">Amount</th>
               <th className="px-4 py-3 text-left">Received</th>
               <th className="px-4 py-3 text-left">Status</th>
@@ -105,13 +107,14 @@ export default function SecurityDepositsPage() {
           </thead>
           <tbody className="divide-y">
             {loading ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No deposits</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No deposits</td></tr>
             ) : rows.map((r) => (
               <tr key={r.deposit_id}>
                 <td className="px-4 py-3">{r.customer_name}</td>
                 <td className="px-4 py-3">{r.sales_order_number || '—'}</td>
+                <td className="px-4 py-3">{r.ttspl_id || '—'}</td>
                 <td className="px-4 py-3">{fmt(r.amount)}</td>
                 <td className="px-4 py-3">{r.received_date?.slice?.(0, 10) || r.received_date}</td>
                 <td className="px-4 py-3">

@@ -706,6 +706,32 @@ function vrdcExpectedConfiguration(row) {
   return enrichVrdcItemRow(row).configuration;
 }
 
+async function hasConfirmedVendorRepairInward(db, dcNumber) {
+  const r = await db.query(
+    `SELECT 1
+       FROM gate_scan_sessions
+      WHERE reference_type = 'vrdc'
+        AND reference_number = $1
+        AND direction = 'inward'
+        AND status = 'confirmed'
+      LIMIT 1`,
+    [dcNumber]
+  );
+  if (r.rows.length) return true;
+  const m = await db.query(
+    `SELECT 1
+       FROM gate_movements
+      WHERE reference_type = 'vrdc'
+        AND reference_number = $1
+        AND direction = 'inward'
+        AND validation_result = 'valid'
+        AND confirmed_at IS NOT NULL
+      LIMIT 1`,
+    [dcNumber]
+  );
+  return m.rows.length > 0;
+}
+
 async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   try {
     await require('./vendorRepairDcService').ensureVendorRepairSchema();
@@ -715,6 +741,12 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
             ship_by, dispatch_mode, gate_legacy, COALESCE(item_domain, 'laptop') AS item_domain
        FROM vendor_repair_delivery_challans
       WHERE dc_number = $1
+         OR receive_dc_number = $1
+         OR EXISTS (
+              SELECT 1 FROM vendor_repair_dc_items i
+               WHERE i.dc_number = vendor_repair_delivery_challans.dc_number
+                 AND (i.receive_dc_number = $1 OR i.replacement_dc_number = $1)
+            )
       LIMIT 1`,
     [dcNumber]
   );
@@ -773,8 +805,19 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     active = false;
     inactive_reason = 'This vendor repair DC is cancelled.';
   } else if (inwardItems.length === 0) {
-    active = false;
-    inactive_reason = 'No units on this vendor repair DC are waiting for guard inward.';
+    // Warehouse may e-sign receive before the guard stamps inward.
+    // If status is already returned, allow a one-time late gate inward
+    // until a confirmed inward stamp exists.
+    if (dcStatus === 'returned') {
+      const gated = await hasConfirmedVendorRepairInward(db, head.dc_number);
+      if (gated) {
+        active = false;
+        inactive_reason = 'All units on this vendor repair DC have already been received.';
+      }
+    } else {
+      active = false;
+      inactive_reason = 'No units on this vendor repair DC are waiting for guard inward.';
+    }
   }
 
   return {
@@ -1450,7 +1493,11 @@ async function resolveDocumentContext(db, scan, preferredDirection) {
     if (qr.docNumber && tok.document_number !== qr.docNumber) {
       return { error: 'This QR does not match a valid gate document.' };
     }
-    const ctx = await loadDocument(db, tok.document_type, tok.document_number, preferredDirection);
+    let docType = String(tok.document_type || '').toLowerCase();
+    const docNumber = tok.document_number;
+    // Legacy/wrong tokens: RDC numbers must load as return DC, not outbound DC.
+    if (/^RDC/i.test(String(docNumber || '')) && docType === 'dc') docType = 'rdc';
+    const ctx = await loadDocument(db, docType, docNumber, preferredDirection);
     if (!ctx) return { error: 'The document on this QR could not be found.' };
     return { ctx };
   }
@@ -2209,13 +2256,17 @@ async function getSession(sessionId) {
   return sessionView(pool, r.rows[0], ctx);
 }
 
-async function getDashboard({ userId, role } = {}) {
-  const todayFilter = `scan_time >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date
+async function getDashboard({ userId, role, search, direction } = {}) {
+  // Midnight IST as timestamptz — do not use `::date AT TIME ZONE` alone (starts at 11:00 IST).
+  const todayFilter = `scan_time >= date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')
                        AT TIME ZONE 'Asia/Kolkata'`;
   const guardFilter = role === 'guard' && userId
     ? 'AND guard_user_id = $1'
     : '';
   const params = role === 'guard' && userId ? [userId] : [];
+  const q = String(search || '').trim();
+  const dir = String(direction || '').toLowerCase();
+  const directionFilter = dir === 'inward' || dir === 'outward' ? dir : null;
 
   const stats = await pool.query(
     `SELECT
@@ -2235,14 +2286,34 @@ async function getDashboard({ userId, role } = {}) {
     params
   );
 
+  let recentWhere = `1=1 ${guardFilter}`;
+  const recentParams = [...params];
+  if (directionFilter) {
+    recentParams.push(directionFilter);
+    recentWhere += ` AND direction = $${recentParams.length} AND validation_result = 'valid' AND ${todayFilter}`;
+  }
+  if (q) {
+    recentParams.push(`%${q}%`);
+    const p = recentParams.length;
+    recentWhere += ` AND (
+      COALESCE(ttspl, '') ILIKE $${p}
+      OR COALESCE(serial_number, '') ILIKE $${p}
+      OR COALESCE(reference_number, '') ILIKE $${p}
+      OR COALESCE(awb_number, '') ILIKE $${p}
+      OR COALESCE(guard_name, '') ILIKE $${p}
+      OR COALESCE(source_type, '') ILIKE $${p}
+    )`;
+  }
+
+  const recentLimit = directionFilter ? 200 : (q ? 50 : 20);
   const recent = await pool.query(
     `SELECT scan_time, ttspl, serial_number, direction, source_type,
-            reference_number, validation_result, guard_name
+            reference_number, validation_result, guard_name, awb_number
        FROM gate_movements
-      WHERE 1=1 ${guardFilter}
+      WHERE ${recentWhere}
       ORDER BY scan_time DESC
-      LIMIT 20`,
-    params
+      LIMIT ${recentLimit}`,
+    recentParams
   );
 
   return {
@@ -2251,15 +2322,30 @@ async function getDashboard({ userId, role } = {}) {
     pending_validation: pending.rows[0]?.n || 0,
     invalid_today: stats.rows[0]?.invalid_today || 0,
     recent: recent.rows,
+    search: q || null,
+    direction: directionFilter,
   };
 }
 
-async function getHistory({ userId, role, limit = 50 } = {}) {
+async function getHistory({ userId, role, limit = 50, search } = {}) {
   const params = [];
   let where = '1=1';
   if (role === 'guard' && userId) {
     params.push(userId);
     where += ` AND guard_user_id = $${params.length}`;
+  }
+  const q = String(search || '').trim();
+  if (q) {
+    params.push(`%${q}%`);
+    const p = params.length;
+    where += ` AND (
+      COALESCE(ttspl, '') ILIKE $${p}
+      OR COALESCE(serial_number, '') ILIKE $${p}
+      OR COALESCE(reference_number, '') ILIKE $${p}
+      OR COALESCE(awb_number, '') ILIKE $${p}
+      OR COALESCE(guard_name, '') ILIKE $${p}
+      OR COALESCE(source_type, '') ILIKE $${p}
+    )`;
   }
   params.push(Math.min(Number(limit) || 50, 200));
   const r = await pool.query(

@@ -12,11 +12,19 @@ import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   exportVendorMasterExcel,
+  fetchVendorMasterColumnValues,
   fetchVendorMasterLaptops,
   fetchVendorMasterOverview,
 } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
+import SheetsColumnFilter from '../../../components/ui/SheetsColumnFilter';
+import {
+  clearColumnFilterParams,
+  columnFiltersToParams,
+  readColumnFiltersFromParams,
+  VMD_COLUMN_TYPES,
+} from '../vendorMasterColumnFilters';
 
 const PAGE_SIZE = 25;
 
@@ -97,6 +105,24 @@ function buildMonthOptions(count = 24) {
 
 const MONTH_OPTIONS = buildMonthOptions();
 
+const LAPTOP_TABLE_COLUMNS = [
+  { key: 'ttspl_id', label: 'TTSPL', align: 'left' },
+  { key: 'serial_number', label: 'Serial', align: 'left' },
+  { key: 'vendor_name', label: 'Vendor', align: 'left' },
+  { key: 'purchase_date', label: 'Purchase Date', align: 'left' },
+  { key: 'purchase_order_number', label: 'PO', align: 'left' },
+  { key: 'purchase_rate', label: 'Purchase Rate', align: 'right' },
+  { key: 'brand', label: 'Brand / Model', align: 'left' },
+  { key: 'specs', label: 'Specs', align: 'left' },
+  { key: 'current_status', label: 'Status', align: 'left' },
+  { key: 'location_label', label: 'Location', align: 'left' },
+  { key: 'current_stage', label: 'Stage', align: 'left' },
+  { key: 'customer_name', label: 'Customer', align: 'left' },
+  { key: 'so_dc', label: 'SO / DC', align: 'left' },
+  { key: 'sale_rent', label: 'Sale / Rent', align: 'right' },
+  { key: 'last_movement_date', label: 'Last Movement', align: 'left' },
+];
+
 function readSpecFilters(sp) {
   const next = { ...EMPTY_SPEC_FILTERS };
   SPEC_FILTER_KEYS.forEach((k) => {
@@ -156,6 +182,8 @@ export default function MasterVendorDataPage() {
   const months = useMemo(() => readCsvParam(searchParams, 'month'), [month]);
   const specFilters = useMemo(() => readSpecFilters(searchParams), [queryKey]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
+  const columnFilters = useMemo(() => readColumnFiltersFromParams(searchParams), [queryKey]);
+  const columnFilterParams = useMemo(() => columnFiltersToParams(columnFilters), [columnFilters]);
 
   const patchParams = useCallback((patch, { resetPage = true } = {}) => {
     setSearchParams((prev) => {
@@ -201,6 +229,11 @@ export default function MasterVendorDataPage() {
     dateMode, month, dateFrom, dateTo, debouncedSpecs,
   ]);
 
+  const listFilterParams = useMemo(() => ({
+    ...filterParams,
+    ...columnFilterParams,
+  }), [filterParams, columnFilterParams]);
+
   const loadOverview = useCallback(async () => {
     const reqId = ++overviewReqRef.current;
     setOverviewLoading(true);
@@ -223,7 +256,7 @@ export default function MasterVendorDataPage() {
     const reqId = ++listReqRef.current;
     setListLoading(true);
     try {
-      const { data } = await fetchVendorMasterLaptops({ ...filterParams, page, limit: PAGE_SIZE });
+      const { data } = await fetchVendorMasterLaptops({ ...listFilterParams, page, limit: PAGE_SIZE });
       if (reqId !== listReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       setRows(data.data || []);
@@ -234,7 +267,7 @@ export default function MasterVendorDataPage() {
     } finally {
       if (reqId === listReqRef.current) setListLoading(false);
     }
-  }, [filterParams, page]);
+  }, [listFilterParams, page]);
 
   useEffect(() => {
     const key = JSON.stringify(filterParams);
@@ -244,16 +277,37 @@ export default function MasterVendorDataPage() {
   }, [filterParams, loadOverview]);
 
   useEffect(() => {
-    const key = JSON.stringify({ ...filterParams, page });
+    const key = JSON.stringify({ ...listFilterParams, page });
     if (lastListKey.current === key) return;
     lastListKey.current = key;
     loadList();
-  }, [filterParams, page, loadList]);
+  }, [listFilterParams, page, loadList]);
 
   const clearFilters = () => {
     setSearchInput('');
     setSearchParams(new URLSearchParams({ date_mode: 'month', month: currentMonthValue() }), { replace: true });
   };
+
+  const fetchColumnOptions = useCallback(async (columnKey) => {
+    const { data } = await fetchVendorMasterColumnValues({ ...listFilterParams, column: columnKey });
+    return data?.values || [];
+  }, [listFilterParams]);
+
+  const applyColumnFilter = useCallback((columnKey, filter) => {
+    setSearchParams((prev) => {
+      const next = clearColumnFilterParams(prev);
+      const merged = { ...readColumnFiltersFromParams(prev) };
+      if (filter) merged[columnKey] = filter;
+      else delete merged[columnKey];
+      Object.entries(columnFiltersToParams(merged)).forEach(([k, v]) => next.set(k, v));
+      next.delete('page');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearColumnFilter = useCallback((columnKey) => {
+    applyColumnFilter(columnKey, null);
+  }, [applyColumnFilter]);
 
   const setSpecFilters = (next) => {
     const value = typeof next === 'function' ? next(specFilters) : next;
@@ -276,7 +330,7 @@ export default function MasterVendorDataPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      await exportVendorMasterExcel(filterParams);
+      await exportVendorMasterExcel(listFilterParams);
       toast.success('Export downloaded');
     } catch (e) {
       toast.error(e.response?.data?.message || 'Export failed');
@@ -578,21 +632,19 @@ export default function MasterVendorDataPage() {
             <table className="w-full text-sm min-w-[1400px]">
               <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
-                  <th className="px-3 py-2 text-left">TTSPL</th>
-                  <th className="px-3 py-2 text-left">Serial</th>
-                  <th className="px-3 py-2 text-left">Vendor</th>
-                  <th className="px-3 py-2 text-left">Purchase Date</th>
-                  <th className="px-3 py-2 text-left">PO</th>
-                  <th className="px-3 py-2 text-right">Purchase Rate</th>
-                  <th className="px-3 py-2 text-left">Brand / Model</th>
-                  <th className="px-3 py-2 text-left">Specs</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">Location</th>
-                  <th className="px-3 py-2 text-left">Stage</th>
-                  <th className="px-3 py-2 text-left">Customer</th>
-                  <th className="px-3 py-2 text-left">SO / DC</th>
-                  <th className="px-3 py-2 text-right">Sale / Rent</th>
-                  <th className="px-3 py-2 text-left">Last Movement</th>
+                  {LAPTOP_TABLE_COLUMNS.map((col) => (
+                    <SheetsColumnFilter
+                      key={col.key}
+                      columnKey={col.key}
+                      label={col.label}
+                      filterType={VMD_COLUMN_TYPES[col.key] || 'text'}
+                      align={col.align}
+                      activeFilter={columnFilters[col.key]}
+                      onApplyFilter={applyColumnFilter}
+                      onClearFilter={clearColumnFilter}
+                      fetchOptions={fetchColumnOptions}
+                    />
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y">

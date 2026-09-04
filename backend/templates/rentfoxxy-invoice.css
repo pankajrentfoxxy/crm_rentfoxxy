@@ -1,0 +1,192 @@
+/* Rentfoxxy customer invoice — table-based print layout (dompdf / Puppeteer safe) */
+:root {
+  --ink: #1c2427;
+  --muted: #6b7478;
+  --rule: #d9dee0;
+  --rule-strong: #1c2427;
+  --band: #f3f6f6;
+  --teal: #157a6e;
+  --orange: #e8792b;
+  --paper: #ffffff;
+}
+@page { size: A4; margin: 14mm 12mm 18mm 12mm; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Arial, Helvetica, "Liberation Sans", sans-serif;
+  font-size: 9.5pt;
+  line-height: 1.35;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+table { border-collapse: collapse; width: 100%; }
+td, th { vertical-align: top; }
+
+.head td { padding: 0 0 10px; }
+.brand-img { height: 34px; width: auto; display: block; }
+.brand { font-size: 20pt; font-weight: bold; letter-spacing: -0.4pt; color: var(--teal); line-height: 1; }
+.brand span { color: var(--orange); }
+.brand-sub { color: var(--muted); font-size: 8.5pt; margin-top: 4px; }
+.doc-title { text-align: right; }
+.doc-title .kind { font-size: 15pt; font-weight: bold; line-height: 1.1; }
+.doc-title .sub { color: var(--muted); font-size: 9pt; margin-top: 3px; }
+.doc-title .num { font-size: 12pt; font-weight: bold; margin-top: 6px; color: var(--teal); }
+
+.supplier { border-top: 2px solid var(--rule-strong); padding-top: 8px; }
+.supplier td { padding: 0; }
+.supplier .name { font-weight: bold; font-size: 10pt; }
+.supplier .addr { color: var(--muted); margin-top: 2px; }
+
+.meta { margin-top: 14px; }
+.meta td.block { width: 50%; padding: 10px 12px; border: 1px solid var(--rule); }
+.meta td.block + td.block { border-left: 0; }
+.meta h3 { margin: 0 0 6px; font-size: 8.5pt; font-weight: bold; color: var(--muted); }
+.meta .party { font-size: 11pt; font-weight: bold; }
+.meta .kv td { padding: 2px 0; border: 0; }
+.meta .kv td:first-child { color: var(--muted); width: 38%; }
+.meta .kv td:last-child { font-weight: bold; }
+.meta .addr { color: var(--ink); margin-top: 3px; }
+
+.items { margin-top: 16px; table-layout: fixed; }
+.items thead th {
+  text-align: left;
+  font-size: 8.5pt;
+  color: var(--muted);
+  font-weight: bold;
+  padding: 6px 6px 7px;
+  border-top: 1.5px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--paper);
+}
+.items thead { display: table-header-group; }
+.items tfoot { display: table-footer-group; }
+.items tbody tr { page-break-inside: avoid; break-inside: avoid; }
+.items td { padding: 7px 6px; border-bottom: 1px solid var(--rule); }
+.items tr.alt td { background: var(--band); }
+.items .num { text-align: right; white-space: nowrap; }
+.items .ctr { text-align: center; white-space: nowrap; }
+.items .period { white-space: nowrap; }
+.items .asset { font-weight: bold; }
+.items .serial { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; }
+.items .item-title { font-weight: 600; }
+.items .item-note { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; }
+.items .item-spec { display: block; color: var(--muted); font-size: 8pt; margin-top: 2px; line-height: 1.25; }
+.items col.c-idx { width: 7mm; }
+.items col.c-asset { width: 34mm; }
+.items col.c-item { width: 52mm; }
+.items col.c-period { width: 40mm; }
+.items col.c-days { width: 16mm; }
+.items col.c-rate { width: 18mm; }
+.items col.c-amt { width: 23mm; }
+.items tr.group td {
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 10px 6px 5px;
+  font-weight: bold;
+  font-size: 9.5pt;
+  color: var(--teal);
+}
+.items tr.group td small { font-weight: normal; color: var(--muted); font-size: 8.5pt; }
+.items tr.subtotal td { font-weight: bold; border-bottom: 1px solid var(--rule-strong); background: var(--paper); }
+.tag {
+  display: inline-block; font-size: 7.5pt; font-weight: bold; line-height: 1;
+  padding: 3px 5px; border-radius: 3px; color: var(--orange);
+  border: 1px solid var(--orange); vertical-align: middle; margin-left: 4px;
+}
+
+.totals-wrap { margin-top: 14px; page-break-inside: avoid; break-inside: avoid; }
+.totals-wrap td { padding: 0; vertical-align: top; }
+.totals-wrap .words-cell { padding-right: 16px; }
+.words { border: 1px solid var(--rule); padding: 9px 12px; }
+.words .lbl { color: var(--muted); font-size: 8.5pt; }
+.words .val { font-weight: bold; margin-top: 3px; }
+.gst-note { color: var(--muted); font-size: 8pt; margin-top: 8px; line-height: 1.4; }
+.totals { width: 78mm; }
+.totals td { padding: 5px 8px; border-bottom: 1px solid var(--rule); }
+.totals td:last-child { text-align: right; white-space: nowrap; font-weight: bold; }
+.totals td:first-child { color: var(--muted); }
+.totals tr.grand td {
+  border-top: 2px solid var(--rule-strong); border-bottom: 2px solid var(--rule-strong);
+  background: var(--band); font-size: 11.5pt; padding: 8px; color: var(--ink);
+}
+.totals tr.grand td:first-child { color: var(--ink); font-weight: bold; }
+.totals tr.credit td:last-child { color: #b91c1c; }
+
+.foot { margin-top: 18px; border-top: 1px solid var(--rule); padding-top: 10px; page-break-inside: avoid; break-inside: avoid; }
+.foot td { width: 50%; padding: 0 12px 0 0; vertical-align: top; }
+.foot h4 { margin: 0 0 4px; font-size: 8.5pt; color: var(--muted); }
+.foot .kv td { padding: 1px 0; width: auto; border: 0; }
+.foot .kv td:first-child { color: var(--muted); width: 32mm; }
+.foot ol { margin: 0; padding-left: 14px; color: var(--ink); font-size: 8.5pt; }
+.foot li { margin-bottom: 2px; }
+.sign { text-align: right; margin-top: 30px; }
+.sign .line { display: inline-block; border-top: 1px solid var(--rule-strong); padding-top: 4px; min-width: 60mm; font-size: 8.5pt; }
+.computer { text-align: center; color: var(--muted); font-size: 7.5pt; margin-top: 14px; page-break-inside: avoid; }
+
+/* Laptop Details variant (non-tax document) */
+.variant-laptop-details {
+  --teal: #1a8f8f;
+  --orange: #e8871a;
+}
+.variant-laptop-details .ld-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 3px solid var(--rule-strong);
+  padding-bottom: 10px;
+  margin-bottom: 0;
+}
+.variant-laptop-details .ld-header-left {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+.variant-laptop-details .ld-header-right {
+  flex: 0 0 auto;
+  text-align: right;
+  max-width: 45%;
+}
+.variant-laptop-details .ld-logo { height: 44px; margin-bottom: 8px; }
+.variant-laptop-details .ld-company { margin-top: 6px; }
+.variant-laptop-details .ld-company-name { font-weight: bold; font-size: 10pt; }
+.variant-laptop-details .ld-company-line,
+.variant-laptop-details .ld-company-contact {
+  color: var(--muted);
+  margin-top: 2px;
+  font-size: 9pt;
+}
+.variant-laptop-details .ld-title {
+  font-size: 15pt;
+  font-weight: bold;
+  line-height: 1.1;
+}
+.variant-laptop-details .ld-customer {
+  font-weight: bold;
+  font-size: 11pt;
+  margin-top: 8px;
+}
+.variant-laptop-details .ld-month {
+  color: var(--muted);
+  font-size: 9.5pt;
+  margin-top: 4px;
+}
+.variant-laptop-details .ld-qty {
+  color: var(--muted);
+  font-size: 9.5pt;
+  margin-top: 4px;
+}
+.variant-laptop-details .ld-doc-label {
+  color: var(--muted);
+  font-size: 8.5pt;
+  margin-top: 8px;
+  font-weight: bold;
+}
+.variant-laptop-details .ld-doc-num {
+  font-size: 12pt;
+  font-weight: bold;
+  margin-top: 2px;
+  color: var(--teal);
+}
+.variant-laptop-details .items { margin-top: 16px; }

@@ -19,6 +19,11 @@ const {
   emptyWarehouseStages,
   locationLabelSql,
 } = require('./masterVendorDataService');
+const {
+  appendColumnFilters: appendReturnColumnFilters,
+  getColumnDistinctValues: getReturnColumnDistinctValues,
+  getColumnDef: getReturnColumnDef,
+} = require('./returnMasterColumnFilters');
 
 const CUSTOMER_SQL = CUSTOMER_STATUSES.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
 
@@ -417,6 +422,11 @@ function buildReturnQuery(query = {}, { withStateJoins = true } = {}) {
   return { cteSql, fromSql, whereSql: filters.whereSql, params };
 }
 
+function buildReturnListFilters(query = {}, { excludeColumn } = {}) {
+  const base = buildReturnQuery(query);
+  return appendReturnColumnFilters(base, query, { excludeColumn });
+}
+
 function mapReturnRow(row) {
   const base = mapLaptopRow(row);
   const loc = row.location_bucket || null;
@@ -573,7 +583,7 @@ async function listLaptops(query = {}) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 25, 1), 100);
   const offset = (page - 1) * limit;
-  const base = buildReturnQuery(query);
+  const base = buildReturnListFilters(query);
   const listParams = [...base.params, limit, offset];
   const [countRes, listRes] = await Promise.all([
     pool.query(
@@ -604,7 +614,7 @@ async function listLaptops(query = {}) {
 
 async function listAllForExport(query = {}) {
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20000, 1), 20000);
-  const base = buildReturnQuery(query);
+  const base = buildReturnListFilters(query);
   const listRes = await pool.query(
     `${base.cteSql}
      SELECT ${LIST_SELECT}
@@ -661,8 +671,24 @@ async function buildExportWorkbook(query = {}) {
   return { buf, filename: 'master_return_data.xlsx' };
 }
 
+async function getLaptopColumnValues(query = {}) {
+  const column = String(query.column || '').trim();
+  if (!column || !getReturnColumnDef(column)) {
+    return { column, values: [] };
+  }
+  const base = buildReturnListFilters(query, { excludeColumn: column });
+  const values = await getReturnColumnDistinctValues(pool, {
+    cteSql: base.cteSql,
+    fromSql: base.fromSql,
+    whereSql: base.whereSql,
+    params: base.params,
+  }, column);
+  return { column, values };
+}
+
 module.exports = {
   getOverview,
   listLaptops,
+  getLaptopColumnValues,
   buildExportWorkbook,
 };

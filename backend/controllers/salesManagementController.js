@@ -24,6 +24,7 @@ const {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  getReturnDcColumnValues,
   listReturnDcLaptopExportRows,
   getReturnDcDetail,
   userCanAccessReturnDc,
@@ -3801,6 +3802,7 @@ exports.listReturnDeliveryChallans = async (req, res) => {
       assignedUserId,
       warehouseReceive: q.warehouse_receive || q.warehouse || '',
       technician: q.technician || '',
+      columnFiltersQuery: req.query,
     });
     const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
     const canViewOtp = await userCanViewDeliveryRegisterOtp(req.user, req.permissionCache);
@@ -3816,6 +3818,30 @@ exports.listReturnDeliveryChallans = async (req, res) => {
       rows: data.return_dcs,
       orders: data.return_dcs,
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getReturnDcColumnValues = async (req, res) => {
+  try {
+    const column = String(req.query.column || '').trim();
+    if (!column) {
+      return res.status(400).json({ success: false, message: 'column is required' });
+    }
+    const assignedUserId = await resolveReturnDcAssignedUserId(req);
+    const values = await getReturnDcColumnValues({
+      column,
+      search: req.query.search || '',
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+      status: req.query.status || req.query.tab || 'all',
+      assignedUserId,
+      warehouseReceive: req.query.warehouse_receive || req.query.warehouse || '',
+      technician: req.query.technician || '',
+      columnFiltersQuery: req.query,
+    });
+    res.json({ success: true, values });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

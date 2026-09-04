@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Users, Wrench,
+  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Package, Truck, Users, Wrench,
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
@@ -12,6 +12,7 @@ import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   exportMasterDataExcel,
+  fetchMasterDataColumnValues,
   fetchMasterDataDashboard,
   fetchMasterDataKpis,
   setVendorExcludeFromVendorPo,
@@ -20,6 +21,14 @@ import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDraw
 import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 import { deliveryChallanDetailPath } from '../../sales-pipeline/salesPipelineUtils';
+import SheetsColumnFilter from '../../../components/ui/SheetsColumnFilter';
+import {
+  clearColumnFilterParams,
+  columnFiltersToParams,
+  LAPTOP_TABLE_COLUMNS,
+  MD_COLUMN_TYPES,
+  readColumnFiltersFromParams,
+} from '../masterDataColumnFilters';
 
 const PAGE_SIZE = 25;
 const TABS = [
@@ -31,8 +40,16 @@ const TABS = [
 
 const STATUS_OPTIONS = [
   'in_stock', 'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
-  'returned', 'in_repair', 'qc_failed', 'scrapped',
+  'returned', 'in_repair', 'qc_failed', 'scrapped', 'dispatch_ready', 'out_stock',
 ];
+
+function sameStatusSet(selected, expected) {
+  const a = new Set(selected);
+  const b = new Set(expected);
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
 
 const LOCATION_OPTIONS = ['Inventory', 'Customer', 'Floor', 'Vendor'];
 
@@ -139,7 +156,7 @@ function summarizeVendorPoTotals(rows = []) {
 function fmtCustomerPrice(r) {
   if (r.customer_price == null) return '—';
   const label = r.customer_price_type === 'sale' ? 'Sale' : 'Rent/mo';
-  return `${fmtMoney(r.customer_price)} (${label})`;
+  return `${fmtMoney(r.customer_price)} (${label}, ex. GST)`;
 }
 
 function fmtVendorPrice(r) {
@@ -267,6 +284,9 @@ export default function MasterDataDashboardPage() {
   const month = months.join(',');
   const specFilters = useMemo(() => readSpecFilters(searchParams), [searchParams]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
+  const queryKey = searchParams.toString();
+  const columnFilters = useMemo(() => readColumnFiltersFromParams(searchParams), [queryKey]);
+  const columnFilterParams = useMemo(() => columnFiltersToParams(columnFilters), [columnFilters]);
 
   const patchParams = useCallback((patch, { resetPage = true } = {}) => {
     setSearchParams((prev) => {
@@ -338,6 +358,11 @@ export default function MasterDataDashboardPage() {
     dateFrom, dateTo, customerId, vendorId, fromVendor, ready, qcProcess, debouncedSpecs,
   ]);
 
+  const listFilterParams = useMemo(() => ({
+    ...tabFilterParams,
+    ...columnFilterParams,
+  }), [tabFilterParams, columnFilterParams]);
+
   const loadKpis = useCallback(async () => {
     const reqId = ++kpiReqRef.current;
     setKpiLoading(true);
@@ -357,8 +382,9 @@ export default function MasterDataDashboardPage() {
   const loadTab = useCallback(async () => {
     const reqId = ++tabReqRef.current;
     setLoading(true);
+    const params = tab === 'laptops' ? listFilterParams : tabFilterParams;
     try {
-      const { data } = await fetchMasterDataDashboard(tabFilterParams);
+      const { data } = await fetchMasterDataDashboard(params);
       if (reqId !== tabReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       if (data.tab === 'laptops') {
@@ -379,10 +405,31 @@ export default function MasterDataDashboardPage() {
     } finally {
       if (reqId === tabReqRef.current) setLoading(false);
     }
-  }, [tabFilterParams]);
+  }, [tab, listFilterParams, tabFilterParams]);
 
   useEffect(() => { loadKpis(); }, [loadKpis]);
   useEffect(() => { loadTab(); }, [loadTab]);
+
+  const fetchColumnOptions = useCallback(async (columnKey) => {
+    const { data } = await fetchMasterDataColumnValues({ ...listFilterParams, column: columnKey });
+    return data?.values || [];
+  }, [listFilterParams]);
+
+  const applyColumnFilter = useCallback((columnKey, filter) => {
+    setSearchParams((prev) => {
+      const next = clearColumnFilterParams(prev);
+      const merged = { ...readColumnFiltersFromParams(prev) };
+      if (filter) merged[columnKey] = filter;
+      else delete merged[columnKey];
+      Object.entries(columnFiltersToParams(merged)).forEach(([k, v]) => next.set(k, v));
+      next.delete('page');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearColumnFilter = useCallback((columnKey) => {
+    applyColumnFilter(columnKey, null);
+  }, [applyColumnFilter]);
 
   useEffect(() => {
     fetchMasterDataDashboard({ tab: 'floor' })
@@ -417,34 +464,6 @@ export default function MasterDataDashboardPage() {
       tab: 'laptops',
     });
   };
-  const openSaleList = () => {
-    patchParams({
-      pricing_type: 'sale',
-      tab: 'laptops',
-      customer_id: '',
-      vendor_id: '',
-      from_vendor: false,
-      ready: false,
-      qc_process: false,
-      location: '',
-      status: '',
-      stage: '',
-    });
-  };
-  const openRentalList = () => {
-    patchParams({
-      pricing_type: 'rental',
-      tab: 'laptops',
-      customer_id: '',
-      vendor_id: '',
-      from_vendor: false,
-      ready: false,
-      qc_process: false,
-      location: '',
-      status: '',
-      stage: '',
-    });
-  };
   const openAllLaptops = () => {
     patchParams({
       customer_id: '',
@@ -459,16 +478,59 @@ export default function MasterDataDashboardPage() {
       tab: 'laptops',
     });
   };
-  const openWithCustomerList = () => {
+  const openCustomerRentalList = () => {
     patchParams({
       customer_id: '',
       vendor_id: '',
       from_vendor: false,
       ready: false,
       qc_process: false,
-      status: '',
+      pricing_type: '',
       stage: '',
       location: 'Customer',
+      status: 'rented',
+      tab: 'laptops',
+    });
+  };
+  const openCustomerSoldList = () => {
+    patchParams({
+      customer_id: '',
+      vendor_id: '',
+      from_vendor: false,
+      ready: false,
+      qc_process: false,
+      pricing_type: '',
+      stage: '',
+      location: 'Customer',
+      status: 'sold',
+      tab: 'laptops',
+    });
+  };
+  const openCustomerInTransitList = () => {
+    patchParams({
+      customer_id: '',
+      vendor_id: '',
+      from_vendor: false,
+      ready: false,
+      qc_process: false,
+      pricing_type: '',
+      stage: '',
+      location: 'Customer',
+      status: 'in_transit,reserved,dispatch_ready',
+      tab: 'laptops',
+    });
+  };
+  const openCustomerDemoList = () => {
+    patchParams({
+      customer_id: '',
+      vendor_id: '',
+      from_vendor: false,
+      ready: false,
+      qc_process: false,
+      pricing_type: '',
+      stage: '',
+      location: 'Customer',
+      status: 'on_demo',
       tab: 'laptops',
     });
   };
@@ -580,7 +642,8 @@ export default function MasterDataDashboardPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const { page: _page, limit: _limit, ...exportParams } = tabFilterParams;
+      const params = tab === 'laptops' ? listFilterParams : tabFilterParams;
+      const { page: _page, limit: _limit, ...exportParams } = params;
       await exportMasterDataExcel(exportParams);
       toast.success('Export downloaded');
     } catch (e) {
@@ -602,25 +665,16 @@ export default function MasterDataDashboardPage() {
           label="Total Laptops"
           value={kpiLoading ? '…' : (kpis.total_laptops ?? '—')}
           icon={Laptop}
-          hint="Click to open all laptops"
+          hint="Every laptop on a purchase order"
           onClick={openAllLaptops}
           active={tab === 'laptops' && !location && !fromVendor && !ready && !qcProcess && !customerId && !vendorId && !pricingType}
-        />
-        <StatCard
-          label="With Customers"
-          value={kpiLoading ? '…' : (kpis.total_active_customer_assets ?? '—')}
-          icon={HardDrive}
-          tone="teal"
-          hint="Rent / demo / sold / in transit"
-          onClick={openWithCustomerList}
-          active={locations.length === 1 && locations[0] === 'Customer' && tab === 'laptops' && !fromVendor && !ready && !qcProcess && !pricingType}
         />
         <StatCard
           label="From Vendors"
           value={kpiLoading ? '…' : (kpis.total_from_vendors ?? '—')}
           icon={Building2}
           tone="purple"
-          hint="Click to open laptop list"
+          hint="Counted vendor POs (exclusions hidden)"
           onClick={openFromVendorList}
           active={fromVendor && tab === 'laptops' && !ready && !qcProcess && !pricingType}
         />
@@ -657,40 +711,91 @@ export default function MasterDataDashboardPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
-          label="Sale Laptops"
-          value={kpiLoading ? '…' : (kpis.total_sale_units ?? '—')}
-          icon={IndianRupee}
-          tone="red"
-          hint="Sold or sale quotation"
-          onClick={openSaleList}
-          active={pricingTypes.length === 1 && pricingTypes[0] === 'sale' && tab === 'laptops'}
+          label="Rental"
+          value={kpiLoading ? '…' : (kpis.customer_rental_units ?? 0)}
+          icon={HardDrive}
+          tone="blue"
+          hint="With customer — rented status only"
+          onClick={openCustomerRentalList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['rented'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
         />
         <StatCard
-          label="Total Sale Value"
+          label="Sold"
+          value={kpiLoading ? '…' : (kpis.customer_sold_units ?? 0)}
+          icon={IndianRupee}
+          tone="red"
+          hint="With customer — sold units"
+          onClick={openCustomerSoldList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['sold'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
+        />
+        <StatCard
+          label="In transit"
+          value={kpiLoading ? '…' : (kpis.customer_in_transit_units ?? 0)}
+          icon={Truck}
+          tone="amber"
+          hint="With customer — allocated, not delivered"
+          onClick={openCustomerInTransitList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['in_transit', 'reserved', 'dispatch_ready'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
+        />
+        <StatCard
+          label="Demo"
+          value={kpiLoading ? '…' : (kpis.customer_demo_units ?? 0)}
+          icon={Package}
+          tone="purple"
+          hint="With customer — on demo"
+          onClick={openCustomerDemoList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['on_demo'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
+        />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-2 gap-3 max-w-2xl">
+        <StatCard
+          label="Total Sale Value (ex. GST)"
           value={kpiLoading ? '…' : fmtMoney(kpis.total_sale_value)}
           icon={IndianRupee}
           tone="red"
-          hint="Sum of sale prices (filtered)"
-          onClick={openSaleList}
-          active={pricingTypes.length === 1 && pricingTypes[0] === 'sale' && tab === 'laptops'}
+          hint="Sold units — SO rate, no GST added"
+          onClick={openCustomerSoldList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['sold'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
         />
         <StatCard
-          label="Rental Laptops"
-          value={kpiLoading ? '…' : (kpis.total_rental_units ?? '—')}
-          icon={IndianRupee}
-          tone="blue"
-          hint="Rental / demo deployments"
-          onClick={openRentalList}
-          active={pricingTypes.length === 1 && pricingTypes[0] === 'rental' && tab === 'laptops'}
-        />
-        <StatCard
-          label="Monthly Rental Value"
+          label="Monthly Rental Value (ex. GST)"
           value={kpiLoading ? '…' : fmtMoney(kpis.total_monthly_rental_value)}
           icon={IndianRupee}
           tone="blue"
-          hint="Active rental monthly total"
-          onClick={openRentalList}
-          active={pricingTypes.length === 1 && pricingTypes[0] === 'rental' && tab === 'laptops'}
+          hint="Rented units — SO rate, no GST added"
+          onClick={openCustomerRentalList}
+          active={
+            tab === 'laptops'
+            && locations.length === 1 && locations[0] === 'Customer'
+            && sameStatusSet(statuses, ['rented'])
+            && !fromVendor && !ready && !qcProcess && !pricingType
+          }
         />
       </div>
 
@@ -918,21 +1023,19 @@ export default function MasterDataDashboardPage() {
             <table className="w-full text-xs min-w-[1200px]">
               <thead className="bg-slate-50 text-slate-500 uppercase">
                 <tr>
-                  {[
-                    'TTSPL', 'Serial', 'Specs', 'Status', 'Location',
-                    'Current Customer', 'Vendor', 'Vendor Type', 'Vendor Price', 'Customer Price',
-                    'Stage', 'SO', 'DC', 'PO', 'GRN',
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      className={`px-2 py-2 text-left whitespace-nowrap ${
-                        ['Current Customer', 'Vendor', 'Vendor Type', 'Vendor Price', 'Customer Price'].includes(h)
-                          ? 'bg-teal-50 text-teal-800'
-                          : ''
-                      }`}
-                    >
-                      {h}
-                    </th>
+                  {LAPTOP_TABLE_COLUMNS.map((col) => (
+                    <SheetsColumnFilter
+                      key={col.key}
+                      columnKey={col.key}
+                      label={col.label}
+                      filterType={MD_COLUMN_TYPES[col.key] || 'text'}
+                      align={col.align}
+                      className={`px-2 py-2 whitespace-nowrap ${col.highlight ? 'bg-teal-50 text-teal-800' : ''}`}
+                      activeFilter={columnFilters[col.key]}
+                      onApplyFilter={applyColumnFilter}
+                      onClearFilter={clearColumnFilter}
+                      fetchOptions={fetchColumnOptions}
+                    />
                   ))}
                 </tr>
               </thead>
@@ -1009,8 +1112,8 @@ export default function MasterDataDashboardPage() {
             <StatCard label="Customers (filtered)" value={customerTotals.total_customers ?? 0} />
             <StatCard label="Active Laptops" value={customerTotals.total_active_laptops ?? 0} />
             <StatCard label="Returned" value={customerTotals.total_returned_laptops ?? 0} />
-            <StatCard label="Monthly Rental Value" value={fmtMoney(customerTotals.total_monthly_rental_value)} />
-            <StatCard label="Sale Value" value={fmtMoney(customerTotals.total_sale_value)} />
+            <StatCard label="Monthly Rental Value (ex. GST)" value={fmtMoney(customerTotals.total_monthly_rental_value)} />
+            <StatCard label="Sale Value (ex. GST)" value={fmtMoney(customerTotals.total_sale_value)} />
           </div>
           <div className="border rounded-xl overflow-hidden bg-white">
             <table className="w-full text-sm">
@@ -1019,8 +1122,8 @@ export default function MasterDataDashboardPage() {
                   <th className="px-3 py-2 text-left">Customer</th>
                   <th className="px-3 py-2 text-right">Active</th>
                   <th className="px-3 py-2 text-right">Returned</th>
-                  <th className="px-3 py-2 text-right">Monthly Rent</th>
-                  <th className="px-3 py-2 text-right">Sale Value</th>
+                  <th className="px-3 py-2 text-right">Monthly Rent (ex. GST)</th>
+                  <th className="px-3 py-2 text-right">Sale Value (ex. GST)</th>
                 </tr>
               </thead>
               <tbody className="divide-y">

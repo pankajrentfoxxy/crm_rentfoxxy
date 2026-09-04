@@ -1,0 +1,96 @@
+TTSPL ID,Serial Number,Status,Customer ID,Customer Name,DC Number,Entity,Brand,Model,Processor,Generation,RAM,Storage,GPU,Screen Size,Monthly Rate (ex GST),SO Rate (ex GST),Sales Order,Rent Start,Dispatched,Delivered,PO Number,PO Type
+G-COTRUE1071,FYQXD02,out_stock,,,,,Dell,Dell Latitude E7240,I5,4TH,4,256 SSD,Intel UHD Graphics,14-inch,,8474.00,SO/26-27/0585,,,,PO-0013,direct_purchase
+TTSPL1107,94HGF72,out_stock,,,,,Dell,Dell Latitude E7250,I5,5TH,8,256 SSD,Intel UHD Graphics,13.3-inch,,8898.00,SO-003475,,,,PO-0003,direct_purchase
+TTSPL1257,JTCDSJ2,out_stock,,,,,Dell,Dell Latitude 3480,I3,6th,8,240 SSD,Intel UHD Graphics,14-inch,,11000.00,SO/26-27/0551,,,,PO-0001,direct_purchase
+TTSPL1321,5CG4475K8J,out_stock,,,,,Dell,HP Elitebook 840 G1,I7,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,12000.00,SO-003560,,,,PO-0013,direct_purchase
+TTSPL1528,790KQ12,out_stock,,,,,Dell,Dell Latitude E7240,I5,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,8475.00,SO-003502,,,,PO-0013,direct_purchase
+TTSPL1622,75S5T72,out_stock,,,,,Dell,Dell Latitude E7250,I5,5TH,8,256 SSD,Intel UHD Graphics,14-inch,,8898.00,SO-003475,,,,PO-0013,direct_purchase
+TTSPL1658,PC01WC4J,out_stock,,,,,Dell,Lenovo Thinkpad T440,I5,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,8899.00,SO/26-27/0439,,,,PO-0013,direct_purchase
+TTSPL1786,5CG70100YT,out_stock,,,,,Dell,HP Elitebook 820 G3,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,3604.00,SO-003651,,,,PO-0002,direct_purchase
+TTSPL1873,5CG5031XCW,out_stock,,,,,Dell,HP Elitebook 840 G1,I5,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,11000.00,SO/26-27/0551,,,,PO-0001,direct_purchase
+TTSPL1889,5CG44562JB,out_stock,,,,,HP,HP Elitebook 840 G1,I7,4TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,12000.00,SO-003560,,,,PO-0077,direct_purchase
+TTSPL1892,BF0KQ12,out_stock,,,,,Dell,DELL Latitude E7240,I5,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,8475.00,SO-003502,,,,PO-0013,direct_purchase
+TTSPL1928,4FB85Q2,out_stock,,,,,Dell,Dell Latitude 7490,I5,8TH,16,512 SSD,Intel UHD Graphics,14-inch,,19499.00,SO-002924,,,,PO-0006,rental_purchase
+TTSPL1985,5CG515260N,out_stock,,,,,Dell,HP Elitebook 840 G1,I5,4TH,8,240 SSD,Intel UHD Graphics,14-inch,,8475.00,SO-003605,,,,PO-0013,direct_purchase
+TTSPL2230,PC0474B1,out_stock,,,,,Dell,Lenovo Thinkpad T440,I5,4TH,8,240 SSD,Intel UHD Graphics,14-inch,,11000.00,SO/26-27/0551,,,,PO-0001,direct_purchase
+TTSPL2631,FVFFW4VQ05F,out_stock,,,,,Dell,Apple Macbook Pro,M1,-,8,500 SSD,Intel UHD Graphics,14-inch,,90000.00,SO/26-27/0606,,,,PO-0006,rental_purchase
+TTSPL2682,5CG9237RBJ,out_stock,,,,,Dell,HP Laptop Elitebook 840 G5,I5,8TH,8,256 SSD,Intel UHD Graphics,14-inch,,13983.00,SO-003699,,,,PO-0002,direct_purchase
+TTSPL2739,5CG4482YGL,out_stock,,,,,Dell,HP Elitebook 840 G1,I5,4TH,8,240 SSD,Intel UHD Graphics,14-inch,,8475.00,SO-003549,,,,PO-0013,direct_purchase
+TTSPL2745,5CG51432PJ,out_stock,,,,,HP,HP Elitebook 840 G1,I5,4TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,8900.00,SO/26-27/0348,,,,PO-0123,direct_purchase
+TTSPL2767,G5H73G2,out_stock,,,,,Dell,Dell Latitude E5470,I5,6TH,8,250 SSD,Intel UHD Graphics,14-inch,,10593.00,SO/26-27/0524,,,,PO-0002,direct_purchase
+TTSPL2813,HF5XFH2,out_stock,,,,,Dell,Dell Latitude E5480,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,10594.00,SO/26-27/0669,,,,PO-0002,direct_purchase
+TTSPL2907,40C1RN2,out_stock,,,,,Dell,DELL Latitude 7480,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,11864.00,SO-003382,,,,PO-0013,direct_purchase
+TTSPL2926,1G5Q5Q2,out_stock,,,,,Dell,Dell Latitude 7490,I5,8TH,8,250 SSD,Intel UHD Graphics,14-inch,,20000.00,SO/26-27/0469,,,,PO-0003,direct_purchase
+TTSPL2930,J4LFNN2,out_stock,,,,,Dell,DELL Latitude 7480,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,10593.00,SO/26-27/0524,,,,PO-0013,direct_purchase
+TTSPL2957,9MBCQ92,out_stock,,,,,Dell,Dell Latitude E7470,I5,6TH,16,250 SSD,Intel UHD Graphics,14-inch,,11017.00,SO/26-27/0293,,,,PO-0013,direct_purchase
+TTSPL2967,JVKR8S2,out_stock,,,,,Dell,Dell Latitude 7490,I5,8TH,8,256 SSD,Intel UHD Graphics,14-inch,,17000.00,SO/26-27/0558,,,,PO-0006,rental_purchase
+TTSPL3114,PF227YCZ,out_stock,,,,,Dell,Lenovo Thinkpad T490 (Touchscreen),I5,8TH,8,512 SSD,Intel UHD Graphics,14-inch,,12711.00,SO/26-27/0723,,,,PO-0002,direct_purchase
+TTSPL3210,7F8K542,out_stock,,,,,Dell,Dell Latitude E7240,I5,4TH,8,256 SSD,Intel UHD Graphics,14-inch,,8475.00,SO/26-27/0605,,,,PO-0013,direct_purchase
+TTSPL3284,9NGNVT2,out_stock,,,,,Dell,Dell Latitude 7490,I5,8TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,19499.00,SO-003065,,,,PO-0035,direct_purchase
+TTSPL3314,JVJM4Y2,out_stock,,,,,Dell,Dell Latitude 7400 (Touch Screen),I7,8TH,16,512 SSD,Intel UHD Graphics,14-inch,,16102.00,SO-003527,,,,PO-0013,direct_purchase
+TTSPL3403,HW2GN13,out_stock,,,,,Dell,Dell Latitude 7400,I7,8TH,16,512 SSD,Intel UHD Graphics,14-inch,,20000.00,SO/26-27/0469,,,,PO-0006,rental_purchase
+TTSPL3422,6SDFVT2,out_stock,,,,,Dell,Dell Latitude 7490,I5,8TH,8,512 SSD,Intel UHD Graphics,14-inch,,12457.00,SO/26-27/0695,,,,PO-0003,direct_purchase
+TTSPL3487,CNW72J3,out_stock,,,,,Dell,Dell Latitude 5420,I7,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,34500.00,SO-003054,,,,PO-0003,direct_purchase
+TTSPL3886,2X1D0N2,out_stock,,,,,Dell,Dell Latitude 7480,I5,6TH,16,256 SSD,Intel UHD Graphics,14-inch,,11017.00,SO-003605,,,,PO-0005,direct_purchase
+TTSPL3892,34WXQ72,out_stock,,,,,Dell,Dell Latitude E7470,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,10594.00,SO/26-27/0670,,,,PO-0003,direct_purchase
+TTSPL3915,3Q4KZM2,out_stock,,,,,Dell,Dell Latitude 7480,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,11017.00,SO-003729,,,,PO-0004,direct_purchase
+TTSPL4159,JVZFFC2,out_stock,,,,,Dell,Dell Latitude E7470,I5,6TH,8,256 SSD,Intel UHD Graphics,14-inch,,11017.00,SO/26-27/0293,,,,PO-0013,direct_purchase
+TTSPL4335,PF2R31HR,out_stock,,,,,Dell,Lenovo Thinkpad T14,I7,10TH,16,512 SSD+2 GB graphic card,Intel UHD Graphics,14-inch,,35000.00,SO-003966,,,,PO-0004,direct_purchase
+TTSPL4339,PF2R1GES,out_stock,,,,,Dell,Lenovo Thinkpad T14,I7,10TH,16,512 SSD+2 GB graphic card,Intel UHD Graphics,14-inch,,35000.00,SO-003966,,,,PO-0004,direct_purchase
+TTSPL4354,PC261P3R,out_stock,,,,,Dell,Lenovo Thinkpad X-13,I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,29000.00,SO/26-27/0727,,,,PO-0002,direct_purchase
+TTSPL4539,9K046J3,out_stock,,,,,Dell,Dell Latitude 5420,I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,19068.00,SO-003875,,,,PO-0013,direct_purchase
+TTSPL4699,PF35YNVG,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003311,,,,PO-0002,direct_purchase
+TTSPL4732,PF32G1AE,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003349,,,,PO-0013,direct_purchase
+TTSPL4854,JWCYZH3,out_stock,,,,,Dell,Dell Latitude 5420,I7,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,35000.00,SO-003966,,,,PO-0004,direct_purchase
+TTSPL4995,PG04FH1Z,out_stock,,,,,Dell,Lenovo V14 (Gen 3),I5,12TH,16,512 SSD,Intel UHD Graphics,14-inch,,2999.00,SO-000632,,,,PO-0002,direct_purchase
+TTSPL5025,3L8R1Z2,out_stock,,,,,Dell,Dell Latitude 5490,I5,8TH,16,512 SSD,Intel UHD Graphics,14-inch,,19500.00,SO-003849,,,,PO-0003,direct_purchase
+TTSPL5036,PC164BHX,out_stock,,,,,Dell,Lenovo Thinkpad T480s,I5,8TH,8,256 SSD,Intel UHD Graphics,14-inch,,17000.00,SO/26-27/0558,,,,PO-0005,direct_purchase
+TTSPL5063,PC1624AM,out_stock,,,,,Dell,Lenovo Thinkpad T480s,I5,8TH,8,256 SSD,Intel UHD Graphics,14-inch,,17000.00,SO/26-27/0558,,,,PO-0005,direct_purchase
+TTSPL5065,PC1GXFKM,out_stock,,,,,Dell,Lenovo Thinkpad T490s,I5,8TH,16,500 SSD,Intel UHD Graphics,14-inch,,25000.00,SO-003582,,,,PO-0002,direct_purchase
+TTSPL5066,PF2AN4VW,out_stock,,,,,Dell,Lenovo Thinkpad L14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO/26-27/0727,,,,PO-0002,direct_purchase
+TTSPL5126,PG04GTK7,out_stock,,,,,Dell,Lenovo V14 (Gen 3),I5,12TH,8,512 SSD,Intel UHD Graphics,14-inch,,2399.00,SO-000638,,,,PO-0002,direct_purchase
+TTSPL5147,PF307C32,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,256 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003362,,,,PO-0005,direct_purchase
+TTSPL5232,PG02Y0DD,out_stock,,,,,Dell,Lenovo Thinkpad E14 (Gen 2),I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,20339.00,SO/26-27/0342,,,,PO-0005,direct_purchase
+TTSPL5254,PF20FKXE,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,29000.00,SO/26-27/0727,,,,PO-0002,direct_purchase
+TTSPL5255,JPM85H2,out_stock,,,,,Dell,Dell Latitude E7480,I7,7TH,16,256 SSD,Intel UHD Graphics,14-inch,,13983.00,SO-003353,,,,PO-0013,direct_purchase
+TTSPL5275,PG02XZ20,out_stock,,,,,Dell,Lenovo Thinkpad E14 (Gen 2),I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,29000.00,SO/26-27/0727,,,,PO-0002,direct_purchase
+TTSPL5281,PG02Y0EW,out_stock,,,,,Dell,Lenovo Thinkpad E14 (Gen 2),I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,29000.00,SO/26-27/0727,,,,PO-0002,direct_purchase
+TTSPL5290,PF2P4W9V,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,256 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003362,,,,PO-0001,direct_purchase
+TTSPL5359,5CD1315Y96,out_stock,,,,,Dell,HP Probook 440 G8,I5,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,32000.00,SO/26-27/0727,,,,PO-0010,rental_purchase
+TTSPL5428,7VV7JW2,out_stock,,,,,Dell,Dell Latitude 3400,I5,8TH,8,256 SSD,Intel UHD Graphics,14-inch,,17000.00,SO/26-27/0558,,,,PO-0005,direct_purchase
+TTSPL5798,CM75HK3,out_stock,,,,,Dell,Dell Latitude 5420,I7,11TH,16,512 SSD,Intel UHD Graphics,14-inch,,35000.00,SO-003966,,,,PO-0009,rental_purchase
+TTSPL5852,HK9QPVWY70,out_stock,,,,,Dell,Apple Macbook Pro,M4,-,16,512 SSD,Intel UHD Graphics,14-inch,,90000.00,SO/26-27/0606,,,,PO-0006,rental_purchase
+TTSPL5966,PC1X7G7W,out_stock,,,,,Dell,Lenovo Thinkpad T14s,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003362,,,,PO-0013,direct_purchase
+TTSPL5968,PC1X7G3C,out_stock,,,,,Dell,Lenovo Thinkpad T14s,I5,10TH,16,256 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003362,,,,PO-0013,direct_purchase
+TTSPL5996,JQMRYVRW2V,out_stock,,,,,Dell,Apple Macbook Air,M4,-,16,256 SSD,Intel UHD Graphics,13.3-inch,,80000.00,SO/26-27/0606,,,,PO-0007,rental_purchase
+TTSPL6157,PF31SCNK,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003311,,,,PO-0005,direct_purchase
+TTSPL6177,PF1A60YU,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003311,,,,PO-0013,direct_purchase
+TTSPL6195,PF1BXJM3,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,24000.00,SO-003511,,,,PO-0005,direct_purchase
+TTSPL6273,F3P6V93,out_stock,,,,,Dell,Dell Latitude 3410,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO/26-27/0469,,,,PO-0009,rental_purchase
+TTSPL6497,H8QS103,out_stock,,,,,Dell,Dell Latitude 3410,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO/26-27/0469,,,,PO-0009,rental_purchase
+TTSPL6909,PF1VLBR3,out_stock,,,,,Lenovo,Lenovo Thinkpad T14,I5,10TH,16GB,512GB SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003311,,,,PO-0050,direct_purchase
+TTSPL6910,PF254RXY,out_stock,,,,,Dell,Lenovo Thinkpad T14,I5,10TH,16,512 SSD,Intel UHD Graphics,14-inch,,26000.00,SO-003311,,,,PO-0013,direct_purchase
+TTSPL6934,H5R60J3,out_stock,,,,,Dell,Dell Latitude 7420,I5,11TH,16,256 SSD,Intel UHD Graphics,14-inch,,20763.00,SO-003875,,,,PO-0013,direct_purchase
+TTSPL7061,FXHRN53,out_stock,,,,,Dell,Dell Latitude 5400,I5,8TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,19500.00,SO-003452,,,,PO-0066,direct_purchase
+TTSPL7063,3JW9533,out_stock,,,,,Dell,Dell Latitude 5400,I5,8TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,19500.00,SO-003452,,,,PO-0066,direct_purchase
+TTSPL7064,GD8QN53,out_stock,,,,,Dell,Dell Latitude 5400,I5,8TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,14624.00,SO-003446,,,,PO-0066,direct_purchase
+TTSPL7067,CJLNN53,out_stock,,,,,Dell,Dell Latitude 5400,I5,8TH,8GB,256GB SSD,Intel UHD Graphics,14-inch,,14624.00,SO-003446,,,,PO-0066,direct_purchase
+TTSPL7134,H0FBNW2,out_stock,,,,,Dell,Dell Latitude 3400,I7,8TH,8GB,512GB SSD,Nvidia Geforce MX130,14-inch,,14830.00,SO/26-27/0306,,,,PO-0115,direct_purchase
+TTSPL7141,J1FBNW2,out_stock,,,,,Dell,Dell Latitude 3400,I7,8TH,8GB,512GB SSD,Nvidia Geforce MX130,14-inch,,14830.00,SO/26-27/0306,,,,PO-0115,direct_purchase
+TTSPL7168,R913GZC5,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,1.00,SO/26-27/0626,,,,PO-0116,direct_purchase
+TTSPL7174,R913GZCN,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7175,R913GZ6H,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7177,R913GZCH,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7178,R913GZ4L,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7180,R913GZ5C,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7185,R913GZGD,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7189,R914RLRE,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7191,R913GZD8,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7194,R913GZ8H,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,19491.00,SO-004034,,,,PO-0116,direct_purchase
+TTSPL7197,R914RLQE,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,19491.00,SO-004034,,,,PO-0116,direct_purchase
+TTSPL7199,R913GZBV,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,1.00,SO/26-27/0626,,,,PO-0116,direct_purchase
+TTSPL7201,R913GZFL,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7227,R913GZ7P,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,19491.00,SO/26-27/0709,,,,PO-0116,direct_purchase
+TTSPL7262,R913GZ5S,out_stock,,,,,Lenovo,Lenovo Thinkpad L13,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,13-inch,,23500.00,SO/26-27/0383,,,,PO-0116,direct_purchase
+TTSPL7327,789B2F3,out_stock,,,,,Dell,Dell Latitude 5420,I5,11TH,16GB,512GB SSD,Intel UHD Graphics,14-inch,,18645.00,SO/26-27/0413,,,,PO-0128,direct_purchase
+,8NPSVZ2,out_stock,,,,,Dell,Dell Latitude 3400,I7,8TH,8GB,512GB SSD,Nvidia Geforce MX130,14-inch,,14830.00,SO/26-27/0467,,,,PO-0115,direct_purchase

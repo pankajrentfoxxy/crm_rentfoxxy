@@ -8,10 +8,17 @@ const AUDIENCE = process.env.TASKFLOW_SSO_AUDIENCE || 'taskflow';
 const SSO_EXPIRES = process.env.TASKFLOW_SSO_EXPIRES || '3m';
 const COUNT_EXPIRES = process.env.TASKFLOW_COUNT_EXPIRES || '60s';
 
+const PLACEHOLDER_SECRETS = new Set([
+  'generate-a-long-random-string',
+  'your-very-secret-jwt-key-change-this-in-production',
+]);
+
 function ssoSecret() {
   const secret = String(process.env.TASKFLOW_SSO_SECRET || '').trim();
-  if (!secret) {
-    const err = new Error('TASKFLOW_SSO_SECRET is not configured');
+  if (!secret || PLACEHOLDER_SECRETS.has(secret)) {
+    const err = new Error(
+      'TASKFLOW_SSO_SECRET is not configured — set it in backend/.env to match TaskFlow CRM_SSO_SECRET'
+    );
     err.status = 503;
     throw err;
   }
@@ -74,10 +81,43 @@ function signCrmTaskflowToken(user, purpose, expiresIn) {
   );
 }
 
+function verifySsoTokenLocally(token) {
+  const payload = jwt.verify(token, ssoSecret(), {
+    issuer: ISSUER,
+    audience: AUDIENCE,
+  });
+  if (payload.purpose !== 'crm_sso') {
+    throw new Error('Invalid SSO token purpose');
+  }
+  return payload;
+}
+
+async function verifySsoTokenWithTaskflow(token) {
+  const { status, data } = await axios.post(
+    `${taskflowApiUrl()}/auth/sso`,
+    { token },
+    { timeout: 8000, validateStatus: () => true }
+  );
+  if (status === 401) {
+    const err = new Error(
+      'TaskFlow rejected the CRM SSO token. On the TaskFlow server, set CRM_SSO_SECRET to the same value as CRM TASKFLOW_SSO_SECRET, then reload TaskFlow.'
+    );
+    err.status = 503;
+    throw err;
+  }
+  if (status >= 400) {
+    const err = new Error(data?.error || data?.message || `TaskFlow SSO check failed (${status})`);
+    err.status = 502;
+    throw err;
+  }
+  return data;
+}
+
 async function buildSsoRedirectUrl(reqUser) {
   const user = await loadCrmUser(reqUser);
   const token = signCrmTaskflowToken(user, 'crm_sso', SSO_EXPIRES);
-  return `${taskflowPublicUrl()}/api/auth/sso?token=${encodeURIComponent(token)}`;
+  // One-time token: do not POST to TaskFlow here — browser consumes it via GET /api/auth/sso.
+  return `${taskflowApiUrl()}/auth/sso?token=${encodeURIComponent(token)}`;
 }
 
 async function fetchPendingCount(reqUser) {
@@ -89,7 +129,7 @@ async function fetchPendingCount(reqUser) {
       timeout: 8000,
       validateStatus: (s) => s >= 200 && s < 500,
     });
-    if (!data || data.success === false) {
+    if (!data || data.success === false || data.error) {
       return { count: 0, mapped: false };
     }
     return {
@@ -105,5 +145,7 @@ async function fetchPendingCount(reqUser) {
 module.exports = {
   buildSsoRedirectUrl,
   fetchPendingCount,
+  verifySsoTokenLocally,
+  verifySsoTokenWithTaskflow,
   taskflowPublicUrl,
 };

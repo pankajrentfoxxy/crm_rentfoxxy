@@ -1,6 +1,7 @@
 const {
   getOverview,
   listLaptops,
+  getLaptopColumnValues,
   buildExportWorkbook,
 } = require('../../services/masterVendorDataService');
 
@@ -21,6 +22,16 @@ exports.listLaptops = async (req, res) => {
   } catch (err) {
     console.error('vendorMasterData.listLaptops:', err);
     res.status(500).json({ success: false, message: err.message || 'Failed to load vendor laptops' });
+  }
+};
+
+exports.columnValues = async (req, res) => {
+  try {
+    const data = await getLaptopColumnValues(req.query || {});
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('vendorMasterData.columnValues:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to load column values' });
   }
 };
 

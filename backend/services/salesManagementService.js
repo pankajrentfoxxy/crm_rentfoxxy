@@ -11,6 +11,10 @@ const {
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
+const {
+  appendColumnFilters: appendReturnDcColumnFilters,
+  getColumnDistinctValues: getReturnDcColumnDistinctValues,
+} = require('./returnDcColumnFilters');
 
 /** Dispatch role with assigned scope: pending SOs live in Pending Orders; Sales Orders list after accept. */
 function dispatchWorkflowListFilterClauses(params, { role, userId, restrictDispatchWorkflow = false } = {}) {
@@ -1282,105 +1286,9 @@ async function userCanAccessReturnDc(rdcNumber, userId) {
   return r.rows.length > 0;
 }
 
-async function listReturnDeliveryChallans({
-  page = 1,
-  limit = 25,
-  search = '',
-  dateFrom,
-  dateTo,
-  status = 'all',
-  assignedUserId = null,
-  warehouseReceive = '',
-  technician = '',
-} = {}) {
-  const params = [];
-  let searchSql = '';
-  const dateClauses = appendDateRangeClauses({
-    column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
-  });
-  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
-  if (search) {
-    params.push(`%${search}%`);
-    const n = params.length;
-    searchSql = ` AND (
-      rl.dc_number ILIKE $${n}
-      OR rl.customer_name ILIKE $${n}
-      OR rl.sales_order_number ILIKE $${n}
-      OR rl.original_dc_number ILIKE $${n}
-      OR st.return_dc_number ILIKE $${n}
-      OR EXISTS (
-        SELECT 1 FROM support_ticket_items sti_s
-         WHERE sti_s.item_type = 'pickup'
-           AND (
-             sti_s.return_dc_number = rl.dc_number
-             OR (sti_s.return_dc_number IS NULL AND sti_s.ticket_id = rl.support_ticket_id)
-           )
-           AND (
-             COALESCE(sti_s.ttspl_id, '') ILIKE $${n}
-             OR COALESCE(sti_s.serial_number, '') ILIKE $${n}
-           )
-      )
-    )`;
-  }
-
-  const statusSql = returnDcStatusFilterSql(status);
-
-  const assignedSql = appendReturnDcAssignedFilter('rl', assignedUserId, params);
-  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}${assignedSql}`;
-  const statsParams = [...params];
-  const warehouseSql = returnDcWarehouseReceiveFilterSql(warehouseReceive);
-  const technicianSql = appendReturnDcTechnicianFilter('rl', technician, params);
-  const filterSql = `${statusSql}${warehouseSql}${technicianSql}`;
-
-  const countResult = await pool.query(
-    `SELECT COUNT(*)::int AS total
-       FROM delivery_challan_lines rl
-       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-      WHERE ${baseWhere}${filterSql}`,
-    params
-  );
-
-  const statsResult = await pool.query(
-    `SELECT
-       COUNT(*)::int AS total,
-       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') IN ('pending', 'processing'))::int AS pending,
-       COUNT(*) FILTER (WHERE rl.status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
-       COUNT(*) FILTER (WHERE rl.status = 'reached')::int AS reached,
-       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered,
-       COUNT(*) FILTER (WHERE rl.status = 'cancelled')::int AS cancelled,
-       COUNT(*) FILTER (WHERE ${RETURN_DC_WAREHOUSE_PENDING_SQL})::int AS warehouse_pending
-       FROM delivery_challan_lines rl
-       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-      WHERE ${baseWhere}`,
-    statsParams
-  );
-
-  const techniciansResult = await pool.query(
-    `SELECT DISTINCT COALESCE(u_tech.name, u_tech.email) AS technician_name
-       FROM delivery_challan_lines rl
-       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-       JOIN support_ticket_items sti_tech
-         ON sti_tech.item_type = 'pickup'
-        AND COALESCE(sti_tech.status, '') NOT IN ('cancelled')
-        AND (
-          sti_tech.return_dc_number = rl.dc_number
-          OR (sti_tech.return_dc_number IS NULL AND sti_tech.ticket_id = rl.support_ticket_id)
-        )
-       JOIN users u_tech ON u_tech.user_id = COALESCE(sti_tech.pickup_assigned_to, sti_tech.assigned_to)
-      WHERE ${baseWhere}
-        AND COALESCE(u_tech.name, u_tech.email) IS NOT NULL
-      ORDER BY 1
-      LIMIT 200`,
-    statsParams
-  );
-
-  const offset = (page - 1) * limit;
-  const listParams = [...params, limit, offset];
-  const limitIdx = listParams.length - 1;
-  const offsetIdx = listParams.length;
-
-  const result = await pool.query(
-    `WITH pickup_counts AS (
+function returnDcListCteSql(baseWhere, statusSql) {
+  return `
+    WITH pickup_counts AS (
        SELECT return_dc_number, COUNT(*)::int AS unit_count
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
@@ -1423,7 +1331,8 @@ async function listReturnDeliveryChallans({
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NULL
         ORDER BY ticket_id, id DESC
-     )
+     ),
+     rdc_list AS (
      SELECT
        rl.dc_number              AS return_dc_number,
        rl.dc_number              AS rdc_number,
@@ -1500,8 +1409,117 @@ async function listReturnDeliveryChallans({
        sti_rdc.pickup_assigned_to, sti_rdc.assigned_to,
        sti_tkt.pickup_assigned_to, sti_tkt.assigned_to
      )
-     WHERE ${baseWhere}${filterSql}
-     ORDER BY rl.created_at DESC NULLS LAST
+     WHERE ${baseWhere}${statusSql}
+     )`;
+}
+
+function returnDcSearchSql(search, params) {
+  if (!search) return '';
+  params.push(`%${search}%`);
+  const n = params.length;
+  return ` AND (
+      rl.dc_number ILIKE $${n}
+      OR rl.customer_name ILIKE $${n}
+      OR rl.sales_order_number ILIKE $${n}
+      OR rl.original_dc_number ILIKE $${n}
+      OR st.return_dc_number ILIKE $${n}
+      OR EXISTS (
+        SELECT 1 FROM support_ticket_items sti_s
+         WHERE sti_s.item_type = 'pickup'
+           AND (
+             sti_s.return_dc_number = rl.dc_number
+             OR (sti_s.return_dc_number IS NULL AND sti_s.ticket_id = rl.support_ticket_id)
+           )
+           AND (
+             COALESCE(sti_s.ttspl_id, '') ILIKE $${n}
+             OR COALESCE(sti_s.serial_number, '') ILIKE $${n}
+           )
+      )
+    )`;
+}
+
+async function listReturnDeliveryChallans({
+  page = 1,
+  limit = 25,
+  search = '',
+  dateFrom,
+  dateTo,
+  status = 'all',
+  assignedUserId = null,
+  warehouseReceive = '',
+  technician = '',
+  columnFiltersQuery = {},
+} = {}) {
+  const params = [];
+  const dateClauses = appendDateRangeClauses({
+    column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+  const searchSql = returnDcSearchSql(search, params);
+  const assignedSql = appendReturnDcAssignedFilter('rl', assignedUserId, params);
+  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}${assignedSql}`;
+  const statsParams = [...params];
+  const statusSql = returnDcStatusFilterSql(status);
+  const warehouseSql = returnDcWarehouseReceiveFilterSql(warehouseReceive);
+  const technicianSql = appendReturnDcTechnicianFilter('rl', technician, params);
+  const cteSql = returnDcListCteSql(baseWhere, `${statusSql}${warehouseSql}${technicianSql}`);
+  const colBase = appendReturnDcColumnFilters(
+    { params: [...params], whereSql: 'WHERE 1=1' },
+    columnFiltersQuery
+  );
+
+  const countResult = await pool.query(
+    `${cteSql}
+     SELECT COUNT(*)::int AS total
+       FROM rdc_list
+      ${colBase.whereSql}`,
+    colBase.params
+  );
+
+  const statsResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') IN ('pending', 'processing'))::int AS pending,
+       COUNT(*) FILTER (WHERE rl.status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
+       COUNT(*) FILTER (WHERE rl.status = 'reached')::int AS reached,
+       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered,
+       COUNT(*) FILTER (WHERE rl.status = 'cancelled')::int AS cancelled,
+       COUNT(*) FILTER (WHERE ${RETURN_DC_WAREHOUSE_PENDING_SQL})::int AS warehouse_pending
+       FROM delivery_challan_lines rl
+       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+      WHERE ${baseWhere}`,
+    statsParams
+  );
+
+  const techniciansResult = await pool.query(
+    `SELECT DISTINCT COALESCE(u_tech.name, u_tech.email) AS technician_name
+       FROM delivery_challan_lines rl
+       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+       JOIN support_ticket_items sti_tech
+         ON sti_tech.item_type = 'pickup'
+        AND COALESCE(sti_tech.status, '') NOT IN ('cancelled')
+        AND (
+          sti_tech.return_dc_number = rl.dc_number
+          OR (sti_tech.return_dc_number IS NULL AND sti_tech.ticket_id = rl.support_ticket_id)
+        )
+       JOIN users u_tech ON u_tech.user_id = COALESCE(sti_tech.pickup_assigned_to, sti_tech.assigned_to)
+      WHERE ${baseWhere}
+        AND COALESCE(u_tech.name, u_tech.email) IS NOT NULL
+      ORDER BY 1
+      LIMIT 200`,
+    statsParams
+  );
+
+  const offset = (page - 1) * limit;
+  const listParams = [...colBase.params, limit, offset];
+  const limitIdx = listParams.length - 1;
+  const offsetIdx = listParams.length;
+
+  const result = await pool.query(
+    `${cteSql}
+     SELECT * FROM rdc_list
+     ${colBase.whereSql}
+     ORDER BY created_at DESC NULLS LAST
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     listParams
   );
@@ -1527,6 +1545,41 @@ async function listReturnDeliveryChallans({
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
   };
+}
+
+async function getReturnDcColumnValues({
+  column,
+  search = '',
+  dateFrom,
+  dateTo,
+  status = 'all',
+  assignedUserId = null,
+  warehouseReceive = '',
+  technician = '',
+  columnFiltersQuery = {},
+} = {}) {
+  const params = [];
+  const dateClauses = appendDateRangeClauses({
+    column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+  const searchSql = returnDcSearchSql(search, params);
+  const assignedSql = appendReturnDcAssignedFilter('rl', assignedUserId, params);
+  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}${assignedSql}`;
+  const statusSql = returnDcStatusFilterSql(status);
+  const warehouseSql = returnDcWarehouseReceiveFilterSql(warehouseReceive);
+  const technicianSql = appendReturnDcTechnicianFilter('rl', technician, params);
+  const cteSql = returnDcListCteSql(baseWhere, `${statusSql}${warehouseSql}${technicianSql}`);
+  const colBase = appendReturnDcColumnFilters(
+    { params: [...params], whereSql: 'WHERE 1=1' },
+    columnFiltersQuery,
+    { excludeColumn: column }
+  );
+  return getReturnDcColumnDistinctValues(pool, {
+    cteSql,
+    whereSql: colBase.whereSql,
+    params: colBase.params,
+  }, column);
 }
 
 function parseReturnAddress(raw) {
@@ -2737,6 +2790,7 @@ module.exports = {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  getReturnDcColumnValues,
   listReturnDcLaptopExportRows,
   getReturnDcDetail,
   userCanAccessReturnDc,

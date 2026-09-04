@@ -376,8 +376,6 @@ exports.detachSerial = async (req, res) => {
   const client = await pool.connect();
   try {
     const allocId = parseInt(req.params.allocId, 10);
-    const toPendingInventory = !!req.body?.to_pending_inventory;
-    const pendingReason = String(req.body?.reason || 'dispatch_qc_failed').trim();
     await client.query('BEGIN');
     const aRes = await client.query(
       `SELECT * FROM sales_order_serials WHERE allocation_id = $1 FOR UPDATE`, [allocId]
@@ -391,6 +389,42 @@ exports.detachSerial = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Cannot detach a dispatched serial' });
     }
+    if (alloc.dc_number) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot detach: a delivery challan is already linked to this laptop',
+      });
+    }
+
+    const qcPassed = String(alloc.qc_status || '').toLowerCase() === 'passed';
+    if (qcPassed && req.user?.role !== 'super_admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Only super admin can remove a laptop after dispatch QC has passed',
+      });
+    }
+
+    if (qcPassed && alloc.sales_order_number) {
+      const dcRes = await client.query(
+        `SELECT 1 FROM delivery_challan_lines
+          WHERE sales_order_number = $1
+            AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+          LIMIT 1`,
+        [alloc.sales_order_number]
+      );
+      if (dcRes.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'Cannot detach: a delivery challan already exists for this sales order',
+        });
+      }
+    }
+
+    const toPendingInventory = !!req.body?.to_pending_inventory;
+    const pendingReason = String(req.body?.reason || 'dispatch_qc_failed').trim();
 
     if (toPendingInventory && alloc.serial_id) {
       try {
@@ -473,6 +507,7 @@ exports.detachSerial = async (req, res) => {
         serial_id: alloc.serial_id,
         ttspl_id: alloc.ttspl_id,
         serial_number: alloc.serial_number,
+        post_qc_removal: qcPassed,
       },
       user: req.user,
     });

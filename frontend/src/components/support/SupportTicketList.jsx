@@ -6,7 +6,14 @@ import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess'
 import { useAuth } from '../../context/AuthContext';
 import { assigneeOptionLabel, displayStatus, formatRelative, formatTicketId, podUrl, ticketCanChangeAssignee, ticketHasUnassignedAssigneeSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
+import ReturnDcNumberLink from './components/ReturnDcNumberLink';
 import { ListPagination } from '../../components/ui/primitives';
+
+function ticketRdcNumber(ticket) {
+  if (ticket?.return_dc_number) return ticket.return_dc_number;
+  const fromItem = (ticket?.items || []).find((it) => it.return_dc_number);
+  return fromItem?.return_dc_number || null;
+}
 
 const PAGE_SIZE = 25;
 
@@ -473,7 +480,7 @@ export default function SupportTicketList() {
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search customer, ticket #, serial…"
+              placeholder="Search customer, ticket #, serial, RDC…"
               className="w-full pl-10 pr-3 py-2 rounded-lg border border-slate-300 text-sm"
             />
           </div>
@@ -543,6 +550,7 @@ export default function SupportTicketList() {
             const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
             const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
             const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
+            const rdcNumber = ticketRdcNumber(ticket);
             return (
               <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-2">
@@ -560,6 +568,9 @@ export default function SupportTicketList() {
                     <button type="button" onClick={() => setHistoryTtspl(ticket.ttspl_id)} className="text-xs font-mono text-blue-600">
                       {ticket.ttspl_id}
                     </button>
+                  )}
+                  {rdcNumber && (
+                    <ReturnDcNumberLink rdcNumber={rdcNumber} className="text-xs font-mono text-teal-700" />
                   )}
                 </div>
                 <div className="flex items-center justify-between gap-2 mt-2 text-xs">
@@ -600,6 +611,7 @@ export default function SupportTicketList() {
                 <th className="p-3">Status</th>
                 <th className="p-3">Priority</th>
                 <th className="p-3">TTSPL ID</th>
+                <th className="p-3">RDC</th>
                 <th className="p-3">Issue</th>
                 <th className="p-3">Created</th>
                 <th className="p-3">Age</th>
@@ -611,6 +623,7 @@ export default function SupportTicketList() {
               {filtered.map((ticket) => {
                 const st = displayStatus(ticket);
                 const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
+                const rdcNumber = ticketRdcNumber(ticket);
                 return (
                   <tr key={ticket.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                     {isSupportLead(user) && (
@@ -639,6 +652,11 @@ export default function SupportTicketList() {
                         >
                           {ticket.ttspl_id}
                         </button>
+                      ) : '—'}
+                    </td>
+                    <td className="p-3 font-mono text-xs">
+                      {rdcNumber ? (
+                        <ReturnDcNumberLink rdcNumber={rdcNumber} className="text-teal-700" />
                       ) : '—'}
                     </td>
                     <td className="p-3 text-slate-600 max-w-[140px] truncate">{primaryCategory(ticket)}</td>

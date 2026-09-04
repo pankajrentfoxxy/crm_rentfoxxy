@@ -280,7 +280,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     try {
       const { ensureGateQrPng } = require('./gateQrService');
       const purpose = String(header.dc_purpose || '').toLowerCase();
-      const qrType = purpose === 'service_return' ? 'sdc' : 'dc';
+      const movement = String(header.movement_type || '').toLowerCase();
+      const qrType = purpose === 'service_return'
+        ? 'sdc'
+        : (movement === 'return' || /^RDC/i.test(String(docNumber || '')))
+          ? 'rdc'
+          : 'dc';
       gateQrPng = (await ensureGateQrPng({ docType: qrType, docNumber })).png;
     } catch (_) { /* gate tokens table may not exist yet */ }
   }

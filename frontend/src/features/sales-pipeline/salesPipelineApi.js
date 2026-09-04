@@ -88,6 +88,7 @@ export const getRefusedReturnUnits = (n) => api.get(`${base}/delivery-challans/$
 export const receiveRefusedReturn = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-receive-back`, d);
 
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
+export const getReturnDcColumnValues = (p) => api.get(`${base}/return-dc/column-values`, { params: p });
 export const exportReturnDcLaptops = (p) => api.get(`${base}/return-dc/export.xlsx`, { params: p, responseType: 'blob' });
 export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
 export const regenerateReturnDcPdf = (rdcNumber) => api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/pdf`);

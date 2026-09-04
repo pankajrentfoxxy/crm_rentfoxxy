@@ -506,7 +506,10 @@ exports.listCustomers = async (req, res) => {
     const listResult = await pool.query(
       `SELECT c.*,
         COALESCE((
-          SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
         ), 0) AS total_security_amount,
         COALESCE((
           SELECT COUNT(*)::int
@@ -950,7 +953,10 @@ exports.getCustomer = async (req, res) => {
     const result = await pool.query(
       `SELECT c.*,
         COALESCE((
-          SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
         ), 0) AS total_security_amount
        FROM customers c WHERE c.customer_id = $1`,
       [customerId]
@@ -1447,7 +1453,12 @@ exports.updateCustomer = async (req, res) => {
     }
 
     const updated = await pool.query(
-      `SELECT c.*, COALESCE((SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id), 0) AS total_security_amount
+      `SELECT c.*, COALESCE((
+          SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
+            FROM customer_security_deposits sd
+           WHERE sd.customer_id = c.customer_id
+             AND sd.status IN ('held', 'partially_refunded')
+        ), 0) AS total_security_amount
        FROM customers c WHERE c.customer_id = $1`,
       [customerId]
     );
@@ -1755,6 +1766,10 @@ const ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL = `
          AND rl_done.customer_id = $1
          AND COALESCE(rl_done.status, '') NOT IN ('cancelled')
          AND sti_done.warehouse_received_at IS NOT NULL
+         AND NOT (
+           vsn.current_customer_id = $1
+           AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
+         )
          AND (
            sti_done.ttspl_id = vsn.inventory_asset_code
            OR sti_done.unique_serial_number = vsn.inventory_asset_code
@@ -1782,6 +1797,10 @@ const ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL = `
            SELECT 1 FROM support_ticket_items sti_x
             WHERE sti_x.return_dc_number = rl_legacy.dc_number
               AND sti_x.item_type = 'pickup'
+         )
+         AND NOT (
+           vsn.current_customer_id = $1
+           AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
          )
          AND (
            vsn.inventory_asset_code = NULLIF(split_part(rl_legacy.serial_number->>0, '|', 3), '')
@@ -1874,60 +1893,9 @@ const ACTIVE_WHERE_SQL = `
   WHERE vsn.current_customer_id = $1
     AND vsn.deleted_at IS NULL
     AND vsn.inventory_status = ANY($2::text[])
-    AND NOT EXISTS (
-      SELECT 1
-        FROM delivery_challan_lines rl
-        LEFT JOIN LATERAL (
-          SELECT COUNT(*)::int AS cnt,
-                 BOOL_AND(sti.warehouse_received_at IS NOT NULL) AS all_received
-            FROM support_ticket_items sti
-           WHERE sti.return_dc_number = rl.dc_number
-             AND sti.item_type = 'pickup'
-        ) wh ON TRUE
-       WHERE rl.movement_type = 'return'
-         AND rl.customer_id = $1
-         AND COALESCE(rl.status, '') NOT IN ('cancelled')
-         AND (wh.cnt IS NULL OR wh.cnt = 0 OR wh.all_received IS NOT TRUE)
-         AND (
-           rl.delivered_at IS NOT NULL
-           OR EXISTS (
-             SELECT 1 FROM support_ticket_items sti_pick
-              WHERE sti_pick.return_dc_number = rl.dc_number
-                AND sti_pick.item_type = 'pickup'
-                AND sti_pick.picked_up_at IS NOT NULL
-                AND (
-                  sti_pick.ttspl_id = vsn.inventory_asset_code
-                  OR sti_pick.unique_serial_number = vsn.inventory_asset_code
-                  OR sti_pick.serial_number = vsn.serial_number
-                )
-           )
-         )
-         AND (
-           vsn.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-           OR vsn.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-           OR EXISTS (
-             SELECT 1 FROM support_ticket_items sti2
-              WHERE sti2.return_dc_number = rl.dc_number
-                AND sti2.item_type = 'pickup'
-                AND (
-                  sti2.ttspl_id = vsn.inventory_asset_code
-                  OR sti2.unique_serial_number = vsn.inventory_asset_code
-                  OR sti2.serial_number = vsn.serial_number
-                )
-           )
-         )
-         -- Ignore superseded returns when the unit was outbound-delivered again afterward.
-         AND NOT EXISTS (
-           SELECT 1
-             FROM outbound_reout o
-            WHERE o.out_at > COALESCE(rl.delivered_at, rl.created_at)
-              AND (
-                (o.ttspl IS NOT NULL AND o.ttspl = vsn.inventory_asset_code)
-                OR (o.serial_no IS NOT NULL AND o.serial_no = vsn.serial_number)
-                OR (o.serial_id IS NOT NULL AND o.serial_id = vsn.serial_id)
-              )
-         )
-    )${ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL}
+    -- Pending return DC / pickup stays Active until warehouse inward.
+    -- Only a warehouse-received return moves the unit to Returned.
+    ${ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL}
 `;
 
 const ACTIVE_CORE_FROM_SQL = `
@@ -1975,7 +1943,8 @@ const RETURNED_FROM_SQL = `
     ON sti.return_dc_number = rl.dc_number
    AND sti.item_type = 'pickup'
   LEFT JOIN LATERAL (
-    SELECT v.serial_id, v.serial_number, v.inventory_asset_code, v.extra, v.current_entity, v.rent_monthly_rate, v.delivered_at
+    SELECT v.serial_id, v.serial_number, v.inventory_asset_code, v.extra, v.current_entity,
+           v.rent_monthly_rate, v.delivered_at, v.current_customer_id, v.inventory_status
     FROM vendor_serial_numbers v
     WHERE v.deleted_at IS NULL
       AND (
@@ -2007,6 +1976,10 @@ const RETURNED_FROM_SQL = `
     AND rl.customer_id = $1
     AND COALESCE(rl.status, '') NOT IN ('cancelled')
     AND ${RETURNED_BUCKET_ELIGIBLE_SQL}
+    AND NOT (
+      vsn.current_customer_id = $1
+      AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
+    )
 `;
 
 const RETURNED_SELECT_SQL = `
@@ -2040,10 +2013,25 @@ const RETURNED_COUNT_FROM_SQL = `
   LEFT JOIN support_ticket_items sti
     ON sti.return_dc_number = rl.dc_number
    AND sti.item_type = 'pickup'
+  LEFT JOIN LATERAL (
+    SELECT v.current_customer_id, v.inventory_status
+      FROM vendor_serial_numbers v
+     WHERE v.deleted_at IS NULL
+       AND (
+         (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
+         OR v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+         OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+       )
+     LIMIT 1
+  ) vsn ON TRUE
   WHERE rl.movement_type = 'return'
     AND rl.customer_id = $1
     AND COALESCE(rl.status, '') NOT IN ('cancelled')
     AND ${RETURNED_BUCKET_ELIGIBLE_SQL}
+    AND NOT (
+      vsn.current_customer_id = $1
+      AND vsn.inventory_status IN ('rented', 'on_demo', 'in_transit')
+    )
 `;
 
 function activeFilterFromSql({ search = '', from = '', to = '' } = {}) {

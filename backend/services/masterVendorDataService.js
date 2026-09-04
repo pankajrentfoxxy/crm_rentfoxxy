@@ -14,6 +14,13 @@ const {
   SQL_IS_RENTAL,
   CUSTOMER_STATUSES,
 } = require('./masterDataDashboardService');
+const {
+  appendColumnFilters,
+  getColumnDistinctValues,
+  columnKeys,
+  getColumnDef,
+  COLUMNS,
+} = require('./vendorMasterColumnFilters');
 
 const CUSTOMER_SQL = CUSTOMER_STATUSES.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
 
@@ -55,14 +62,18 @@ function scopedQuery(query = {}) {
   };
 }
 
-function buildVendorMasterFilters(query = {}) {
+function buildVendorMasterFilters(query = {}, { excludeColumn } = {}) {
   const base = buildMasterFilters(scopedQuery(query));
   const buckets = parseCsvQuery(query.warehouse_bucket);
-  if (!buckets.length) return base;
-  base.params.push(buckets);
-  const i = base.params.length;
-  base.whereSql = `${base.whereSql} AND (${WAREHOUSE_BUCKET_SQL}) = ANY($${i}::text[])`;
-  return base;
+  if (buckets.length) {
+    base.params.push(buckets);
+    const i = base.params.length;
+    base.whereSql = `${base.whereSql} AND (${WAREHOUSE_BUCKET_SQL}) = ANY($${i}::text[])`;
+  }
+  return appendColumnFilters(base, query, {
+    excludeColumn,
+    locationLabelSql: locationLabelSql(),
+  });
 }
 
 function usageSql() {
@@ -267,6 +278,21 @@ async function getOverview(query = {}) {
   };
 }
 
+async function getLaptopColumnValues(query = {}) {
+  const column = String(query.column || '').trim();
+  if (!column || !getColumnDef(column, locationLabelSql())) {
+    return { column, values: [] };
+  }
+  const base = buildVendorMasterFilters(query, { excludeColumn: column });
+  const values = await getColumnDistinctValues(pool, {
+    fromSql: FROM_SQL,
+    joinSql: base.joinSql,
+    whereSql: base.whereSql,
+    params: base.params,
+  }, column, locationLabelSql());
+  return { column, values };
+}
+
 async function listLaptops(query = {}) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 25, 1), 100);
@@ -358,10 +384,13 @@ async function buildExportWorkbook(query = {}) {
 module.exports = {
   getOverview,
   listLaptops,
+  getLaptopColumnValues,
   buildExportWorkbook,
   WAREHOUSE_BUCKET_SQL,
   WAREHOUSE_STAGE_KEYS,
   emptyWarehouseStages,
   usageSql,
   locationLabelSql,
+  VENDOR_MASTER_COLUMN_KEYS: columnKeys(),
+  VENDOR_MASTER_COLUMNS: COLUMNS,
 };

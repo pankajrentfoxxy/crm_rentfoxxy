@@ -18,12 +18,10 @@ const invView = [authMiddleware, checkSectionPermission('inventory_management', 
 const masterDataView = [authMiddleware, checkSectionPermission('inventory_master_data', 'view')];
 const vendorMasterDataView = [
   authMiddleware,
-  checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_vendor_master_data', 'view'),
 ];
 const returnMasterDataView = [
   authMiddleware,
-  checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_return_master_data', 'view'),
 ];
 const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];
@@ -114,6 +112,7 @@ router.post(
 router.get('/lists/counts', invView, inventoryList.getListCounts);
 router.get('/master-data/kpis', masterDataView, masterData.getMasterDataKpis);
 router.get('/master-data/export.xlsx', masterDataView, masterData.exportMasterDataExcel);
+router.get('/master-data/laptops/column-values', masterDataView, masterData.getLaptopColumnValues);
 router.patch(
   '/master-data/vendors/:vendorId/exclude-from-vendor-po',
   masterDataView,
@@ -123,9 +122,11 @@ router.patch(
 router.get('/master-data', masterDataView, masterData.getMasterDataDashboard);
 router.get('/vendor-master-data/overview', vendorMasterDataView, vendorMasterData.getOverview);
 router.get('/vendor-master-data/export.xlsx', vendorMasterDataView, vendorMasterData.exportExcel);
+router.get('/vendor-master-data/laptops/column-values', vendorMasterDataView, vendorMasterData.columnValues);
 router.get('/vendor-master-data/laptops', vendorMasterDataView, vendorMasterData.listLaptops);
 router.get('/return-master-data/overview', returnMasterDataView, returnMasterData.getOverview);
 router.get('/return-master-data/export.xlsx', returnMasterDataView, returnMasterData.exportExcel);
+router.get('/return-master-data/laptops/column-values', returnMasterDataView, returnMasterData.columnValues);
 router.get('/return-master-data/laptops', returnMasterDataView, returnMasterData.listLaptops);
 router.get('/customer-assets', custInvView, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(

@@ -193,25 +193,45 @@ export default function SearchableMultiSelect({
       ) : null}
 
       {!compact && selectedValues.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {selectedValues.map((v) => (
-            <span
-              key={v}
-              className="inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md bg-teal-50 border border-teal-200 text-xs text-teal-900"
-            >
-              <span className="truncate">{optionMap.get(v) || v}</span>
+        <div className="mb-2">
+          {selectedValues.length > 12 ? (
+            <div className="flex items-center justify-between gap-2 mb-1.5 text-xs text-gray-600">
+              <span>
+                {selectedValues.length} {countNoun}{selectedValues.length === 1 ? '' : 's'} selected
+              </span>
               {!disabled ? (
                 <button
                   type="button"
-                  onClick={(e) => removeValue(v, e)}
-                  className="shrink-0 text-teal-700 hover:text-teal-900"
-                  aria-label={`Remove ${optionMap.get(v) || v}`}
+                  onClick={() => onChange([])}
+                  className="text-teal-700 hover:text-teal-900 font-medium"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  Clear all
                 </button>
               ) : null}
-            </span>
-          ))}
+            </div>
+          ) : null}
+          <div className="max-h-28 overflow-y-auto overscroll-contain rounded-md border border-gray-100 bg-slate-50/70 p-1.5">
+            <div className="flex flex-wrap gap-1.5">
+              {selectedValues.map((v) => (
+                <span
+                  key={v}
+                  className="inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md bg-teal-50 border border-teal-200 text-xs text-teal-900"
+                >
+                  <span className="truncate">{optionMap.get(v) || v}</span>
+                  {!disabled ? (
+                    <button
+                      type="button"
+                      onClick={(e) => removeValue(v, e)}
+                      className="shrink-0 text-teal-700 hover:text-teal-900"
+                      aria-label={`Remove ${optionMap.get(v) || v}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       ) : null}
 

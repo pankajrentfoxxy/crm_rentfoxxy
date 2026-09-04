@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { getDcInvoiceQueue } from '../financeOverviewApi';
@@ -6,6 +6,114 @@ import { uploadSaleDcCompliance, uploadDemoEway } from '../../sales-pipeline/sal
 import { deliveryChallanDetailPath } from '../../sales-pipeline/salesPipelineUtils';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 import { getBackendOrigin } from '../../../utils/api';
+import { DateRangeFilter, SearchField } from '../../../components/ui/primitives';
+
+const TYPE_FILTERS = [
+  { value: '', label: 'All types' },
+  { value: 'sale', label: 'Sale' },
+  { value: 'first_order', label: 'First order' },
+];
+
+const STATUS_FILTERS = [
+  { value: '', label: 'All status' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'dispatch_ready', label: 'Dispatch ready' },
+  { value: 'in_transit', label: 'In transit' },
+  { value: 'reached', label: 'Reached' },
+  { value: 'shipped', label: 'Shipped' },
+  { value: 'delivered', label: 'Delivered' },
+];
+
+const EWAY_FILTERS = [
+  { value: '', label: 'All e-way' },
+  { value: 'required', label: 'E-way required' },
+  { value: 'not_required', label: 'No e-way' },
+];
+
+const MAIL_FILTERS = [
+  { value: '', label: 'All mail' },
+  { value: 'sent', label: 'Mail sent' },
+  { value: 'pending', label: 'Not sent' },
+];
+
+function isSaleRow(row) {
+  const qt = String(row.quotation_type || '').toLowerCase();
+  return qt === 'sale' || qt === 'sales' || row.entity_code === 'gorefurbo';
+}
+
+function matchesSearch(row, q) {
+  if (!q) return true;
+  const hay = [
+    row.dc_number,
+    row.sales_order_number,
+    row.customer_name,
+    row.quotation_type,
+    row.status,
+    row.einvoice_number,
+    row.irn,
+    row.eway_bill_number,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+function filterSaleRows(rows, { search, type, status, eway, mail, dateFrom, dateTo }) {
+  const q = search.trim().toLowerCase();
+  return rows.filter((row) => {
+    if (!matchesSearch(row, q)) return false;
+    if (type === 'sale' && !isSaleRow(row)) return false;
+    if (type === 'first_order' && isSaleRow(row)) return false;
+    if (status && String(row.status || '').toLowerCase() !== status) return false;
+    if (eway === 'required' && !row.requires_eway_bill) return false;
+    if (eway === 'not_required' && row.requires_eway_bill) return false;
+    if (mail === 'sent' && !row.accounts_notified_at) return false;
+    if (mail === 'pending' && row.accounts_notified_at) return false;
+    if (dateFrom || dateTo) {
+      const created = row.created_at ? new Date(row.created_at) : null;
+      if (!created || Number.isNaN(created.getTime())) return false;
+      if (dateFrom) {
+        const from = new Date(`${dateFrom}T00:00:00`);
+        if (created < from) return false;
+      }
+      if (dateTo) {
+        const to = new Date(`${dateTo}T23:59:59.999`);
+        if (created > to) return false;
+      }
+    }
+    return true;
+  });
+}
+
+function filterDemoRows(rows, { search, mail, dateFrom, dateTo }) {
+  const q = search.trim().toLowerCase();
+  return rows.filter((row) => {
+    if (q) {
+      const hay = [
+        row.dc_number,
+        row.sales_order_number,
+        row.customer_name,
+        row.laptops,
+        row.eway_bill_number,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (mail === 'sent' && !row.accounts_notified_at) return false;
+    if (mail === 'pending' && row.accounts_notified_at) return false;
+    if (dateFrom || dateTo) {
+      const created = row.created_at ? new Date(row.created_at) : null;
+      if (!created || Number.isNaN(created.getTime())) return false;
+      if (dateFrom) {
+        const from = new Date(`${dateFrom}T00:00:00`);
+        if (created < from) return false;
+      }
+      if (dateTo) {
+        const to = new Date(`${dateTo}T23:59:59.999`);
+        if (created > to) return false;
+      }
+    }
+    return true;
+  });
+}
 
 function formatMoney(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN')}`;
@@ -43,6 +151,54 @@ export default function DcInvoiceQueuePage() {
   const [einvoiceFile, setEinvoiceFile] = useState(null);
   const [ewayFile, setEwayFile] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [ewayFilter, setEwayFilter] = useState('');
+  const [mailFilter, setMailFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [demoSearchInput, setDemoSearchInput] = useState('');
+  const [demoMailFilter, setDemoMailFilter] = useState('');
+  const [demoDateFrom, setDemoDateFrom] = useState('');
+  const [demoDateTo, setDemoDateTo] = useState('');
+
+  const filteredRows = useMemo(
+    () => filterSaleRows(rows, {
+      search: searchInput,
+      type: typeFilter,
+      status: statusFilter,
+      eway: ewayFilter,
+      mail: mailFilter,
+      dateFrom,
+      dateTo,
+    }),
+    [rows, searchInput, typeFilter, statusFilter, ewayFilter, mailFilter, dateFrom, dateTo]
+  );
+
+  const filteredDemoRows = useMemo(
+    () => filterDemoRows(demoRows, {
+      search: demoSearchInput,
+      mail: demoMailFilter,
+      dateFrom: demoDateFrom,
+      dateTo: demoDateTo,
+    }),
+    [demoRows, demoSearchInput, demoMailFilter, demoDateFrom, demoDateTo]
+  );
+
+  const hasActiveFilters = Boolean(
+    searchInput || typeFilter || statusFilter || ewayFilter || mailFilter || dateFrom || dateTo
+  );
+
+  const clearFilters = () => {
+    setSearchInput('');
+    setTypeFilter('');
+    setStatusFilter('');
+    setEwayFilter('');
+    setMailFilter('');
+    setDateFrom('');
+    setDateTo('');
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -151,6 +307,96 @@ export default function DcInvoiceQueuePage() {
         </p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Type</span>
+        {TYPE_FILTERS.map((f) => (
+          <button
+            key={f.value || 'all-type'}
+            type="button"
+            onClick={() => setTypeFilter(f.value)}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              typeFilter === f.value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Status</span>
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f.value || 'all-status'}
+            type="button"
+            onClick={() => setStatusFilter(f.value)}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              statusFilter === f.value ? 'bg-blue-600 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">E-Way</span>
+        {EWAY_FILTERS.map((f) => (
+          <button
+            key={f.value || 'all-eway'}
+            type="button"
+            onClick={() => setEwayFilter(f.value)}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              ewayFilter === f.value ? 'bg-amber-700 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide ml-2">Mail</span>
+        {MAIL_FILTERS.map((f) => (
+          <button
+            key={f.value || 'all-mail'}
+            type="button"
+            onClick={() => setMailFilter(f.value)}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              mailFilter === f.value ? 'bg-emerald-700 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search DC #, SO #, customer, invoice #…"
+        />
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          onRangeChange={({ dateFrom: from, dateTo: to }) => {
+            setDateFrom(from || '');
+            setDateTo(to || '');
+          }}
+          fromLabel="Created from"
+          toLabel="Created to"
+        />
+        {hasActiveFilters && (
+          <button type="button" onClick={clearFilters} className="text-sm text-blue-600 hover:underline pb-2">
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-gray-500 mb-2">
+        Showing {filteredRows.length} of {rows.length} pending sale DC invoices
+      </p>
+
       <div className="bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
@@ -172,7 +418,9 @@ export default function DcInvoiceQueuePage() {
               <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
               <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No pending DC invoices</td></tr>
-            ) : rows.map((r) => (
+            ) : filteredRows.length === 0 ? (
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No DC invoices match your filters</td></tr>
+            ) : filteredRows.map((r) => (
               <tr key={r.dc_number}>
                 <td className="px-4 py-3 font-mono">
                   <Link to={deliveryChallanDetailPath(r.dc_number)} className="text-blue-600 hover:underline">
@@ -225,6 +473,61 @@ export default function DcInvoiceQueuePage() {
           Demo DCs for a first-time customer when consignment value is above ₹{Number(ewayThreshold).toLocaleString('en-IN')}.
         </p>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Mail</span>
+        {MAIL_FILTERS.map((f) => (
+          <button
+            key={`demo-${f.value || 'all-mail'}`}
+            type="button"
+            onClick={() => setDemoMailFilter(f.value)}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              demoMailFilter === f.value ? 'bg-emerald-700 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <SearchField
+          value={demoSearchInput}
+          onChange={(e) => setDemoSearchInput(e.target.value)}
+          placeholder="Search demo DC #, SO #, customer, laptop…"
+        />
+        <DateRangeFilter
+          dateFrom={demoDateFrom}
+          dateTo={demoDateTo}
+          onDateFromChange={setDemoDateFrom}
+          onDateToChange={setDemoDateTo}
+          onRangeChange={({ dateFrom: from, dateTo: to }) => {
+            setDemoDateFrom(from || '');
+            setDemoDateTo(to || '');
+          }}
+          fromLabel="Created from"
+          toLabel="Created to"
+        />
+        {(demoSearchInput || demoMailFilter || demoDateFrom || demoDateTo) && (
+          <button
+            type="button"
+            onClick={() => {
+              setDemoSearchInput('');
+              setDemoMailFilter('');
+              setDemoDateFrom('');
+              setDemoDateTo('');
+            }}
+            className="text-sm text-blue-600 hover:underline pb-2"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-gray-500 mb-2">
+        Showing {filteredDemoRows.length} of {demoRows.length} demo E-Way Bill rows
+      </p>
+
       <div className="bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
@@ -243,7 +546,9 @@ export default function DcInvoiceQueuePage() {
               <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : demoRows.length === 0 ? (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No new-customer demo E-Way Bills</td></tr>
-            ) : demoRows.map((r) => (
+            ) : filteredDemoRows.length === 0 ? (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No demo rows match your filters</td></tr>
+            ) : filteredDemoRows.map((r) => (
               <tr key={`demo-${r.dc_number}`}>
                 <td className="px-4 py-3 font-mono">
                   <Link to={deliveryChallanDetailPath(r.dc_number)} className="text-blue-600 hover:underline">

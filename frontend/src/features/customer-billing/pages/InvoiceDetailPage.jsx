@@ -34,12 +34,35 @@ function isCatchupLine(line) {
   return line?.is_catchup === true || line?.is_catchup === 'true';
 }
 
+function isSecurityLine(line) {
+  return line?.line_type === 'security' || line?.is_security === true;
+}
+
 function isFullBilledLine(line) {
-  if (isCatchupLine(line)) return false;
+  if (isSecurityLine(line) || isCatchupLine(line)) return false;
   const days = Number(line?.days_in_month);
   const monthDays = Number(line?.month_days);
   if (!Number.isFinite(days) || !Number.isFinite(monthDays) || monthDays <= 0) return true;
   return days >= monthDays;
+}
+
+function formatSpecLine(line) {
+  const tidy = (v) => {
+    const s = String(v || '').replace(/\s+/g, ' ').trim();
+    return !s || s === '-' || s === '—' ? '' : s;
+  };
+  const ramRaw = tidy(line.ram);
+  const ram = ramRaw && /^\d+(\.\d+)?$/.test(ramRaw) ? `${ramRaw}GB` : ramRaw;
+  return [tidy(line.processor), tidy(line.generation), ram, tidy(line.storage)].filter(Boolean).join(' · ');
+}
+
+function itemTitle(line) {
+  const brand = String(line.brand || '').trim();
+  const model = String(line.model || '').trim();
+  if (brand && model && !model.toLowerCase().startsWith(brand.toLowerCase())) {
+    return `${brand} ${model}`;
+  }
+  return model || brand || '—';
 }
 
 function lineMatchesSearch(line, q) {
@@ -49,6 +72,10 @@ function lineMatchesSearch(line, q) {
     line.serial_number,
     line.brand,
     line.model,
+    line.processor,
+    line.generation,
+    line.ram,
+    line.storage,
     line.dc_number,
     line.period,
   ].map((v) => String(v || '').toLowerCase()).join(' ');
@@ -97,6 +124,7 @@ export default function InvoiceDetailPage() {
     let fullLines = 0;
     let previousLines = 0;
     for (const line of lineItems) {
+      if (isSecurityLine(line)) continue;
       const key = line.ttspl_id || line.serial_number || line.serial_id;
       if (isCatchupLine(line)) {
         previousLines += 1;
@@ -134,11 +162,11 @@ export default function InvoiceDetailPage() {
 
   const handleDownload = async () => {
     try {
-      const res = await downloadInvoicePdf(id);
+      const res = await downloadInvoicePdf(id, { format: 'laptop_details' });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${invoice.invoice_number}.pdf`;
+      a.download = `${invoice.invoice_number}-document.pdf`;
       a.click();
     } catch {
       toast.error('PDF download failed');
@@ -187,13 +215,16 @@ export default function InvoiceDetailPage() {
         <div>
           <h1 className="text-2xl font-semibold">{invoice.invoice_number}</h1>
           <p className="text-sm text-gray-500">{invoice.customer_name} · {formatInvoiceDate(invoice.from_date)} – {formatInvoiceDate(invoice.to_date)}</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Total Quantity : {new Set(lineItems.map((line) => line.serial_id || line.ttspl_id || line.serial_number).filter(Boolean)).size || lineItems.length}
+          </p>
           <div className="mt-2"><InvoiceStatusBadge status={invoice.status} /></div>
         </div>
         <div className="flex flex-wrap gap-2">
           <PermissionGate section="customer_billing" action="edit">
             <Button onClick={() => setSendOpen(true)}>Send to Customer</Button>
           </PermissionGate>
-          <Button variant="secondary" onClick={handleDownload}>Download PDF</Button>
+          <Button variant="secondary" onClick={handleDownload}>Laptop Rental Document PDF</Button>
           <PermissionGate section="customer_billing" action="edit">
             <Button variant="secondary" onClick={handleMarkPaid}>Mark as Paid</Button>
           </PermissionGate>
@@ -231,7 +262,7 @@ export default function InvoiceDetailPage() {
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search TTSPL, serial, brand, model…"
+          placeholder="Search TTSPL, serial, brand, model, specs…"
           className="max-w-lg"
         />
         {lineFilter !== 'all' && (
@@ -260,11 +291,17 @@ export default function InvoiceDetailPage() {
                   <span className="font-semibold text-slate-900">{fmt(line.amount)}</span>
                 </div>
                 {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
-                <p className="text-sm text-slate-700">{line.brand} {line.model}</p>
-                <p className="text-xs text-slate-500">{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</p>
+                <p className="text-sm text-slate-700">{itemTitle(line)}</p>
+                {formatSpecLine(line) && <p className="text-xs text-slate-500">{formatSpecLine(line)}</p>}
+                <p className="text-xs text-slate-500">
+                  {isSecurityLine(line)
+                    ? `Delivered ${formatInvoiceDate(line.delivery_date || line.rent_start)}`
+                    : `${formatInvoiceDate(line.rent_start)} → ${formatInvoiceDate(line.rent_end)}`}
+                </p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                   <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
                   <span>{fmt(line.daily_rate)}/day</span>
+                  {isSecurityLine(line) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-100 text-teal-800">security</span>}
                   {isCatchupLine(line) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>}
                   {line.returned && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">returned</span>}
                 </div>
@@ -276,8 +313,7 @@ export default function InvoiceDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-3 text-left">TTSPL / Serial</th>
-                  <th className="px-4 py-3 text-left">Brand</th>
-                  <th className="px-4 py-3 text-left">Model</th>
+                  <th className="px-4 py-3 text-left">Item</th>
                   <th className="px-4 py-3 text-left">Period</th>
                   <th className="px-4 py-3 text-right">Days</th>
                   <th className="px-4 py-3 text-right">Daily Rate</th>
@@ -287,7 +323,7 @@ export default function InvoiceDetailPage() {
               <tbody className="divide-y">
                 {filteredLines.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                       No lines match this filter/search.
                     </td>
                   </tr>
@@ -299,10 +335,21 @@ export default function InvoiceDetailPage() {
                         <div className="text-xs text-gray-500">SN: {line.serial_number}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3">{line.brand}</td>
-                    <td className="px-4 py-3">{line.model}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-800">{itemTitle(line)}</div>
+                      {formatSpecLine(line) && (
+                        <div className="text-xs text-gray-500 mt-0.5">{formatSpecLine(line)}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <div>{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</div>
+                      <div>
+                        {isSecurityLine(line)
+                          ? `Delivered ${formatInvoiceDate(line.delivery_date || line.rent_start)}`
+                          : `${formatInvoiceDate(line.rent_start)} → ${formatInvoiceDate(line.rent_end)}`}
+                      </div>
+                      {isSecurityLine(line) && (
+                        <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-100 text-teal-800">security</span>
+                      )}
                       {isCatchupLine(line) && (
                         <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>
                       )}
@@ -325,6 +372,12 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-between text-red-600">
                 <span>Credit Notes{appliedNotes.length ? ` (${appliedNotes.map((c) => c.credit_note_number).join(', ')})` : ''}</span>
                 <span>-{fmt(invoice.credit_note_adjustment)}</span>
+              </div>
+            )}
+            {parseFloat(invoice.security_deposit) > 0 && (
+              <div className="flex justify-between">
+                <span>Security deposit</span>
+                <span>{fmt(invoice.security_deposit)}</span>
               </div>
             )}
             <div className="flex justify-between font-semibold text-base border-t pt-2"><span>Grand Total</span><span>{fmt(invoice.grand_total)}</span></div>

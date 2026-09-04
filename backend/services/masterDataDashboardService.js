@@ -15,8 +15,43 @@ const {
   setCachedKpis,
   invalidateMasterDataCachesFireAndForget,
 } = require('./masterDataCache');
+const {
+  appendColumnFilters: appendMasterColumnFilters,
+  getColumnDistinctValues: getMasterColumnDistinctValues,
+  getColumnDef: getMasterColumnDef,
+} = require('./masterDataColumnFilters');
 
 const CUSTOMER_STATUSES = DEPLOYED_WITH_CUSTOMER_STATUSES;
+
+/** Mutually exclusive with-customer buckets (status-first, matches deployed fleet). */
+const SQL_CUSTOMER_RENTAL = `(s.inventory_status = 'rented')`;
+const SQL_CUSTOMER_SOLD = `(s.inventory_status = 'sold')`;
+const SQL_CUSTOMER_IN_TRANSIT = `(
+  s.inventory_status IN ('in_transit', 'reserved', 'dispatch_ready')
+)`;
+const SQL_CUSTOMER_DEMO = `(s.inventory_status = 'on_demo')`;
+
+/** Value KPIs — count only units in final deployed status, not quotation-based fleet totals. */
+const SQL_SOLD_FOR_VALUE = `(s.inventory_status = 'sold')`;
+const SQL_RENTED_FOR_VALUE = `(s.inventory_status = 'rented')`;
+
+/** SO line rate is the taxable amount (exclusive of GST). Never gross up with tax here. */
+const SQL_CUSTOMER_RATE_EX_GST = `COALESCE(NULLIF(sos.so_rate, 0), NULLIF(s.rent_monthly_rate, 0), 0)`;
+
+function customerKpiSql(deployedParamRef) {
+  const d = deployedParamRef;
+  return {
+    rental: SQL_CUSTOMER_RENTAL.replace(/\$DEPLOYED/g, d),
+    sold: SQL_CUSTOMER_SOLD,
+    inTransit: SQL_CUSTOMER_IN_TRANSIT,
+    demo: SQL_CUSTOMER_DEMO,
+  };
+}
+
+/** NULL status is not deployed — SQL `NOT (status = ANY(...))` is unknown for NULL and drops the row. */
+function sqlNotDeployed(paramRef) {
+  return `(s.inventory_status IS NULL OR NOT (s.inventory_status = ANY(${paramRef}::text[])))`;
+}
 
 /** Commercial classification for sale vs rental filters + price KPIs. */
 const SQL_IS_SALE = `(
@@ -163,7 +198,7 @@ function buildMasterFilters(query = {}) {
   const qcProcess = String(query.qc_process || query.qcProcess || '').trim().toLowerCase();
   if (qcProcess === '1' || qcProcess === 'true' || qcProcess === 'yes') {
     params.push(CUSTOMER_STATUSES);
-    clauses.push(`NOT (s.inventory_status = ANY($${params.length}::text[]))`);
+    clauses.push(sqlNotDeployed(`$${params.length}`));
     clauses.push(`NOT (
       s.inventory_status = 'in_stock'
       AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
@@ -246,6 +281,11 @@ function buildMasterFilters(query = {}) {
     params,
     joinSql: spec.joinSql || '',
   };
+}
+
+function buildMasterListFilters(query = {}, { excludeColumn } = {}) {
+  const base = buildMasterFilters(query);
+  return appendMasterColumnFilters(base, query, { excludeColumn });
 }
 
 const FROM_SQL = `
@@ -397,10 +437,10 @@ function mapLaptopRow(row) {
   let customerPriceType = null;
   if (withCustomer) {
     if (isSale) {
-      customerPrice = soRate ?? rentRate;
+      customerPrice = soRate ?? null;
       customerPriceType = customerPrice != null ? 'sale' : null;
     } else {
-      customerPrice = rentRate ?? soRate;
+      customerPrice = soRate ?? rentRate ?? null;
       customerPriceType = customerPrice != null ? 'monthly' : null;
     }
   }
@@ -450,10 +490,10 @@ function mapLaptopRow(row) {
 }
 
 async function getKpis(query = {}) {
-  // KPI cards follow the shared filter bar (date, specs, status, location,
-  // stage, entity, pricing, search) and Vendor PO exclusions. Card drill-downs
-  // (customer_id / vendor_id / from_vendor / ready / qc_process) stay off so
-  // clicking a card does not collapse the other overview numbers.
+  // Operational cards (Total / With Customers / QC / Ready / Sale / Rental)
+  // count every PO-linked laptop. Vendor PO exclusions apply only to
+  // From Vendors + Vendors so purchase reporting can hide SELF / internal POs.
+  // Card drill-downs stay off so clicking a card does not collapse the others.
   const dateRange = resolveMasterDateRange(query);
   const kpiQuery = {
     search: query.search,
@@ -469,7 +509,6 @@ async function getKpis(query = {}) {
     date_to: dateRange.dateTo,
     dateFrom: dateRange.dateFrom,
     dateTo: dateRange.dateTo,
-    apply_vendor_po_exclusion: '1',
     ...pickMultiSpecFilters(query),
   };
 
@@ -480,35 +519,43 @@ async function getKpis(query = {}) {
   const { whereSql, params, joinSql } = buildMasterFilters(kpiQuery);
   const deployedIdx = params.length + 1;
   const kpiParams = [...params, CUSTOMER_STATUSES];
+  const customerSql = customerKpiSql(`$${deployedIdx}`);
 
   const kpiRes = await pool.query(
     `SELECT
         COUNT(*)::int AS total_laptops,
         COUNT(DISTINCT s.current_customer_id) FILTER (WHERE s.current_customer_id IS NOT NULL)::int AS total_customers,
-        COUNT(DISTINCT p.vendor_id) FILTER (WHERE p.vendor_id IS NOT NULL)::int AS total_vendors,
+        COUNT(DISTINCT p.vendor_id) FILTER (
+          WHERE p.vendor_id IS NOT NULL
+            AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
+        )::int AS total_vendors,
         COUNT(*) FILTER (WHERE s.inventory_status = ANY($${deployedIdx}::text[]))::int AS total_active_customer_assets,
         COUNT(*) FILTER (
           WHERE s.current_customer_id IS NOT NULL
              OR s.inventory_status = ANY($${deployedIdx}::text[])
         )::int AS total_with_customer,
-        COUNT(*) FILTER (WHERE p.vendor_id IS NOT NULL)::int AS total_from_vendors,
+        COUNT(*) FILTER (WHERE ${customerSql.rental})::int AS customer_rental_units,
+        COUNT(*) FILTER (WHERE ${customerSql.sold})::int AS customer_sold_units,
+        COUNT(*) FILTER (WHERE ${customerSql.inTransit})::int AS customer_in_transit_units,
+        COUNT(*) FILTER (WHERE ${customerSql.demo})::int AS customer_demo_units,
+        COUNT(*) FILTER (
+          WHERE p.vendor_id IS NOT NULL
+            AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
+        )::int AS total_from_vendors,
         COUNT(*) FILTER (
           WHERE s.inventory_status = 'in_stock'
             AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
         )::int AS total_ready_to_rent_sale,
         COUNT(*) FILTER (
-          WHERE NOT (s.inventory_status = ANY($${deployedIdx}::text[]))
+          WHERE ${sqlNotDeployed(`$${deployedIdx}`)}
             AND NOT (
               s.inventory_status = 'in_stock'
               AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
             )
         )::int AS total_qc_process,
-        COUNT(*) FILTER (WHERE ${SQL_IS_SALE})::int AS total_sale_units,
-        COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL})::int AS total_rental_units,
-        COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${SQL_IS_SALE}), 0)::numeric AS total_sale_value,
-        COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
-          WHERE ${SQL_IS_RENTAL}
-            AND s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')
+        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (WHERE ${SQL_SOLD_FOR_VALUE}), 0)::numeric AS total_sale_value,
+        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (
+          WHERE ${SQL_RENTED_FOR_VALUE}
         ), 0)::numeric AS total_monthly_rental_value
      ${FROM_SQL}
      ${joinSql}
@@ -523,11 +570,13 @@ async function getKpis(query = {}) {
     total_vendors: k.total_vendors || 0,
     total_active_customer_assets: k.total_active_customer_assets || 0,
     total_with_customer: k.total_with_customer || 0,
+    customer_rental_units: k.customer_rental_units || 0,
+    customer_sold_units: k.customer_sold_units || 0,
+    customer_in_transit_units: k.customer_in_transit_units || 0,
+    customer_demo_units: k.customer_demo_units || 0,
     total_from_vendors: k.total_from_vendors || 0,
     total_ready_to_rent_sale: k.total_ready_to_rent_sale || 0,
     total_qc_process: k.total_qc_process || 0,
-    total_sale_units: k.total_sale_units || 0,
-    total_rental_units: k.total_rental_units || 0,
     total_sale_value: Number(k.total_sale_value || 0),
     total_monthly_rental_value: Number(k.total_monthly_rental_value || 0),
   };
@@ -539,7 +588,7 @@ async function listLaptops(query = {}) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 25, 1), 100);
   const offset = (page - 1) * limit;
-  const { whereSql, params, joinSql } = buildMasterFilters(query);
+  const { whereSql, params, joinSql } = buildMasterListFilters(query);
 
   const listParams = [...params, limit, offset];
   const [countRes, listRes] = await Promise.all([
@@ -591,9 +640,9 @@ async function getCustomerSummary(query = {}) {
         COALESCE(c.company_name, c.name) AS customer_name,
         COUNT(*)::int AS active_laptops,
         COUNT(*) FILTER (WHERE s.inventory_status = 'returned')::int AS returned_laptops,
-        COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0))
-          FILTER (WHERE s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')), 0)::numeric AS monthly_rental_value,
-        COALESCE(SUM(COALESCE(sos.so_rate, 0))
+        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST})
+          FILTER (WHERE s.inventory_status = 'rented'), 0)::numeric AS monthly_rental_value,
+        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST})
           FILTER (WHERE s.inventory_status = 'sold'), 0)::numeric AS sale_value
      ${FROM_SQL}
      ${base.joinSql || ''}
@@ -768,11 +817,12 @@ async function getFloorSummary() {
 
 async function getMasterDashboardTab(query = {}) {
   const tab = String(query.tab || 'laptops').toLowerCase();
-  // Laptop / customer lists follow Vendor PO exclusions so clicking a KPI card
-  // matches the filtered card count. Vendor tab keeps excluded rows visible.
+  const fromVendor = ['1', 'true', 'yes'].includes(String(query.from_vendor || query.has_vendor || '').trim().toLowerCase());
+  // From Vendors drill-down matches the purchase card (exclusions on).
+  // Total / With Customers / QC lists show the full PO-linked fleet.
   const scopedQuery = (tab === 'vendors' || tab === 'floor')
     ? query
-    : { ...query, apply_vendor_po_exclusion: '1' };
+    : (fromVendor ? { ...query, apply_vendor_po_exclusion: '1' } : query);
   const cacheKey = buildDashboardCacheKey(scopedQuery);
   const cached = await getCachedDashboard(cacheKey);
   if (cached !== undefined) return cached;
@@ -803,7 +853,7 @@ async function getMasterDashboard(query = {}) {
 
 async function listAllLaptopsForExport(query = {}) {
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20000, 1), 20000);
-  const { whereSql, params, joinSql } = buildMasterFilters(query);
+  const { whereSql, params, joinSql } = buildMasterListFilters(query);
   const listParams = [...params, limit];
   const listRes = await pool.query(
     `SELECT
@@ -862,7 +912,7 @@ function laptopRowToExport(r, idx) {
     'Vendor Type': r.purchase_order_type_label || '',
     'Vendor Price': fmtExportVendorPrice(r),
     'Vendor Price Type': r.vendor_price_type === 'monthly' ? 'Rent/mo' : (r.vendor_price_type === 'purchase' ? 'Purchase' : ''),
-    'Customer Price': fmtExportCustomerPrice(r),
+    'Customer Price (ex. GST)': fmtExportCustomerPrice(r),
     'Customer Price Type': r.customer_price_type === 'sale' ? 'Sale' : (r.customer_price_type === 'monthly' ? 'Rent/mo' : ''),
     Stage: r.current_stage || '',
     'Sales Order': r.sales_order_number || '',
@@ -880,7 +930,7 @@ async function buildMasterDataExportWorkbook(query = {}) {
   let sheetName = 'Master Data';
 
   if (tab === 'customers') {
-    const { customers } = await getCustomerSummary({ ...query, apply_vendor_po_exclusion: '1' });
+    const { customers } = await getCustomerSummary(query);
     sheetName = 'Customers';
     sheetRows = customers.map((c, idx) => ({
       'S.No': idx + 1,
@@ -888,8 +938,8 @@ async function buildMasterDataExportWorkbook(query = {}) {
       'Customer ID': c.customer_id || '',
       Active: Number(c.active_laptops || 0),
       Returned: Number(c.returned_laptops || 0),
-      'Monthly Rental Value': fmtExportMoney(c.monthly_rental_value),
-      'Sale Value': fmtExportMoney(c.sale_value),
+      'Monthly Rental Value (ex. GST)': fmtExportMoney(c.monthly_rental_value),
+      'Sale Value (ex. GST)': fmtExportMoney(c.sale_value),
     }));
   } else if (tab === 'vendors') {
     const { vendors } = await getVendorSummary(query);
@@ -912,7 +962,10 @@ async function buildMasterDataExportWorkbook(query = {}) {
       Count: Number(s.count || 0),
     }));
   } else {
-    const rows = await listAllLaptopsForExport({ ...query, apply_vendor_po_exclusion: '1' });
+    const fromVendor = ['1', 'true', 'yes'].includes(String(query.from_vendor || query.has_vendor || '').trim().toLowerCase());
+    const rows = await listAllLaptopsForExport(
+      fromVendor ? { ...query, apply_vendor_po_exclusion: '1' } : query
+    );
     sheetName = 'Laptop Master';
     sheetRows = rows.map(laptopRowToExport);
   }
@@ -925,10 +978,26 @@ async function buildMasterDataExportWorkbook(query = {}) {
   return { buf, filename: `master_data_${safeTab}.xlsx` };
 }
 
+async function getLaptopColumnValues(query = {}) {
+  const column = String(query.column || '').trim();
+  if (!column || !getMasterColumnDef(column)) {
+    return { column, values: [] };
+  }
+  const base = buildMasterListFilters(query, { excludeColumn: column });
+  const values = await getMasterColumnDistinctValues(pool, {
+    fromSql: FROM_SQL,
+    joinSql: base.joinSql,
+    whereSql: base.whereSql,
+    params: base.params,
+  }, column);
+  return { column, values };
+}
+
 module.exports = {
   getMasterDashboard,
   getMasterDashboardTab,
   listLaptops,
+  getLaptopColumnValues,
   getKpis,
   buildMasterDataExportWorkbook,
   setVendorExcludeFromVendorPo,
@@ -938,5 +1007,10 @@ module.exports = {
   mapLaptopRow,
   SQL_IS_SALE,
   SQL_IS_RENTAL,
+  SQL_CUSTOMER_RENTAL,
+  SQL_CUSTOMER_SOLD,
+  SQL_CUSTOMER_IN_TRANSIT,
+  SQL_CUSTOMER_DEMO,
+  customerKpiSql,
   VENDOR_REPAIR_EXISTS,
 };

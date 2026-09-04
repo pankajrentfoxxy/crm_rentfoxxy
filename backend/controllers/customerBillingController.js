@@ -1,8 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
+const { ZipArchive } = require('archiver');
+const { generateCustomerInvoicePdf, invoicePdfDownloadName, uniqueCustomerPdfName } = require('../services/customerInvoicePdfService');
+const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
 const {
   generateCustomerInvoice,
   generateAllCustomerInvoices,
@@ -13,15 +15,6 @@ const {
   recordFullPayment,
   listPayments,
 } = require('../services/paymentLedgerService');
-const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
-const { mergeCompany } = require('../utils/companyDefaults');
-
-const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
-
-function resolveRentfoxxyLogoAbs() {
-  const p = path.join(__dirname, '../assets/rentfoxxy-logo.png');
-  return fs.existsSync(p) ? p : null;
-}
 
 async function nextCreditNoteNumber() {
   const res = await pool.query(
@@ -33,133 +26,8 @@ async function nextCreditNoteNumber() {
   return res.rows[0].number;
 }
 
-// Format billing / invoice dates for PDF output (IST, explicit label).
-function fmtDate(d) {
-  return formatPdfDateIstOrDash(d);
-}
-function fmtMoney(n) {
-  return `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-async function generateInvoicePdf(invoice) {
-  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const fileName = `${invoice.invoice_number}_${Date.now()}.pdf`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
-  const relativePath = `uploads/customer-invoices/${fileName}`;
-  const lineItems = typeof invoice.line_items === 'string'
-    ? JSON.parse(invoice.line_items)
-    : (invoice.line_items || []);
-  const company = mergeCompany({ code: 'rentfoxxy' });
-  const logoAbs = resolveRentfoxxyLogoAbs();
-
-  await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
-    const stream = fs.createWriteStream(filePath);
-    doc.pipe(stream);
-
-    // ── Header (logo left, title right) ──────────────────────────────────
-    const headerY = 40;
-    let logoDrawn = false;
-    if (logoAbs) {
-      try {
-        doc.image(logoAbs, 40, headerY, { height: 34 });
-        logoDrawn = true;
-      } catch (_) { /* ignore */ }
-    }
-    if (!logoDrawn) {
-      doc.fontSize(18).font('Helvetica-Bold').fillColor('#f26b21')
-        .text('Rentfoxxy', 40, headerY + 4);
-    }
-
-    doc.fontSize(14).font('Helvetica-Bold').fillColor('#111827')
-      .text('Customer Invoice (Prepaid Rental)', 250, headerY, { width: 305, align: 'right' });
-    doc.fontSize(8).font('Helvetica').fillColor('#6b7280')
-      .text(company.legal_name || 'TRUETECH SERVICES PRIVATE LIMITED', 250, headerY + 20, {
-        width: 305,
-        align: 'right',
-      });
-
-    doc.fillColor('#000');
-    let y = headerY + 48;
-    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    y += 14;
-
-    doc.font('Helvetica').fontSize(10).fillColor('#111827');
-    const leftX = 40;
-    const rightX = 320;
-    doc.text(`Invoice No: ${invoice.invoice_number}`, leftX, y);
-    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`, rightX, y);
-    y += 14;
-    doc.text(`Invoice Date: ${fmtDate(invoice.invoice_date)}`, leftX, y);
-    if (invoice.gst_number) doc.text(`GSTIN: ${invoice.gst_number}`, rightX, y);
-    y += 14;
-    doc.text(`Billing Period: ${fmtDate(invoice.from_date)}  to  ${fmtDate(invoice.to_date)}`, leftX, y, { width: 280 });
-    doc.y = y + 20;
-
-    // ── Line item table ───────────────────────────────────────
-    const x = { idx: 40, asset: 64, item: 200, period: 330, days: 450, amount: 510 };
-    const drawHead = () => {
-      const hy = doc.y;
-      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
-      doc.text('#', x.idx, hy);
-      doc.text('TTSPL / Serial', x.asset, hy);
-      doc.text('Item', x.item, hy);
-      doc.text('Period', x.period, hy);
-      doc.text('Days', x.days, hy, { width: 50, align: 'right' });
-      doc.text('Amount', x.amount, hy, { width: 55, align: 'right' });
-      doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).strokeColor('#e5e7eb').stroke();
-      doc.moveDown(0.5);
-    };
-    drawHead();
-    doc.font('Helvetica').fontSize(9);
-
-    lineItems.forEach((line, idx) => {
-      if (doc.y > 740) { doc.addPage(); drawHead(); doc.font('Helvetica').fontSize(9); }
-      const rowY = doc.y;
-      doc.fillColor('#000').text(String(idx + 1), x.idx, rowY);
-      // TTSPL id with Serial Number directly below it
-      doc.font('Helvetica-Bold').text(line.ttspl_id || '—', x.asset, rowY, { width: 130 });
-      doc.font('Helvetica').fillColor('#555').fontSize(8)
-         .text(line.serial_number ? `SN: ${line.serial_number}` : '', x.asset, doc.y, { width: 130 });
-      doc.fillColor('#000').fontSize(9);
-      doc.text(`${line.brand || ''} ${line.model || ''}`.trim() || '—', x.item, rowY, { width: 125 });
-      doc.text(`${fmtDate(line.rent_start)} - ${fmtDate(line.rent_end)}${line.is_catchup ? '  (catch-up)' : ''}${line.returned ? '  (returned)' : ''}`,
-        x.period, rowY, { width: 118 });
-      doc.text(`${line.days_in_month}${line.month_days ? `/${line.month_days}` : ''}`, x.days, rowY, { width: 50, align: 'right' });
-      doc.text(fmtMoney(line.amount), x.amount, rowY, { width: 55, align: 'right' });
-      doc.moveDown(0.8);
-    });
-
-    doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).stroke();
-    doc.moveDown(0.6);
-
-    // ── Totals ────────────────────────────────────────────────
-    const totRow = (label, val, opts = {}) => {
-      const ty = doc.y;
-      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(opts.bold ? 11 : 10);
-      if (opts.color) doc.fillColor(opts.color);
-      doc.text(label, 360, ty, { width: 120, align: 'right' });
-      doc.text(val, 485, ty, { width: 80, align: 'right' });
-      doc.fillColor('#000');
-      doc.moveDown(0.4);
-    };
-    totRow('Subtotal', fmtMoney(invoice.subtotal));
-    totRow(`GST (${invoice.gst_percent}%)`, fmtMoney(invoice.gst_amount));
-    if (parseFloat(invoice.credit_note_adjustment) > 0) {
-      totRow('Credit Notes', `- ${fmtMoney(invoice.credit_note_adjustment)}`, { color: '#b00' });
-    }
-    totRow('Grand Total', fmtMoney(invoice.grand_total), { bold: true });
-
-    doc.end();
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
-
-  return relativePath;
-}
-
 // Exposed for tests / scripts.
-exports._generateInvoicePdf = generateInvoicePdf;
+exports._generateInvoicePdf = generateCustomerInvoicePdf;
 
 exports.ensureBillingEngineSchema = async () => {
   const sqlPath = path.join(__dirname, '../migrations/067_phase5_billing_engine.sql');
@@ -167,6 +35,11 @@ exports.ensureBillingEngineSchema = async () => {
   const sql = fs.readFileSync(sqlPath, 'utf8');
   await pool.query(sql);
 };
+
+const SECURITY_LINE_SQL = `(
+  COALESCE(elem->>'line_type', 'rental') = 'security'
+  OR LOWER(COALESCE(elem->>'is_security', 'false')) IN ('true', 't', '1', 'yes')
+)`;
 
 function invoiceListFilters(query, { includeStatus = true } = {}) {
   const { customer_id, month, year, status, search } = query;
@@ -209,12 +82,36 @@ exports.listInvoices = async (req, res) => {
     const offset = (page - 1) * limit;
     const list = invoiceListFilters(req.query, { includeStatus: true });
     const kpi = invoiceListFilters(req.query, { includeStatus: false });
+    if (String(req.query.status || '') !== 'cancelled') {
+      kpi.where.push(`ci.status <> 'cancelled'`);
+    }
+    const kpiWhere = kpi.where.join(' AND ');
     list.params.push(limit, offset);
 
-    const [listRes, countRes, summaryRes] = await Promise.all([
+    const [listRes, countRes, summaryRes, securityRes, pendingCnRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
-                COALESCE(jsonb_array_length(ci.line_items), 0) AS laptop_count
+                COALESCE((
+                  SELECT COUNT(*)::int
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE NOT ${SECURITY_LINE_SQL}
+                ), 0) AS laptop_count,
+                COALESCE((
+                  SELECT COUNT(*)::int
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE ${SECURITY_LINE_SQL}
+                ), 0) AS security_laptop_count,
+                COALESCE((
+                  SELECT SUM(COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric)
+                  FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+                  ) elem
+                  WHERE ${SECURITY_LINE_SQL}
+                ), 0) AS security_amount
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
          WHERE ${list.where.join(' AND ')}
@@ -247,20 +144,313 @@ exports.listInvoices = async (req, res) => {
            COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status IN ('sent','overdue')), 0) AS outstanding_total
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
-         WHERE ${kpi.where.join(' AND ')}`,
+         WHERE ${kpiWhere}`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
+           ci.customer_id,
+           COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || ci.customer_id) AS customer_name,
+           ci.invoice_id,
+           ci.invoice_number,
+           ci.status,
+           ci.invoice_month,
+           ci.invoice_year,
+           COUNT(*)::int AS laptop_count,
+           COALESCE(SUM(COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric), 0) AS amount,
+           json_agg(
+             COALESCE(NULLIF(elem->>'ttspl_id', ''), NULLIF(elem->>'serial_number', ''), 'Laptop')
+             ORDER BY COALESCE(NULLIF(elem->>'ttspl_id', ''), elem->>'serial_number')
+           ) AS ttspls
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+         ) elem
+         WHERE ${kpiWhere}
+           AND ${SECURITY_LINE_SQL}
+         GROUP BY ci.customer_id, c.company_name, c.name, ci.invoice_id, ci.invoice_number,
+                  ci.status, ci.invoice_month, ci.invoice_year
+         ORDER BY customer_name, ci.invoice_number`,
+        kpi.params
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(cn.amount), 0) AS pending_total,
+           COUNT(*)::int AS pending_count
+         FROM customer_credit_notes cn
+         WHERE cn.status = 'pending'
+           AND cn.invoice_id IN (
+             SELECT ci.invoice_id
+             FROM customer_invoices ci
+             LEFT JOIN customers c ON c.customer_id = ci.customer_id
+             WHERE ${kpiWhere}
+           )`,
         kpi.params
       ),
     ]);
+
+    const securityDetails = securityRes.rows || [];
+    const securityCustomers = new Set(securityDetails.map((row) => row.customer_id));
+    const summary = {
+      ...(summaryRes.rows[0] || {}),
+      security_total: securityDetails.reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2),
+      security_invoice_count: securityDetails.length,
+      security_customer_count: securityCustomers.size,
+      security_laptop_count: securityDetails.reduce((sum, row) => sum + Number(row.laptop_count || 0), 0),
+      security_details: securityDetails,
+      credit_note_pending_total: pendingCnRes.rows[0]?.pending_total || 0,
+      credit_note_pending_count: pendingCnRes.rows[0]?.pending_count || 0,
+    };
 
     const total = countRes.rows[0]?.n || 0;
     res.json({
       success: true,
       invoices: listRes.rows,
-      summary: summaryRes.rows[0] || {},
+      summary,
       page,
       limit,
       total,
       total_pages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const MONTH_LABELS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Excel of billed rental serials for the current invoice filters. */
+exports.exportInvoiceSerialsExcel = async (req, res) => {
+  try {
+    const list = invoiceListFilters(req.query, { includeStatus: true });
+    if (!req.query.status) {
+      list.where.push(`ci.status <> 'cancelled'`);
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || ci.customer_id) AS customer_name,
+         ci.invoice_number,
+         ci.invoice_month,
+         ci.invoice_year,
+         ci.status AS invoice_status,
+         COALESCE(
+           NULLIF(elem->>'brand', ''),
+           NULLIF(vsn.extra->>'brand', ''),
+           NULLIF(inv.brand, '')
+         ) AS brand,
+         COALESCE(
+           NULLIF(elem->>'model', ''),
+           NULLIF(vsn.extra->>'model', ''),
+           NULLIF(vsn.extra->>'model_name', ''),
+           NULLIF(inv.model, '')
+         ) AS model,
+         COALESCE(
+           NULLIF(elem->>'processor', ''),
+           NULLIF(vsn.extra->>'processor', ''),
+           NULLIF(inv.processor, '')
+         ) AS processor,
+         COALESCE(
+           NULLIF(elem->>'generation', ''),
+           NULLIF(vsn.extra->>'generation', ''),
+           NULLIF(inv.generation, '')
+         ) AS generation,
+         COALESCE(
+           NULLIF(elem->>'ram', ''),
+           NULLIF(vsn.extra->>'ram', ''),
+           NULLIF(inv.ram, '')
+         ) AS ram,
+         COALESCE(
+           NULLIF(elem->>'storage', ''),
+           NULLIF(vsn.extra->>'storage', ''),
+           NULLIF(inv.storage, '')
+         ) AS storage,
+         COALESCE(
+           NULLIF(elem->>'ttspl_id', ''),
+           NULLIF(vsn.inventory_asset_code, ''),
+           NULLIF(vsn.extra->>'ttspl_id', '')
+         ) AS ttspl,
+         COALESCE(
+           NULLIF(elem->>'serial_number', ''),
+           NULLIF(vsn.serial_number, '')
+         ) AS serial_number,
+         LEFT(elem->>'rent_start', 10) AS rent_start,
+         LEFT(elem->>'rent_end', 10) AS rent_end,
+         NULLIF(elem->>'monthly_rate', '') AS monthly_rate,
+         NULLIF(elem->>'amount', '') AS amount,
+         CASE
+           WHEN LOWER(COALESCE(elem->>'is_catchup', 'false')) IN ('true', 't', '1', 'yes')
+           THEN 'Yes' ELSE 'No'
+         END AS catchup
+       FROM customer_invoices ci
+       LEFT JOIN customers c ON c.customer_id = ci.customer_id
+       CROSS JOIN LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(ci.line_items) = 'array' THEN ci.line_items ELSE '[]'::jsonb END
+       ) elem
+       LEFT JOIN LATERAL (
+         SELECT v.serial_id, v.serial_number, v.inventory_asset_code, v.extra
+           FROM vendor_serial_numbers v
+          WHERE v.deleted_at IS NULL
+            AND (
+              (NULLIF(elem->>'serial_id', '') ~ '^[0-9]+$' AND v.serial_id = (elem->>'serial_id')::int)
+              OR (
+                NULLIF(elem->>'ttspl_id', '') IS NOT NULL
+                AND v.inventory_asset_code = elem->>'ttspl_id'
+              )
+            )
+          ORDER BY CASE
+            WHEN NULLIF(elem->>'serial_id', '') ~ '^[0-9]+$'
+             AND v.serial_id = (elem->>'serial_id')::int THEN 0
+            ELSE 1
+          END, v.serial_id
+          LIMIT 1
+       ) vsn ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT i.brand, i.model, i.processor, i.generation, i.ram, i.storage
+           FROM inventory i
+          WHERE vsn.serial_id IS NOT NULL
+            AND (
+              i.serial_number = vsn.serial_number
+              OR (
+                vsn.inventory_asset_code IS NOT NULL
+                AND i.machine_number = vsn.inventory_asset_code
+              )
+            )
+          ORDER BY CASE WHEN i.serial_number = vsn.serial_number THEN 0 ELSE 1 END, i.inventory_id
+          LIMIT 1
+       ) inv ON TRUE
+      WHERE ${list.where.join(' AND ')}
+        AND COALESCE(elem->>'line_type', 'rental') <> 'security'
+        AND COALESCE(elem->>'is_security', 'false') <> 'true'
+      ORDER BY customer_name, ci.invoice_year, ci.invoice_month, ci.invoice_number,
+               ttspl, rent_start`,
+      list.params
+    );
+
+    const orderedRows = rows.map((r) => ({
+      'Customer Name': r.customer_name || '',
+      'Invoice Number': r.invoice_number || '',
+      'Billing Month': `${MONTH_LABELS[Number(r.invoice_month)] || ''} ${r.invoice_year || ''}`.trim(),
+      Status: r.invoice_status || '',
+      Brand: r.brand || '',
+      Model: r.model || '',
+      Processor: r.processor || '',
+      Generation: r.generation || '',
+      RAM: r.ram || '',
+      'Hard Disk': r.storage || '',
+      TTSPL: r.ttspl || '',
+      'Serial Number': r.serial_number || '',
+      'Rent Start': r.rent_start || '',
+      'Rent End': r.rent_end || '',
+      'Monthly Rate': r.monthly_rate != null && r.monthly_rate !== '' ? Number(r.monthly_rate) : '',
+      Amount: r.amount != null && r.amount !== '' ? Number(r.amount) : '',
+      'Catch-up': r.catchup || 'No',
+    }));
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows);
+    ws['!cols'] = [
+      { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
+      { wch: 12 }, { wch: 28 }, { wch: 18 }, { wch: 12 },
+      { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 },
+      { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Billed Serials');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    const stamp = month && year
+      ? `${MONTH_LABELS[month] || month}_${year}`
+      : new Date().toISOString().slice(0, 10);
+    const filename = `invoice_billing_serials_${stamp}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buf);
+  } catch (err) {
+    console.error('exportInvoiceSerialsExcel:', err);
+    res.status(500).json({ success: false, message: err.message || 'Export failed' });
+  }
+};
+
+function monthEndYmd(year, month) {
+  const d = new Date(year, month, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Customers with rental assets vs invoices generated for a billing month. */
+exports.listInvoiceCoverage = async (req, res) => {
+  try {
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    if (!month || month < 1 || month > 12 || !year || year < 2000) {
+      return res.status(400).json({ success: false, message: 'month and year required' });
+    }
+
+    const result = await pool.query(
+      `WITH assets AS (
+         SELECT vsn.current_customer_id AS customer_id,
+                COUNT(*)::int AS asset_count,
+                COUNT(*) FILTER (WHERE vsn.inventory_status = 'rented')::int AS rented_count,
+                COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned_count
+           FROM vendor_serial_numbers vsn
+          WHERE vsn.current_customer_id IS NOT NULL
+            AND vsn.deleted_at IS NULL
+            AND vsn.inventory_status IN ('rented', 'returned')
+            AND vsn.rent_start_date IS NOT NULL
+            AND vsn.rent_start_date <= $1::date
+          GROUP BY vsn.current_customer_id
+       ),
+       inv AS (
+         SELECT DISTINCT ON (ci.customer_id)
+                ci.customer_id, ci.invoice_id, ci.invoice_number, ci.status, ci.grand_total
+           FROM customer_invoices ci
+          WHERE ci.invoice_month = $2
+            AND ci.invoice_year = $3
+            AND ci.status <> 'cancelled'
+          ORDER BY ci.customer_id, ci.invoice_id DESC
+       )
+       SELECT a.customer_id,
+              COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), 'Customer #' || a.customer_id) AS customer_name,
+              c.email,
+              a.asset_count,
+              a.rented_count,
+              a.returned_count,
+              i.invoice_id,
+              i.invoice_number,
+              i.status AS invoice_status,
+              i.grand_total
+         FROM assets a
+         JOIN customers c ON c.customer_id = a.customer_id
+         LEFT JOIN inv i ON i.customer_id = a.customer_id
+        ORDER BY 2 ASC`,
+      [monthEndYmd(year, month), month, year]
+    );
+
+    const customers = result.rows.map((row) => ({
+      ...row,
+      bucket: row.invoice_id ? 'invoiced' : 'pending',
+    }));
+    const invoiced = customers.filter((c) => c.bucket === 'invoiced');
+    const pending = customers.filter((c) => c.bucket === 'pending');
+
+    res.json({
+      success: true,
+      month,
+      year,
+      counts: {
+        with_assets: customers.length,
+        invoiced: invoiced.length,
+        pending: pending.length,
+        laptops: customers.reduce((n, c) => n + Number(c.asset_count || 0), 0),
+      },
+      customers,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -287,7 +477,9 @@ exports.getInvoice = async (req, res) => {
        WHERE applied_in_invoice_id = $1 OR invoice_id = $1`,
       [invoiceId]
     );
-    res.json({ success: true, invoice: result.rows[0], credit_notes: creditNotes.rows });
+    const invoice = result.rows[0];
+    invoice.line_items = await enrichLineItemsWithSpecs(parseLineItems(invoice));
+    res.json({ success: true, invoice, credit_notes: creditNotes.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -378,7 +570,16 @@ exports.sendInvoice = async (req, res) => {
     const { id } = req.params;
     const { to_email, cc_emails } = req.body || {};
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -388,7 +589,7 @@ exports.sendInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    const pdfPath = await generateInvoicePdf(invoice);
+    const pdfPath = await generateCustomerInvoicePdf(invoice);
     await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
     const to = to_email || invoice.customer_email;
     const cc = Array.isArray(cc_emails) ? cc_emails.join(',') : cc_emails;
@@ -491,7 +692,16 @@ exports.downloadInvoicePdf = async (req, res) => {
     // and made every PDF download 404). Accept either for safety.
     const id = req.params.invoiceId || req.params.id;
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name, c.gst_no AS gst_number
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
        FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
@@ -501,12 +711,119 @@ exports.downloadInvoicePdf = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    // Always regenerate so branding/logo updates apply to existing invoices.
-    const pdfPath = await generateInvoicePdf(invoice);
-    await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    res.download(path.join(__dirname, '..', pdfPath));
+    const format = normalizeInvoiceFormat(req.query.format);
+    // Always regenerate tax invoice PDF so branding/logo updates apply; laptop details is on-demand only.
+    const pdfPath = await generateCustomerInvoicePdf(invoice, { format });
+    if (format === 'tax_invoice') {
+      await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
+    }
+    res.download(
+      path.join(__dirname, '..', pdfPath),
+      invoicePdfDownloadName(invoice.invoice_number, format),
+    );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const MONTH_NAMES = [
+  '', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+async function mapPool(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+exports.downloadInvoicesZip = async (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  if (!(month >= 1 && month <= 12) || !(year >= 2000 && year <= 2100)) {
+    return res.status(400).json({ success: false, message: 'month and year are required' });
+  }
+  const format = normalizeInvoiceFormat(req.query.format || 'laptop_details');
+  const createdFiles = [];
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const file of createdFiles) fs.unlink(file, () => {});
+  };
+  try {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const result = await pool.query(
+      `SELECT ci.*,
+              c.company_name AS customer_name,
+              c.name AS customer_contact_name,
+              c.email AS customer_email,
+              c.phone AS customer_phone,
+              c.gst_no AS gst_number,
+              c.billing_address,
+              c.billing_city,
+              c.billing_state,
+              c.billing_pincode
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+        WHERE ci.invoice_month = $1
+          AND ci.invoice_year = $2
+          AND ci.status <> 'cancelled'
+        ORDER BY COALESCE(c.company_name, c.name, ci.invoice_number)`,
+      [month, year]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'No invoices found for that month' });
+    }
+
+    const generated = await mapPool(result.rows, 3, async (invoice) => {
+      const pdfPath = await generateCustomerInvoicePdf(invoice, { format });
+      const abs = path.join(__dirname, '..', pdfPath);
+      createdFiles.push(abs);
+      return { invoice, abs };
+    });
+
+    const monthLabel = MONTH_NAMES[month] || String(month);
+    const zipName = `Laptop-Rental-Documents-${monthLabel}-${year}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+      else res.end();
+    });
+    archive.pipe(res);
+    res.on('finish', cleanup);
+    res.on('close', cleanup);
+
+    const usedNames = new Set();
+    for (const item of generated) {
+      archive.file(item.abs, {
+        name: uniqueCustomerPdfName(
+          item.invoice.customer_name || item.invoice.customer_contact_name,
+          item.invoice.invoice_number,
+          usedNames,
+        ),
+      });
+    }
+    await archive.finalize();
+  } catch (err) {
+    cleanup();
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    } else {
+      res.end();
+    }
   }
 };
 

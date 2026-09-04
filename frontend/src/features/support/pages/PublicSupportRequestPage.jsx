@@ -12,6 +12,7 @@ import {
   indianMobileError,
   normalizeIndianMobile,
 } from '../../../utils/phoneValidation';
+import { PICKUP_REASON_OPTIONS } from '../pickupReasonTypes';
 
 const inputClass = (invalid) =>
   `mt-1 w-full border rounded-xl px-3 py-2.5 text-sm focus:ring-2 outline-none ${
@@ -47,6 +48,8 @@ export default function PublicSupportRequestPage() {
     address: '',
     preferred_visit_date: '',
     preferred_visit_time: '',
+    pickup_reason_type: '',
+    pickup_reason_other: '',
   });
   const [devices, setDevices] = useState([]);
   const [deviceDraft, setDeviceDraft] = useState('');
@@ -158,6 +161,13 @@ export default function PublicSupportRequestPage() {
 
     if (isPickup) {
       if (!devices.length) next.devices = 'Add at least one TTSPL / laptop';
+      if (!form.pickup_reason_type) {
+        next.pickup_reason_type = 'Please select a pickup reason';
+      } else if (form.pickup_reason_type === 'other' && !form.pickup_reason_other.trim()) {
+        next.pickup_reason_other = 'Please describe the reason for pickup';
+      } else if (form.pickup_reason_type === 'other' && form.pickup_reason_other.trim().length < 3) {
+        next.pickup_reason_other = 'Please enter a more detailed reason (at least 3 characters)';
+      }
     } else {
       if (!String(form.device_serial || '').trim()) next.device_serial = 'TTSPL / device ID is required';
       if (String(form.issue_description || '').trim().length < 10) {
@@ -231,6 +241,10 @@ export default function PublicSupportRequestPage() {
       if (isPickup) {
         payload.device_serials = devices;
         payload.pickup_address = visitAddress;
+        payload.pickup_reason_type = form.pickup_reason_type;
+        if (form.pickup_reason_type === 'other') {
+          payload.pickup_reason_other = form.pickup_reason_other.trim();
+        }
       } else {
         payload.device_serial = form.device_serial.trim();
         payload.service_address = visitAddress;
@@ -436,6 +450,44 @@ export default function PublicSupportRequestPage() {
                   </label>
                 )}
               </section>
+
+              {isPickup ? (
+                <section className="space-y-3.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pickup reason</p>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">Reason type *</span>
+                    <select
+                      className={inputClass(fieldErrors.pickup_reason_type)}
+                      value={form.pickup_reason_type}
+                      onChange={(e) => {
+                        set('pickup_reason_type', e.target.value);
+                        if (e.target.value !== 'other') {
+                          set('pickup_reason_other', '');
+                          setFieldErrors((prev) => ({ ...prev, pickup_reason_other: '' }));
+                        }
+                      }}
+                    >
+                      <option value="">Select reason</option>
+                      {PICKUP_REASON_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <FieldError>{fieldErrors.pickup_reason_type}</FieldError>
+                  </label>
+                  {form.pickup_reason_type === 'other' ? (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Describe reason *</span>
+                      <textarea
+                        className={`${inputClass(fieldErrors.pickup_reason_other)} min-h-[88px]`}
+                        value={form.pickup_reason_other}
+                        onChange={(e) => set('pickup_reason_other', e.target.value)}
+                        placeholder="Why is this laptop being picked up?"
+                      />
+                      <FieldError>{fieldErrors.pickup_reason_other}</FieldError>
+                    </label>
+                  ) : null}
+                </section>
+              ) : null}
 
               <section className="space-y-3.5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">

@@ -3,6 +3,7 @@ const {
   getMasterDashboard,
   getMasterDashboardTab,
   getKpis,
+  getLaptopColumnValues,
   buildMasterDataExportWorkbook,
   setVendorExcludeFromVendorPo,
 } = require('../../services/masterDataDashboardService');
@@ -29,6 +30,16 @@ exports.getMasterDataDashboard = async (req, res) => {
   } catch (err) {
     console.error('getMasterDataDashboard:', err);
     res.status(500).json({ success: false, message: err.message || 'Failed to load master data' });
+  }
+};
+
+exports.getLaptopColumnValues = async (req, res) => {
+  try {
+    const data = await getLaptopColumnValues(req.query || {});
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('getMasterDataColumnValues:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to load column values' });
   }
 };
 

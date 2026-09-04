@@ -235,29 +235,12 @@ async function buildUserPermissionsPayload(userId) {
   };
 }
 
-const ADMIN_ONLY_SECTIONS = new Set([
-  'inventory_vendor_master_data',
-  'inventory_return_master_data',
-]);
-const ADMIN_ONLY_ROLES = new Set(['admin', 'super_admin']);
-
-function applyAdminOnlySectionGuard(role, section, flags) {
-  if (!ADMIN_ONLY_SECTIONS.has(section) || ADMIN_ONLY_ROLES.has(role)) return flags;
-  return { can_view: false, can_create: false, can_edit: false, can_delete: false };
-}
-
 async function upsertRolePermissions(role, permissions) {
   const results = [];
   for (const perm of permissions) {
     const { section, data_scope, customer_access, inventory_tag_access } = perm;
     if (!section) continue;
-    const guarded = applyAdminOnlySectionGuard(role, section, {
-      can_view: perm.can_view,
-      can_create: perm.can_create,
-      can_edit: perm.can_edit,
-      can_delete: perm.can_delete,
-    });
-    const { can_view, can_create, can_edit, can_delete } = guarded;
+    const { can_view, can_create, can_edit, can_delete } = perm;
     const scope = data_scope === 'assigned' ? 'assigned' : 'all';
     const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : 'all';
     const tagAccess = INVENTORY_TAG_ACCESS_VALUES.has(inventory_tag_access) ? inventory_tag_access : 'all';
@@ -283,17 +266,10 @@ async function upsertRolePermissions(role, permissions) {
 
 async function upsertUserPermissions(userId, permissions, grantedBy) {
   const results = [];
-  const userRole = await getUserRole(userId);
   for (const perm of permissions) {
     const { section, data_scope, customer_access, inventory_tag_access } = perm;
     if (!section) continue;
-    const guarded = applyAdminOnlySectionGuard(userRole, section, {
-      can_view: perm.can_view,
-      can_create: perm.can_create,
-      can_edit: perm.can_edit,
-      can_delete: perm.can_delete,
-    });
-    const { can_view, can_create, can_edit, can_delete } = guarded;
+    const { can_view, can_create, can_edit, can_delete } = perm;
     const scope = data_scope === 'all' || data_scope === 'assigned' ? data_scope : null;
     const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : null;
     const tagAccess = INVENTORY_TAG_ACCESS_VALUES.has(inventory_tag_access) ? inventory_tag_access : null;

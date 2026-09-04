@@ -553,10 +553,11 @@ async function customerAssets(req, res) {
        GROUP BY s.inventory_status`,
       breakdownParams
     );
-    const counts = { reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
+    const counts = { reserved: 0, dispatch_ready: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, out_stock: 0, all: 0 };
     breakdownR.rows.forEach((r) => {
-      const key = displayDeployedStatus(r.inventory_status);
-      if (counts[key] !== undefined) counts[key] += r.c;
+      const st = r.inventory_status;
+      // Count raw status only — do not fold legacy out_stock into rented (Master Data uses rented only).
+      if (Object.prototype.hasOwnProperty.call(counts, st)) counts[st] += r.c;
       counts.all += r.c;
     });
 
@@ -585,7 +586,7 @@ async function customerAssets(req, res) {
         generation: ex.generation || null,
         ram: ex.ram || null,
         storage: ex.storage || null,
-        inventory_status: displayDeployedStatus(r.inventory_status),
+        inventory_status: r.inventory_status,
         customer_id: r.customer_id,
         customer_name: r.customer_name,
         company_name: r.company_name,

@@ -3,7 +3,7 @@
  */
 const { cacheGet, cacheSet, cacheDelPattern, CACHE_TTL } = require('../utils/cacheService');
 
-const CACHE_VERSION = 'v8';
+const CACHE_VERSION = 'v13';
 const PREFIX = `master_data:${CACHE_VERSION}:`;
 const KPI_PREFIX = `master_data_kpi:${CACHE_VERSION}:`;
 
