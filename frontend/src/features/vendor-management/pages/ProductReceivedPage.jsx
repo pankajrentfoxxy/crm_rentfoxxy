@@ -33,6 +33,7 @@ import {
   receivePoLineUnit,
 } from '../vendorManagementApi';
 import AccessNumbersAdmin from '../components/AccessNumbersAdmin';
+import PoReplacementsPanel from '../components/PoReplacementsPanel';
 import {
   LAPTOP_CONDITIONS,
   PART_CATEGORIES,
@@ -809,6 +810,8 @@ export default function ProductReceivedPage() {
                   </tbody>
                 </table>
               </div>
+
+              <PoReplacementsPanel replacements={ctx?.replacements} className="mx-4 mb-4" />
 
               {n > 0 ? (
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">

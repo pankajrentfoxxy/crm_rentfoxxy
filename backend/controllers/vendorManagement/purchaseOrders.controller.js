@@ -171,30 +171,78 @@ function parseLineItemsJson(raw) {
   return [];
 }
 
+function parseSerialExtra(raw) {
+  if (raw == null) return {};
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return typeof p === 'object' && p !== null && !Array.isArray(p) ? p : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function isVendorRepairReplacement(extra) {
+  const ex = extra && typeof extra === 'object' ? extra : {};
+  const source = String(ex.source || ex.intake_source || '').toLowerCase();
+  const tag = String(ex.asset_tag || '').toLowerCase();
+  return source === 'vendor_repair_replacement' || tag === 'replacement';
+}
+
+function replacementRowFromSerial(row, extra) {
+  const ex = extra || parseSerialExtra(row.extra);
+  const newTtspl = row.inventory_asset_code || ex.unique_product_serial || ex.unique_number || null;
+  const oldTtspl = ex.replaced_ttspl_id || ex.replaced_ttspl || null;
+  const oldSerial = ex.replaced_serial || null;
+  return {
+    serial_id: row.serial_id || null,
+    ttspl_id: newTtspl,
+    serial_number: row.serial_number || null,
+    replaced_ttspl_id: oldTtspl,
+    replaced_serial: oldSerial,
+    brand: ex.brand || null,
+    model: ex.model || null,
+    replacement_dc_number: ex.replacement_dc_number || null,
+    label: oldTtspl && newTtspl
+      ? `${oldTtspl} → ${newTtspl}`
+      : (newTtspl || row.serial_number || 'Replacement'),
+  };
+}
+
 /**
  * Laravel view_purchase_order: each product_detail row gets receivedQty from goods_receipt + po.
  * CRM: sum vendor_serial_numbers per PO keyed by extra.line_index or extra.product_detail_id / product_id / pro_id.
+ * Vendor-repair replacements are listed separately and never count toward received qty.
  */
 async function buildReceivedQtyMapsForPoIds(poIds) {
-  const map = new Map(); // po_id -> { byIdx: {}, byPd: {}, unalloc: number }
+  const map = new Map(); // po_id -> { byIdx, byPd, unalloc, replacements }
   if (!Array.isArray(poIds) || !poIds.length) return map;
 
   const r = await pool.query(
-    `SELECT po_id, extra FROM vendor_serial_numbers
-     WHERE po_id = ANY($1::int[]) AND deleted_at IS NULL`,
+    `SELECT po_id, serial_id, serial_number, inventory_asset_code, extra
+       FROM vendor_serial_numbers
+      WHERE po_id = ANY($1::int[]) AND deleted_at IS NULL`,
     [poIds]
   );
 
   function ensure(pid) {
-    if (!map.has(pid)) map.set(pid, { byIdx: {}, byPd: {}, unalloc: 0 });
+    if (!map.has(pid)) map.set(pid, { byIdx: {}, byPd: {}, unalloc: 0, replacements: [] });
     return map.get(pid);
   }
 
   for (const row of r.rows) {
     const pid = Number(row.po_id);
     const m = ensure(pid);
-    const ex =
-      row.extra && typeof row.extra === 'object' && row.extra !== null && !Array.isArray(row.extra) ? row.extra : {};
+    const ex = parseSerialExtra(row.extra);
+
+    if (isVendorRepairReplacement(ex)) {
+      m.replacements.push(replacementRowFromSerial(row, ex));
+      continue;
+    }
+
     const liRaw = ex.line_index;
     const pdRaw = ex.product_detail_id ?? ex.pro_id ?? ex.product_id;
 
@@ -257,7 +305,8 @@ function attachProductDetails(poRow, qtyMaps, grnLineConfigs = null) {
   return {
     ...poRow,
     line_items: enriched,
-    product_details: enriched
+    product_details: enriched,
+    replacements: (ri && ri.replacements) || [],
   };
 }
 
@@ -454,6 +503,7 @@ async function getProductReceivedContext(req, res) {
         vendor_address: enriched.vendor_address
       },
       lines,
+      replacements: enriched.replacements || [],
       stats: {
         total_lines: lines.length,
         order_qty: orderQty,
@@ -1325,7 +1375,14 @@ async function getGeneratedGrnOverview(req, res) {
       g.bill_status,
       g.bill_name,
       g.bill_files,
-      COUNT(s.serial_id)::int AS received_qty,
+      COUNT(s.serial_id) FILTER (
+        WHERE COALESCE(s.extra->>'source', '') <> 'vendor_repair_replacement'
+          AND COALESCE(s.extra->>'asset_tag', '') <> 'replacement'
+      )::int AS received_qty,
+      COUNT(s.serial_id) FILTER (
+        WHERE COALESCE(s.extra->>'source', '') = 'vendor_repair_replacement'
+           OR COALESCE(s.extra->>'asset_tag', '') = 'replacement'
+      )::int AS replacement_qty,
       ('GRN-' || LPAD(g.grn_id::text, 4, '0')) AS grn_number
     FROM vendor_goods_received_notes g
     LEFT JOIN vendor_serial_numbers s
@@ -1357,6 +1414,7 @@ async function getGeneratedGrnOverview(req, res) {
         vendor_address: enriched.vendor_address
       },
       lines,
+      replacements: enriched.replacements || [],
       stats: {
         total_lines: lines.length,
         order_qty: orderQty,
@@ -1418,6 +1476,8 @@ async function getGrnReceivedProducts(req, res) {
       ...buildConfigExtraFromLine(line),
       ...(configFromPlainObject(s.grn_received_config) || {}),
     };
+    const isReplacement = isVendorRepairReplacement(ex);
+    const replacement = isReplacement ? replacementRowFromSerial(s, ex) : null;
     const rep = ex.is_replaced === true || ex.is_replaced === 1 || String(ex.is_replaced) === '1';
     const repa = ex.is_repaired === true || ex.is_repaired === 1 || String(ex.is_repaired) === '1';
     return {
@@ -1427,8 +1487,12 @@ async function getGrnReceivedProducts(req, res) {
       rental_start_date: s.rental_start_date ?? ex.rental_start_date ?? null,
       unique_product_serial:
         ex.unique_product_serial ?? ex.unique_number ?? s.inventory_asset_code ?? null,
+      is_replacement: isReplacement,
       is_replaced: rep ? 1 : 0,
       is_repaired: repa ? 1 : 0,
+      replaced_ttspl_id: replacement?.replaced_ttspl_id || null,
+      replaced_serial: replacement?.replaced_serial || null,
+      replacement_label: replacement?.label || null,
       brand: config.brand ?? null,
       model: config.model ?? null,
       processor: config.processor ?? null,

@@ -137,12 +137,24 @@ export default function SerialNumberPage() {
       }
       const list = data.data || [];
       setSerialRows(
-        list.map((s) => ({
-          serial_id: s.serial_id,
-          baseline_serial: String(s.serial_number ?? ''),
-          draft_serial: String(s.serial_number ?? ''),
-          unique_display: uniqueNumberFromSerialRow(s)
-        }))
+        list.map((s) => {
+          const ex = parseExtra(s.extra);
+          const isReplacement =
+            String(ex.source || ex.intake_source || '').toLowerCase() === 'vendor_repair_replacement'
+            || String(ex.asset_tag || '').toLowerCase() === 'replacement';
+          const newTtspl = uniqueNumberFromSerialRow(s);
+          const oldTtspl = ex.replaced_ttspl_id || ex.replaced_ttspl || '';
+          return {
+            serial_id: s.serial_id,
+            baseline_serial: String(s.serial_number ?? ''),
+            draft_serial: String(s.serial_number ?? ''),
+            unique_display: isReplacement && oldTtspl
+              ? `${oldTtspl} → ${newTtspl}`
+              : newTtspl,
+            is_replacement: isReplacement,
+            replaced_ttspl_id: oldTtspl || null,
+          };
+        })
       );
       setPage(1);
     } catch (e) {
@@ -456,7 +468,14 @@ export default function SerialNumberPage() {
                             />
                           </td>
                           <td className="px-3 py-3 font-mono text-xs sm:text-sm text-slate-800">
-                            {r.unique_display}
+                            <span className={r.is_replacement ? 'text-violet-800 font-semibold' : ''}>
+                              {r.unique_display}
+                            </span>
+                            {r.is_replacement ? (
+                              <span className="ml-2 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-800">
+                                Replacement
+                              </span>
+                            ) : null}
                           </td>
                           <td className="px-3 py-3 print:hidden">
                             <button
