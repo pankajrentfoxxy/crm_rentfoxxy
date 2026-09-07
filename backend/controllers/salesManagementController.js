@@ -5609,6 +5609,126 @@ exports.markDcDelivered = async (req, res) => {
 };
 
 /**
+ * Correct or set dispatch date on a DC and regenerate the PDF.
+ * Allowed for admin/super_admin while DC is not cancelled/rejected.
+ */
+exports.updateDcDispatchDate = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const { parseDeliveredAtInput, rentStartForSerial } = require('../services/deliveryDateService');
+    const raw = req.body?.dispatched_at ?? req.body?.dispatch_date;
+    let dispatchedAt;
+    try {
+      dispatchedAt = parseDeliveredAtInput(raw, { required: true });
+    } catch (e) {
+      e.message = String(e.message || '').replace('Delivery date', 'Dispatch date');
+      throw e;
+    }
+
+    await client.query('BEGIN');
+
+    const headRes = await client.query(
+      `SELECT status, dispatch_mode, sales_order_number
+         FROM delivery_challan_lines
+        WHERE dc_number = $1
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!headRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = headRes.rows[0];
+    const status = String(head.status || '').toLowerCase();
+    if (['cancelled', 'rejected', 'refused'].includes(status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Dispatch date cannot be updated on a cancelled or rejected DC',
+      });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET dispatched_at = $1, pdf_path = NULL, updated_at = NOW()
+        WHERE dc_number = $2`,
+      [dispatchedAt, dcNumber]
+    );
+
+    const syncSerialStatuses = new Set(['in_transit', 'shipped', 'delivered']);
+    let serialsUpdated = 0;
+    if (syncSerialStatuses.has(status)) {
+      const serials = await collectDcSerials(dcNumber);
+      for (const s of serials) {
+        const serialId = await resolveSerialId(client, s);
+        if (!serialId) continue;
+        const sr = await client.query(
+          `SELECT dispatch_mode, delivered_at, inventory_status
+             FROM vendor_serial_numbers WHERE serial_id = $1`,
+          [serialId]
+        );
+        const row = sr.rows[0] || {};
+        const rentStart = rentStartForSerial({
+          dispatchMode: row.dispatch_mode || head.dispatch_mode,
+          dispatchedAt,
+          deliveredAt: row.delivered_at,
+          inventoryStatus: row.inventory_status,
+        });
+        await client.query(
+          `UPDATE vendor_serial_numbers
+              SET dispatched_at = $1,
+                  rent_start_date = COALESCE($2, rent_start_date),
+                  updated_at = NOW()
+            WHERE serial_id = $3`,
+          [dispatchedAt, rentStart ? rentStart.toISOString().slice(0, 10) : null, serialId]
+        );
+        serialsUpdated += 1;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    let pdfPath = null;
+    try {
+      pdfPath = await regenerateDcPdfForNumber(dcNumber);
+    } catch (pdfErr) {
+      console.warn('DC PDF regeneration after dispatch date update:', pdfErr.message);
+    }
+
+    if (head.sales_order_number) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: head.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'dispatch_date_updated',
+        description: `${dcNumber} dispatch date updated to ${dispatchedAt.toISOString().slice(0, 10)}.`,
+        metadata: {
+          dc_number: dcNumber,
+          dispatched_at: dispatchedAt.toISOString(),
+          pdf_regenerated: Boolean(pdfPath),
+          serials_updated: serialsUpdated,
+        },
+        user: req.user,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: pdfPath ? 'Dispatch date updated — DC PDF regenerated' : 'Dispatch date updated',
+      dispatched_at: dispatchedAt.toISOString(),
+      pdf_path: pdfPath,
+      serials_updated: serialsUpdated,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateDcDispatchDate:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Correct delivery date on an already-delivered outbound DC.
  * Updates DC lines, customer asset delivered_at, and rental rent_start_date (billing anchor).
  */

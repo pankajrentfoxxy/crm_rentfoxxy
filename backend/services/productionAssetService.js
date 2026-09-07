@@ -457,27 +457,36 @@ async function updateConfig(db, productionAssetId, patch, userId, stageName) {
 
   // Mirror to ticket denorm columns for list/search (GRN untouched)
   if (current.ticket_id) {
-    await db.query(
-      `UPDATE tickets SET
-         brand = COALESCE(NULLIF($2, ''), brand),
-         model = COALESCE(NULLIF($3, ''), model),
-         processor = COALESCE(NULLIF($4, ''), processor),
-         ram = COALESCE(NULLIF($5, ''), ram),
-         storage = COALESCE(NULLIF($6, ''), storage),
-         updated_at = NOW()
-       WHERE ticket_id = $1`,
-      [
-        current.ticket_id,
-        next.brand,
-        next.model,
-        next.processor,
-        next.ram,
-        next.ssd,
-      ]
-    );
+    await mirrorWorkingConfigToTicket(db, current.ticket_id, next);
   }
 
   return { production_asset: upd.rows[0], changes };
+}
+
+/** Keep tickets.* hardware columns aligned with the working production-asset config. */
+async function mirrorWorkingConfigToTicket(db, ticketId, config) {
+  if (!ticketId || !config) return;
+  const w = normalizeWorkingConfig(config);
+  await db.query(
+    `UPDATE tickets SET
+       brand = $2,
+       model = $3,
+       processor = $4,
+       generation = $5,
+       ram = $6,
+       storage = $7,
+       updated_at = NOW()
+     WHERE ticket_id = $1`,
+    [
+      ticketId,
+      w.brand || null,
+      w.model || null,
+      w.processor || null,
+      w.generation || null,
+      w.ram || null,
+      w.ssd || null,
+    ]
+  );
 }
 
 async function saveQc1Checklist(db, productionAssetId, checklist, userId) {
@@ -1165,6 +1174,7 @@ module.exports = {
   getByVendorSerial,
   getConfigForTicket,
   updateConfig,
+  mirrorWorkingConfigToTicket,
   saveQc1Checklist,
   verifyQc2Specs,
   markPendingInventory,

@@ -1,17 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Laptop, Package, Plus, Truck } from 'lucide-react';
+import { ArrowLeft, Laptop, Package } from 'lucide-react';
 import { PageHeader, Button, SearchField } from '../../../components/ui/primitives';
-import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import {
   createReturnToVendorDc,
-  fetchAllPurchaseOrders,
-  fetchAllVendors,
   fetchReturnToVendorEligible,
 } from '../vendorManagementApi';
 
-const STEPS = ['Vendor', 'Purchase Order', 'Select Laptops', 'Confirm'];
+const STEPS = ['Select Laptops', 'Confirm'];
 
 function statusPill(status) {
   const map = {
@@ -25,10 +22,6 @@ function statusPill(status) {
 export default function ReturnToVendorCreatePage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [vendors, setVendors] = useState([]);
-  const [pos, setPos] = useState([]);
-  const [vendorId, setVendorId] = useState('');
-  const [poId, setPoId] = useState('');
   const [laptops, setLaptops] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [search, setSearch] = useState('');
@@ -37,30 +30,10 @@ export default function ReturnToVendorCreatePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchAllVendors({ limit: 200 })
-      .then(setVendors)
-      .catch(() => toast.error('Failed to load vendors'));
-  }, []);
-
-  useEffect(() => {
-    if (!vendorId) {
-      setPos([]);
-      setPoId('');
-      return;
-    }
-    fetchAllPurchaseOrders({ vendor_id: vendorId, limit: 200 })
-      .then(setPos)
-      .catch(() => toast.error('Failed to load purchase orders'));
-  }, [vendorId]);
-
   const loadLaptops = useCallback(async () => {
-    if (!vendorId || !poId) return;
     setLoading(true);
     try {
       const res = await fetchReturnToVendorEligible({
-        vendor_id: vendorId,
-        po_id: poId,
         search: search || undefined,
         limit: 200,
       });
@@ -71,29 +44,18 @@ export default function ReturnToVendorCreatePage() {
     } finally {
       setLoading(false);
     }
-  }, [vendorId, poId, search]);
+  }, [search]);
 
   useEffect(() => {
-    if (step >= 2 && vendorId && poId) loadLaptops();
-  }, [step, vendorId, poId, loadLaptops]);
-
-  const vendorOptions = useMemo(
-    () => vendors.map((v) => ({
-      value: String(v.vendor_id),
-      label: v.business_name || v.name || `Vendor #${v.vendor_id}`,
-    })),
-    [vendors]
-  );
-
-  const poOptions = useMemo(
-    () => pos.map((p) => ({
-      value: String(p.po_id || p.id),
-      label: p.po_number || p.order_number || `PO #${p.po_id || p.id}`,
-    })),
-    [pos]
-  );
+    loadLaptops();
+  }, [loadLaptops]);
 
   const selectedRows = laptops.filter((r) => selected.has(r.serial_id));
+
+  const selectedVendor = useMemo(() => {
+    const names = [...new Set(selectedRows.map((r) => r.vendor_name).filter(Boolean))];
+    return names.length === 1 ? names[0] : names.length > 1 ? null : '';
+  }, [selectedRows]);
 
   const toggle = (serialId) => {
     setSelected((prev) => {
@@ -109,6 +71,10 @@ export default function ReturnToVendorCreatePage() {
       toast.error('Select at least one laptop');
       return;
     }
+    if (selectedVendor === null) {
+      toast.error('All selected laptops must belong to the same vendor');
+      return;
+    }
     if (!returnReason.trim()) {
       toast.error('Return reason is required');
       return;
@@ -116,8 +82,6 @@ export default function ReturnToVendorCreatePage() {
     setSaving(true);
     try {
       const res = await createReturnToVendorDc({
-        vendor_id: Number(vendorId),
-        po_id: Number(poId),
         serial_ids: [...selected],
         return_reason: returnReason.trim(),
         remarks: remarks.trim() || undefined,
@@ -135,7 +99,7 @@ export default function ReturnToVendorCreatePage() {
     <div className="space-y-4 pb-8">
       <PageHeader
         title="Return Laptop to Vendor"
-        subtitle="Send warehouse laptops back to the original supplier"
+        subtitle="Select warehouse laptops to send back to the original supplier"
         actions={(
           <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
             <ArrowLeft className="w-4 h-4" /> Back to list
@@ -159,52 +123,26 @@ export default function ReturnToVendorCreatePage() {
       <div className="rounded-xl border bg-white shadow-sm p-4 space-y-4">
         {step === 0 && (
           <>
-            <p className="text-sm text-slate-600">Choose the vendor who originally supplied the laptop(s).</p>
-            <SearchableSelect
-              label="Vendor"
-              value={vendorId}
-              onChange={setVendorId}
-              options={vendorOptions}
-              placeholder="Search vendor…"
-            />
-            <div className="flex justify-end">
-              <Button disabled={!vendorId} onClick={() => setStep(1)}>Next: Purchase Order</Button>
-            </div>
-          </>
-        )}
-
-        {step === 1 && (
-          <>
-            <p className="text-sm text-slate-600">Select the purchase order the laptop was received on.</p>
-            <SearchableSelect
-              label="Purchase Order"
-              value={poId}
-              onChange={setPoId}
-              options={poOptions}
-              placeholder="Search PO…"
-            />
-            <div className="flex justify-between">
-              <Button variant="secondary" onClick={() => setStep(0)}>Back</Button>
-              <Button disabled={!poId} onClick={() => setStep(2)}>Next: Select Laptops</Button>
-            </div>
-          </>
-        )}
-
-        {step === 2 && (
-          <>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between">
               <p className="text-sm text-slate-600">
-                Only warehouse laptops linked to this PO are shown. Selected: <strong>{selected.size}</strong>
+                Pick one or more laptops in warehouse. Selected: <strong>{selected.size}</strong>
               </p>
-              <SearchField value={search} onChange={setSearch} placeholder="Search TTSPL / serial…" />
+              <SearchField value={search} onChange={setSearch} placeholder="Search TTSPL / serial / vendor…" />
             </div>
-            <div className="overflow-x-auto border rounded-lg max-h-96 overflow-y-auto">
+            {selectedVendor === null && selected.size > 0 && (
+              <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                Selected laptops belong to different vendors — pick laptops from one vendor only.
+              </p>
+            )}
+            <div className="overflow-x-auto border rounded-lg max-h-[28rem] overflow-y-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 sticky top-0 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2 text-left w-10" />
                     <th className="px-3 py-2 text-left">Asset ID</th>
                     <th className="px-3 py-2 text-left">Serial</th>
+                    <th className="px-3 py-2 text-left">Vendor</th>
+                    <th className="px-3 py-2 text-left">PO</th>
                     <th className="px-3 py-2 text-left">Brand / Model</th>
                     <th className="px-3 py-2 text-left">Status</th>
                     <th className="px-3 py-2 text-left">Warehouse</th>
@@ -212,9 +150,9 @@ export default function ReturnToVendorCreatePage() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Loading…</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">Loading…</td></tr>
                   ) : laptops.length === 0 ? (
-                    <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">No eligible laptops for this PO</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">No eligible laptops in warehouse</td></tr>
                   ) : laptops.map((row) => (
                     <tr key={row.serial_id} className="border-t hover:bg-slate-50/80">
                       <td className="px-3 py-2">
@@ -226,6 +164,8 @@ export default function ReturnToVendorCreatePage() {
                       </td>
                       <td className="px-3 py-2 font-medium">{row.ttspl_id}</td>
                       <td className="px-3 py-2">{row.serial_number}</td>
+                      <td className="px-3 py-2">{row.vendor_name || '—'}</td>
+                      <td className="px-3 py-2 text-xs">{row.po_number || row.po_id || '—'}</td>
                       <td className="px-3 py-2">{[row.brand, row.model].filter(Boolean).join(' ') || '—'}</td>
                       <td className="px-3 py-2">
                         <span className={`px-2 py-0.5 rounded-full text-xs ${statusPill(row.inventory_status)}`}>
@@ -240,24 +180,19 @@ export default function ReturnToVendorCreatePage() {
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-between">
-              <Button variant="secondary" onClick={() => setStep(1)}>Back</Button>
-              <Button disabled={!selected.size} onClick={() => setStep(3)}>Next: Confirm</Button>
+            <div className="flex justify-end">
+              <Button disabled={!selected.size || selectedVendor === null} onClick={() => setStep(1)}>
+                Next: Confirm
+              </Button>
             </div>
           </>
         )}
 
-        {step === 3 && (
+        {step === 1 && (
           <>
-            <div className="grid sm:grid-cols-2 gap-4 text-sm">
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs uppercase text-slate-500">Vendor</p>
-                <p className="font-medium">{vendorOptions.find((o) => o.value === vendorId)?.label}</p>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs uppercase text-slate-500">Purchase Order</p>
-                <p className="font-medium">{poOptions.find((o) => o.value === poId)?.label}</p>
-              </div>
+            <div className="rounded-lg bg-slate-50 p-3 text-sm">
+              <p className="text-xs uppercase text-slate-500">Vendor</p>
+              <p className="font-medium">{selectedVendor || '—'}</p>
             </div>
             <label className="block text-sm">
               <span className="font-medium text-slate-700">Return reason *</span>
@@ -287,12 +222,13 @@ export default function ReturnToVendorCreatePage() {
                   <li key={r.serial_id} className="flex items-center gap-2">
                     <Laptop className="w-3.5 h-3.5 text-slate-400" />
                     {r.ttspl_id} — {r.serial_number}
+                    {r.po_number ? ` · ${r.po_number}` : ''}
                   </li>
                 ))}
               </ul>
             </div>
             <div className="flex justify-between">
-              <Button variant="secondary" onClick={() => setStep(2)}>Back</Button>
+              <Button variant="secondary" onClick={() => setStep(0)}>Back</Button>
               <Button loading={saving} onClick={handleCreate}>
                 <Package className="w-4 h-4" /> Generate Return DC
               </Button>

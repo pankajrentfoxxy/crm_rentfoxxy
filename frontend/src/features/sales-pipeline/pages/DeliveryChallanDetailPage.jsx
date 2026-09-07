@@ -15,7 +15,7 @@ import {
   downloadBluedartWaybillPdfByAwb, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   sendAccountsDcMail, requestDemoEway,
-  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, cancelDcBluedartAwb,
+  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, updateDcDispatchDate, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
@@ -96,6 +96,7 @@ export default function DeliveryChallanDetailPage() {
   const isSuperAdmin = user?.role === 'super_admin';
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const canEditDeliveryDate = isSuperAdmin || canOverrideHsn;
+  const canEditDispatchDate = isSuperAdmin || canOverrideHsn;
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
   const [billingLines, setBillingLines] = useState([]);
@@ -131,12 +132,14 @@ export default function DeliveryChallanDetailPage() {
   const [bluedartPdfLoading, setBluedartPdfLoading] = useState(false);
   const [shipmentUnits, setShipmentUnits] = useState([]);
   const [updateDeliveryDateOpen, setUpdateDeliveryDateOpen] = useState(false);
+  const [updateDispatchDateOpen, setUpdateDispatchDateOpen] = useState(false);
   const [sendingAccountsMail, setSendingAccountsMail] = useState(false);
   const [apiCanViewOtp, setApiCanViewOtp] = useState(false);
   const [apiDeliveryOtp, setApiDeliveryOtp] = useState(null);
   const [apiWarehouseOtp, setApiWarehouseOtp] = useState(null);
 
   const head = lines[0] || {};
+  const dispatchDateEditable = canEditDispatchDate && !['cancelled', 'rejected', 'refused'].includes(String(head.status || '').toLowerCase());
   const showOtp = canViewOtp || apiCanViewOtp || isSuperAdmin;
 
   useEffect(() => {
@@ -381,6 +384,20 @@ export default function DeliveryChallanDetailPage() {
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update delivery date');
+      throw err;
+    }
+  };
+
+  const confirmUpdateDispatchDate = async ({ delivered_at: dispatched_at }) => {
+    try {
+      const { data } = await updateDcDispatchDate(dcNumber, { dispatched_at });
+      toast.success(data?.message || 'Dispatch date updated');
+      setUpdateDispatchDateOpen(false);
+      await load();
+      const url = dcPdfUrl(data?.pdf_path) || dcPdfUrl(head.pdf_path);
+      if (url) window.open(url, '_blank');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update dispatch date');
       throw err;
     }
   };
@@ -817,7 +834,18 @@ export default function DeliveryChallanDetailPage() {
               ) : null}
               <div className="p-4 text-sm border-t space-y-1">
                 <p>Created: {formatDate(head.created_at)}</p>
-                <p className="font-medium text-slate-800">Dispatch date: {formatDateTime(head.dispatched_at)}</p>
+                <p className="font-medium text-slate-800">
+                  Dispatch date: {formatDateTime(head.dispatched_at)}
+                  {dispatchDateEditable ? (
+                    <button
+                      type="button"
+                      onClick={() => setUpdateDispatchDateOpen(true)}
+                      className="ml-2 text-xs text-indigo-700 underline hover:text-indigo-900"
+                    >
+                      Edit date
+                    </button>
+                  ) : null}
+                </p>
                 {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && (
                   <div>
                     <p>
@@ -1279,7 +1307,19 @@ export default function DeliveryChallanDetailPage() {
           <div className="bg-white border rounded-xl p-4 text-sm">
             <h3 className="font-semibold mb-2">Dispatch</h3>
             <p><span className="text-gray-500">Created:</span> {formatDate(head.created_at)}</p>
-            <p><span className="text-gray-500">Dispatch date:</span> <strong>{formatDateTime(head.dispatched_at)}</strong></p>
+            <p>
+              <span className="text-gray-500">Dispatch date:</span>{' '}
+              <strong>{formatDateTime(head.dispatched_at)}</strong>
+              {dispatchDateEditable ? (
+                <button
+                  type="button"
+                  onClick={() => setUpdateDispatchDateOpen(true)}
+                  className="ml-2 text-xs text-indigo-700 underline hover:text-indigo-900"
+                >
+                  Edit date
+                </button>
+              ) : null}
+            </p>
             <p><span className="text-gray-500">Mode:</span> {head.dispatch_mode || head.ship_by || '—'}</p>
             {head.vehicle_number ? (
               <p><span className="text-gray-500">Vehicle:</span> {head.vehicle_number}</p>
@@ -1374,6 +1414,18 @@ export default function DeliveryChallanDetailPage() {
           confirmLabel="Save delivery date"
           onClose={() => setUpdateDeliveryDateOpen(false)}
           onConfirm={confirmUpdateDeliveryDate}
+        />
+      )}
+
+      {updateDispatchDateOpen && (
+        <MarkDeliveredModal
+          dcNumber={dcNumber}
+          title="Update Dispatch Date"
+          initialDate={head.dispatched_at}
+          confirmLabel="Save & regenerate PDF"
+          helpText="Sets the dispatch date on this DC and regenerates the PDF. For dispatch-ready DCs this updates the document only; guard outward scan still marks the unit in transit."
+          onClose={() => setUpdateDispatchDateOpen(false)}
+          onConfirm={confirmUpdateDispatchDate}
         />
       )}
 

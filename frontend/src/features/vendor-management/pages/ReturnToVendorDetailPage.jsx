@@ -73,7 +73,7 @@ export default function ReturnToVendorDetailPage() {
     <div className="space-y-4 pb-8">
       <PageHeader
         title={dc.dc_number}
-        subtitle={`${dc.vendor_name || 'Vendor'} · PO ${dc.po_number || dc.po_id || '—'}`}
+        subtitle={`${dc.vendor_name || 'Vendor'}${dc.po_number || dc.po_id ? ` · PO ${dc.po_number || dc.po_id}` : (dc.items?.length > 1 ? ' · Multiple POs' : '')}`}
         actions={(
           <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
             <ArrowLeft className="w-4 h-4" /> Back

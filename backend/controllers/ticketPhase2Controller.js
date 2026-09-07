@@ -962,6 +962,15 @@ exports.updateTtsplConfig = async (req, res) => {
       });
     }
 
+    if (pa?.production_asset_id && ticket.ticket_id && !pa.ticket_id) {
+      await pool.query(
+        `UPDATE production_assets SET ticket_id = $2, updated_at = NOW()
+         WHERE production_asset_id = $1`,
+        [pa.production_asset_id, ticket.ticket_id]
+      );
+      pa.ticket_id = ticket.ticket_id;
+    }
+
     const stageRes = await pool.query(
       `SELECT stage_name FROM stages WHERE stage_id = $1`,
       [ticket.current_stage_id]
@@ -1044,30 +1053,9 @@ exports.updateTtsplConfig = async (req, res) => {
 
     // Mirror the working config onto the ticket row so the floor tickets list
     // (which reads tickets.brand/model/processor/generation/ram/storage) reflects the edit.
-    // GRN accepted snapshot (grn_config / vendor serial extra) is intentionally left untouched.
-    if (changes.length) {
-      const latest = paResult.production_asset || {};
-      await pool.query(
-        `UPDATE tickets SET
-             brand = COALESCE(NULLIF($2, ''), brand),
-             model = COALESCE(NULLIF($3, ''), model),
-             processor = COALESCE(NULLIF($4, ''), processor),
-             generation = COALESCE(NULLIF($5, ''), generation),
-             ram = COALESCE(NULLIF($6, ''), ram),
-             storage = COALESCE(NULLIF($7, ''), storage),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE ticket_id = $1`,
-        [
-          ticket.ticket_id,
-          latest.brand,
-          latest.model,
-          latest.processor,
-          latest.generation,
-          latest.ram,
-          latest.ssd,
-        ]
-      );
-    }
+    // Always sync — PA may already match the patch (changes=[]), but tickets.* can still be stale.
+    const latest = paResult.production_asset || {};
+    await paSvc.mirrorWorkingConfigToTicket(pool, ticket.ticket_id, latest);
 
     if (changes.length) {
       await ttsplAuditService.logTtsplEvent({

@@ -760,15 +760,38 @@ exports.getTicketById = async (req, res) => {
     const servicesTotal = services.rows.reduce((sum, svc) => sum + (parseFloat(svc.cost) || 0), 0);
     const grandTotal = initialCost + partsTotal + servicesTotal;
 
+    let displayTicket = { ...ticket, dispatch_qc_eta: dispatchQcEta };
+    try {
+      const paSvc = require('../services/productionAssetService');
+      const cfgBundle = await paSvc.getConfigForTicket(pool, ticket);
+      const wc = cfgBundle.config || {};
+      if (wc && Object.keys(wc).length) {
+        displayTicket = {
+          ...displayTicket,
+          brand: wc.brand || displayTicket.brand,
+          model: wc.model || displayTicket.model,
+          model_name: wc.model || displayTicket.model_name || displayTicket.model,
+          processor: wc.processor || displayTicket.processor,
+          generation: wc.generation || displayTicket.generation,
+          ram: wc.ram || displayTicket.ram,
+          storage: wc.storage || wc.ssd || displayTicket.storage,
+          gpu: wc.gpu || displayTicket.gpu,
+          screen_size: wc.screen_size || displayTicket.screen_size,
+        };
+      }
+    } catch {
+      // Fall back to ticket row + VSN extra when production asset lookup fails
+    }
+    displayTicket.vendor_serial_extra = ticket.vsn_extra || null;
+
     res.json({
       success: true,
       ticket: {
-        ...ticket,
+        ...displayTicket,
         initial_cost: initialCost,
         parts_total: partsTotal,
         services_total: servicesTotal,
         grand_total: grandTotal,
-        dispatch_qc_eta: dispatchQcEta,
       },
       activities: activities.rows,
       photos: photos.rows,

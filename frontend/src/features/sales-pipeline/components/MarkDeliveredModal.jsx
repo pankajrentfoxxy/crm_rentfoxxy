@@ -23,6 +23,7 @@ export default function MarkDeliveredModal({
   initialDate,
   confirmLabel = 'Confirm Delivery',
   allowFutureDates = true,
+  helpText,
   onClose,
   onConfirm,
 }) {
@@ -50,11 +51,17 @@ export default function MarkDeliveredModal({
           <p className="text-xs text-gray-500 font-mono mb-3">{dcNumber}</p>
         ) : null}
         <p className="text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg p-2 mb-4">
-          This date becomes the customer delivery date and rental billing start anchor for laptops on this DC.
-          {allowFutureDates ? ' You can pick a future date for units still in transit.' : ''}
+          {helpText || (
+            <>
+              This date becomes the customer delivery date and rental billing start anchor for laptops on this DC.
+              {allowFutureDates ? ' You can pick a future date for units still in transit.' : ''}
+            </>
+          )}
         </p>
         <label className="block mb-4">
-          <span className="text-sm font-medium text-gray-700 block mb-1">Delivery date *</span>
+          <span className="text-sm font-medium text-gray-700 block mb-1">
+            {(title || '').toLowerCase().includes('dispatch') ? 'Dispatch date *' : 'Delivery date *'}
+          </span>
           <input
             type="date"
             value={deliveryDate}

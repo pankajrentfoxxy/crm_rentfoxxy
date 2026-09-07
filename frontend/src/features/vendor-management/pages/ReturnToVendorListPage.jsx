@@ -58,7 +58,7 @@ export default function ReturnToVendorListPage() {
       ),
     },
     { key: 'vendor_name', header: 'Vendor', render: (r) => r.vendor_name || '—' },
-    { key: 'po_number', header: 'PO', render: (r) => r.po_number || '—' },
+    { key: 'po_number', header: 'PO', render: (r) => r.po_number || (r.item_count > 1 ? 'Multiple' : '—') },
     {
       key: 'item_count',
       header: 'Laptops',

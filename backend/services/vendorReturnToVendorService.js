@@ -126,6 +126,7 @@ async function listEligibleLaptops({ vendorId, poId, search, page = 1, limit = 5
       vsn.serial_number ILIKE $${n}
       OR vsn.inventory_asset_code ILIKE $${n}
       OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${n}
+      OR v.business_name ILIKE $${n}
     )`);
   }
   const offset = (Math.max(1, page) - 1) * limit;
@@ -276,10 +277,9 @@ async function createReturnDc(client, {
   const vendorIds = [...new Set(serialRows.map((r) => Number(r.vendor_id)))];
   const poIds = [...new Set(serialRows.map((r) => Number(r.po_id)))];
   if (vendorIds.length > 1) throw new Error('All laptops must belong to the same vendor');
-  if (poIds.length > 1) throw new Error('All laptops must belong to the same purchase order');
 
   const resolvedVendorId = vendorIds[0];
-  const resolvedPoId = poIds[0];
+  const resolvedPoId = poIds.length === 1 ? poIds[0] : null;
   const sample = serialRows[0];
 
   const vRes = await client.query(
