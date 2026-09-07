@@ -91,6 +91,7 @@ app.use('/api/user-permissions', require('./routes/userPermissions'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/sales-management', require('./routes/salesManagement'));
+app.use('/api/bluedart-awb-tracking', require('./routes/bluedartAwbTracking'));
 app.use('/api/dispatch-workflow', require('./routes/dispatchWorkflow'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/delivery-register-management', require('./routes/deliveryRegisterManagement'));

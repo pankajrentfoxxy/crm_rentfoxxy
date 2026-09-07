@@ -13,6 +13,7 @@ import DeliveryRegisterPage from './pages/DeliveryRegisterPage';
 import DeliveryRegisterListPage from '../../pages/delivery-register-management/DeliveryRegisterListPage';
 import TechnicianBucketPage from './pages/TechnicianBucketPage';
 import MyDeliveriesPage from './pages/MyDeliveriesPage';
+import BluedartAwbTrackingPage from './pages/BluedartAwbTrackingPage';
 import { SO_PERMISSION_SECTIONS } from './salesOrderScope';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
@@ -42,6 +43,7 @@ function SalesIndexRedirect() {
   if (canView('sales_orders_replacement')) return <Navigate to="sales-orders-replacement" replace />;
   if (canView('sales_orders_doc')) return <Navigate to="sales-orders-rental" replace />;
   if (canView('delivery_challans')) return <Navigate to="delivery-challans" replace />;
+  if (canView('bluedart_awb_tracking')) return <Navigate to="bluedart-tracking" replace />;
   if (canView('delivery_register_management')) return <Navigate to="delivery-register" replace />;
   if (canView('return_dc')) return <Navigate to="return-dc" replace />;
   if (canView('technician_bucket') || canView('delivery_my_deliveries')) {
@@ -65,6 +67,7 @@ export default function SalesPipelineApp() {
       <Route path="sales-orders-replacement/*" element={gSo(<SalesOrderDetailPage scope="replacement" />)} />
       <Route path="sales-orders/*" element={gSo(<SalesOrderDetailPage />)} />
       <Route path="delivery-challans" element={g('delivery_challans', <DeliveryChallanListPage />)} />
+      <Route path="bluedart-tracking" element={g('bluedart_awb_tracking', <BluedartAwbTrackingPage />)} />
       <Route
         path="delivery-challans/*"
         element={(

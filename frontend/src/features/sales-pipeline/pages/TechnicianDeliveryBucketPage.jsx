@@ -95,7 +95,7 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
           <p className="text-sm text-gray-500">
             {isReturn
               ? 'In-house return pickups currently with technicians'
-              : 'In-person deliveries only. Send OTP to the customer, then enter the code they received — technicians cannot see the OTP.'}
+              : 'In-person deliveries only. Send OTP to the customer, then enter the code to confirm delivery. OTP is shown here once sent.'}
           </p>
         </div>
         <select
@@ -177,7 +177,12 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                                 : 'Send OTP to customer'}
                           </button>
                         )}
-                        {dc.otp_sent_at && !dc.otp_verified_at ? (
+                        {dc.otp_sent_at && !dc.otp_verified_at && dc.otp_code ? (
+                          <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 font-mono font-bold tracking-widest inline-flex items-center gap-1.5 border border-amber-200">
+                            <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                            OTP {dc.otp_code}
+                          </span>
+                        ) : dc.otp_sent_at && !dc.otp_verified_at ? (
                           <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700">
                             OTP sent · ask customer
                           </span>

@@ -134,7 +134,7 @@ function refusalStage(line) {
  * Build grouped DC rows (one object per DC) with serials, specs, technician,
  * customer phone and the chosen delivery address.
  */
-async function buildDcFlow(where, params, { includeOtp = false } = {}) {
+async function buildDcFlow(where, params, { includeOtp = false, includeSentOtp = false } = {}) {
   const rowsRes = await pool.query(
     `SELECT d.*,
             COALESCE(NULLIF(TRIM(CONCAT(dt.first_name,' ',COALESCE(dt.last_name,''))),''), u.name, u.email) AS technician_name,
@@ -204,6 +204,11 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
 
     const shipping = normalizeDeliveryAddress(first.customer_shipping_address);
     const stage = refusalStage(first);
+    const otpWasSent = Boolean(
+      first.otp_sent_at || first.delivery_otp_sent_at || first.d_otp || first.support_otp_sent_at
+    );
+    const otpValue = first.otp_code || first.d_otp || first.delivery_otp || first.support_otp_code || null;
+    const canShowOtp = Boolean(includeOtp || (includeSentOtp && otpWasSent && otpValue));
 
     out.push({
       dc_number: dcNumber,
@@ -237,10 +242,8 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       otp_sent_at: first.otp_sent_at || first.delivery_otp_sent_at
         || (first.d_otp ? first.updated_at : null) || first.support_otp_sent_at,
       otp_verified_at: first.otp_verified_at || first.d_otp_verified_at || first.support_otp_verified_at,
-      otp_code: includeOtp
-        ? (first.otp_code || first.d_otp || first.delivery_otp || first.support_otp_code)
-        : undefined,
-      can_view_otp: includeOtp,
+      otp_code: canShowOtp ? otpValue : undefined,
+      can_view_otp: canShowOtp,
       otp_pending: Boolean(
         first.otp_sent_at || first.delivery_otp_sent_at || first.d_otp || first.support_otp_sent_at
       ) && !(first.otp_verified_at || first.d_otp_verified_at || first.support_otp_verified_at),
@@ -278,6 +281,8 @@ exports.listDeliveryFlow = async (req, res) => {
     await rejectionSvc.ensureDeliveryRejectionSchema();
     const permissionCache = {};
     const includeOtp = await userCanViewDeliveryRegisterOtp(req.user, permissionCache);
+    // Technician bucket: show OTP once it has been sent (even for field delivery roles).
+    const includeSentOtp = status === 'inhouse';
     const conditions = [];
     const params = [];
 
@@ -359,7 +364,7 @@ exports.listDeliveryFlow = async (req, res) => {
       }
       const pageParams = [...params, dcNumbers];
       const pageWhere = `${where} AND d.dc_number = ANY($${pageParams.length}::text[])`;
-      const items = await buildDcFlow(pageWhere, pageParams, { includeOtp });
+      const items = await buildDcFlow(pageWhere, pageParams, { includeOtp, includeSentOtp });
       return res.json({
         success: true,
         items,
@@ -367,7 +372,7 @@ exports.listDeliveryFlow = async (req, res) => {
       });
     }
 
-    const items = await buildDcFlow(where, params, { includeOtp });
+    const items = await buildDcFlow(where, params, { includeOtp, includeSentOtp });
     res.json({ success: true, items });
   } catch (error) {
     console.error('listDeliveryFlow:', error);

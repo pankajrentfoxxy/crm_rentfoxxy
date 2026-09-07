@@ -32,6 +32,7 @@ export const MODULE_CHILDREN = {
     'so_laptop_qc',
     'sales_order_cancel',
     'delivery_challans',
+    'bluedart_awb_tracking',
     'return_dc',
     'delivery_register_management',
     'technician_bucket',
