@@ -236,6 +236,7 @@ router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
 router.get('/return-dc/:rdcNumber/download-pdf', rdcView, ctrl.downloadReturnDcPdf);
 router.post('/return-dc/:rdcNumber/pdf', rdcView, ctrl.regenerateReturnDcPdf);
 router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
+router.post('/return-dc/:rdcNumber/config-tokens', rdcEdit, ctrl.remintReturnDcConfigTokens);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);
 router.post('/return-dc/tickets/:ticketId/generate', rdcEdit, ctrl.generateReturnDc);
 

@@ -409,6 +409,7 @@ exports.listCreditNotes = async (req, res) => {
               return_ticket_id, applied_in_invoice_id
        FROM customer_credit_notes
        WHERE customer_id = $1
+         AND status IN ('approved', 'applied')
        ORDER BY created_at DESC`,
       [req.customer.customer_id]
     );

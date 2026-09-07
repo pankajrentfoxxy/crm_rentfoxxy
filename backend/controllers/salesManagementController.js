@@ -3938,6 +3938,24 @@ exports.exportReturnDcLaptops = async (req, res) => {
   }
 };
 
+exports.remintReturnDcConfigTokens = async (req, res) => {
+  try {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    await assertReturnDcAssignedAccess(req, rdcNumber);
+    const rdcCapture = require('../services/rdcCaptureService');
+    const itemId = Number(req.body?.item_id || 0) || null;
+    const minted = await rdcCapture.mintTokensForRdc(require('../config/db'), {
+      rdcNumber,
+      createdBy: req.user?.user_id || req.user?.id || null,
+      itemIds: itemId ? [itemId] : null,
+    });
+    res.json({ success: true, minted });
+  } catch (error) {
+    console.error('remintReturnDcConfigTokens:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to generate access number' });
+  }
+};
+
 exports.getReturnDcDetail = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();

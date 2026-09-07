@@ -26,9 +26,31 @@ export const exportInvoiceSerialsExcel = (p) => api.get(`${base}/invoices/export
   timeout: 5 * 60 * 1000,
 });
 export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: p });
+export const getCreditNote = (id) => api.get(`${base}/credit-notes/${id}`);
+export const listCreditNoteLaptops = (p) => api.get(`${base}/credit-notes/laptops`, { params: p });
+export const listCreditNoteReviewGroups = (p) => api.get(`${base}/credit-notes/review-groups`, { params: p });
+export const generateCreditNotesBulk = (d) => api.post(`${base}/credit-notes/generate-bulk`, d);
+export const generateCreditNote = (d) => api.post(`${base}/credit-notes/generate`, d);
 export const createCreditNote = (d) => api.post(`${base}/credit-notes`, d);
-export const approveCreditNote = (id) => api.patch(`${base}/credit-notes/${id}/approve`);
+export const approveCreditNote = (id, d) => api.patch(`${base}/credit-notes/${id}/approve`, d);
 export const approveCreditNotesBulk = (ids) => api.post(`${base}/credit-notes/approve-bulk`, { ids });
+export async function creditNotePdfErrorMessage(err, fallback = 'PDF download failed') {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text());
+      return parsed.message || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return data?.message || fallback;
+}
+
+export const downloadCreditNotePdf = (id, { format } = {}) => api.get(`${base}/credit-notes/${id}/pdf`, {
+  params: format ? { format } : undefined,
+  responseType: 'blob',
+});
 export const listSecurityDeposits = (p) => api.get(`${base}/security-deposits`, { params: p });
 export const recordSecurityDeposit = (d) => api.post(`${base}/security-deposits`, d);
 export const refundSecurityDeposit = (id, d) => api.patch(`${base}/security-deposits/${id}/refund`, d);

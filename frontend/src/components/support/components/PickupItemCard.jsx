@@ -122,9 +122,11 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const whDone = !!item.warehouse_received_at;
   const needsGate = !!item.return_dc_number;
   const gateDone = !!item.gate_inward_at;
+  const configDone = !!item.return_config_verified_at && !!item.return_captured_serial;
   const pickupReadyForWarehouse = isInhouse ? otpVerified : true;
   const awaitingGate = needsGate && !gateDone && !whDone && pickupReadyForWarehouse;
-  const canWarehouseEsign = !whDone && isWH && pickupReadyForWarehouse && (!needsGate || gateDone);
+  const awaitingConfig = needsGate && gateDone && !configDone && !whDone;
+  const canWarehouseEsign = !whDone && isWH && pickupReadyForWarehouse && (!needsGate || (gateDone && configDone));
   const canOpenGuardScanner = canView('guard_gate_checking');
   const guardScannerHref = item.return_dc_number
     ? `/guard/scanner?dir=inward&q=${encodeURIComponent(item.return_dc_number)}`
@@ -704,16 +706,28 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
       )}
 
       {needsGate && gateDone && !whDone && (
-        <div className="mx-4 mt-3 mb-1 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
-          <div className="flex items-center gap-2 text-emerald-900">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-            <p className="font-semibold text-sm">Guard inward done — warehouse can e-sign</p>
+        <div className={`mx-4 mt-3 mb-1 p-3 rounded-xl ${configDone ? 'bg-emerald-50 border border-emerald-200' : 'bg-violet-50 border border-violet-200'}`}>
+          <div className={`flex items-center gap-2 ${configDone ? 'text-emerald-900' : 'text-violet-900'}`}>
+            <CheckCircle2 className={`w-5 h-5 ${configDone ? 'text-emerald-600' : 'text-violet-600'}`} />
+            <p className="font-semibold text-sm">
+              {configDone
+                ? 'Guard inward + config match — warehouse can e-sign'
+                : 'Guard inward done — run Return DC hardware script'}
+            </p>
           </div>
           {item.gate_inward_at && (
-            <p className="text-xs text-emerald-700 mt-1">
+            <p className={`text-xs mt-1 ${configDone ? 'text-emerald-700' : 'text-violet-700'}`}>
               Scanned {new Date(item.gate_inward_at).toLocaleString('en-IN')}
             </p>
           )}
+          {awaitingConfig && item.return_dc_number ? (
+            <Link
+              to={`/sales-pipeline/return-dc?search=${encodeURIComponent(item.return_dc_number)}`}
+              className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-violet-800"
+            >
+              Open Return DC for access number
+            </Link>
+          ) : null}
         </div>
       )}
 

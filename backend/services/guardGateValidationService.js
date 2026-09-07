@@ -2031,6 +2031,17 @@ async function applyInwardReturnDcGate(client, { session, actor }) {
       );
     } catch (_) { /* audit table may differ */ }
   }
+
+  try {
+    const { mintTokensForRdc } = require('./rdcCaptureService');
+    await mintTokensForRdc(client, {
+      rdcNumber: rdc,
+      createdBy: actor.userId,
+      itemIds: updated.rows.map((row) => row.id),
+    });
+  } catch (err) {
+    console.error('[applyInwardReturnDcGate] mint RDC capture tokens:', err.message);
+  }
 }
 
 async function confirmSession({ sessionId, remarks, user }) {

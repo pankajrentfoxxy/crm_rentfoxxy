@@ -2914,6 +2914,18 @@ exports.warehouseReceivedPickup = async (req, res) => {
                 { status: 400 }
             );
         }
+        if (item.return_dc_number && item.gate_inward_at && !item.return_config_verified_at) {
+            throw Object.assign(
+                new Error('Configuration check has not passed. Run the Return DC hardware script (same as QC2 / Dispatch QC).'),
+                { status: 400 }
+            );
+        }
+        if (item.return_dc_number && item.gate_inward_at && !String(item.return_captured_serial || '').trim()) {
+            throw Object.assign(
+                new Error('Serial has not been captured. Finish the Return DC hardware script so it can read the BIOS serial.'),
+                { status: 400 }
+            );
+        }
         const isRepair = isRepairPickupItem(item);
         const terminalStatus = isRepair ? AWAITING_SDC_STATUS : 'inventory_updated';
 
@@ -3683,6 +3695,18 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         if (s.return_dc_number && !s.gate_inward_at) {
             throw Object.assign(
                 new Error('Guard must scan this Return DC inward before warehouse e-sign.'),
+                { status: 400 }
+            );
+        }
+        if (s.return_dc_number && s.gate_inward_at && !s.return_config_verified_at) {
+            throw Object.assign(
+                new Error(`Configuration check has not passed for ${s.ttspl_id || s.unique_serial_number || 'a unit'}. Run the Return DC hardware script (same as QC2 / Dispatch QC).`),
+                { status: 400 }
+            );
+        }
+        if (s.return_dc_number && s.gate_inward_at && !String(s.return_captured_serial || '').trim()) {
+            throw Object.assign(
+                new Error(`Serial has not been captured for ${s.ttspl_id || s.unique_serial_number || 'a unit'}. Finish the Return DC hardware script so it can read the BIOS serial.`),
                 { status: 400 }
             );
         }

@@ -1134,17 +1134,26 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     return isInhouse && !i.customer_otp_verified_at && !isDelivered;
   });
   const gateBlocked = itemsToCheck.some((i) => i.return_dc_number && !i.gate_inward_at);
+  const configBlocked = itemsToCheck.some((i) => i.return_dc_number && i.gate_inward_at && !i.return_config_verified_at);
+  const serialBlocked = itemsToCheck.some((i) => (
+    i.return_dc_number && i.gate_inward_at && i.return_config_verified_at
+    && !String(i.return_captured_serial || '').trim()
+  ));
 
   let warehouse_block_reason = null;
   if (otpBlocked) {
     warehouse_block_reason = 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).';
   } else if (gateBlocked) {
     warehouse_block_reason = 'Guard must scan this Return DC inward before warehouse e-sign.';
+  } else if (configBlocked) {
+    warehouse_block_reason = 'Run the Return DC hardware script on each laptop (same as QC2 / Dispatch QC) before warehouse e-sign.';
+  } else if (serialBlocked) {
+    warehouse_block_reason = 'Finish the Return DC hardware script so the BIOS serial is captured before warehouse e-sign.';
   }
 
   const roleAllowed = opts.role == null ? true : userCanConfirmReturnDcWarehouse(opts.role);
   return {
-    can_warehouse_confirm: roleAllowed && !otpBlocked && !gateBlocked,
+    can_warehouse_confirm: roleAllowed && !otpBlocked && !gateBlocked && !configBlocked && !serialBlocked,
     warehouse_block_reason,
     warehouse_receive_pending: true,
   };
@@ -1823,6 +1832,22 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
 
   pickupItems = pickupItems.filter((i) => i.status !== 'cancelled');
 
+  try {
+    const rdcCapture = require('./rdcCaptureService');
+    const gated = pickupItems.filter((i) => i.gate_inward_at && !i.warehouse_received_at);
+    if (gated.length) {
+      await rdcCapture.mintTokensForRdc(pool, { rdcNumber });
+      const tokens = await rdcCapture.listLatestTokensForRdc(pool, rdcNumber);
+      const byItem = new Map(tokens.map((t) => [Number(t.item_id), t]));
+      pickupItems = pickupItems.map((i) => ({
+        ...i,
+        return_capture: byItem.get(Number(i.id)) || null,
+      }));
+    }
+  } catch (e) {
+    console.error('[getReturnDcDetail] RDC capture tokens:', e.message);
+  }
+
   const { buildUnitsForRdc } = require('./returnDcPdfService');
   const units = await buildUnitsForRdc(pool, dcl, pickupItems);
 
@@ -1894,6 +1919,18 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
       customer_otp_verified_at: i.customer_otp_verified_at,
       gate_inward_at: i.gate_inward_at,
       floor_ticket_id: i.floor_ticket_id,
+      return_config_verified_at: i.return_config_verified_at || null,
+      return_captured_serial: i.return_captured_serial || null,
+      return_config_result: i.return_config_result || null,
+      return_capture: i.return_capture
+        ? {
+          token_id: i.return_capture.token_id,
+          access_number: i.return_capture.access_number,
+          status: i.return_capture.status,
+          expected_config: i.return_capture.expected_config,
+          match_result: i.return_capture.match_result,
+        }
+        : null,
     })),
     floor_ticket_ids: pickupItems.map((i) => i.floor_ticket_id).filter(Boolean),
     esign: {

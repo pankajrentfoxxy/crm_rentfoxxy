@@ -25,6 +25,11 @@ const FLOW = {
     brand: 'Vendor Return',
     filename: 'rentfoxxy-vendor-return-verify.exe',
   },
+  'rdc-capture': {
+    apiPrefix: 'rdc-capture',
+    brand: 'Return DC',
+    filename: 'rentfoxxy-rdc-verify.exe',
+  },
 };
 
 function getStubPath() {

@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
+import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
-import { confirmReturnDcWarehouse, getReturnDcDetail } from '../salesPipelineApi';
+import { confirmReturnDcWarehouse, getReturnDcDetail, remintReturnDcConfigTokens } from '../salesPipelineApi';
 import { formatDate, formatDateTime } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 
@@ -122,6 +122,27 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const awaitingScript = (detail?.pickup_items || []).some((i) => (
+    i.gate_inward_at && !i.warehouse_received_at
+    && (!i.return_config_verified_at || !i.return_captured_serial)
+  ));
+
+  useEffect(() => {
+    if (!awaitingScript) return undefined;
+    const t = setInterval(() => { load(); }, 5000);
+    return () => clearInterval(t);
+  }, [awaitingScript, load]);
+
+  const remintItem = async (itemId) => {
+    try {
+      await remintReturnDcConfigTokens(rdcNumber, { item_id: itemId });
+      toast.success('New access number generated');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to generate access number');
+    }
+  };
+
   const pdfLink = assetUrl(detail?.pdf_path);
 
   return (
@@ -227,6 +248,65 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                   ))}
                 </div>
               </div>
+
+              {detail.gate_inward_at && (detail.pickup_items || []).some((i) => !i.warehouse_received_at) ? (
+                <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Hardware configuration check</p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        After guard inward, run the same QC2 / Dispatch QC script on each laptop. Warehouse e-sign unlocks only when every unit matches.
+                      </p>
+                    </div>
+                    <a
+                      href="/rdc-config-match"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-violet-800 shrink-0"
+                    >
+                      Open script page <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                  <div className="space-y-2">
+                    {(detail.pickup_items || []).map((item) => {
+                      const capture = item.return_capture || {};
+                      const matched = !!item.return_config_verified_at && !!item.return_captured_serial;
+                      const failed = capture.status === 'failed' || (item.return_config_result && item.return_config_result.configurationMatched === false);
+                      return (
+                        <div key={item.id} className="bg-white border border-violet-100 rounded-lg px-3 py-2 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-mono text-xs font-semibold">{item.ttspl_id || '—'}</p>
+                            {matched ? (
+                              <span className="text-xs text-emerald-700 font-semibold">Matched</span>
+                            ) : failed ? (
+                              <span className="text-xs text-red-700 font-semibold">Mismatch — retry</span>
+                            ) : (
+                              <span className="text-xs text-amber-700 font-semibold">Awaiting script</span>
+                            )}
+                          </div>
+                          {capture.access_number && !matched ? (
+                            <p className="text-xs text-gray-600 mt-1">
+                              Access number <span className="font-mono font-semibold">{capture.access_number}</span>
+                            </p>
+                          ) : null}
+                          {item.return_captured_serial ? (
+                            <p className="text-xs text-gray-500 mt-0.5">Serial {item.return_captured_serial}</p>
+                          ) : null}
+                          {!matched && canWarehouseSign ? (
+                            <button
+                              type="button"
+                              onClick={() => remintItem(item.id)}
+                              className="mt-1 inline-flex items-center gap-1 text-xs text-violet-800 font-semibold"
+                            >
+                              <RefreshCw className="w-3 h-3" /> New access number
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               {(detail.pickup_items || []).some((i) => i.pod_image_path) && (
                 <div>
