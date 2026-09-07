@@ -3859,6 +3859,9 @@ exports.exportReturnDcLaptops = async (req, res) => {
       dateTo: q.date_to,
       status,
       assignedUserId,
+      warehouseReceive: q.warehouse_receive || q.warehouse || '',
+      technician: q.technician || '',
+      columnFiltersQuery: q,
     });
 
     const fmtDate = (d) => {
@@ -3889,6 +3892,8 @@ exports.exportReturnDcLaptops = async (req, res) => {
       'SO Number',
       'Pickup Type',
       'RDC Status',
+      'Warehouse Status',
+      'Warehouse Received Date',
       'Pickup Date',
       'Created',
     ];
@@ -3914,6 +3919,8 @@ exports.exportReturnDcLaptops = async (req, res) => {
         'SO Number': r.sales_order_number || '',
         'Pickup Type': r.pickup_type || '',
         'RDC Status': r.rdc_status || '',
+        'Warehouse Status': r.warehouse_receive_pending ? 'Receive pending' : 'Received',
+        'Warehouse Received Date': fmtDate(r.warehouse_received_at),
         'Pickup Date': fmtDate(r.pickup_date),
         Created: fmtDate(r.created_at),
       };
@@ -3923,7 +3930,10 @@ exports.exportReturnDcLaptops = async (req, res) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
     ws['!cols'] = columnOrder.map((h) => ({
-      wch: h === 'Current Location' || h === 'Pickup Address' ? 48 : h === 'Customer' ? 28 : 16,
+      wch: h === 'Current Location' || h === 'Pickup Address' ? 48
+        : h === 'Customer' ? 28
+          : h === 'Warehouse Status' || h === 'Warehouse Received Date' ? 20
+            : 16,
     }));
     XLSX.utils.book_append_sheet(wb, ws, 'In Transit Laptops');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

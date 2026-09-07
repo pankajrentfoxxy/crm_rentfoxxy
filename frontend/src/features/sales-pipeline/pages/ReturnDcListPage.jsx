@@ -126,15 +126,15 @@ export default function ReturnDcListPage() {
     applyColumnFilter(columnKey, null);
   }, [applyColumnFilter]);
 
+  const exportParams = useMemo(() => {
+    const { page: _page, limit: _limit, ...rest } = listParams;
+    return rest;
+  }, [listParams]);
+
   const handleExport = async () => {
     setExporting(true);
     try {
-      const res = await exportReturnDcLaptops({
-        search: search.trim() || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        status: statusParam,
-      });
+      const res = await exportReturnDcLaptops(exportParams);
       const type = res.headers['content-type'] || '';
       if (type.includes('application/json')) {
         const text = await res.data.text?.() || '';

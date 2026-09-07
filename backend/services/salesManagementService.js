@@ -1649,95 +1649,83 @@ async function listReturnDcLaptopExportRows({
   search = '',
   dateFrom,
   dateTo,
-  status = 'in_transit',
+  status = 'all',
   assignedUserId = null,
+  warehouseReceive = '',
+  technician = '',
+  columnFiltersQuery = {},
 } = {}) {
   const params = [];
   const dateClauses = appendDateRangeClauses({
     column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
   });
   const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
-
-  let searchSql = '';
-  if (search) {
-    params.push(`%${search}%`);
-    const n = params.length;
-    searchSql = ` AND (
-      rl.dc_number ILIKE $${n}
-      OR rl.customer_name ILIKE $${n}
-      OR rl.sales_order_number ILIKE $${n}
-      OR rl.original_dc_number ILIKE $${n}
-      OR COALESCE(sti.ttspl_id, '') ILIKE $${n}
-      OR COALESCE(sti.serial_number, '') ILIKE $${n}
-      OR COALESCE(sti.unique_serial_number, '') ILIKE $${n}
-    )`;
-  }
-
+  const searchSql = returnDcSearchSql(search, params);
+  const assignedSql = appendReturnDcAssignedFilter('rl', assignedUserId, params);
+  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}${assignedSql}`;
   const statusSql = returnDcStatusFilterSql(status);
+  const warehouseSql = returnDcWarehouseReceiveFilterSql(warehouseReceive);
+  const technicianSql = appendReturnDcTechnicianFilter('rl', technician, params);
+  const cteSql = returnDcListCteSql(baseWhere, `${statusSql}${warehouseSql}${technicianSql}`);
+  const colBase = appendReturnDcColumnFilters(
+    { params: [...params], whereSql: 'WHERE 1=1' },
+    columnFiltersQuery
+  );
 
   const { rows } = await pool.query(
-    `SELECT
-       rl.dc_number AS return_dc_number,
+    `${cteSql}
+     SELECT
+       rl.return_dc_number,
        rl.customer_name,
        rl.sales_order_number,
-       COALESCE(rl.original_dc_number, st.dc_number) AS original_dc_number,
+       rl.original_dc_number,
        rl.status AS rdc_status,
+       rl.warehouse_receive_pending,
        rl.created_at,
-       COALESCE(
-         pd.picked_up_at,
-         sti.picked_up_at,
-         pd.pickup_scheduled_at,
-         sti.pickup_scheduled_at,
-         rl.dispatched_at
-       ) AS pickup_date,
-       COALESCE(rl.dispatch_mode, sti.pickup_method) AS dispatch_mode,
+       rl.pickup_date,
+       rl.dispatch_mode,
+       COALESCE(sti.pickup_courier_name, dcl.courier_name) AS courier_name,
+       COALESCE(sti.pickup_awb, dcl.awb_number) AS awb_number,
+       dcl.porter_tracking_id,
        sti.pickup_method,
-       COALESCE(sti.pickup_courier_name, rl.courier_name) AS courier_name,
-       COALESCE(sti.pickup_awb, rl.awb_number) AS awb_number,
-       rl.porter_tracking_id,
        COALESCE(u.name, u.email) AS assignee_name,
        COALESCE(
          sti.ttspl_id,
          sti.unique_serial_number,
-         NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+         NULLIF(split_part(dcl.serial_number->>0, '|', 3), '')
        ) AS ttspl,
        COALESCE(
          sti.serial_number,
-         NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+         NULLIF(split_part(dcl.serial_number->>0, '|', 2), '')
        ) AS serial_number,
-       COALESCE(sti.brand, rl.brand) AS brand,
-       COALESCE(sti.model, rl.model_name) AS model,
-       COALESCE(sti.pickup_type, st.complaint_type, 'return') AS pickup_type,
+       COALESCE(sti.brand, dcl.brand) AS brand,
+       COALESCE(sti.model, dcl.model_name) AS model,
+       COALESCE(sti.pickup_type, rl.reason, 'return') AS pickup_type,
        sti.picked_up_at,
        sti.visited_at,
        sti.customer_otp_verified_at,
        sti.warehouse_received_at,
        sti.warehouse_esign_at,
        st.pickup_address AS ticket_pickup_address,
-       rl.customer_shipping_address,
+       dcl.customer_shipping_address,
        st.ticket_address
-     FROM delivery_challan_lines rl
-     LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-     LEFT JOIN support_ticket_items sti
+     FROM (
+       SELECT * FROM rdc_list
+       ${colBase.whereSql}
+     ) rl
+     JOIN delivery_challan_lines dcl
+       ON dcl.dc_number = rl.return_dc_number AND dcl.movement_type = 'return'
+     LEFT JOIN support_tickets st ON st.id = rl.ticket_id
+     JOIN support_ticket_items sti
        ON sti.item_type = 'pickup'
+      AND COALESCE(sti.status, '') NOT IN ('cancelled')
       AND (
-        sti.return_dc_number = rl.dc_number
-        OR (sti.return_dc_number IS NULL AND sti.ticket_id = rl.support_ticket_id)
+        sti.return_dc_number = rl.return_dc_number
+        OR (sti.return_dc_number IS NULL AND sti.ticket_id = rl.ticket_id)
       )
      LEFT JOIN users u ON u.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
-     LEFT JOIN LATERAL (
-       SELECT MIN(p.picked_up_at) AS picked_up_at,
-              MIN(p.pickup_scheduled_at) AS pickup_scheduled_at
-         FROM support_ticket_items p
-        WHERE p.item_type = 'pickup'
-          AND (
-            p.return_dc_number = rl.dc_number
-            OR (p.return_dc_number IS NULL AND p.ticket_id = rl.support_ticket_id)
-          )
-     ) pd ON TRUE
-     WHERE rl.movement_type = 'return'${searchSql}${dateSql}${statusSql}${appendReturnDcAssignedFilter('rl', assignedUserId, params)}
-     ORDER BY rl.created_at DESC NULLS LAST, rl.dc_number, sti.id NULLS LAST`,
-    params
+     ORDER BY rl.created_at DESC NULLS LAST, rl.return_dc_number, sti.id`,
+    colBase.params
   );
 
   return rows.map((row) => {
