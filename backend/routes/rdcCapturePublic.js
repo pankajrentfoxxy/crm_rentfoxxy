@@ -8,6 +8,7 @@ router.get('/:token/windows-exe', ctrl.downloadWindowsExe);
 router.get('/:token', ctrl.getPublicSession);
 router.post('/:token/verify-configuration', ...ctrl.verifyValidators, ctrl.verifyConfiguration);
 router.post('/:token/verify-config', ...ctrl.verifyValidators, ctrl.verifyConfiguration);
+router.post('/:token/not-on', ...ctrl.notOnValidators, ctrl.markNotOn);
 router.post('/:token', ...ctrl.submitSerialValidators, ctrl.submitSerial);
 
 module.exports = router;

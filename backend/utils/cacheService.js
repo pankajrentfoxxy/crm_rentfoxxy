@@ -103,5 +103,7 @@ module.exports = {
     PRODUCTION_QC_LIST: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_LIST_SEC || '300', 10),
     PRODUCTION_QC_DETAIL: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_DETAIL_SEC || '600', 10),
     CUSTOMER_LAPTOPS: parseInt(process.env.CACHE_TTL_CUSTOMER_LAPTOPS_SEC || '45', 10),
+    RETURN_DC_LIST: parseInt(process.env.CACHE_TTL_RETURN_DC_LIST_SEC || '25', 10),
+    RETURN_DC_STATS: parseInt(process.env.CACHE_TTL_RETURN_DC_STATS_SEC || '30', 10),
   },
 };

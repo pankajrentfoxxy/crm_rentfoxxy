@@ -90,7 +90,26 @@ export const receiveRefusedReturn = (n, d) => api.post(`${base}/delivery-challan
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
 export const getReturnDcColumnValues = (p) => api.get(`${base}/return-dc/column-values`, { params: p });
 export const exportReturnDcLaptops = (p) => api.get(`${base}/return-dc/export.xlsx`, { params: p, responseType: 'blob' });
-export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
+const returnDcDetailInflight = new Map();
+const returnDcDetailCache = new Map();
+const RETURN_DC_DETAIL_TTL_MS = 2500;
+
+export const getReturnDcDetail = (rdcNumber, { refresh = false } = {}) => {
+  const key = String(rdcNumber || '');
+  if (!key) return api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
+  if (!refresh) {
+    const inflight = returnDcDetailInflight.get(key);
+    if (inflight) return inflight;
+    const cached = returnDcDetailCache.get(key);
+    if (cached && Date.now() - cached.at < RETURN_DC_DETAIL_TTL_MS) return cached.promise;
+  }
+  const req = api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`).finally(() => {
+    returnDcDetailInflight.delete(key);
+  });
+  returnDcDetailInflight.set(key, req);
+  returnDcDetailCache.set(key, { at: Date.now(), promise: req });
+  return req;
+};
 export const regenerateReturnDcPdf = (rdcNumber) => api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/pdf`);
 export const downloadReturnDcPdf = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/download-pdf`, { responseType: 'blob' });
 export const confirmReturnDcWarehouse = (rdcNumber, data) =>

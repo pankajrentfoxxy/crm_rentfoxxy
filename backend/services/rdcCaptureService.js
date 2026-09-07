@@ -219,6 +219,8 @@ async function resolveByAccessNumber(accessNumber) {
 async function getPublicSession(tokenId) {
   const row = await getTokenRow(tokenId);
   if (!row) return null;
+  const laptopCondition = row.match_result?.laptop_condition
+    || (row.status === 'matched' && row.match_result?.skipped ? 'not_on' : null);
   return {
     token: row.token_id,
     status: row.status,
@@ -233,6 +235,7 @@ async function getPublicSession(tokenId) {
     config_check: row.match_result,
     expected_config: expectedShape(row.expected_config),
     ttspl_id: row.ttspl_id || null,
+    laptop_condition: laptopCondition,
   };
 }
 
@@ -274,6 +277,7 @@ async function verifyRdcConfiguration(tokenId, actual, ip) {
     const configResult = verifyConfigurationAgainst(expected, actual);
     const matchPayload = {
       configurationMatched: configResult.configurationMatched,
+      laptop_condition: 'on',
       checks: configResult.checks || [],
       errors: configResult.errors || [],
       verified_at: new Date().toISOString(),
@@ -295,6 +299,7 @@ async function verifyRdcConfiguration(tokenId, actual, ip) {
             SET return_config_verified_at = NOW(),
                 return_config_result = $2::jsonb,
                 return_config_token_id = $1,
+                return_laptop_condition = 'on',
                 updated_at = NOW()
           WHERE id = $3`,
         [tokenId, JSON.stringify(matchPayload), row.item_id]
@@ -356,6 +361,93 @@ async function verifyRdcConfiguration(tokenId, actual, ip) {
   }
 }
 
+async function markRdcNotOn(tokenId, serialNumber, ip) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await expireStaleTokens(client);
+
+    const tokRes = await client.query(
+      `SELECT * FROM rdc_capture_tokens WHERE token_id = $1 FOR UPDATE`,
+      [tokenId]
+    );
+    const row = tokRes.rows[0];
+    if (!row) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 404, message: 'Capture link not found or expired' };
+    }
+    if (row.status === 'matched') {
+      await client.query('ROLLBACK');
+      return { ok: true, already: true, serial_number: row.serial_number };
+    }
+    if (row.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 409, message: 'This access number is no longer active' };
+    }
+    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+      await client.query(
+        `UPDATE rdc_capture_tokens SET status = 'expired' WHERE token_id = $1`,
+        [row.token_id]
+      );
+      await client.query('COMMIT');
+      return { ok: false, code: 410, message: 'Access number expired — generate a new one from the Return DC' };
+    }
+
+    const serial = String(serialNumber || '').trim().toUpperCase();
+    if (!serial || serial.length < 3) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 400, message: 'Type the serial number on the laptop' };
+    }
+    const expected = String(row.serial_number || '').trim().toUpperCase();
+    if (expected && expected !== serial) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        code: 400,
+        message: `Serial does not match the laptop on this Return DC (expected ${expected})`,
+      };
+    }
+
+    const matchPayload = {
+      configurationMatched: true,
+      skipped: true,
+      laptop_condition: 'not_on',
+      checks: [],
+      errors: [],
+      verified_at: new Date().toISOString(),
+    };
+
+    await client.query(
+      `UPDATE rdc_capture_tokens
+          SET status = 'matched',
+              serial_number = $2,
+              match_result = $3::jsonb,
+              matched_at = NOW(),
+              verified_by_ip = $4
+        WHERE token_id = $1`,
+      [tokenId, serial, JSON.stringify(matchPayload), ip ? String(ip).slice(0, 64) : null]
+    );
+    await client.query(
+      `UPDATE support_ticket_items
+          SET return_config_verified_at = NOW(),
+              return_config_result = $2::jsonb,
+              return_config_token_id = $1,
+              return_captured_serial = $3,
+              return_laptop_condition = 'not_on',
+              updated_at = NOW()
+        WHERE id = $4`,
+      [tokenId, JSON.stringify(matchPayload), serial, row.item_id]
+    );
+    await client.query('COMMIT');
+    return { ok: true, serial_number: serial, laptop_condition: 'not_on' };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function submitRdcSerial(tokenId, serialNumber) {
   await expireStaleTokens();
   const row = await getTokenRow(tokenId);
@@ -392,7 +484,9 @@ async function submitRdcSerial(tokenId, serialNumber) {
   );
   await pool.query(
     `UPDATE support_ticket_items
-        SET return_captured_serial = $2, updated_at = NOW()
+        SET return_captured_serial = $2,
+            return_laptop_condition = COALESCE(return_laptop_condition, 'on'),
+            updated_at = NOW()
       WHERE id = $1`,
     [row.item_id, serial]
   );
@@ -409,6 +503,7 @@ module.exports = {
   resolveByAccessNumber,
   getPublicSession,
   verifyRdcConfiguration,
+  markRdcNotOn,
   submitRdcSerial,
   apiBaseUrl,
   frontendBaseUrl,

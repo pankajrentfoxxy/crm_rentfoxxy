@@ -2237,6 +2237,9 @@ async function confirmSession({ sessionId, remarks, user }) {
     try {
       const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
       invalidateInventoryListCachesFireAndForget();
+      try {
+        require('./returnDcListCache').invalidateReturnDcListCachesFireAndForget();
+      } catch { /* ignore */ }
     } catch (_) { /* ignore */ }
 
     return {
