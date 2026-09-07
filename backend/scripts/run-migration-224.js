@@ -1,8 +1,6 @@
 /**
- * Run numbered-222 migrations that landed from both branches:
- *   - 222_vrdc_gate_flow.sql (staging VRDC guard-gate)
- *   - 222_invoice_security_deposit.sql (incoming invoice deposit columns)
- * Usage: node scripts/run-migration-222.js
+ * Run migration 224 — vendor-return captured serial.
+ * Usage: node scripts/run-migration-224.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.DB_SSL = process.env.DB_SSL || 'false';
@@ -11,36 +9,25 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
-const MIGRATIONS = [
-  '222_vrdc_gate_flow.sql',
-  '222_invoice_security_deposit.sql',
-];
+const MIGRATION_NAME = '224_vrdc_return_captured_serial.sql';
 
-async function applyOne(client, name) {
-  const sqlPath = path.join(__dirname, '../migrations', name);
+async function main() {
+  const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);
   const sql = fs.readFileSync(sqlPath, 'utf8');
-  await client.query('BEGIN');
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     await client.query(sql);
     await client.query(
       `INSERT INTO schema_migrations (name) VALUES ($1)
        ON CONFLICT (name) DO NOTHING`,
-      [name]
+      [MIGRATION_NAME]
     );
     await client.query('COMMIT');
-    console.log('Applied:', name);
+    console.log('Migration 224 applied:', sqlPath);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
-  }
-}
-
-async function main() {
-  const client = await pool.connect();
-  try {
-    for (const name of MIGRATIONS) {
-      await applyOne(client, name);
-    }
   } finally {
     client.release();
     await pool.end();

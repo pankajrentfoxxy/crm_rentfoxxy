@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Boxes, Clock, Headphones, PackageOpen, Repeat, Truck, PackageCheck, Laptop,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api, { downloadInvoicePdf } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { inr, fmtDate } from '../utils/format';
@@ -42,7 +43,7 @@ const KPI_CARDS = [
     key: 'pending_pickup',
     label: 'Pending Pickup',
     hint: 'Collection in progress',
-    to: '/support/tickets?ticket_type=pickup',
+    to: '/support/tickets?ticket_type=pickup&item_pending=1',
     icon: PackageOpen,
     tone: 'text-purple-600 bg-purple-50',
   },
@@ -50,7 +51,7 @@ const KPI_CARDS = [
     key: 'pending_replacement',
     label: 'Pending Replacement',
     hint: 'Swap in progress',
-    to: '/support/tickets?ticket_type=replacement',
+    to: '/support/tickets?ticket_type=replacement&item_pending=1',
     icon: Repeat,
     tone: 'text-purple-600 bg-purple-50',
   },
@@ -66,7 +67,7 @@ const KPI_CARDS = [
     key: 'delivered_laptops',
     label: 'Delivered Laptops',
     hint: 'Delivered to date',
-    to: '/deliveries?status=delivered',
+    to: '/laptops?lifecycle=delivered',
     icon: PackageCheck,
     tone: 'text-green-600 bg-green-50',
   },
@@ -87,6 +88,7 @@ export default function DashboardPage() {
   const [tickets, setTickets] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     Promise.allSettled([
@@ -172,7 +174,7 @@ export default function DashboardPage() {
         <Link to="/invoices" className="px-4 py-2 rounded-lg border text-sm font-semibold">View Invoices</Link>
       </div>
 
-      {currentInvoice && ['sent', 'draft'].includes(currentInvoice.status) && (
+      {currentInvoice && ['sent', 'draft', 'paid'].includes(currentInvoice.status) && (
         <div className="bg-white rounded-xl border p-5 flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="font-semibold">
@@ -185,10 +187,20 @@ export default function DashboardPage() {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => downloadInvoicePdf(currentInvoice.invoice_id, `${currentInvoice.invoice_number}.pdf`)}
-              className="px-3 py-1.5 text-sm border rounded-lg"
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true);
+                try {
+                  await downloadInvoicePdf(currentInvoice.invoice_id, `${currentInvoice.invoice_number}.pdf`);
+                } catch (err) {
+                  toast.error(err.message || 'Failed to download invoice PDF');
+                } finally {
+                  setDownloading(false);
+                }
+              }}
+              className="px-3 py-1.5 text-sm border rounded-lg disabled:opacity-60"
             >
-              Download PDF
+              {downloading ? 'Preparing PDF…' : 'Download PDF'}
             </button>
             <Link to={`/invoices/${currentInvoice.invoice_id}`} className="px-3 py-1.5 text-sm bg-brand text-white rounded-lg">
               View Details

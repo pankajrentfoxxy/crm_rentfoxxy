@@ -45,6 +45,7 @@ const {
     getPickupDeliveryContext,
     technicianSignPickup,
     verifyPickupCustomerOtp,
+    sendSupportOtp,
     confirmWarehouseReceipt,
     getTechnicianLaptopBucket,
     setOutcome,
@@ -202,6 +203,7 @@ router.post('/service-dc/:sdcNumber/pdf', requireTicketLead, regenerateServiceDc
 router.post('/items/:itemId/pickup-reached', logVisit);
 router.post('/items/:itemId/technician-esign', technicianSignPickup);
 router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
+router.post('/items/:itemId/send-otp', sendSupportOtp);
 router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 
 router.patch('/replacement-orders/:orderId', requireTicketLead, updateReplacementOrder);

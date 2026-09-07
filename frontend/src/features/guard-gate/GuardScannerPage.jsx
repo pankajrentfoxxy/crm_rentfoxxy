@@ -18,6 +18,7 @@ const SOURCE_LABELS = {
   repair_pickup: 'Repair Pickup',
   customer_delivery: 'Customer Delivery',
   vendor_repair: 'Vendor Repair',
+  vendor_repair_return: 'Vendor Repair Return',
   replacement: 'Replacement',
   service_return: 'Service Return',
   refused_delivery: 'Refused Delivery',

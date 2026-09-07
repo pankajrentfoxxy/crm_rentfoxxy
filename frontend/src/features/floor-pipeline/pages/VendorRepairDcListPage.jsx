@@ -114,6 +114,7 @@ export default function VendorRepairDcListPage() {
         >
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
+          <option value="dispatch_ready">Dispatch Ready</option>
           <option value="dispatched">Dispatched</option>
           <option value="partially_returned">Partially Returned</option>
           <option value="returned">Returned</option>

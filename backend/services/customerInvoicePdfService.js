@@ -10,7 +10,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
 const {
   buildInvoiceHtmlByFormat,
   loadCompany,
@@ -60,8 +59,19 @@ async function resolveChromeExecutable() {
   return undefined;
 }
 
+function loadPuppeteer() {
+  try {
+    return require('puppeteer');
+  } catch (err) {
+    throw new Error(
+      'puppeteer is not installed for invoice PDF generation. Run: cd backend && npm install puppeteer'
+    );
+  }
+}
+
 async function getBrowser() {
   if (!browserPromise) {
+    const puppeteer = loadPuppeteer();
     const executablePath = await resolveChromeExecutable();
     if (!executablePath) {
       throw new Error(

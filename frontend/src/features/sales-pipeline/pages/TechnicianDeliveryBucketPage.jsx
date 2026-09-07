@@ -4,11 +4,10 @@ import { MapPin, Phone, KeyRound, Map as MapIcon, CheckCircle2, Truck } from 'lu
 import { listDeliveryFlow, sendDeliveryOtp } from '../salesPipelineApi';
 import {
   deliveryAddressPhone,
-  formatDateTime,
   formatDeliveryAddressLine,
   statusLabel,
 } from '../salesPipelineUtils';
-import AdminDeliverModal from '../components/AdminDeliverModal';
+import InPersonDeliverModal from '../components/InPersonDeliverModal';
 
 function timeSince(dateStr) {
   if (!dateStr) return '-';
@@ -30,7 +29,6 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [techFilter, setTechFilter] = useState('all');
-  const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
   const [sendingOtp, setSendingOtp] = useState(null);
   const isReturn = movement === 'return';
@@ -39,13 +37,10 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
     setSendingOtp(dc.dc_number);
     try {
       const r = await sendDeliveryOtp(dc.dc_number, {});
-      toast.success(r.data?.message || 'OTP generated');
-      if (r.data?.otp_visible) {
-        setOtpModal({ ...dc, otp_code: r.data.otp_visible, otp_sent_at: new Date().toISOString() });
-      }
+      toast.success(r.data?.message || 'OTP sent to the customer on WhatsApp. Ask them for the code.');
       load();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to generate OTP');
+      toast.error(e.response?.data?.message || 'Failed to send OTP');
     } finally {
       setSendingOtp(null);
     }
@@ -100,7 +95,7 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
           <p className="text-sm text-gray-500">
             {isReturn
               ? 'In-house return pickups currently with technicians'
-              : 'In-house deliveries currently with technicians'}
+              : 'In-person deliveries only. Send OTP to the customer, then enter the code they received — technicians cannot see the OTP.'}
           </p>
         </div>
         <select
@@ -165,16 +160,8 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                       <div className="flex flex-wrap gap-2 pt-1">
                         {dc.otp_verified_at ? (
                           <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700">
-                            OTP Verified
+                            OTP verified
                           </span>
-                        ) : dc.otp_sent_at ? (
-                          <button
-                            type="button"
-                            onClick={() => setOtpModal(dc)}
-                            className="text-xs px-2.5 py-1 rounded-lg border border-blue-200 text-blue-700 flex items-center gap-1"
-                          >
-                            <KeyRound className="w-3.5 h-3.5" /> View OTP
-                          </button>
                         ) : (
                           <button
                             type="button"
@@ -183,9 +170,18 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                             className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-700 flex items-center gap-1 disabled:opacity-50"
                           >
                             <KeyRound className="w-3.5 h-3.5" />
-                            {sendingOtp === dc.dc_number ? 'Sending…' : 'Send OTP'}
+                            {sendingOtp === dc.dc_number
+                              ? 'Sending…'
+                              : dc.otp_sent_at
+                                ? 'Resend OTP'
+                                : 'Send OTP to customer'}
                           </button>
                         )}
+                        {dc.otp_sent_at && !dc.otp_verified_at ? (
+                          <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700">
+                            OTP sent · ask customer
+                          </span>
+                        ) : null}
                         {mapsUrl && (
                           <a
                             href={mapsUrl}
@@ -198,10 +194,22 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                         )}
                         <button
                           type="button"
-                          onClick={() => setDeliverModal(dc)}
-                          className="text-xs px-2.5 py-1 rounded-lg border border-emerald-200 text-emerald-700 flex items-center gap-1"
+                          disabled={!dc.otp_sent_at && !dc.otp_verified_at}
+                          title={
+                            dc.otp_sent_at || dc.otp_verified_at
+                              ? 'Enter the customer OTP to confirm delivery'
+                              : 'Send OTP to the customer first'
+                          }
+                          onClick={() => {
+                            if (!dc.otp_sent_at && !dc.otp_verified_at) {
+                              toast.error('Send OTP to the customer first, then ask them for the code.');
+                              return;
+                            }
+                            setDeliverModal(dc);
+                          }}
+                          className="text-xs px-2.5 py-1 rounded-lg border border-emerald-200 text-emerald-700 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Mark Delivered
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Confirm delivery
                         </button>
                       </div>
                     </div>
@@ -213,34 +221,8 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
         </div>
       )}
 
-      {otpModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setOtpModal(null)}
-            aria-label="Close"
-          />
-          <div className="relative bg-white rounded-xl p-6 w-full max-w-xs text-center">
-            <h3 className="font-semibold mb-2">OTP - {otpModal.dc_number}</h3>
-            <p className="text-3xl font-mono font-bold tracking-widest text-blue-700">
-              {otpModal.otp_code || '------'}
-            </p>
-            <p className="text-xs text-gray-500 mt-2">Sent {formatDateTime(otpModal.otp_sent_at)}</p>
-            <p className="text-xs text-gray-400 mt-1">Share verbally with the customer.</p>
-            <button
-              type="button"
-              onClick={() => setOtpModal(null)}
-              className="mt-4 w-full py-2 border rounded-lg text-sm"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
       {deliverModal && (
-        <AdminDeliverModal
+        <InPersonDeliverModal
           dc={deliverModal}
           onClose={() => setDeliverModal(null)}
           onDelivered={load}

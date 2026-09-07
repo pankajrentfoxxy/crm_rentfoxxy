@@ -140,6 +140,10 @@ exports.sendOtp = async (req, res) => {
       text: `Your delivery OTP is ${otp}`,
       pdfRelativePath: null,
     });
+    try {
+      const { notifyDeliveryOtpAsync } = require('../services/salesOrderWhatsApp');
+      notifyDeliveryOtpAsync({ dcNumber, otp });
+    } catch (_) { /* WhatsApp must never block OTP */ }
     res.json({ success: true, status: 'success', message: 'OTP sent successfully' });
   } catch (e) {
     res.status(500).json({ success: false, status: 'error', message: e.message });
@@ -285,6 +289,16 @@ exports.submitPod = [
       }
 
       await client.query('COMMIT');
+      if (nextStatus === 'delivered') {
+        try {
+          const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
+          notifySoDeliveredAsync({ dcNumber });
+        } catch (_) { /* WhatsApp must never block delivery */ }
+        try {
+          const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
+          notifySupportServiceDeliveredAsync({ dcNumber });
+        } catch (_) { /* WhatsApp must never block delivery */ }
+      }
       res.json({ success: true, message: 'Delivery status updated successfully' });
     } catch (e) {
       try {

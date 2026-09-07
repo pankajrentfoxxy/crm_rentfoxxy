@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { createDebitNote } from '../vendorBillingApi';
-import api from '../../../utils/api';
+import { createDebitNote, listBillableVendors } from '../vendorBillingApi';
 
 export default function DebitNoteForm({ open, onClose, onCreated }) {
   const [vendors, setVendors] = useState([]);
@@ -13,8 +12,8 @@ export default function DebitNoteForm({ open, onClose, onCreated }) {
 
   useEffect(() => {
     if (!open) return;
-    api.get('/vendor-management/vendors', { params: { limit: 200 } })
-      .then((r) => setVendors(r.data?.vendors || r.data?.rows || []))
+    listBillableVendors()
+      .then((r) => setVendors(r.data?.vendors || []))
       .catch(() => setVendors([]));
   }, [open]);
 
@@ -55,7 +54,7 @@ export default function DebitNoteForm({ open, onClose, onCreated }) {
             <select required value={form.vendor_id} onChange={(e) => set('vendor_id', e.target.value)} className="w-full border rounded-lg px-3 py-2">
               <option value="">Select…</option>
               {vendors.map((v) => (
-                <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name || v.name}</option>
+                <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name || v.business_name || v.first_name || `Vendor #${v.vendor_id}`}</option>
               ))}
             </select>
           </div>

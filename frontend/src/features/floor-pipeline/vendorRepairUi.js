@@ -133,6 +133,7 @@ export function vendorDeliveryStatusClass(dc) {
 export function vendorRepairStatusLabel(status) {
   const map = {
     draft: 'Draft',
+    dispatch_ready: 'Dispatch Ready',
     dispatched: 'Dispatched',
     partially_returned: 'Partially Returned',
     returned: 'Returned',
@@ -142,6 +143,7 @@ export function vendorRepairStatusLabel(status) {
 
 export function vendorRepairStatusClass(status) {
   if (status === 'draft') return 'bg-slate-100 text-slate-700';
+  if (status === 'dispatch_ready') return 'bg-sky-100 text-sky-800';
   if (status === 'dispatched') return 'bg-purple-100 text-purple-900';
   if (status === 'partially_returned') return 'bg-amber-100 text-amber-900';
   if (status === 'returned') return 'bg-green-100 text-green-800';

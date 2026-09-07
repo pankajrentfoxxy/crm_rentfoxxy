@@ -51,11 +51,23 @@ api.interceptors.response.use(
 export default api;
 
 export async function downloadInvoicePdf(invoiceId, filename = 'invoice.pdf') {
-  const { data } = await api.get(`/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
-  const url = window.URL.createObjectURL(data);
+  const res = await api.get(`/invoices/${invoiceId}/pdf`, {
+    responseType: 'blob',
+    params: { format: 'laptop_details' },
+  });
+  const type = res.headers['content-type'] || '';
+  if (type.includes('application/json')) {
+    const text = await res.data.text?.() || '';
+    let message = 'Failed to download invoice PDF';
+    try { message = JSON.parse(text).message || message; } catch { /* keep */ }
+    throw new Error(message);
+  }
+  const disposition = res.headers['content-disposition'] || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const url = window.URL.createObjectURL(res.data);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename;
+  a.download = match?.[1] || filename;
   a.click();
   window.URL.revokeObjectURL(url);
 }

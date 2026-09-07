@@ -37,6 +37,7 @@ const {
 } = require('../services/supportSerialEligibility');
 const { markReturnPickupInTransit } = require('../services/supportReturnPickupInventory');
 const supportServiceDcService = require('../services/supportServiceDcService');
+const supportWa = require('../services/supportWhatsApp');
 const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
@@ -61,6 +62,10 @@ const TICKET_CLOSED = 'closed';
 const TICKET_CANCELLED = 'cancelled';
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+
+function fireSupportWa(fn) {
+    try { fn(); } catch (_) { /* WhatsApp must never block CRM writes */ }
+}
 
 const parseAddressJson = (raw) => {
     if (!raw) return {};
@@ -1472,6 +1477,7 @@ exports.createTicket = async (req, res) => {
         }
 
         await client.query('COMMIT');
+        fireSupportWa(() => supportWa.notifySupportTicketCreatedAsync({ ticketId: ticket.id }));
         const full = await getTicketWithItems(ticket.id, req.user);
         res.status(201).json({ success: true, ...full });
     } catch (e) {
@@ -1783,6 +1789,9 @@ exports.markWorkDone = async (req, res) => {
         await bumpTicketActivity(client, item.ticket_id);
         await recomputeTicketStatus(client, item.ticket_id);
         await client.query('COMMIT');
+        if (item.item_type === 'complaint') {
+            fireSupportWa(() => supportWa.notifySupportOtpAsync({ itemId }));
+        }
         const data = await getTicketWithItems(item.ticket_id, req.user);
         res.json({ success: true, ...data });
     } catch (e) {
@@ -1845,6 +1854,9 @@ exports.uploadPod = async (req, res) => {
         });
         await bumpTicketActivity(client, item.ticket_id);
         await client.query('COMMIT');
+        if (isNewPickup && !supportWa.isCourierOrPorter(item.pickup_method)) {
+            fireSupportWa(() => supportWa.notifySupportOtpAsync({ itemId }));
+        }
         const data = await getTicketWithItems(item.ticket_id, req.user);
         res.json({ success: true, ...data });
     } catch (e) {
@@ -3075,6 +3087,11 @@ exports.createPickupWithReturnDc = async (req, res) => {
             console.error('[support] return DC pdf (create):', pdfErr.message);
         }
 
+        fireSupportWa(() => supportWa.notifySupportPickupScheduledAsync({
+            ticketId,
+            rdcNumber: result.rdc,
+        }));
+
         const data = await getTicketWithItems(ticketId, req.user);
         res.status(201).json({
             success: true,
@@ -3182,6 +3199,14 @@ exports.createPickupTicket = async (req, res) => {
         try { await regenerateReturnDcPdfByRdc(pool, result.rdc); } catch (pdfErr) {
             console.error('[support] return DC pdf (pickup ticket):', pdfErr.message);
         }
+
+        fireSupportWa(() => {
+            supportWa.notifySupportTicketCreatedAsync({ ticketId: ticket.id });
+            supportWa.notifySupportPickupScheduledAsync({
+                ticketId: ticket.id,
+                rdcNumber: result.rdc,
+            });
+        });
 
         const data = await getTicketWithItems(ticket.id, req.user);
         res.status(201).json({
@@ -3395,8 +3420,59 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     } catch (pdfErr) {
         console.error('[support] return DC pdf (otp verify):', pdfErr.message);
     }
+    fireSupportWa(() => supportWa.notifySupportPickedUpAsync({
+        ticketId: it.ticket_id,
+        rdcNumber: it.return_dc_number,
+    }));
     const data = await getTicketWithItems(it.ticket_id, req.user);
     res.json({ success: true, message: 'OTP verified. Laptop picked up successfully.', ...data });
+};
+
+/** Send / resend the customer OTP on WhatsApp (reuses Interakt otp_verification). */
+exports.sendSupportOtp = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) {
+        return res.status(404).json({ success: false, message: 'Item not found' });
+    }
+    const item = itemRes.rows[0];
+    const isMine = item.assigned_to === req.user.user_id || item.pickup_assigned_to === req.user.user_id;
+    if (!isMine && !(await canLeadThisTicket(req.user, item.ticket_id))) {
+        return res.status(403).json({ success: false, message: 'Not assigned to this item' });
+    }
+    if (item.item_type === 'pickup' && supportWa.isCourierOrPorter(item.pickup_method)) {
+        return res.status(400).json({ success: false, message: 'Courier / porter pickup does not use customer OTP' });
+    }
+    if (item.customer_otp_verified_at || item.otp_verified_at) {
+        return res.status(409).json({ success: false, message: 'OTP already verified' });
+    }
+
+    let otp = String(item.customer_otp_code || item.otp_code || '').trim();
+    if (!otp) {
+        otp = generateOtp();
+        await pool.query(
+            `UPDATE support_ticket_items
+                SET otp_code = $2,
+                    customer_otp_code = CASE WHEN item_type = 'pickup' THEN $2 ELSE customer_otp_code END,
+                    customer_otp_sent_at = NOW(),
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [itemId, otp]
+        );
+    } else {
+        await pool.query(
+            `UPDATE support_ticket_items SET customer_otp_sent_at = NOW(), updated_at = NOW() WHERE id = $1`,
+            [itemId]
+        );
+    }
+
+    fireSupportWa(() => supportWa.notifySupportOtpAsync({ itemId, otp }));
+    const includeOtp = isSupportLead(req.user);
+    res.json({
+        success: true,
+        message: 'OTP sent to the customer on WhatsApp. Ask the customer for the 6-digit code.',
+        otp_visible: includeOtp ? otp : undefined,
+    });
 };
 
 // Warehouse confirms receipt of the laptop with an e-signature. For a repair
@@ -4357,6 +4433,20 @@ exports.initiateReplacement = async (req, res) => {
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
 
+        fireSupportWa(() => {
+            if (!isAppend) {
+                supportWa.notifySupportReplacementCreatedAsync({
+                    ticketId,
+                    salesOrderNumber,
+                    quantity: sourceItems.length,
+                });
+            }
+            supportWa.notifySupportPickupScheduledAsync({
+                ticketId,
+                rdcNumber: pickupResult.rdc,
+            });
+        });
+
         resultPayload = {
             sales_order_number: salesOrderNumber,
             return_dc_number: pickupResult.rdc,
@@ -4946,6 +5036,11 @@ exports.assignReturnPickupDispatch = async (req, res) => {
             console.error('[support] return DC pdf (assign):', pdfErr.message);
         }
 
+        fireSupportWa(() => supportWa.notifySupportPickupScheduledAsync({
+            ticketId,
+            rdcNumber: result.data.return_dc_number,
+        }));
+
         const data = await getTicketWithItems(ticketId, req.user);
         res.json({
             success: true,
@@ -5357,6 +5452,19 @@ exports.initiateRepairSwap = async (req, res) => {
     } finally {
         client.release();
     }
+    fireSupportWa(() => {
+        supportWa.notifySupportReplacementCreatedAsync({
+            ticketId,
+            salesOrderNumber: resultPayload.sales_order_number,
+            quantity: resultPayload.unit_count,
+        });
+        if (resultPayload.return_dc_number) {
+            supportWa.notifySupportPickupScheduledAsync({
+                ticketId,
+                rdcNumber: resultPayload.return_dc_number,
+            });
+        }
+    });
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,
@@ -5407,6 +5515,10 @@ exports.initiateResendLaptop = async (req, res) => {
     } finally {
         client.release();
     }
+    fireSupportWa(() => supportWa.notifySupportReplacementCreatedAsync({
+        ticketId,
+        salesOrderNumber: resultPayload.sales_order_number,
+    }));
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,
@@ -5476,6 +5588,11 @@ exports.initiateReturnRedelivery = async (req, res) => {
     } finally {
         client.release();
     }
+    fireSupportWa(() => supportWa.notifySupportReplacementCreatedAsync({
+        ticketId,
+        salesOrderNumber: resultPayload.sales_order_number,
+        quantity: resultPayload.unit_count,
+    }));
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,

@@ -78,7 +78,7 @@ function DeliveryCard({ dc, onChanged }) {
     setBusy(true);
     try {
       const r = await verifySerialAndGenerateOtp(dc.dc_number, { serial_number: serial.trim() });
-      toast.success(r.data?.message || 'OTP sent to admin email');
+      toast.success(r.data?.message || 'OTP sent to the customer on WhatsApp. Ask them for the 6-digit code.');
       onChanged();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Serial verification failed');
@@ -234,7 +234,8 @@ function DeliveryCard({ dc, onChanged }) {
         {dc.status === 'reached' && dc.otp_pending && (
           <div className="border-t pt-3 space-y-3">
             <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Step 2 · Enter OTP from Customer</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Step 2 · Ask the customer for their WhatsApp OTP</p>
+              <p className="text-xs text-gray-500 mb-1">The code is sent to the customer. You cannot see it.</p>
               <input value={otp} onChange={(e) => setOtp(e.target.value)} inputMode="numeric"
                 placeholder="6-digit OTP" className="w-full border rounded-xl px-3 py-3 text-sm tracking-widest" />
             </div>
@@ -242,7 +243,7 @@ function DeliveryCard({ dc, onChanged }) {
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Proof of Delivery</p>
               <div className="flex gap-2 text-xs mb-2">
-                {[['photo', 'Photo'], ['esign', 'E-Sign'], ['none', 'Skip']].map(([val, label]) => (
+                {[['photo', 'Photo'], ['esign', 'E-Sign']].map(([val, label]) => (
                   <button key={val} type="button" onClick={() => setPodType(val)}
                     className={`flex-1 py-2 rounded-lg border ${podType === val ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' : 'border-gray-200 text-gray-600'}`}>
                     {label}

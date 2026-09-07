@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api, { downloadInvoicePdf } from '../utils/api';
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -12,6 +13,7 @@ export default function InvoiceDetailPage() {
   const { invoiceId } = useParams();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     api.get(`/invoices/${invoiceId}`).then(({ data }) => setInvoice(data.invoice)).finally(() => setLoading(false));
@@ -84,15 +86,23 @@ export default function InvoiceDetailPage() {
           </div>
         )}
 
-        {invoice.pdf_path && (
-          <button
-            type="button"
-            onClick={() => downloadInvoicePdf(invoice.invoice_id, `${invoice.invoice_number}.pdf`)}
-            className="block w-full text-center py-3 bg-brand text-white rounded-lg font-semibold"
-          >
-            Download PDF
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={downloading}
+          onClick={async () => {
+            setDownloading(true);
+            try {
+              await downloadInvoicePdf(invoice.invoice_id, `${invoice.invoice_number}.pdf`);
+            } catch (err) {
+              toast.error(err.message || 'Failed to download invoice PDF');
+            } finally {
+              setDownloading(false);
+            }
+          }}
+          className="block w-full text-center py-3 bg-brand text-white rounded-lg font-semibold disabled:opacity-60"
+        >
+          {downloading ? 'Preparing PDF…' : 'Download PDF'}
+        </button>
       </div>
     </div>
   );

@@ -991,6 +991,15 @@ exports.convertToTicket = async (req, res) => {
         console.warn('pickup convert return DC pdf:', pdfErr.message);
       }
 
+      try {
+        const supportWa = require('../services/supportWhatsApp');
+        supportWa.notifySupportTicketCreatedAsync({ ticketId: out.ticketId });
+        supportWa.notifySupportPickupScheduledAsync({
+          ticketId: out.ticketId,
+          rdcNumber: out.rdc,
+        });
+      } catch (_) { /* WhatsApp must never block convert */ }
+
       return res.status(201).json({
         success: true,
         ticket_id: out.ticketId,
@@ -1196,6 +1205,10 @@ exports.convertToTicket = async (req, res) => {
     );
 
     await client.query('COMMIT');
+    try {
+      const supportWa = require('../services/supportWhatsApp');
+      supportWa.notifySupportTicketCreatedAsync({ ticketId });
+    } catch (_) { /* WhatsApp must never block convert */ }
     res.status(201).json({
       success: true,
       ticket_id: ticketId,

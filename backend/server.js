@@ -113,6 +113,7 @@ app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
 app.use('/api/qc2-capture', require('./routes/qc2CapturePublic'));
 app.use('/api/qc2', require('./routes/qc2'));
 app.use('/api/dispatch-qc-capture', require('./routes/dispatchQcCapturePublic'));
+app.use('/api/vendor-return-capture', require('./routes/vendorReturnCapturePublic'));
 app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
 app.use('/api/support-public', require('./routes/supportRequestPublic'));

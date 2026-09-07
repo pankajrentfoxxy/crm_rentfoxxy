@@ -1,18 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, FileText, Search } from 'lucide-react';
+import { Plus, FileText, Search, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import VendorBillStatusBadge from '../components/VendorBillStatusBadge';
 import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
-import { approveVendorBill, generateVendorBill, listVendorBills, markVendorBillPaid } from '../vendorBillingApi';
-import api from '../../../utils/api';
+import MultiSelectFilter from '../../lead-crm/components/MultiSelectFilter';
+import { approveVendorBill, generateVendorBill, listBillableVendors, listVendorBills, markVendorBillPaid } from '../vendorBillingApi';
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_OPTIONS = MONTHS.slice(1).map((label, i) => ({ value: String(i + 1), label }));
 const PAGE_SIZE = 25;
 
 function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+}
+
+function vendorLabel(v) {
+  return v?.vendor_name || v?.business_name || v?.name || v?.first_name || `Vendor #${v?.vendor_id}`;
 }
 
 export default function VendorBillListPage() {
@@ -23,11 +28,16 @@ export default function VendorBillListPage() {
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [status, setStatus] = useState('');
   const [vendorId, setVendorId] = useState('');
+  const [months, setMonths] = useState([]);
   const [searchInput, setSearchInput] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
   const [vendors, setVendors] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
+  const [genLoading, setGenLoading] = useState(false);
   const [genForm, setGenForm] = useState({ vendor_id: '', month: String(new Date().getMonth() + 1), year: String(new Date().getFullYear()) });
+  const [payOpen, setPayOpen] = useState(null);
+  const [payRef, setPayRef] = useState('');
+  const [payLoading, setPayLoading] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
@@ -35,8 +45,8 @@ export default function VendorBillListPage() {
   }, [searchInput]);
 
   useEffect(() => {
-    api.get('/vendor-management/vendors', { params: { limit: 200 } })
-      .then((r) => setVendors(r.data?.vendors || r.data?.rows || r.data?.data || []))
+    listBillableVendors()
+      .then((r) => setVendors(r.data?.vendors || []))
       .catch(() => setVendors([]));
   }, []);
 
@@ -46,6 +56,9 @@ export default function VendorBillListPage() {
       const params = { page, limit: PAGE_SIZE, search: searchDebounced || undefined };
       if (status) params.status = status;
       if (vendorId) params.vendor_id = vendorId;
+      if (months.length && months.length < MONTH_OPTIONS.length) {
+        params.months = months.join(',');
+      }
       const res = await listVendorBills(params);
       setRows(res.data?.bills || []);
       setSummary(res.data?.summary || {});
@@ -55,7 +68,7 @@ export default function VendorBillListPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, vendorId, page, searchDebounced]);
+  }, [status, vendorId, months, page, searchDebounced]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -65,18 +78,34 @@ export default function VendorBillListPage() {
     paid: { count: summary.paid_count || 0, total: summary.paid_total || 0 },
   }), [summary]);
 
+  const closeGenerate = () => {
+    if (genLoading) return;
+    setGenOpen(false);
+  };
+
   const handleGenerate = async () => {
+    if (!genForm.vendor_id) {
+      toast.error('Select a vendor');
+      return;
+    }
+    setGenLoading(true);
     try {
-      await generateVendorBill({
+      const res = await generateVendorBill({
         vendor_id: Number(genForm.vendor_id),
         month: Number(genForm.month),
         year: Number(genForm.year),
       });
-      toast.success('Bill generated');
+      if (res.data?.skipped) {
+        toast.error(res.data?.message || res.data?.reason || 'Nothing to bill for this month');
+        return;
+      }
+      toast.success(res.data?.bill_number ? `Bill ${res.data.bill_number} generated` : 'Bill generated');
       setGenOpen(false);
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Generate failed');
+    } finally {
+      setGenLoading(false);
     }
   };
 
@@ -90,16 +119,33 @@ export default function VendorBillListPage() {
     }
   };
 
-  const handlePaid = async (id) => {
-    const ref = window.prompt('Payment reference:');
+  const handlePaid = async () => {
+    if (!payOpen) return;
+    setPayLoading(true);
     try {
-      await markVendorBillPaid(id, { payment_reference: ref || '' });
+      await markVendorBillPaid(payOpen, { payment_reference: payRef.trim() });
       toast.success('Marked paid');
+      setPayOpen(null);
+      setPayRef('');
       load();
     } catch {
       toast.error('Failed');
+    } finally {
+      setPayLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!genOpen && !payOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        closeGenerate();
+        if (!payLoading) setPayOpen(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [genOpen, payOpen, genLoading, payLoading]);
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -109,15 +155,43 @@ export default function VendorBillListPage() {
         icon={FileText}
         actions={(
           <PermissionGate section="vendor_billing_mgmt" action="create">
-            <Button icon={Plus} onClick={() => setGenOpen(true)}>Generate Bill</Button>
+            <Button icon={Plus} onClick={() => {
+              setGenForm({
+                vendor_id: '',
+                month: String(new Date().getMonth() + 1),
+                year: String(new Date().getFullYear()),
+              });
+              setGenOpen(true);
+            }}>Generate Bill</Button>
           </PermissionGate>
         )}
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <StatCard label="Generated" value={stats.generated.count} hint={fmt(stats.generated.total)} tone="gray" />
-        <StatCard label="Approved" value={stats.approved.count} hint={fmt(stats.approved.total)} tone="blue" />
-        <StatCard label="Paid" value={stats.paid.count} hint={fmt(stats.paid.total)} tone="green" />
+        <StatCard
+          label="Generated"
+          value={stats.generated.count}
+          hint={fmt(stats.generated.total)}
+          tone="gray"
+          onClick={() => { setStatus((s) => (s === 'generated' ? '' : 'generated')); setPage(1); }}
+          active={status === 'generated'}
+        />
+        <StatCard
+          label="Approved"
+          value={stats.approved.count}
+          hint={fmt(stats.approved.total)}
+          tone="blue"
+          onClick={() => { setStatus((s) => (s === 'approved' ? '' : 'approved')); setPage(1); }}
+          active={status === 'approved'}
+        />
+        <StatCard
+          label="Paid"
+          value={stats.paid.count}
+          hint={fmt(stats.paid.total)}
+          tone="green"
+          onClick={() => { setStatus((s) => (s === 'paid' ? '' : 'paid')); setPage(1); }}
+          active={status === 'paid'}
+        />
         <StatCard label="Total Payable" value={fmt(stats.approved.total)} tone="amber" />
       </div>
 
@@ -134,8 +208,15 @@ export default function VendorBillListPage() {
         </div>
         <select value={vendorId} onChange={(e) => { setVendorId(e.target.value); setPage(1); }} className="border rounded-lg px-2 py-1.5 text-sm min-w-[10rem]">
           <option value="">All vendors</option>
-          {vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name || v.business_name || v.first_name}</option>)}
+          {vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{vendorLabel(v)}</option>)}
         </select>
+        <MultiSelectFilter
+          options={MONTH_OPTIONS}
+          value={months}
+          onChange={(next) => { setMonths(next); setPage(1); }}
+          allLabel="All months"
+          className="min-w-[10rem]"
+        />
         <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className="border rounded-lg px-2 py-1.5 text-sm">
           <option value="">All statuses</option>
           {['generated', 'approved', 'paid', 'disputed'].map((s) => <option key={s} value={s}>{s}</option>)}
@@ -170,7 +251,7 @@ export default function VendorBillListPage() {
                 )}
                 {r.status === 'approved' && (
                   <PermissionGate section="vendor_billing_mgmt" action="edit">
-                    <button type="button" onClick={() => handlePaid(r.bill_id)} className="text-sm text-green-600 font-semibold">Paid</button>
+                    <button type="button" onClick={() => { setPayOpen(r.bill_id); setPayRef(''); }} className="text-sm text-green-600 font-semibold">Paid</button>
                   </PermissionGate>
                 )}
               </div>
@@ -221,7 +302,7 @@ export default function VendorBillListPage() {
                     )}
                     {r.status === 'approved' && (
                       <PermissionGate section="vendor_billing_mgmt" action="edit">
-                        <button type="button" onClick={() => handlePaid(r.bill_id)} className="text-xs text-green-600">Paid</button>
+                        <button type="button" onClick={() => { setPayOpen(r.bill_id); setPayRef(''); }} className="text-xs text-green-600">Paid</button>
                       </PermissionGate>
                     )}
                   </div>
@@ -246,23 +327,152 @@ export default function VendorBillListPage() {
       )}
 
       {genOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setGenOpen(false)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-3">
-            <h3 className="font-semibold">Generate Vendor Bill</h3>
-            <select value={genForm.vendor_id} onChange={(e) => setGenForm((f) => ({ ...f, vendor_id: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="">Vendor…</option>
-              {vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>)}
-            </select>
-            <div className="grid grid-cols-2 gap-2">
-              <select value={genForm.month} onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm">
-                {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-              </select>
-              <input type="number" value={genForm.year} onChange={(e) => setGenForm((f) => ({ ...f, year: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+        <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/50"
+            onClick={closeGenerate}
+            aria-label="Close"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gen-vendor-bill-title"
+            className="relative z-10 w-full sm:max-w-md bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex-none h-auto max-h-[90vh] overflow-y-auto"
+          >
+            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100">
+              <div>
+                <h2 id="gen-vendor-bill-title" className="text-lg font-semibold text-slate-900">Generate vendor bill</h2>
+                <p className="text-sm text-slate-500 mt-0.5">Bill one vendor for a calendar month.</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeGenerate}
+                className="shrink-0 p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => setGenOpen(false)} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-              <button type="button" onClick={handleGenerate} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Generate</button>
+            <div className="px-5 py-4 space-y-4">
+              <label className="block text-sm">
+                <span className="block text-slate-600 font-medium mb-1">Vendor</span>
+                <select
+                  value={genForm.vendor_id}
+                  onChange={(e) => setGenForm((f) => ({ ...f, vendor_id: e.target.value }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm min-h-[44px]"
+                  disabled={genLoading}
+                >
+                  <option value="">{vendors.length ? 'Select vendor…' : 'No rental vendors found'}</option>
+                  {vendors.map((v) => (
+                    <option key={v.vendor_id} value={v.vendor_id}>{vendorLabel(v)}</option>
+                  ))}
+                </select>
+                <span className="block text-xs text-slate-500 mt-1">Rental and rent-to-own vendors only.</span>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm">
+                  <span className="block text-slate-600 font-medium mb-1">Month</span>
+                  <select
+                    value={genForm.month}
+                    onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm min-h-[44px]"
+                    disabled={genLoading}
+                  >
+                    {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="block text-slate-600 font-medium mb-1">Year</span>
+                  <input
+                    type="number"
+                    value={genForm.year}
+                    onChange={(e) => setGenForm((f) => ({ ...f, year: e.target.value }))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm min-h-[44px]"
+                    disabled={genLoading}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end px-5 py-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={closeGenerate}
+                disabled={genLoading}
+                className="px-4 py-2.5 text-sm border border-slate-300 bg-white rounded-lg min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={genLoading || !genForm.vendor_id}
+                className="px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50 min-h-[44px]"
+              >
+                {genLoading ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payOpen && (
+        <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/50"
+            onClick={() => !payLoading && setPayOpen(null)}
+            aria-label="Close"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pay-vendor-bill-title"
+            className="relative z-10 w-full sm:max-w-md bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex-none h-auto"
+          >
+            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100">
+              <div>
+                <h2 id="pay-vendor-bill-title" className="text-lg font-semibold text-slate-900">Mark bill paid</h2>
+                <p className="text-sm text-slate-500 mt-0.5">Optional payment reference (UTR, cheque no.).</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !payLoading && setPayOpen(null)}
+                className="shrink-0 p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <label className="block text-sm">
+                <span className="block text-slate-600 font-medium mb-1">Payment reference</span>
+                <input
+                  value={payRef}
+                  onChange={(e) => setPayRef(e.target.value)}
+                  placeholder="e.g. UTR / NEFT / cheque"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm min-h-[44px]"
+                  disabled={payLoading}
+                />
+              </label>
+            </div>
+            <div className="flex gap-2 justify-end px-5 py-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setPayOpen(null)}
+                disabled={payLoading}
+                className="px-4 py-2.5 text-sm border border-slate-300 bg-white rounded-lg min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handlePaid}
+                disabled={payLoading}
+                className="px-4 py-2.5 text-sm bg-emerald-600 text-white rounded-lg disabled:opacity-50 min-h-[44px]"
+              >
+                {payLoading ? 'Saving…' : 'Mark paid'}
+              </button>
             </div>
           </div>
         </div>

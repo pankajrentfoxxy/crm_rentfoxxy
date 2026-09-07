@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Building2, Download, Tags } from 'lucide-react';
+import { Plus, Building2, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, exportCustomerSaleAssets, getCustomerIds, getCustomers, updateCustomerStatus } from '../leadCrmApi';
+import { bulkUpdateCustomerType, getCustomerIds, getCustomers, updateCustomerStatus } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
@@ -15,7 +15,6 @@ import {
 } from '../../../utils/customerType';
 import usePermission from '../../../hooks/usePermission';
 
-const EXPORT_ROLES = new Set(['admin', 'super_admin']);
 const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
 const PAGE_SIZE = 25;
 
@@ -44,7 +43,6 @@ export default function CustomerListPage() {
   const { user } = useAuth();
   const { canEdit } = usePermission();
   const canEditCustomers = canEdit('customers');
-  const canExportCustomers = EXPORT_ROLES.has(user?.role);
   const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
   const saved = useMemo(() => {
     try {
@@ -65,9 +63,6 @@ export default function CustomerListPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
-  const [exporting, setExporting] = useState(false);
-  const [exportingAssets, setExportingAssets] = useState(false);
-  const [exportingSaleAssets, setExportingSaleAssets] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectedMeta, setSelectedMeta] = useState(() => new Map());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
@@ -296,82 +291,6 @@ export default function CustomerListPage() {
     setPage(1);
   };
 
-  const handleExportExcel = async () => {
-    setExporting(true);
-    try {
-      const response = await exportCustomersExcel({ search: search || undefined });
-      const blob = new Blob([response.data], {
-        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const disposition = response.headers['content-disposition'] || '';
-      const match = /filename="?([^"]+)"?/.exec(disposition);
-      a.href = url;
-      a.download = match?.[1] || 'customers_export.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success('Customer export downloaded');
-    } catch {
-      toast.error('Failed to export customers');
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExportCustomerAssets = async () => {
-    setExportingAssets(true);
-    try {
-      const response = await exportCustomerAssetsExcel();
-      const blob = new Blob([response.data], {
-        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const disposition = response.headers['content-disposition'] || '';
-      const match = /filename="?([^"]+)"?/.exec(disposition);
-      a.href = url;
-      a.download = match?.[1] || 'customer_assets_export.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success('Customer assets export downloaded');
-    } catch {
-      toast.error('Failed to export customer assets');
-    } finally {
-      setExportingAssets(false);
-    }
-  };
-
-  const handleExportSaleAssets = async (format = 'xlsx') => {
-    setExportingSaleAssets(true);
-    try {
-      const response = await exportCustomerSaleAssets({ format });
-      const isCsv = format === 'csv';
-      const blob = new Blob([response.data], {
-        type: response.headers['content-type'] || (isCsv ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const disposition = response.headers['content-disposition'] || '';
-      const match = /filename="?([^"]+)"?/.exec(disposition);
-      a.href = url;
-      a.download = match?.[1] || (isCsv ? 'customer_sale_assets_export.csv' : 'customer_sale_assets_export.xlsx');
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success(isCsv ? 'Sale assets CSV downloaded' : 'Sale assets Excel downloaded');
-    } catch {
-      toast.error('Failed to export sale assets');
-    } finally {
-      setExportingSaleAssets(false);
-    }
-  };
-
   const removeFromSelection = (customerId) => {
     setSelectAllMatching(false);
     setSelectedIds((prev) => {
@@ -511,26 +430,6 @@ export default function CustomerListPage() {
         icon={Building2}
         actions={(
           <div className="flex flex-wrap gap-2">
-            {canExportCustomers ? (
-              <Button variant="secondary" icon={Download} disabled={exporting} onClick={handleExportExcel}>
-                {exporting ? 'Exporting...' : 'Export Excel'}
-              </Button>
-            ) : null}
-            {canExportCustomers ? (
-              <Button variant="secondary" icon={Download} disabled={exportingAssets} onClick={handleExportCustomerAssets}>
-                {exportingAssets ? 'Exporting...' : 'Export Customer Assets'}
-              </Button>
-            ) : null}
-            {canExportCustomers ? (
-              <Button variant="secondary" icon={Download} disabled={exportingSaleAssets} onClick={() => handleExportSaleAssets('xlsx')}>
-                {exportingSaleAssets ? 'Exporting...' : 'Export Sale Assets (Excel)'}
-              </Button>
-            ) : null}
-            {canExportCustomers ? (
-              <Button variant="secondary" icon={Download} disabled={exportingSaleAssets} onClick={() => handleExportSaleAssets('csv')}>
-                Export Sale Assets (CSV)
-              </Button>
-            ) : null}
             <Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>
           </div>
         )}

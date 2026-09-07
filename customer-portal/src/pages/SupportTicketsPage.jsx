@@ -26,10 +26,18 @@ const FILTER_FIELDS = [
     label: 'Status',
     options: [
       { value: '', label: 'All statuses' },
-      { value: 'open', label: 'Open' },
-      { value: 'in_progress', label: 'In Progress' },
+      { value: 'open', label: 'Open / In progress' },
+      { value: 'in_progress', label: 'In Progress only' },
       { value: 'closed', label: 'Closed' },
       { value: 'cancelled', label: 'Cancelled' },
+    ],
+  },
+  {
+    key: 'item_pending',
+    label: 'Items',
+    options: [
+      { value: '', label: 'All tickets' },
+      { value: '1', label: 'Pending items only' },
     ],
   },
   {
