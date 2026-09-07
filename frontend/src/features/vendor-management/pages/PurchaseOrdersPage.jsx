@@ -25,6 +25,7 @@ import {
   uploadPurchaseOrderBills
 } from '../vendorManagementApi';
 import PoActivityPanel from '../components/PoActivityPanel';
+import PoReplacementsPanel from '../components/PoReplacementsPanel';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -2142,6 +2143,7 @@ export default function PurchaseOrdersPage() {
                       )}
                     </table>
                   </div>
+                  <PoReplacementsPanel replacements={preview.detail.replacements} />
                 </>
                 )
               ) : null}

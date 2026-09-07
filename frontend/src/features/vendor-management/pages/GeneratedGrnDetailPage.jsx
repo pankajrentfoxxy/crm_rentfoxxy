@@ -20,6 +20,7 @@ import {
   X
 } from 'lucide-react';
 import { fetchGeneratedGrnOverview, fetchGrnReceivedProducts, uploadGrnBill } from '../vendorManagementApi';
+import PoReplacementsPanel from '../components/PoReplacementsPanel';
 
 function formatPoType(t) {
   if (!t) return '—';
@@ -353,6 +354,7 @@ export default function GeneratedGrnDetailPage() {
                 <div className="px-4 py-8 text-center text-slate-500 text-sm">No GRNs recorded for this PO yet.</div>
               )}
             </div>
+            <PoReplacementsPanel replacements={data.replacements} />
           </div>
         ) : null}
       </div>
@@ -415,7 +417,13 @@ export default function GeneratedGrnDetailPage() {
                         className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                          {ttspl ? (
+                          {item.is_replacement && (item.replaced_ttspl_id || item.replacement_label) ? (
+                            <span className="font-mono text-sm font-bold text-violet-800">
+                              <span className="text-slate-500">{item.replaced_ttspl_id || '—'}</span>
+                              {' → '}
+                              <span>{ttspl || '—'}</span>
+                            </span>
+                          ) : ttspl ? (
                             <span className="font-mono text-sm font-bold text-blue-600">{ttspl}</span>
                           ) : (
                             <span className="font-mono text-sm text-gray-400">No TTSPL</span>
@@ -447,8 +455,11 @@ export default function GeneratedGrnDetailPage() {
                             <span className="font-semibold">Physical damage:</span> {item.physical_damage_remark}
                           </p>
                         ) : null}
-                        {item.is_replaced || item.is_repaired ? (
+                        {item.is_replacement || item.is_replaced || item.is_repaired ? (
                           <div className="flex gap-1 mt-2">
+                            {item.is_replacement ? (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-100 text-violet-800">Replacement</span>
+                            ) : null}
                             {item.is_replaced ? (
                               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-50 text-pink-700">Replaced</span>
                             ) : null}
