@@ -18,19 +18,35 @@ function looksLikeEncodedJson(s) {
     || t.includes('\\"');
 }
 
+function unwrapEncodedString(value) {
+  let cur = value;
+  for (let i = 0; i < 10 && typeof cur === 'string'; i += 1) {
+    const trimmed = cur.trim();
+    if (!trimmed) return trimmed;
+    if (!looksLikeEncodedJson(trimmed)) return trimmed;
+    let next = tryParseJsonString(trimmed);
+    // Outer quotes are often stripped, leaving \"{...}\". Re-wrap as a JSON string.
+    if (next === undefined) next = tryParseJsonString(`"${trimmed}"`);
+    if (next === undefined) {
+      const peeled = trimmed.replace(/\\"/g, '"').replace(/^"+|"+$/g, '').trim();
+      next = tryParseJsonString(peeled);
+      if (next === undefined && peeled !== trimmed) {
+        cur = peeled;
+        continue;
+      }
+    }
+    if (next === undefined || next === cur) break;
+    cur = next;
+  }
+  return cur;
+}
+
 function unwrapJsonValue(value, depth = 0) {
   if (value == null || depth > 6) return value;
 
   if (typeof value === 'string') {
     if (!looksLikeEncodedJson(value)) return value;
-    const parsed = tryParseJsonString(value);
-    if (parsed !== undefined) return unwrapJsonValue(parsed, depth + 1);
-    const unescaped = value.replace(/\\"/g, '"').replace(/^"+|"+$/g, '').trim();
-    if (unescaped !== value) {
-      const parsed2 = tryParseJsonString(unescaped);
-      if (parsed2 !== undefined) return unwrapJsonValue(parsed2, depth + 1);
-    }
-    return value;
+    return unwrapJsonValue(unwrapEncodedString(value), depth + 1);
   }
 
   if (typeof value === 'object' && !Array.isArray(value)) {
@@ -39,7 +55,11 @@ function unwrapJsonValue(value, depth = 0) {
       if (typeof out[key] === 'string' && looksLikeEncodedJson(out[key])) {
         const unwrapped = unwrapJsonValue(out[key], depth + 1);
         if (typeof unwrapped === 'object' && unwrapped !== null && !Array.isArray(unwrapped)) {
+          const company = out.name;
           Object.assign(out, unwrapped);
+          if (company && unwrapped.name && company !== unwrapped.name) {
+            out.company = out.company || company;
+          }
         } else if (typeof unwrapped === 'string' && !looksLikeEncodedJson(unwrapped)) {
           out.address = unwrapped;
         }

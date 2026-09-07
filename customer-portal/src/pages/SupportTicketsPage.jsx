@@ -57,11 +57,6 @@ const FILTER_FIELDS = [
   },
 ];
 
-const EXTRA_SEARCH = [
-  { key: 'ttspl', label: 'TTSPL', placeholder: 'TTSPL id' },
-  { key: 'serial', label: 'Serial Number', placeholder: 'Serial no.' },
-];
-
 export default function SupportTicketsPage() {
   const { readOnly } = useAuth();
   const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/tickets', {
@@ -99,11 +94,18 @@ export default function SupportTicketsPage() {
     },
     { key: 'created_at', label: 'Created', render: (r) => fmtDate(r.created_at) },
     {
-      key: 'stage',
-      label: 'Current Stage',
-      render: (r) => <StatusBadge status={r.stage} label={r.stage_label} />,
+      key: 'status',
+      label: 'Status',
+      render: (r) => {
+        const cancelled = String(r.status || '').toLowerCase() === 'cancelled';
+        return (
+          <StatusBadge
+            status={cancelled ? 'cancelled' : r.stage}
+            label={cancelled ? 'Cancelled' : r.stage_label}
+          />
+        );
+      },
     },
-    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
     {
       key: 'last_updated',
       label: 'Last Updated',
@@ -131,7 +133,11 @@ export default function SupportTicketsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Support Tickets</h1>
-          <p className="text-sm text-slate-500 mt-1">Track every request raised on your account</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {filters.item_pending === '1' && (filters.ticket_type === 'pickup' || filters.ticket_type === 'replacement')
+              ? `Each row is one ${filters.ticket_type === 'pickup' ? 'laptop awaiting collection' : 'laptop in a swap'} — same count as the dashboard`
+              : 'Track every request raised on your account'}
+          </p>
         </div>
         {!readOnly && (
           <Link
@@ -181,8 +187,7 @@ export default function SupportTicketsPage() {
         value={filters}
         onChange={setFilters}
         fields={FILTER_FIELDS}
-        extraSearchFields={EXTRA_SEARCH}
-        searchPlaceholder="Search by ticket number or subject…"
+        searchPlaceholder="Search ticket, TTSPL or serial…"
       />
 
       {error && (
@@ -193,7 +198,7 @@ export default function SupportTicketsPage() {
         columns={columns}
         rows={rows}
         loading={loading}
-        rowKey={(r) => r.ticket_id}
+        rowKey={(r) => r.item_id || r.ticket_id}
         rowLink={(r) => `/support/tickets/${r.ticket_id}`}
         emptyMessage="No tickets match these filters"
       />
