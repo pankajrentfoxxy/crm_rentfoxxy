@@ -43,6 +43,7 @@ async function resolveAccessNumber(req, res) {
         dc_number: result.dc_number,
         expected_config: result.expected_config,
         ttspl_id: result.ttspl_id,
+        serial_number: result.serial_number || null,
         api_base_url: rdcCapture.apiBaseUrl(req),
       },
     });
@@ -123,6 +124,36 @@ async function verifyConfiguration(req, res) {
   }
 }
 
+const notOnValidators = [
+  param('token').isUUID(),
+  body('serial_number').isString().trim().isLength({ min: 3, max: 120 }),
+];
+
+async function markNotOn(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: 'Type the serial number', errors: errors.array() });
+  }
+  try {
+    const result = await rdcCapture.markRdcNotOn(
+      req.params.token,
+      req.body.serial_number,
+      clientIp(req)
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    res.json({
+      success: true,
+      serial_number: result.serial_number,
+      laptop_condition: 'not_on',
+    });
+  } catch (e) {
+    console.error('markNotOn rdc:', e);
+    res.status(500).json({ success: false, message: e.message || 'Not ON submit failed' });
+  }
+}
+
 const submitSerialValidators = [
   param('token').isUUID(),
   body('serial_number').isString().trim().isLength({ min: 3, max: 120 }),
@@ -152,6 +183,8 @@ module.exports = {
   downloadWindowsExe,
   verifyValidators,
   verifyConfiguration,
+  notOnValidators,
+  markNotOn,
   submitSerialValidators,
   submitSerial,
 };

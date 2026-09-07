@@ -102,21 +102,33 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const canWarehouseSign = RETURN_DC_WAREHOUSE_ROLES.has(String(user?.role || '').toLowerCase());
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const inFlightRef = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async ({ silent = false, refresh = false } = {}) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (silent) setRefreshing(true);
+    else {
+      setLoading(true);
+      setError(null);
+    }
     try {
-      const r = await getReturnDcDetail(rdcNumber);
+      const r = await getReturnDcDetail(rdcNumber, { refresh });
       setDetail(r.data);
+      setError(null);
     } catch (e) {
       const msg = e.response?.data?.message || 'Failed to load Return DC';
-      setError(msg);
-      setDetail(null);
-      toast.error(msg);
+      if (!silent) {
+        setError(msg);
+        setDetail(null);
+        toast.error(msg);
+      }
     } finally {
-      setLoading(false);
+      inFlightRef.current = false;
+      if (silent) setRefreshing(false);
+      else setLoading(false);
     }
   }, [rdcNumber]);
 
@@ -129,7 +141,7 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
 
   useEffect(() => {
     if (!awaitingScript) return undefined;
-    const t = setInterval(() => { load(); }, 5000);
+    const t = setInterval(() => { load({ silent: true, refresh: true }); }, 20000);
     return () => clearInterval(t);
   }, [awaitingScript, load]);
 
@@ -137,7 +149,7 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
     try {
       await remintReturnDcConfigTokens(rdcNumber, { item_id: itemId });
       toast.success('New access number generated');
-      load();
+      load({ silent: true, refresh: true });
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to generate access number');
     }
@@ -255,8 +267,17 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     <div>
                       <p className="text-sm font-semibold text-gray-900">Hardware configuration check</p>
                       <p className="text-xs text-gray-600 mt-1">
-                        After guard inward, run the same QC2 / Dispatch QC script on each laptop. Warehouse e-sign unlocks only when every unit matches.
+                        After guard inward: if the laptop is ON, run the QC2 / Dispatch QC script. If it is Not ON, type the serial on the script page. Warehouse e-sign unlocks after every unit is done.
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => load({ silent: true, refresh: true })}
+                        disabled={refreshing}
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-violet-800 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+                        {refreshing ? 'Checking…' : 'Refresh match status'}
+                      </button>
                     </div>
                     <a
                       href="/rdc-config-match"
@@ -271,13 +292,18 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     {(detail.pickup_items || []).map((item) => {
                       const capture = item.return_capture || {};
                       const matched = !!item.return_config_verified_at && !!item.return_captured_serial;
-                      const failed = capture.status === 'failed' || (item.return_config_result && item.return_config_result.configurationMatched === false);
+                      const notOn = item.return_laptop_condition === 'not_on'
+                        || item.return_config_result?.laptop_condition === 'not_on'
+                        || item.return_config_result?.skipped;
+                      const failed = !notOn && (capture.status === 'failed' || (item.return_config_result && item.return_config_result.configurationMatched === false));
                       return (
                         <div key={item.id} className="bg-white border border-violet-100 rounded-lg px-3 py-2 text-sm">
                           <div className="flex items-center justify-between gap-2">
                             <p className="font-mono text-xs font-semibold">{item.ttspl_id || '—'}</p>
-                            {matched ? (
-                              <span className="text-xs text-emerald-700 font-semibold">Matched</span>
+                            {matched && notOn ? (
+                              <span className="text-xs text-rose-700 font-semibold">Not ON — serial typed</span>
+                            ) : matched ? (
+                              <span className="text-xs text-emerald-700 font-semibold">ON — matched</span>
                             ) : failed ? (
                               <span className="text-xs text-red-700 font-semibold">Mismatch — retry</span>
                             ) : (
@@ -375,7 +401,7 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
               {canWarehouseSign && detail.can_warehouse_confirm ? (
                 <WarehouseSignPanel
                   rdcNumber={rdcNumber}
-                  onSigned={() => { load(); onUpdated?.(); }}
+                  onSigned={() => { load({ silent: true, refresh: true }); onUpdated?.(); }}
                 />
               ) : null}
             </>

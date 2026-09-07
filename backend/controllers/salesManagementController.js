@@ -3766,6 +3766,9 @@ exports.assignReturnDcNumber = async (req, res) => {
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
+    try {
+      require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
+    } catch { /* ignore */ }
     res.json({ success: true, return_dc_number: returnDcNumber, ticket: result.rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -3959,6 +3962,9 @@ exports.remintReturnDcConfigTokens = async (req, res) => {
       createdBy: req.user?.user_id || req.user?.id || null,
       itemIds: itemId ? [itemId] : null,
     });
+    try {
+      require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
+    } catch { /* ignore */ }
     res.json({ success: true, minted });
   } catch (error) {
     console.error('remintReturnDcConfigTokens:', error);
@@ -4233,6 +4239,9 @@ exports.generateReturnDc = async (req, res) => {
       console.error('[sales] return DC pdf (generate):', pdfErr.message);
     }
 
+    try {
+      require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
+    } catch { /* ignore */ }
     res.json({
       success: true,
       return_dc_number: rdc,

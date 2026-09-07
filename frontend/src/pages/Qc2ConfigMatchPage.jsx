@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getApiUrl, getCaptureApiBase } from '../utils/api';
+import { copyToClipboard } from '../utils/copyToClipboard';
 import { buildMacCaptureCommand } from '../utils/macHwCaptureScript';
 import {
   buildWindowsCaptureCommand,
@@ -71,6 +72,7 @@ const CAPTURE_UI = {
     exeFile: 'rentfoxxy-rdc-verify.exe',
     laptopHint: 'laptop on this Return DC',
     ps1Title: 'Return DC',
+    allowNotOn: true,
   },
 };
 
@@ -84,6 +86,9 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
   const [sessionWarning, setSessionWarning] = useState(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [laptopCondition, setLaptopCondition] = useState('on');
+  const [manualSerial, setManualSerial] = useState('');
+  const [submittingNotOn, setSubmittingNotOn] = useState(false);
 
   const scriptApiBase = getCaptureApiBase(captureApiBase);
   const psScript = useMemo(
@@ -153,8 +158,46 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
     }
   };
 
-  const copyText = (text, label) => {
-    navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
+  const copyText = async (text, label) => {
+    try {
+      await copyToClipboard(text);
+      toast.success(`${label} copied`);
+    } catch {
+      toast.error('Copy failed — select the script and copy manually (Ctrl+C)');
+    }
+  };
+
+  const submitNotOn = async (e) => {
+    e?.preventDefault?.();
+    if (!token) return;
+    const serial = manualSerial.trim();
+    if (serial.length < 3) {
+      toast.error('Type the serial number on the laptop');
+      return;
+    }
+    setSubmittingNotOn(true);
+    try {
+      const { data } = await publicApi().post(`/${ui.apiPrefix}/${token}/not-on`, {
+        serial_number: serial,
+      });
+      if (!data.success) {
+        toast.error(data.message || 'Could not mark Not ON');
+        return;
+      }
+      setDone(true);
+      setSession((prev) => ({
+        ...(prev || {}),
+        status: 'matched',
+        config_verified: true,
+        laptop_condition: 'not_on',
+        serial_number: data.serial_number || serial,
+      }));
+      toast.success('Marked Not ON — warehouse can e-sign');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not mark Not ON');
+    } finally {
+      setSubmittingNotOn(false);
+    }
   };
 
   const downloadWindowsExe = async () => {
@@ -306,13 +349,52 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
           {done || configMatched ? (
             <div className="text-center py-4">
               <CheckCircle2 className="w-14 h-14 text-emerald-500 mx-auto mb-3" />
-              <h2 className="text-lg font-semibold text-slate-900">Specs verified</h2>
+              <h2 className="text-lg font-semibold text-slate-900">
+                {session?.laptop_condition === 'not_on' ? 'Marked Not ON' : 'Specs verified'}
+              </h2>
               <p className="text-sm text-slate-500 mt-3">
-                Return to the {ui.successHint}. You can close this tab.
+                {session?.laptop_condition === 'not_on'
+                  ? `Serial ${session?.serial_number || ''} recorded. Return to the ${ui.successHint}. You can close this tab.`
+                  : `Return to the ${ui.successHint}. You can close this tab.`}
               </p>
             </div>
           ) : (
             <>
+              {ui.allowNotOn ? (
+                <div>
+                  <p className="text-xs font-semibold uppercase text-slate-600 mb-2">Is the laptop ON or Not ON?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLaptopCondition('on')}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                        laptopCondition === 'on'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaptopCondition('not_on')}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                        laptopCondition === 'not_on'
+                          ? 'border-rose-500 bg-rose-50 text-rose-800'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      Not ON
+                    </button>
+                  </div>
+                  <p className={`mt-2 text-[11px] ${laptopCondition === 'not_on' ? 'text-rose-700' : 'text-slate-600'}`}>
+                    {laptopCondition === 'not_on'
+                      ? 'Laptop does not power on. Type the serial number — the capture script cannot run.'
+                      : 'Laptop is ON. Copy and run the script on this laptop to match specs and capture the BIOS serial.'}
+                  </p>
+                </div>
+              ) : null}
+
               {expectedSpecs.length > 0 ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5 mb-2">
@@ -362,50 +444,83 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
                 </div>
               ) : null}
 
-              <ol className="text-sm text-slate-700 space-y-2 list-decimal list-inside leading-relaxed">
-                <li>You are on the <strong>{ui.laptopHint}</strong>.</li>
-                <li>
-                  <strong>Windows:</strong> download the app (.exe) and double-click it.
-                  If SmartScreen warns, choose <em>More info → Run anyway</em>.
-                </li>
-                <li>On match, return to the CRM {ui.screenHint} — testing unlocks automatically.</li>
-              </ol>
-
-              <button
-                type="button"
-                onClick={downloadWindowsExe}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700"
-              >
-                <Download className="w-4 h-4" /> Download Windows app (.exe)
-              </button>
-
-              <button
-                type="button"
-                onClick={downloadWindowsScript}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
-              >
-                Download PowerShell script (.ps1) instead
-              </button>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-600">PowerShell one-liner</span>
-                  <button type="button" onClick={() => copyText(psEncoded, 'PowerShell')} className="text-xs text-indigo-600 flex items-center gap-1">
-                    <Copy className="w-3.5 h-3.5" /> Copy
+              {ui.allowNotOn && laptopCondition === 'not_on' ? (
+                <form onSubmit={submitNotOn} className="space-y-3">
+                  <label className="block text-sm">
+                    <span className="text-xs font-medium text-slate-600">Serial number</span>
+                    <input
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono uppercase"
+                      value={manualSerial}
+                      onChange={(e) => setManualSerial(e.target.value.toUpperCase())}
+                      placeholder={session?.serial_number ? `Expected: ${session.serial_number}` : 'Type serial'}
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={submittingNotOn || manualSerial.trim().length < 3}
+                    className="w-full py-3 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    {submittingNotOn ? 'Saving…' : 'Confirm Not ON'}
                   </button>
-                </div>
-                <pre className="text-[10px] bg-slate-900 text-slate-100 rounded-lg p-3 overflow-x-auto max-h-24">{psEncoded}</pre>
-              </div>
+                </form>
+              ) : (
+                <>
+                  <ol className="text-sm text-slate-700 space-y-2 list-decimal list-inside leading-relaxed">
+                    <li>You are on the <strong>{ui.laptopHint}</strong>.</li>
+                    <li>
+                      <strong>Windows:</strong> download the app (.exe) and double-click it.
+                      If SmartScreen warns, choose <em>More info → Run anyway</em>.
+                    </li>
+                    <li>Or copy the PowerShell script below and paste it in PowerShell on this laptop.</li>
+                    <li>On match, return to the CRM {ui.screenHint} — testing unlocks automatically.</li>
+                  </ol>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-600">macOS one-liner</span>
-                  <button type="button" onClick={() => copyText(macScript, 'macOS')} className="text-xs text-indigo-600 flex items-center gap-1">
-                    <Copy className="w-3.5 h-3.5" /> Copy
+                  <button
+                    type="button"
+                    onClick={downloadWindowsExe}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700"
+                  >
+                    <Download className="w-4 h-4" /> Download Windows app (.exe)
                   </button>
-                </div>
-                <pre className="text-[10px] bg-slate-900 text-slate-100 rounded-lg p-3 overflow-x-auto max-h-24">{macScript}</pre>
-              </div>
+
+                  <button
+                    type="button"
+                    onClick={downloadWindowsScript}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+                  >
+                    Download PowerShell script (.ps1) instead
+                  </button>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-600">PowerShell one-liner</span>
+                      <button
+                        type="button"
+                        onClick={() => copyText(psEncoded, 'PowerShell script')}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-xs font-semibold text-indigo-700"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </button>
+                    </div>
+                    <pre className="text-[10px] bg-slate-900 text-slate-100 rounded-lg p-3 overflow-x-auto max-h-24 select-all">{psEncoded}</pre>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-600">macOS one-liner</span>
+                      <button
+                        type="button"
+                        onClick={() => copyText(macScript, 'macOS script')}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-xs font-semibold text-indigo-700"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </button>
+                    </div>
+                    <pre className="text-[10px] bg-slate-900 text-slate-100 rounded-lg p-3 overflow-x-auto max-h-24 select-all">{macScript}</pre>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>

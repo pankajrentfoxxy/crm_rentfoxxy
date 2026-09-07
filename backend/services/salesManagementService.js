@@ -1146,9 +1146,9 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
   } else if (gateBlocked) {
     warehouse_block_reason = 'Guard must scan this Return DC inward before warehouse e-sign.';
   } else if (configBlocked) {
-    warehouse_block_reason = 'Run the Return DC hardware script on each laptop (same as QC2 / Dispatch QC) before warehouse e-sign.';
+    warehouse_block_reason = 'Run the Return DC hardware script (ON) or mark Not ON and type the serial before warehouse e-sign.';
   } else if (serialBlocked) {
-    warehouse_block_reason = 'Finish the Return DC hardware script so the BIOS serial is captured before warehouse e-sign.';
+    warehouse_block_reason = 'Finish the Return DC hardware check so the serial is captured before warehouse e-sign.';
   }
 
   const roleAllowed = opts.role == null ? true : userCanConfirmReturnDcWarehouse(opts.role);
@@ -1208,25 +1208,12 @@ function returnDcStatusFilterSql(status) {
   return ` AND (${clauses.join(' OR ')})`;
 }
 
-/** Pickup still awaiting warehouse receipt / e-sign (matches list warehouse_receive_pending). */
+/** Pickup still awaiting warehouse receipt / e-sign (list filter + stats). */
 const RETURN_DC_WAREHOUSE_PENDING_SQL = `
   LOWER(COALESCE(rl.status, '')) <> 'cancelled'
   AND EXISTS (
     SELECT 1
       FROM support_ticket_items sti_w
-      LEFT JOIN LATERAL (
-        SELECT v.inventory_status, v.current_customer_id
-          FROM vendor_serial_numbers v
-         WHERE v.deleted_at IS NULL
-           AND (
-             v.inventory_asset_code = COALESCE(sti_w.ttspl_id, sti_w.unique_serial_number)
-             OR v.serial_number = sti_w.serial_number
-           )
-         ORDER BY
-           CASE WHEN v.inventory_asset_code = COALESCE(sti_w.ttspl_id, sti_w.unique_serial_number) THEN 0 ELSE 1 END,
-           v.serial_id ASC
-         LIMIT 1
-      ) v_w ON TRUE
      WHERE sti_w.item_type = 'pickup'
        AND COALESCE(sti_w.status, '') NOT IN ('cancelled')
        AND (
@@ -1237,7 +1224,6 @@ const RETURN_DC_WAREHOUSE_PENDING_SQL = `
          sti_w.warehouse_received_at IS NULL
          OR (sti_w.warehouse_esign_at IS NULL AND sti_w.warehouse_esign_url IS NULL)
          OR sti_w.floor_ticket_id IS NULL
-         OR COALESCE(v_w.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
        )
   )
 `;
@@ -1297,49 +1283,44 @@ async function userCanAccessReturnDc(rdcNumber, userId) {
 
 function returnDcListCteSql(baseWhere, statusSql) {
   return `
-    WITH pickup_counts AS (
-       SELECT return_dc_number, COUNT(*)::int AS unit_count
-         FROM support_ticket_items
-        WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
-        GROUP BY return_dc_number
-     ),
-     pickup_dates AS (
+    WITH pickup_by_rdc AS (
        SELECT return_dc_number,
+              COUNT(*)::int AS unit_count,
               MIN(picked_up_at) AS picked_up_at,
-              MIN(pickup_scheduled_at) AS pickup_scheduled_at
+              MIN(pickup_scheduled_at) AS pickup_scheduled_at,
+              (ARRAY_AGG(pickup_type ORDER BY id DESC))[1] AS pickup_type,
+              (ARRAY_AGG(ttspl_id ORDER BY id DESC))[1] AS ttspl_id,
+              (ARRAY_AGG(serial_number ORDER BY id DESC))[1] AS serial_number,
+              (ARRAY_AGG(floor_ticket_id ORDER BY id DESC))[1] AS floor_ticket_id,
+              (ARRAY_AGG(COALESCE(customer_otp_code, otp_code) ORDER BY id DESC))[1] AS customer_otp_code,
+              (ARRAY_AGG(customer_otp_verified_at ORDER BY id DESC))[1] AS customer_otp_verified_at,
+              (ARRAY_AGG(warehouse_received_at ORDER BY id DESC))[1] AS warehouse_received_at,
+              (ARRAY_AGG(warehouse_esign_at ORDER BY id DESC))[1] AS warehouse_esign_at,
+              (ARRAY_AGG(warehouse_esign_url ORDER BY id DESC))[1] AS warehouse_esign_url,
+              (ARRAY_AGG(pickup_assigned_to ORDER BY id DESC))[1] AS pickup_assigned_to,
+              (ARRAY_AGG(assigned_to ORDER BY id DESC))[1] AS assigned_to
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
         GROUP BY return_dc_number
      ),
-     pickup_dates_by_ticket AS (
+     pickup_by_ticket AS (
        SELECT ticket_id,
               MIN(picked_up_at) AS picked_up_at,
-              MIN(pickup_scheduled_at) AS pickup_scheduled_at
+              MIN(pickup_scheduled_at) AS pickup_scheduled_at,
+              (ARRAY_AGG(pickup_type ORDER BY id DESC))[1] AS pickup_type,
+              (ARRAY_AGG(ttspl_id ORDER BY id DESC))[1] AS ttspl_id,
+              (ARRAY_AGG(serial_number ORDER BY id DESC))[1] AS serial_number,
+              (ARRAY_AGG(floor_ticket_id ORDER BY id DESC))[1] AS floor_ticket_id,
+              (ARRAY_AGG(COALESCE(customer_otp_code, otp_code) ORDER BY id DESC))[1] AS customer_otp_code,
+              (ARRAY_AGG(customer_otp_verified_at ORDER BY id DESC))[1] AS customer_otp_verified_at,
+              (ARRAY_AGG(warehouse_received_at ORDER BY id DESC))[1] AS warehouse_received_at,
+              (ARRAY_AGG(warehouse_esign_at ORDER BY id DESC))[1] AS warehouse_esign_at,
+              (ARRAY_AGG(warehouse_esign_url ORDER BY id DESC))[1] AS warehouse_esign_url,
+              (ARRAY_AGG(pickup_assigned_to ORDER BY id DESC))[1] AS pickup_assigned_to,
+              (ARRAY_AGG(assigned_to ORDER BY id DESC))[1] AS assigned_to
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NULL
         GROUP BY ticket_id
-     ),
-     pickup_by_rdc AS (
-       SELECT DISTINCT ON (return_dc_number)
-              return_dc_number, pickup_type, ttspl_id, serial_number, floor_ticket_id,
-              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
-              customer_otp_verified_at, warehouse_received_at,
-              warehouse_esign_at, warehouse_esign_url,
-              pickup_assigned_to, assigned_to
-         FROM support_ticket_items
-        WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
-        ORDER BY return_dc_number, id DESC
-     ),
-     pickup_by_ticket AS (
-       SELECT DISTINCT ON (ticket_id)
-              ticket_id, pickup_type, ttspl_id, serial_number, floor_ticket_id,
-              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
-              customer_otp_verified_at, warehouse_received_at,
-              warehouse_esign_at, warehouse_esign_url,
-              pickup_assigned_to, assigned_to
-         FROM support_ticket_items
-        WHERE item_type = 'pickup' AND return_dc_number IS NULL
-        ORDER BY ticket_id, id DESC
      ),
      rdc_list AS (
      SELECT
@@ -1359,14 +1340,14 @@ function returnDcListCteSql(baseWhere, statusSql) {
        COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
        rl.delivered_at,
        COALESCE(
-         pd.picked_up_at,
-         pdt.picked_up_at,
-         pd.pickup_scheduled_at,
-         pdt.pickup_scheduled_at,
+         sti_rdc.picked_up_at,
+         sti_tkt.picked_up_at,
+         sti_rdc.pickup_scheduled_at,
+         sti_tkt.pickup_scheduled_at,
          rl.dispatched_at
        ) AS pickup_date,
        COALESCE(rl.quantity, 1) AS quantity,
-       COALESCE(pc.unit_count, COALESCE(rl.quantity, 1)) AS unit_count,
+       COALESCE(sti_rdc.unit_count, COALESCE(rl.quantity, 1)) AS unit_count,
        COALESCE(rl.original_dc_number, st.dc_number) AS original_dc_number,
        COALESCE(st.complaint_type, sti_rdc.pickup_type, sti_tkt.pickup_type, 'return') AS reason,
        COALESCE(sti_rdc.pickup_type, sti_tkt.pickup_type) AS pickup_type,
@@ -1383,16 +1364,6 @@ function returnDcListCteSql(baseWhere, statusSql) {
              AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
            )
            OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
-           OR EXISTS (
-             SELECT 1 FROM vendor_serial_numbers v_pending
-              WHERE v_pending.deleted_at IS NULL
-                AND (
-                  v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
-                  OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
-                )
-                AND v_pending.current_customer_id = rl.customer_id
-                AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
-            )
          )
        ) AS warehouse_receive_pending,
        COALESCE(
@@ -1407,10 +1378,6 @@ function returnDcListCteSql(baseWhere, statusSql) {
        COALESCE(u_tech.name, u_tech.email) AS technician_name
      FROM delivery_challan_lines rl
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-     LEFT JOIN pickup_counts pc ON pc.return_dc_number = rl.dc_number
-     LEFT JOIN pickup_dates pd ON pd.return_dc_number = rl.dc_number
-     LEFT JOIN pickup_dates_by_ticket pdt
-       ON pdt.ticket_id = rl.support_ticket_id AND pd.return_dc_number IS NULL
      LEFT JOIN pickup_by_rdc sti_rdc ON sti_rdc.return_dc_number = rl.dc_number
      LEFT JOIN pickup_by_ticket sti_tkt
        ON sti_tkt.ticket_id = rl.support_ticket_id AND sti_rdc.return_dc_number IS NULL
@@ -1423,8 +1390,13 @@ function returnDcListCteSql(baseWhere, statusSql) {
 }
 
 function returnDcSearchSql(search, params) {
-  if (!search) return '';
-  params.push(`%${search}%`);
+  const q = String(search || '').trim();
+  if (!q) return '';
+  if (/^RDC\d+$/i.test(q)) {
+    params.push(q.toUpperCase());
+    return ` AND UPPER(rl.dc_number) = $${params.length}`;
+  }
+  params.push(`%${q}%`);
   const n = params.length;
   return ` AND (
       rl.dc_number ILIKE $${n}
@@ -1459,6 +1431,13 @@ async function listReturnDeliveryChallans({
   technician = '',
   columnFiltersQuery = {},
 } = {}) {
+  const rdcCache = require('./returnDcListCache');
+  const listKey = rdcCache.buildListCacheKey({
+    page, limit, search, dateFrom, dateTo, status, assignedUserId, warehouseReceive, technician, columnFiltersQuery,
+  });
+  const cachedList = await rdcCache.getCached(listKey);
+  if (cachedList) return cachedList;
+
   const params = [];
   const dateClauses = appendDateRangeClauses({
     column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
@@ -1477,68 +1456,78 @@ async function listReturnDeliveryChallans({
     columnFiltersQuery
   );
 
-  const countResult = await pool.query(
-    `${cteSql}
-     SELECT COUNT(*)::int AS total
-       FROM rdc_list
-      ${colBase.whereSql}`,
-    colBase.params
-  );
-
-  const statsResult = await pool.query(
-    `SELECT
-       COUNT(*)::int AS total,
-       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') IN ('pending', 'processing'))::int AS pending,
-       COUNT(*) FILTER (WHERE rl.status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
-       COUNT(*) FILTER (WHERE rl.status = 'reached')::int AS reached,
-       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered,
-       COUNT(*) FILTER (WHERE rl.status = 'cancelled')::int AS cancelled,
-       COUNT(*) FILTER (WHERE ${RETURN_DC_WAREHOUSE_PENDING_SQL})::int AS warehouse_pending
-       FROM delivery_challan_lines rl
-       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-      WHERE ${baseWhere}`,
-    statsParams
-  );
-
-  const techniciansResult = await pool.query(
-    `SELECT DISTINCT COALESCE(u_tech.name, u_tech.email) AS technician_name
-       FROM delivery_challan_lines rl
-       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-       JOIN support_ticket_items sti_tech
-         ON sti_tech.item_type = 'pickup'
-        AND COALESCE(sti_tech.status, '') NOT IN ('cancelled')
-        AND (
-          sti_tech.return_dc_number = rl.dc_number
-          OR (sti_tech.return_dc_number IS NULL AND sti_tech.ticket_id = rl.support_ticket_id)
-        )
-       JOIN users u_tech ON u_tech.user_id = COALESCE(sti_tech.pickup_assigned_to, sti_tech.assigned_to)
-      WHERE ${baseWhere}
-        AND COALESCE(u_tech.name, u_tech.email) IS NOT NULL
-      ORDER BY 1
-      LIMIT 200`,
-    statsParams
-  );
+  const statsKey = rdcCache.buildStatsCacheKey({ search, dateFrom, dateTo, assignedUserId });
+  const cachedMeta = await rdcCache.getCached(statsKey);
 
   const offset = (page - 1) * limit;
   const listParams = [...colBase.params, limit, offset];
   const limitIdx = listParams.length - 1;
   const offsetIdx = listParams.length;
 
-  const result = await pool.query(
+  const listPromise = pool.query(
     `${cteSql}
-     SELECT * FROM rdc_list
-     ${colBase.whereSql}
+     SELECT *, COUNT(*) OVER()::int AS _total
+       FROM rdc_list
+      ${colBase.whereSql}
      ORDER BY created_at DESC NULLS LAST
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     listParams
   );
 
-  const total = countResult.rows[0]?.total || 0;
-  const statsRow = statsResult.rows[0] || {};
-  return {
-    return_dcs: result.rows,
-    technicians: (techniciansResult.rows || []).map((r) => r.technician_name).filter(Boolean),
-    stats: {
+  const statsPromise = cachedMeta
+    ? Promise.resolve(null)
+    : pool.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') IN ('pending', 'processing'))::int AS pending,
+         COUNT(*) FILTER (WHERE rl.status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
+         COUNT(*) FILTER (WHERE rl.status = 'reached')::int AS reached,
+         COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered,
+         COUNT(*) FILTER (WHERE rl.status = 'cancelled')::int AS cancelled,
+         COUNT(*) FILTER (WHERE ${RETURN_DC_WAREHOUSE_PENDING_SQL})::int AS warehouse_pending
+         FROM delivery_challan_lines rl
+         LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+        WHERE ${baseWhere}`,
+      statsParams
+    );
+
+  const techniciansPromise = cachedMeta
+    ? Promise.resolve(null)
+    : pool.query(
+      `SELECT DISTINCT COALESCE(u_tech.name, u_tech.email) AS technician_name
+         FROM delivery_challan_lines rl
+         LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+         JOIN support_ticket_items sti_tech
+           ON sti_tech.item_type = 'pickup'
+          AND COALESCE(sti_tech.status, '') NOT IN ('cancelled')
+          AND sti_tech.return_dc_number = rl.dc_number
+         JOIN users u_tech ON u_tech.user_id = COALESCE(sti_tech.pickup_assigned_to, sti_tech.assigned_to)
+        WHERE ${baseWhere}
+          AND COALESCE(u_tech.name, u_tech.email) IS NOT NULL
+        ORDER BY 1
+        LIMIT 200`,
+      statsParams
+    );
+
+  const [result, statsResult, techniciansResult] = await Promise.all([
+    listPromise, statsPromise, techniciansPromise,
+  ]);
+
+  const total = result.rows[0]?._total || 0;
+  const return_dcs = result.rows.map((row) => {
+    const { _total, ...rest } = row;
+    return rest;
+  });
+
+  let technicians;
+  let stats;
+  if (cachedMeta) {
+    technicians = cachedMeta.technicians;
+    stats = cachedMeta.stats;
+  } else {
+    const statsRow = statsResult.rows[0] || {};
+    technicians = (techniciansResult.rows || []).map((r) => r.technician_name).filter(Boolean);
+    stats = {
       total: statsRow.total || 0,
       pending: statsRow.pending || 0,
       in_transit: statsRow.in_transit || 0,
@@ -1546,7 +1535,14 @@ async function listReturnDeliveryChallans({
       delivered: statsRow.delivered || 0,
       cancelled: statsRow.cancelled || 0,
       warehouse_pending: statsRow.warehouse_pending || 0,
-    },
+    };
+    await rdcCache.setCachedStats(statsKey, { technicians, stats });
+  }
+
+  const payload = {
+    return_dcs,
+    technicians,
+    stats,
     pagination: {
       page,
       limit,
@@ -1554,6 +1550,8 @@ async function listReturnDeliveryChallans({
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
   };
+  await rdcCache.setCachedList(listKey, payload);
+  return payload;
 }
 
 async function getReturnDcColumnValues({
@@ -1584,11 +1582,19 @@ async function getReturnDcColumnValues({
     columnFiltersQuery,
     { excludeColumn: column }
   );
-  return getReturnDcColumnDistinctValues(pool, {
+  const rdcCache = require('./returnDcListCache');
+  const colKey = rdcCache.buildColumnCacheKey({
+    column, search, dateFrom, dateTo, status, assignedUserId, warehouseReceive, technician, columnFiltersQuery,
+  });
+  const cached = await rdcCache.getCached(colKey);
+  if (cached) return cached;
+  const values = await getReturnDcColumnDistinctValues(pool, {
     cteSql,
     whereSql: colBase.whereSql,
     params: colBase.params,
   }, column);
+  await rdcCache.setCachedColumns(colKey, values);
+  return values;
 }
 
 function parseReturnAddress(raw) {
@@ -1755,23 +1761,7 @@ async function listReturnDcLaptopExportRows({
   });
 }
 
-/** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */
-async function getReturnDcDetail(rdcNumber, { role } = {}) {
-  await healReturnDcPickupLinks();
-
-  const dclRes = await pool.query(
-    `SELECT dcl.*, st.customer_phone, st.ticket_email
-       FROM delivery_challan_lines dcl
-       LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
-      WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
-      LIMIT 1`,
-    [rdcNumber]
-  );
-  const dcl = dclRes.rows[0];
-  if (!dcl) return null;
-
-  await ensureReturnDcPickupItems(pool, dcl);
-
+async function queryReturnDcPickupItems(rdcNumber, ticketId) {
   const itemsRes = await pool.query(
     `SELECT sti.*,
             COALESCE(sti.technician_esign_name, u_tech_esign.name, u_tech_esign.email, u1.name, u1.email) AS tech_name,
@@ -1802,10 +1792,29 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
           OR (sti.return_dc_number IS NULL AND sti.ticket_id = $2)
         )
       ORDER BY sti.id ASC`,
-    [rdcNumber, dcl.support_ticket_id]
+    [rdcNumber, ticketId]
   );
-  let pickupItems = itemsRes.rows;
-  if (pickupItems.some((i) => !i.return_dc_number)) {
+  return itemsRes.rows;
+}
+
+/** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. Read-only on GET. */
+async function getReturnDcDetail(rdcNumber, { role } = {}) {
+  const dclRes = await pool.query(
+    `SELECT dcl.*, st.customer_phone, st.ticket_email
+       FROM delivery_challan_lines dcl
+       LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+      WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
+      LIMIT 1`,
+    [rdcNumber]
+  );
+  const dcl = dclRes.rows[0];
+  if (!dcl) return null;
+
+  let pickupItems = await queryReturnDcPickupItems(rdcNumber, dcl.support_ticket_id);
+  if (!pickupItems.length) {
+    await ensureReturnDcPickupItems(pool, dcl);
+    pickupItems = await queryReturnDcPickupItems(rdcNumber, dcl.support_ticket_id);
+  } else if (pickupItems.some((i) => !i.return_dc_number) && dcl.support_ticket_id) {
     await pool.query(
       `UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW()
         WHERE ticket_id = $2 AND item_type = 'pickup'
@@ -1813,19 +1822,15 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
           AND COALESCE(status, '') NOT IN ('cancelled', 'closed', 'resolved', 'inventory_updated')`,
       [rdcNumber, dcl.support_ticket_id]
     );
-    pickupItems = pickupItems
-      .filter((i) => i.status !== 'cancelled')
-      .map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
+    pickupItems = pickupItems.map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
   }
 
   pickupItems = pickupItems.filter((i) => i.status !== 'cancelled');
 
   try {
     const rdcCapture = require('./rdcCaptureService');
-    const gated = pickupItems.filter((i) => i.gate_inward_at && !i.warehouse_received_at);
-    if (gated.length) {
-      await rdcCapture.mintTokensForRdc(pool, { rdcNumber });
-      const tokens = await rdcCapture.listLatestTokensForRdc(pool, rdcNumber);
+    const tokens = await rdcCapture.listLatestTokensForRdc(pool, rdcNumber);
+    if (tokens.length) {
       const byItem = new Map(tokens.map((t) => [Number(t.item_id), t]));
       pickupItems = pickupItems.map((i) => ({
         ...i,
@@ -1849,10 +1854,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     || pickupItems[0];
 
   let pdfPath = dcl.pdf_path;
-  const shouldRegenPdf = !pdfPath || pickupItems.some((i) =>
-    i.technician_esign_url || i.warehouse_esign_url || i.customer_otp_verified_at
-  );
-  if (shouldRegenPdf) {
+  if (!pdfPath) {
     try {
       const { regenerateReturnDcPdfByRdc } = require('./returnDcPdfService');
       const regen = await regenerateReturnDcPdfByRdc(pool, rdcNumber);
@@ -1909,6 +1911,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
       floor_ticket_id: i.floor_ticket_id,
       return_config_verified_at: i.return_config_verified_at || null,
       return_captured_serial: i.return_captured_serial || null,
+      return_laptop_condition: i.return_laptop_condition || null,
       return_config_result: i.return_config_result || null,
       return_capture: i.return_capture
         ? {
