@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Clock } from 'lucide-react';
 import api from '../utils/api';
+import { formatDdMmYyyyDateTime } from '../utils/dateFormat';
 
 // Reusable laptop (TTSPL) lifecycle timeline: received -> QC -> rented ->
 // returned -> QC re-entry ... Reads the existing /tickets/ttspl/:id/history API
@@ -30,7 +31,7 @@ export default function TtsplHistoryModal({ ttsplId, onClose }) {
     (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0),
   );
   const cost = data?.costSummary || null;
-  const fmtDt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+  const fmtDt = formatDdMmYyyyDateTime;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

@@ -753,11 +753,14 @@ async function buildSyntheticLifecycleEvents(ctx) {
         customer_name: dc.customer_name || null,
       }
     }));
-    if (dc.status === 'delivered' && dc.updated_at) {
+    // Use delivered_at (actual POD date), not updated_at — otherwise unrelated
+    // row updates (warehouse backfill, PDF regen) show fake "marked delivered" entries.
+    const deliveredAt = dc.delivered_at || null;
+    if (dc.status === 'delivered' && deliveredAt) {
       events.push(makeSyntheticEvent({
         eventType: 'status_delivered',
         description: `DC ${dc.dc_number} marked delivered`,
-        createdAt: dc.updated_at,
+        createdAt: deliveredAt,
         vendorSerialId: serialId,
         metadata: { dc_number: dc.dc_number, customer_name: dc.customer_name || null }
       }));

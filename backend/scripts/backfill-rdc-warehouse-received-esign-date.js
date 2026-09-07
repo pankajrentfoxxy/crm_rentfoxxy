@@ -11,7 +11,6 @@
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const pool = require('../config/db');
-const inventorySM = require('../services/inventoryStateMachine');
 const { resetVendorSerialForQcReentry } = require('../services/grnTicketService');
 const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 
@@ -158,19 +157,18 @@ async function processRdc(client, rdcNumber, customerId) {
 
     const rentEndDate = receivedAt.toISOString().slice(0, 10);
     if (COMMIT) {
-      await inventorySM.markReturned(client, vsn.serial_id, {
-        reason: `Warehouse receive backfill via ${rdcNumber} (esign date)`,
-        rentEndDate,
-        actorName: 'backfill-rdc-warehouse-received-esign-date',
-      });
+      // Silent inventory fix — do not call markReturned/logTtsplEvent (adds today's timeline).
       await client.query(
         `UPDATE vendor_serial_numbers SET
+            inventory_status = 'returned',
             current_customer_id = NULL,
             current_dc_number = NULL,
-            returned_at = COALESCE(returned_at, $2),
+            returned_at = $2,
+            status_changed_at = $2,
+            rent_end_date = COALESCE(rent_end_date, $3::date),
             updated_at = NOW()
          WHERE serial_id = $1`,
-        [vsn.serial_id, receivedAt]
+        [vsn.serial_id, receivedAt, rentEndDate]
       );
       await resetVendorSerialForQcReentry(client, vsn.serial_id);
     }
@@ -181,8 +179,7 @@ async function processRdc(client, rdcNumber, customerId) {
     if (COMMIT) {
       await client.query(
         `UPDATE delivery_challan_lines SET
-            warehouse_received_at = $2,
-            updated_at = NOW()
+            warehouse_received_at = $2
          WHERE dc_number = $1 AND movement_type = 'return'`,
         [rdcNumber, earliestReceivedAt]
       );

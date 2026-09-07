@@ -8,6 +8,7 @@ import usePermission from '../../../hooks/usePermission';
 import DetachPartToInventoryModal from './DetachPartToInventoryModal';
 import { HistoryRefChips, LinkedHistoryText, customerDisplayName } from './TtsplHistoryRefs';
 import { Link } from 'react-router-dom';
+import { formatDdMmYyyy, formatDdMmYyyyDateTime } from '../../../utils/dateFormat';
 
 export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
   const { canEdit } = usePermission();
@@ -143,7 +144,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                         {EVENT_ICONS[ev.event_type] || EVENT_ICONS.default}
                       </span>
                       <p className="text-xs text-slate-500">
-                        {new Date(ev.created_at).toLocaleString()}
+                        {formatDdMmYyyyDateTime(ev.created_at)}
                         {ev.actor_name_resolved || ev.actor_name ? ` · ${ev.actor_name_resolved || ev.actor_name}` : ''}
                       </p>
                       <LinkedHistoryText text={ev.description} metadata={ev.metadata} onNavigate={onClose} />
@@ -209,7 +210,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                             <td className="px-2 py-2 font-mono text-[11px] text-emerald-700">{b.prt_id}</td>
                             <td className="px-2 py-2">{b.part_name}</td>
                             <td className="px-2 py-2 capitalize text-xs">{b.type}</td>
-                            <td className="px-2 py-2 text-xs">{b.installed_at ? new Date(b.installed_at).toLocaleDateString() : '—'}</td>
+                            <td className="px-2 py-2 text-xs">{formatDdMmYyyy(b.installed_at)}</td>
                             <td className="px-2 py-2 text-right">₹{parseFloat(b.unit_cost || 0).toFixed(0)}</td>
                             {showDetachColumn ? (
                               <td className="px-2 py-2 text-right">
@@ -257,7 +258,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                       <tbody>
                         {configHistory.map((h) => (
                           <tr key={h.history_id} className="border-t">
-                            <td className="px-2 py-2 text-xs">{new Date(h.created_at).toLocaleDateString()}</td>
+                            <td className="px-2 py-2 text-xs">{formatDdMmYyyy(h.created_at)}</td>
                             <td className="px-2 py-2 capitalize text-xs">{h.change_type}</td>
                             <td className="px-2 py-2 capitalize">{h.field_name}</td>
                             <td className="px-2 py-2">{h.old_value || '—'} → {h.new_value}</td>
