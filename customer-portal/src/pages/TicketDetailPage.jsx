@@ -98,6 +98,7 @@ export default function TicketDetailPage() {
   if (!ticket) return null;
 
   const addr = ticket.pickup_address;
+  const cancelled = String(ticket.status || '').toLowerCase() === 'cancelled';
 
   return (
     <div className="space-y-6">
@@ -113,10 +114,10 @@ export default function TicketDetailPage() {
               {ticket.ticket_type} · Raised {fmtDate(ticket.created_at)}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <StatusBadge status={ticket.stage} label={ticket.stage_label} />
-            <StatusBadge status={ticket.status} />
-          </div>
+          <StatusBadge
+            status={cancelled ? 'cancelled' : ticket.stage}
+            label={cancelled ? 'Cancelled' : ticket.stage_label}
+          />
         </div>
 
         <div className="pt-4 border-t border-slate-100">
@@ -131,7 +132,7 @@ export default function TicketDetailPage() {
           <Field label="Closed On">{ticket.closed_at ? fmtDate(ticket.closed_at) : '—'}</Field>
         </dl>
 
-        {ticket.description && (
+        {ticket.description && ticket.description !== ticket.subject && (
           <div className="pt-4 border-t border-slate-100">
             <Field label="What you reported">
               <p className="whitespace-pre-wrap text-slate-700">{ticket.description}</p>

@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import { X } from 'lucide-react';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import Pagination from '../components/Pagination';
@@ -64,6 +66,108 @@ function ConfigCell({ items }) {
   );
 }
 
+function stopRowNav(e) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function DcLink({ dc, className }) {
+  return (
+    <Link
+      to={`/deliveries/${encodeURIComponent(dc)}`}
+      onClick={(e) => e.stopPropagation()}
+      className={className}
+    >
+      {dc}
+    </Link>
+  );
+}
+
+function DcNumbersCell({ numbers }) {
+  const [open, setOpen] = useState(false);
+  const extra = Math.max((numbers?.length || 0) - 1, 0);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!numbers?.length) return <span className="text-slate-400">—</span>;
+
+  return (
+    <>
+      <div className="flex items-center gap-1.5 whitespace-nowrap">
+        <DcLink dc={numbers[0]} className="font-mono text-xs text-brand hover:underline" />
+        {extra > 0 && (
+          <button
+            type="button"
+            aria-label={`Show ${extra} more DC numbers`}
+            onClick={(e) => {
+              stopRowNav(e);
+              setOpen(true);
+            }}
+            className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-1.5 rounded-full text-xs font-semibold text-brand bg-teal-50 hover:bg-teal-100 border border-teal-200"
+          >
+            +{extra}
+          </button>
+        )}
+      </div>
+      {open && createPortal(
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/40"
+          onClick={(e) => {
+            stopRowNav(e);
+            setOpen(false);
+          }}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dc-list-title"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-sm max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b">
+              <h2 id="dc-list-title" className="font-semibold text-slate-900">
+                DC Numbers ({numbers.length})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="p-1 rounded-lg text-slate-500 hover:bg-slate-100"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <ul className="overflow-y-auto p-3 space-y-1">
+              {numbers.map((dc) => (
+                <li key={dc}>
+                  <DcLink
+                    dc={dc}
+                    className="block font-mono text-sm text-brand hover:underline px-2 py-1.5 rounded-lg hover:bg-teal-50"
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 export default function OrdersPage() {
   const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/orders', {
     resultKey: 'orders',
@@ -87,20 +191,7 @@ export default function OrdersPage() {
     {
       key: 'dc_numbers',
       label: 'DC Number',
-      render: (r) => (r.dc_numbers?.length ? (
-        <div className="space-y-0.5">
-          {r.dc_numbers.map((dc) => (
-            <Link
-              key={dc}
-              to={`/deliveries/${encodeURIComponent(dc)}`}
-              onClick={(e) => e.stopPropagation()}
-              className="block font-mono text-xs text-brand hover:underline"
-            >
-              {dc}
-            </Link>
-          ))}
-        </div>
-      ) : <span className="text-slate-400">—</span>),
+      render: (r) => <DcNumbersCell numbers={r.dc_numbers} />,
     },
     {
       key: 'delivery_status',

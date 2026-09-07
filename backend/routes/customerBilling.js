@@ -23,8 +23,14 @@ router.post('/invoices/:id/mark-zoho', cp('customer_billing', 'edit'), ctrl.mark
 router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid);
 
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
+router.get('/credit-notes/laptops', cp('credit_notes', 'view'), ctrl.listCreditNoteLaptops);
+router.get('/credit-notes/review-groups', cp('credit_notes', 'view'), ctrl.listCreditNoteReviewGroups);
+router.post('/credit-notes/generate', cp('credit_notes', 'create'), ctrl.generateCreditNote);
+router.post('/credit-notes/generate-bulk', cp('credit_notes', 'create'), ctrl.generateCreditNotesBulk);
 router.post('/credit-notes', cp('credit_notes', 'create'), ctrl.createCreditNote);
 router.post('/credit-notes/approve-bulk', cp('credit_notes', 'edit'), ctrl.approveCreditNotesBulk);
+router.get('/credit-notes/:id/pdf', cp('credit_notes', 'view'), ctrl.downloadCreditNotePdf);
+router.get('/credit-notes/:id', cp('credit_notes', 'view'), ctrl.getCreditNote);
 router.patch('/credit-notes/:id/approve', cp('credit_notes', 'edit'), ctrl.approveCreditNote);
 
 router.get('/security-deposits', cp('security_deposits', 'view'), ctrl.listSecurityDeposits);

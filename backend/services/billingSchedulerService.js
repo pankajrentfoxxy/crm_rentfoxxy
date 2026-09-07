@@ -1703,10 +1703,305 @@ async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
   }
 }
 
+function lineMatchesApprovalSelection(line, index, selection) {
+  const keys = new Set((selection.line_keys || []).map((s) => String(s).trim()).filter(Boolean));
+  const serialIds = new Set(
+    (selection.serial_ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  );
+  const ttspls = new Set((selection.ttspl_ids || []).map((s) => String(s).trim()).filter(Boolean));
+  const key = creditNoteLineKey(line) || `i:${index}`;
+  if (keys.has(key) || keys.has(`i:${index}`)) return true;
+  if (line.serial_id && serialIds.has(Number(line.serial_id))) return true;
+  if (line.ttspl_id && ttspls.has(String(line.ttspl_id).trim())) return true;
+  return false;
+}
+
 /**
- * Credit unused prepaid days when this customer returned a unit to
- * warehouse. Inventory may already say `rented` on a later customer;
- * use this customer's RDC + billed rate, not current VSN state.
+ * Approve only the selected laptops on a draft credit note.
+ * Unselected lines stay on the original draft so they can be approved later.
+ */
+async function approveSelectedCreditNoteLines(creditNoteId, selection = {}, actorUserId = null) {
+  const client = await pool.connect();
+  let approveId = Number(creditNoteId);
+  let leftover = null;
+  let split = false;
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query(
+      `SELECT * FROM customer_credit_notes WHERE credit_note_id = $1 FOR UPDATE`,
+      [approveId]
+    );
+    if (!locked.rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'Credit note not found' };
+    }
+    const cn = locked.rows[0];
+    if (String(cn.status || '').toLowerCase() !== 'pending') {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'Credit note is not a draft' };
+    }
+
+    const lines = linesFromCreditNote(cn);
+    const selected = [];
+    const remainder = [];
+    lines.forEach((line, index) => {
+      if (lineMatchesApprovalSelection(line, index, selection || {})) selected.push(line);
+      else remainder.push(line);
+    });
+    if (!selected.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'Select at least one laptop to approve' };
+    }
+
+    if (remainder.length) {
+      leftover = await persistConsolidatedReturnCreditNote(client, {
+        customerId: cn.customer_id,
+        actorUserId,
+        lines: remainder,
+        source: cn.source || 'invoice_generation',
+        reason: cn.reason || RETURN_CN_REASON,
+        survivor: cn,
+      });
+      const created = await persistConsolidatedReturnCreditNote(client, {
+        customerId: cn.customer_id,
+        actorUserId,
+        lines: selected,
+        source: cn.source || 'invoice_generation',
+        reason: cn.reason || RETURN_CN_REASON,
+        invoiceId: cn.invoice_id || null,
+        survivor: null,
+      });
+      if (!created) {
+        await client.query('ROLLBACK');
+        return { ok: false, reason: 'Could not create credit note for selected laptops' };
+      }
+      approveId = created.credit_note_id;
+      split = true;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const result = await approveAndApplyCreditNote(approveId, actorUserId);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    split,
+    leftover_credit_note: leftover,
+    approved_count: Number((result.credit_note?.line_items
+      ? parseCreditNoteJsonArray(result.credit_note.line_items)
+      : []).length || 0) || undefined,
+  };
+}
+
+const RETURN_CN_REASON = 'Rental return — unused prepaid days';
+
+function parseCreditNoteJsonArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function creditNoteLineKey(line) {
+  const serialId = Number(line?.serial_id);
+  if (Number.isFinite(serialId) && serialId > 0) return `s:${serialId}`;
+  const ttspl = String(line?.ttspl_id || '').trim();
+  return ttspl ? `t:${ttspl}` : null;
+}
+
+function linesFromCreditNote(cn) {
+  const stored = parseCreditNoteJsonArray(cn.line_items);
+  if (stored.length) return stored;
+  const ttspls = parseCreditNoteJsonArray(cn.ttspl_ids);
+  if (!cn.serial_id && !ttspls.length && !Number(cn.amount)) return [];
+  const fromDate = cn.from_date ? String(cn.from_date).slice(0, 10) : null;
+  const toDate = cn.to_date ? String(cn.to_date).slice(0, 10) : null;
+  return [{
+    serial_id: cn.serial_id || null,
+    ttspl_id: ttspls[0] || null,
+    amount: Number(cn.amount || 0),
+    quantity: Number(cn.quantity || 0),
+    unit_rate: Number(cn.unit_rate || 0),
+    monthly_rate: Number(cn.unit_rate || 0)
+      ? +(Number(cn.unit_rate) * 30).toFixed(2)
+      : Number(cn.amount || 0),
+    from_date: fromDate,
+    to_date: toDate,
+    rent_start: fromDate,
+    rent_end: toDate,
+    return_dc_number: cn.return_dc_number || null,
+    support_ticket_id: cn.support_ticket_id || cn.return_ticket_id || null,
+    brand: 'Laptop rental',
+    model: 'Unused prepaid days',
+    days_in_month: Number(cn.quantity || 0),
+  }];
+}
+
+function mergeCreditNoteLines(...groups) {
+  const byKey = new Map();
+  for (const line of groups.flat()) {
+    const key = creditNoteLineKey(line);
+    if (!key || byKey.has(key)) continue;
+    byKey.set(key, line);
+  }
+  return [...byKey.values()];
+}
+
+function creditNoteBillMonthKey(cnOrLine) {
+  const d = cnOrLine?.to_date || cnOrLine?.rent_end || cnOrLine?.from_date || cnOrLine?.rent_start;
+  return d ? String(d).slice(0, 7) : 'unknown';
+}
+
+function groupByBillMonth(items, keyFn = creditNoteBillMonthKey) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyFn(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+function summarizeCreditNoteLines(lines) {
+  const ttspls = [...new Set(lines.map((line) => line.ttspl_id).filter(Boolean))];
+  const quantity = lines.reduce((n, line) => n + Number(line.quantity || line.days_in_month || 0), 0);
+  const dates = lines
+    .flatMap((line) => [line.from_date, line.to_date, line.rent_start, line.rent_end])
+    .filter(Boolean)
+    .map((d) => String(d).slice(0, 10))
+    .sort();
+  return {
+    amount: +lines.reduce((n, line) => n + Number(line.amount || 0), 0).toFixed(2),
+    quantity,
+    ttspl_ids: ttspls,
+    from_date: dates[0] || null,
+    to_date: dates[dates.length - 1] || null,
+    serial_id: lines[0]?.serial_id || null,
+    return_dc_number: lines.find((line) => line.return_dc_number)?.return_dc_number || null,
+    support_ticket_id: lines.find((line) => line.support_ticket_id)?.support_ticket_id || null,
+    description: `${lines.length} laptop${lines.length === 1 ? '' : 's'} — unused prepaid rental${ttspls.length ? ` (${ttspls.join(', ')})` : ''}`,
+  };
+}
+
+async function listPendingReturnCreditNotes(client, customerId) {
+  const res = await client.query(
+    `SELECT * FROM customer_credit_notes
+      WHERE customer_id = $1
+        AND status = 'pending'
+        AND (
+          COALESCE(source, '') IN ('invoice_generation', 'return_pickup')
+          OR reason = $2
+        )
+      ORDER BY created_at ASC, credit_note_id ASC`,
+    [customerId, RETURN_CN_REASON]
+  );
+  return res.rows;
+}
+
+async function persistConsolidatedReturnCreditNote(client, {
+  customerId,
+  actorUserId = null,
+  lines,
+  source = 'invoice_generation',
+  reason = RETURN_CN_REASON,
+  invoiceId = null,
+  survivor = null,
+  extras = [],
+}) {
+  const merged = mergeCreditNoteLines(lines);
+  if (!merged.length) return survivor || null;
+  const totals = summarizeCreditNoteLines(merged);
+  if (survivor) {
+    const upd = await client.query(
+      `UPDATE customer_credit_notes
+          SET amount = $1,
+              quantity = $2::int,
+              unit_rate = 0,
+              from_date = $3::date,
+              to_date = $4::date,
+              ttspl_ids = $5::jsonb,
+              line_items = $6::jsonb,
+              description = $7::text,
+              serial_id = $8::int,
+              return_dc_number = COALESCE($9::varchar, return_dc_number),
+              support_ticket_id = COALESCE($10::int, support_ticket_id),
+              updated_at = NOW()
+        WHERE credit_note_id = $11
+        RETURNING *`,
+      [
+        totals.amount,
+        totals.quantity,
+        totals.from_date,
+        totals.to_date,
+        JSON.stringify(totals.ttspl_ids),
+        JSON.stringify(merged),
+        totals.description,
+        totals.serial_id,
+        totals.return_dc_number,
+        totals.support_ticket_id,
+        survivor.credit_note_id,
+      ]
+    );
+    for (const extra of extras) {
+      await client.query(
+        `UPDATE customer_credit_notes
+            SET status = 'cancelled',
+                description = CONCAT(COALESCE(description, ''), ' Merged into ', $2::text),
+                updated_at = NOW()
+          WHERE credit_note_id = $1 AND status = 'pending'`,
+        [extra.credit_note_id, survivor.credit_note_number]
+      );
+    }
+    return upd.rows[0];
+  }
+
+  const num = await client.query(
+    `UPDATE sm_document_sequences SET last_value = last_value + 1
+      WHERE doc_type = 'credit_note'
+      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+  );
+  const cnNumber = num.rows[0].number;
+  const ins = await client.query(
+    `INSERT INTO customer_credit_notes
+      (credit_note_number, customer_id, invoice_id, reason, description, amount,
+       quantity, unit_rate, from_date, to_date, ttspl_ids, line_items, status, created_by,
+       serial_id, source, support_ticket_id, return_dc_number)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int,$16)
+     RETURNING *`,
+    [
+      cnNumber,
+      customerId,
+      invoiceId || null,
+      reason || RETURN_CN_REASON,
+      totals.description,
+      totals.amount,
+      totals.quantity,
+      totals.from_date,
+      totals.to_date,
+      JSON.stringify(totals.ttspl_ids),
+      JSON.stringify(merged),
+      actorUserId,
+      totals.serial_id,
+      source,
+      totals.support_ticket_id,
+      totals.return_dc_number,
+    ]
+  );
+  return ins.rows[0];
+}
+
+/**
+ * Credit unused prepaid days when this customer returned units to
+ * warehouse. One draft credit note per customer lists every laptop.
  */
 async function createMissingReturnCreditNotes(client, {
   customerId, actorUserId = null, month = null, year = null,
@@ -1764,9 +2059,17 @@ async function createMissingReturnCreditNotes(client, {
         AND last_line.rent_end > (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
         AND NOT EXISTS (
           SELECT 1 FROM customer_credit_notes cn
-           WHERE cn.serial_id = vsn.serial_id
-             AND cn.customer_id = $1
+           WHERE cn.customer_id = $1
              AND cn.status <> 'cancelled'
+             AND (
+               cn.serial_id = vsn.serial_id
+               OR EXISTS (
+                 SELECT 1
+                   FROM jsonb_array_elements(COALESCE(cn.line_items, '[]'::jsonb)) li
+                  WHERE NULLIF(li->>'serial_id', '') ~ '^[0-9]+$'
+                    AND (li->>'serial_id')::int = vsn.serial_id
+               )
+             )
         )
         AND NOT EXISTS (
           SELECT 1
@@ -1782,7 +2085,7 @@ async function createMissingReturnCreditNotes(client, {
     params
   );
 
-  const created = [];
+  const newLines = [];
   for (const row of rows) {
     const returnDate = new Date(row.return_date);
     // Only refund days this customer was actually invoiced past the return.
@@ -1795,40 +2098,201 @@ async function createMissingReturnCreditNotes(client, {
       rentBilledUntil: billedUntil,
     });
     if (!calc) continue;
-
-    const num = await client.query(
-      `UPDATE sm_document_sequences SET last_value = last_value + 1
-        WHERE doc_type = 'credit_note'
-        RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
-    );
-    const cnNumber = num.rows[0].number;
-    const ins = await client.query(
-      `INSERT INTO customer_credit_notes
-        (credit_note_number, customer_id, reason, description, amount,
-         quantity, unit_rate, from_date, to_date, ttspl_ids, status, created_by,
-         serial_id, source, support_ticket_id, return_dc_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,$14,$15)
-       RETURNING *`,
-      [
-        cnNumber, customerId,
-        'Rental return — unused prepaid days',
-        `Unit ${row.ttspl_id || row.serial_id} warehouse received on ${toLocalYmd(returnDate)}` +
-          (row.return_dc_number ? ` via ${row.return_dc_number}` : '') +
-          `; ${calc.unusedDays} prepaid day(s) (${toLocalYmd(calc.refundStart)} to ${toLocalYmd(calc.billedUntil)}) refunded at ₹${calc.dailyRate.toFixed(2)}/day (base, excl. GST).`,
-        calc.amount, calc.unusedDays, calc.dailyRate,
-        toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
-        JSON.stringify([row.ttspl_id].filter(Boolean)), actorUserId,
-        row.serial_id, 'invoice_generation',
-        row.ticket_id || null, row.return_dc_number || null,
-      ]
-    );
-    billingLog.info(
-      { cnNumber, amount: calc.amount, customerId, serialId: row.serial_id },
-      'Return credit note created'
-    );
-    created.push(ins.rows[0]);
+    const fromDate = toLocalYmd(calc.refundStart);
+    const toDate = toLocalYmd(calc.billedUntil);
+    newLines.push({
+      serial_id: row.serial_id,
+      ttspl_id: row.ttspl_id || null,
+      amount: calc.amount,
+      quantity: calc.unusedDays,
+      unit_rate: calc.dailyRate,
+      monthly_rate: Number(row.monthly_rate || 0),
+      from_date: fromDate,
+      to_date: toDate,
+      rent_start: fromDate,
+      rent_end: toDate,
+      return_date: toLocalYmd(returnDate),
+      return_dc_number: row.return_dc_number || null,
+      support_ticket_id: row.ticket_id || null,
+      brand: 'Laptop rental',
+      model: 'Unused prepaid days',
+      days_in_month: calc.unusedDays,
+    });
   }
-  return created;
+
+  const pending = await listPendingReturnCreditNotes(client, customerId);
+  const pendingByMonth = groupByBillMonth(pending);
+  const newByMonth = groupByBillMonth(newLines);
+  const months = new Set([...pendingByMonth.keys(), ...newByMonth.keys()]);
+  const savedAll = [];
+
+  for (const monthKey of months) {
+    const group = pendingByMonth.get(monthKey) || [];
+    const monthNew = newByMonth.get(monthKey) || [];
+    const mergedLines = mergeCreditNoteLines(...group.map(linesFromCreditNote), monthNew);
+    if (!mergedLines.length) continue;
+
+    const survivor = group[0] || null;
+    const extras = group.slice(1);
+    const unchanged = survivor
+      && !monthNew.length
+      && extras.length === 0
+      && parseCreditNoteJsonArray(survivor.line_items).length === mergedLines.length;
+    if (unchanged) {
+      savedAll.push(survivor);
+      continue;
+    }
+
+    const saved = await persistConsolidatedReturnCreditNote(client, {
+      customerId,
+      actorUserId,
+      lines: mergedLines,
+      source: survivor?.source || 'invoice_generation',
+      invoiceId: survivor?.invoice_id || null,
+      survivor,
+      extras,
+    });
+    if (saved) {
+      billingLog.info(
+        {
+          cnNumber: saved.credit_note_number,
+          amount: saved.amount,
+          customerId,
+          month: monthKey,
+          laptopCount: mergedLines.length,
+          merged: extras.length,
+          created: !survivor,
+        },
+        survivor ? 'Return credit note updated for customer' : 'Return credit note created for customer'
+      );
+      savedAll.push(saved);
+    }
+  }
+  return savedAll;
+}
+
+async function consolidateAllPendingReturnCreditNotes() {
+  const res = await pool.query(
+    `SELECT DISTINCT customer_id
+       FROM customer_credit_notes
+      WHERE status = 'pending'
+        AND (
+          COALESCE(source, '') IN ('invoice_generation', 'return_pickup')
+          OR reason = $1
+        )`,
+    [RETURN_CN_REASON]
+  );
+  const results = [];
+  for (const row of res.rows) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const pending = await listPendingReturnCreditNotes(client, row.customer_id);
+      const byMonth = groupByBillMonth(pending);
+      for (const [, group] of byMonth) {
+        const lines = mergeCreditNoteLines(...group.map(linesFromCreditNote));
+        if (!lines.length) continue;
+        const alreadyOne = group.length === 1
+          && parseCreditNoteJsonArray(group[0].line_items).length === lines.length;
+        if (alreadyOne) {
+          results.push(group[0]);
+          continue;
+        }
+        const saved = await persistConsolidatedReturnCreditNote(client, {
+          customerId: row.customer_id,
+          lines,
+          source: group[0]?.source || 'invoice_generation',
+          invoiceId: group[0]?.invoice_id || null,
+          survivor: group[0] || null,
+          extras: group.slice(1),
+        });
+        if (saved) results.push(saved);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      billingLog.error({ customerId: row.customer_id, err: err.message }, 'Credit note consolidate failed');
+    } finally {
+      client.release();
+    }
+  }
+  return results;
+}
+
+async function listCreditNoteEligibleCustomerIds(month, year) {
+  const monthEnd = new Date(year, month, 0);
+  const { prevStart } = previousMonthRange(month, year);
+  const res = await pool.query(
+    `SELECT DISTINCT customer_id
+       FROM (
+         SELECT vsn.current_customer_id AS customer_id
+           FROM vendor_serial_numbers vsn
+          WHERE vsn.current_customer_id IS NOT NULL
+            AND vsn.deleted_at IS NULL
+            AND vsn.inventory_status IN ('rented', 'returned', 'in_transit')
+            AND vsn.rent_start_date IS NOT NULL
+            AND vsn.rent_start_date <= $1::date
+         UNION
+         SELECT rl.customer_id
+           FROM delivery_challan_lines rl
+           JOIN support_ticket_items sti
+             ON sti.return_dc_number = rl.dc_number
+            AND sti.item_type = 'pickup'
+            AND sti.warehouse_received_at IS NOT NULL
+          WHERE rl.movement_type = 'return'
+            AND COALESCE(rl.status, '') NOT IN ('cancelled')
+            AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
+                BETWEEN $2::date AND $3::date
+       ) x
+      WHERE customer_id IS NOT NULL`,
+    [toLocalYmd(monthEnd), toLocalYmd(prevStart), toLocalYmd(new Date(year, month - 1, 0))]
+  );
+  return res.rows.map((row) => Number(row.customer_id)).filter((id) => id > 0);
+}
+
+async function generateReturnCreditNotesForCustomer(customerId, month, year, actorUserId = null) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const created = await createMissingReturnCreditNotes(client, {
+      customerId, month, year, actorUserId,
+    });
+    await client.query('COMMIT');
+    return {
+      customer_id: customerId,
+      created: created.length,
+      skipped: created.length === 0,
+      credit_notes: created.map((note) => ({
+        credit_note_id: note.credit_note_id,
+        credit_note_number: note.credit_note_number,
+        amount: note.amount,
+        status: note.status,
+      })),
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function generateReturnCreditNotesForCustomers({
+  customerIds, all, month, year, actorUserId = null,
+}) {
+  const ids = all
+    ? await listCreditNoteEligibleCustomerIds(month, year)
+    : [...new Set((customerIds || []).map((id) => Number(id)).filter((id) => id > 0))];
+  const results = [];
+  for (const customerId of ids) {
+    try {
+      results.push(await generateReturnCreditNotesForCustomer(customerId, month, year, actorUserId));
+    } catch (err) {
+      billingLog.error({ customerId, err: err.message }, 'Credit note generation failed');
+      results.push({ customer_id: customerId, error: err.message });
+    }
+  }
+  return results;
 }
 
 async function generateCustomerInvoice(customerId, month, year, options = {}) {
@@ -2440,35 +2904,62 @@ async function createReturnCreditNote(client, {
   });
   if (!calc) return null;
 
-  const retDate = new Date(returnDate);
-  const num = await client.query(
-    `UPDATE sm_document_sequences SET last_value = last_value + 1
-     WHERE doc_type = 'credit_note'
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+  const already = await client.query(
+    `SELECT credit_note_id FROM customer_credit_notes
+      WHERE customer_id = $1
+        AND status <> 'cancelled'
+        AND (
+          serial_id = $2
+          OR EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(COALESCE(line_items, '[]'::jsonb)) li
+             WHERE NULLIF(li->>'serial_id', '') ~ '^[0-9]+$'
+               AND (li->>'serial_id')::int = $2
+          )
+        )
+      LIMIT 1`,
+    [resolvedCustomerId, serialId]
   );
-  const cnNumber = num.rows[0].number;
+  if (already.rows.length) return null;
 
-  const ins = await client.query(
-    `INSERT INTO customer_credit_notes
-      (credit_note_number, customer_id, reason, description, amount,
-       quantity, unit_rate, from_date, to_date, ttspl_ids, status, created_by,
-       serial_id, return_ticket_id, source, support_ticket_id, return_dc_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11,$12,$13,$14,$15,$16)
-     RETURNING *`,
-    [
-      cnNumber, resolvedCustomerId,
-      'Rental return — unused prepaid days',
-      `Unit ${s.ttspl_id || s.serial_id} warehouse received on ${toLocalYmd(retDate)}; ` +
-        `${calc.unusedDays} prepaid day(s) (${toLocalYmd(calc.refundStart)} to ${toLocalYmd(calc.billedUntil)}) refunded at ₹${calc.dailyRate.toFixed(2)}/day (base, excl. GST).`,
-      calc.amount, calc.unusedDays, calc.dailyRate,
-      toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
-      JSON.stringify([s.ttspl_id].filter(Boolean)), actorUserId,
-      serialId, returnTicketId, source || 'return_pickup',
-      supportTicketId, returnDcNumber,
-    ]
-  );
-  billingLog.info({ cnNumber, amount: calc.amount, customerId: resolvedCustomerId, serialId }, 'Return credit note created');
-  return ins.rows[0];
+  const retDate = new Date(returnDate);
+  const fromDate = toLocalYmd(calc.refundStart);
+  const toDate = toLocalYmd(calc.billedUntil);
+  const newLine = {
+    serial_id: serialId,
+    ttspl_id: s.ttspl_id || null,
+    amount: calc.amount,
+    quantity: calc.unusedDays,
+    unit_rate: calc.dailyRate,
+    monthly_rate: Number(lastLine.monthly_rate || s.rent_monthly_rate || 0),
+    from_date: fromDate,
+    to_date: toDate,
+    rent_start: fromDate,
+    rent_end: toDate,
+    return_date: toLocalYmd(retDate),
+    return_dc_number: returnDcNumber || null,
+    support_ticket_id: supportTicketId || returnTicketId || null,
+    brand: 'Laptop rental',
+    model: 'Unused prepaid days',
+    days_in_month: calc.unusedDays,
+  };
+
+  const pending = await listPendingReturnCreditNotes(client, resolvedCustomerId);
+  const saved = await persistConsolidatedReturnCreditNote(client, {
+    customerId: resolvedCustomerId,
+    actorUserId,
+    lines: mergeCreditNoteLines(...pending.map(linesFromCreditNote), [newLine]),
+    source: source || pending[0]?.source || 'return_pickup',
+    survivor: pending[0] || null,
+    extras: pending.slice(1),
+  });
+  if (saved) {
+    billingLog.info(
+      { cnNumber: saved.credit_note_number, amount: calc.amount, customerId: resolvedCustomerId, serialId },
+      pending[0] ? 'Return credit note line added' : 'Return credit note created'
+    );
+  }
+  return saved;
 }
 
 async function generateAllCustomerInvoices(month, year) {
@@ -2730,6 +3221,7 @@ module.exports = {
   generateAllVendorBills,
   createReturnCreditNote,
   approveAndApplyCreditNote,
+  approveSelectedCreditNoteLines,
   runBillingBatch,
   maybeInvoiceOnRentalDelivery,
   maybeInvoiceOnRentalDcCreate,
@@ -2739,6 +3231,10 @@ module.exports = {
   stripWarehouseReturnedRentalsFromDraft,
   reconcileDraftRentalWindow,
   createMissingReturnCreditNotes,
+  consolidateAllPendingReturnCreditNotes,
+  generateReturnCreditNotesForCustomer,
+  generateReturnCreditNotesForCustomers,
+  listCreditNoteEligibleCustomerIds,
   collapseDuplicateRentalLines,
   collapseDuplicateCatchupOnDraft,
   ensureInvoiceSecurityLines,

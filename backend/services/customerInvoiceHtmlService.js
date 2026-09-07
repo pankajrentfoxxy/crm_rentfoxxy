@@ -45,7 +45,14 @@ function parseLineItems(invoice) {
 
 async function enrichLineItemsWithSpecs(lines) {
   if (!Array.isArray(lines) || !lines.length) return lines || [];
-  const needsLookup = lines.some((l) => !formatSpecLine(l) && (l.serial_id || l.ttspl_id));
+  const needsLookup = lines.some((l) => {
+    if (!l.serial_id && !l.ttspl_id) return false;
+    const genericBrand = !String(l.brand || '').trim() || String(l.brand).trim() === 'Laptop rental';
+    const genericModel = !String(l.model || '').trim()
+      || String(l.model).trim() === 'Unused prepaid days'
+      || String(l.model).trim() === 'Credit note';
+    return !formatSpecLine(l) || genericBrand || genericModel;
+  });
   if (!needsLookup) return lines;
 
   const ids = [...new Set(lines.map((l) => Number(l.serial_id)).filter((n) => Number.isFinite(n) && n > 0))];
@@ -55,10 +62,13 @@ async function enrichLineItemsWithSpecs(lines) {
   const r = await pool.query(
     `SELECT serial_id,
             inventory_asset_code,
+            serial_number,
             extra->>'processor' AS processor,
             extra->>'generation' AS generation,
             extra->>'ram' AS ram,
-            extra->>'storage' AS storage
+            extra->>'storage' AS storage,
+            extra->>'brand' AS brand,
+            extra->>'model' AS model
        FROM vendor_serial_numbers
       WHERE deleted_at IS NULL
         AND (
@@ -74,15 +84,21 @@ async function enrichLineItemsWithSpecs(lines) {
     if (row.inventory_asset_code) byCode.set(String(row.inventory_asset_code), row);
   }
   return lines.map((line) => {
-    if (formatSpecLine(line)) return line;
     const spec = byId.get(Number(line.serial_id)) || byCode.get(String(line.ttspl_id || ''));
     if (!spec) return line;
+    const genericBrand = !String(line.brand || '').trim() || String(line.brand).trim() === 'Laptop rental';
+    const genericModel = !String(line.model || '').trim()
+      || String(line.model).trim() === 'Unused prepaid days'
+      || String(line.model).trim() === 'Credit note';
     return {
       ...line,
-      processor: spec.processor || '',
-      generation: spec.generation || '',
-      ram: spec.ram || '',
-      storage: spec.storage || '',
+      serial_number: line.serial_number || spec.serial_number || null,
+      processor: line.processor || spec.processor || '',
+      generation: line.generation || spec.generation || '',
+      ram: line.ram || spec.ram || '',
+      storage: line.storage || spec.storage || '',
+      brand: genericBrand ? (spec.brand || line.brand) : line.brand,
+      model: genericModel ? (spec.model || line.model) : line.model,
     };
   });
 }
@@ -244,6 +260,27 @@ function groupTitleSecurity({ compact = false } = {}) {
 }
 
 function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = {}) {
+  if (String(invoice.document_kind || '') === 'credit_note') {
+    const rentalLines = (lines || []).filter((line) => !isSecurityLine(line));
+    const title = compactSectionTitles
+      ? 'Unused prepaid rental'
+      : 'Unused prepaid rental <small>— credit for days invoiced after warehouse return</small>';
+    const g = renderGroup(title, rentalLines, 1, false, 'Credit subtotal');
+    const billingMonthLabel = monthYearLabel(
+      `${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`,
+    );
+    return {
+      bodyRows: g.html,
+      catchupSubtotal: 0,
+      fullSubtotal: g.subtotal || 0,
+      securitySubtotal: 0,
+      catchupMonthLabel: '',
+      billingMonthLabel,
+      deviceCount: rentalLines.length,
+      laptopQuantity: countUniqueLaptops(rentalLines),
+    };
+  }
+
   const { catchup, full, security } = groupLineItems(lines);
   let bodyRows = '';
   let rowNum = 1;
@@ -347,7 +384,25 @@ function normalizeInvoiceFormat(format) {
   return INVOICE_FORMATS.has(f) ? f : 'tax_invoice';
 }
 
+function documentKindLabels(invoice) {
+  const isCredit = String(invoice.document_kind || '') === 'credit_note';
+  return {
+    isCredit,
+    kind: isCredit ? 'Credit Note' : 'Tax Invoice',
+    detailsTitle: isCredit ? 'Credit note details' : 'Invoice details',
+    numberLabel: isCredit ? 'Credit note number' : 'Invoice number',
+    dateLabel: isCredit ? 'Credit note date' : 'Invoice date',
+    grandLabel: isCredit ? 'Total credit' : 'Total payable',
+    computer: isCredit
+      ? 'This is a computer-generated credit note and does not require a physical signature.'
+      : 'This is a computer-generated invoice and does not require a physical signature.',
+    titleSuffix: isCredit ? 'credit note' : 'tax invoice',
+    laptopTitle: isCredit ? 'Credit Note' : LAPTOP_DETAILS_DOCUMENT.title,
+  };
+}
+
 async function buildInvoiceHtml(invoice, company) {
+  const labels = documentKindLabels(invoice);
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const lines = await enrichLineItemsWithSpecs(parseLineItems(invoice));
   const { bodyRows, deviceCount, securitySubtotal } = buildItemsTableBody(invoice, lines);
@@ -359,15 +414,19 @@ async function buildInvoiceHtml(invoice, company) {
   const { rows: gstRows, intra } = gstDisplayRows(invoice, company, gstin);
   const totalsRows = [
     `<tr><td>Subtotal (${deviceCount} device${deviceCount === 1 ? '' : 's'})</td><td>${fmtMoneyInr(invoice.subtotal)}</td></tr>`,
-    ...gstRows.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${fmtMoneyInr(r.value)}</td></tr>`),
   ];
+  if (!labels.isCredit) {
+    totalsRows.push(
+      ...gstRows.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${fmtMoneyInr(r.value)}</td></tr>`),
+    );
+  }
   if (credit > 0) {
     totalsRows.push(`<tr class="credit"><td>Credit notes</td><td>- ${fmtMoneyPlain(credit)}</td></tr>`);
   }
   if (security > 0) {
     totalsRows.push(`<tr><td>Security deposit</td><td>${fmtMoneyInr(security)}</td></tr>`);
   }
-  totalsRows.push(`<tr class="grand"><td>Total payable</td><td>${fmtMoneyInr(invoice.grand_total)}</td></tr>`);
+  totalsRows.push(`<tr class="grand"><td>${labels.grandLabel}</td><td>${fmtMoneyInr(invoice.grand_total)}</td></tr>`);
 
   const contactParts = [
     invoice.customer_contact_name || invoice.customer_name,
@@ -379,7 +438,7 @@ async function buildInvoiceHtml(invoice, company) {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>${escapeHtml(invoice.invoice_number)} – Rentfoxxy tax invoice</title>
+<title>${escapeHtml(invoice.invoice_number)} – Rentfoxxy ${labels.titleSuffix}</title>
 <style>${css}</style>
 </head>
 <body>
@@ -391,8 +450,8 @@ async function buildInvoiceHtml(invoice, company) {
     : '<div class="brand">rent<span>foxxy</span></div><div class="brand-sub">Laptop and workstation rentals</div>'}
     </td>
     <td class="doc-title">
-      <div class="kind">Tax Invoice</div>
-      <div class="sub">Prepaid rental</div>
+      <div class="kind">${escapeHtml(labels.kind)}</div>
+      <div class="sub">${labels.isCredit ? 'Rental credit' : 'Prepaid rental'}</div>
       <div class="num">${escapeHtml(invoice.invoice_number)}</div>
     </td>
   </tr>
@@ -421,12 +480,14 @@ async function buildInvoiceHtml(invoice, company) {
       </table>
     </td>
     <td class="block">
-      <h3>Invoice details</h3>
+      <h3>${escapeHtml(labels.detailsTitle)}</h3>
       <table class="kv">
-        <tr><td>Invoice number</td><td>${escapeHtml(invoice.invoice_number)}</td></tr>
-        <tr><td>Invoice date</td><td>${fmtInvoiceDate(invoice.invoice_date)}</td></tr>
+        <tr><td>${escapeHtml(labels.numberLabel)}</td><td>${escapeHtml(invoice.invoice_number)}</td></tr>
+        <tr><td>${escapeHtml(labels.dateLabel)}</td><td>${fmtInvoiceDate(invoice.invoice_date)}</td></tr>
         <tr><td>Billing period</td><td>${fmtInvoiceDate(invoice.from_date)} – ${fmtInvoiceDate(invoice.to_date)} (${PDF_TZ_LABEL})</td></tr>
-        <tr><td>Payment due</td><td>${fmtInvoiceDate(invoice.invoice_date)} (${invoice.billing_type === 'postpaid' ? 'postpaid' : 'prepaid'})</td></tr>
+        ${labels.isCredit
+          ? `<tr><td>Document type</td><td>Credit against prepaid rental</td></tr>`
+          : `<tr><td>Payment due</td><td>${fmtInvoiceDate(invoice.invoice_date)} (${invoice.billing_type === 'postpaid' ? 'postpaid' : 'prepaid'})</td></tr>`}
         <tr><td>Reverse charge</td><td>No</td></tr>
         <tr><td>Devices billed</td><td>${deviceCount}</td></tr>
       </table>
@@ -456,37 +517,45 @@ ${renderItemsTable(bodyRows)}
 <table class="foot">
   <tr>
     <td>
-      <h4>Pay to</h4>
-      <table class="kv">
+      <h4>${labels.isCredit ? 'Credit application' : 'Pay to'}</h4>
+      ${labels.isCredit
+        ? `<p class="addr">This credit note reduces the amount payable on the related customer invoice after approval. It is not a request for payment.</p>`
+        : `<table class="kv">
         <tr><td>Account name</td><td>${escapeHtml(bank.accountName)}</td></tr>
         <tr><td>Bank</td><td>${escapeHtml(bank.bankName)}</td></tr>
         <tr><td>Account number</td><td>${escapeHtml(bank.accountNumber)}</td></tr>
         <tr><td>IFSC</td><td>${escapeHtml(bank.ifsc)}</td></tr>
         <tr><td>UPI</td><td>${escapeHtml(bank.upi)}</td></tr>
-      </table>
+      </table>`}
     </td>
     <td>
       <h4>Terms</h4>
       <ol>
-        <li>${invoice.billing_type === 'postpaid'
+        ${labels.isCredit
+          ? `<li>This credit note is issued for unused prepaid rental after a warehouse return.</li>
+        <li>Only approved credit notes are shown on the related invoice.</li>
+        <li>Amounts are in INR exclusive of GST, matching invoice credit adjustments.</li>
+        <li>Disputes must be raised within 7 days of the credit note date.</li>`
+          : `<li>${invoice.billing_type === 'postpaid'
           ? 'Rental is postpaid; this invoice covers the previous calendar month. Mid-month returns are billed through the warehouse received date.'
           : 'Rental is prepaid; pay on or before the invoice date to keep devices active.'}</li>
         <li>Mid-month deliveries are billed pro-rata on calendar days.</li>
         <li>Devices remain the property of ${escapeHtml(company.legal_name)}.</li>
         <li>Security deposit is refundable and is not subject to GST.</li>
-        <li>Disputes must be raised within 7 days of the invoice date.</li>
+        <li>Disputes must be raised within 7 days of the invoice date.</li>`}
       </ol>
       <div class="sign"><span class="line">For ${escapeHtml(company.legal_name)}<br>Authorised signatory</span></div>
     </td>
   </tr>
 </table>
 
-<div class="computer">This is a computer-generated invoice and does not require a physical signature.</div>
+<div class="computer">${escapeHtml(labels.computer)}</div>
 </body>
 </html>`;
 }
 
 async function buildLaptopDetailsHtml(invoice, company) {
+  const labels = documentKindLabels(invoice);
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const lines = await enrichLineItemsWithSpecs(parseLineItems(invoice));
   const {
@@ -527,7 +596,7 @@ async function buildLaptopDetailsHtml(invoice, company) {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>${escapeHtml(LAPTOP_DETAILS_DOCUMENT.title)} – ${escapeHtml(invoice.customer_name || 'Rentfoxxy')}</title>
+<title>${escapeHtml(labels.laptopTitle)} – ${escapeHtml(invoice.customer_name || 'Rentfoxxy')}</title>
 <style>${css}</style>
 </head>
 <body class="variant-laptop-details">
@@ -543,7 +612,7 @@ async function buildLaptopDetailsHtml(invoice, company) {
     </div>
   </div>
   <div class="ld-header-right">
-    <div class="ld-title">${escapeHtml(LAPTOP_DETAILS_DOCUMENT.title)}</div>
+    <div class="ld-title">${escapeHtml(labels.laptopTitle)}</div>
     <div class="ld-customer">${escapeHtml(invoice.customer_name || invoice.customer_id)}</div>
     <div class="ld-month">${escapeHtml(billingMonthLabel || '—')}</div>
     <div class="ld-qty">Total Quantity : ${Number(laptopQuantity || 0)}</div>

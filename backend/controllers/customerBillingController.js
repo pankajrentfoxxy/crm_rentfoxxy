@@ -4,11 +4,15 @@ const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const archiver = require('archiver');
 const { generateCustomerInvoicePdf, invoicePdfDownloadName, uniqueCustomerPdfName } = require('../services/customerInvoicePdfService');
+const { generateCustomerCreditNotePdf, creditNotePdfDownloadName, hydrateCreditNoteDocument } = require('../services/customerCreditNotePdfService');
 const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
 const {
   generateCustomerInvoice,
   generateAllCustomerInvoices,
   approveAndApplyCreditNote,
+  approveSelectedCreditNoteLines,
+  generateReturnCreditNotesForCustomer,
+  generateReturnCreditNotesForCustomers,
 } = require('../services/billingSchedulerService');
 const {
   listZohoCandidates,
@@ -548,9 +552,10 @@ exports.getInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const creditNotes = await pool.query(
-      `SELECT credit_note_number, amount, status
+      `SELECT credit_note_id, credit_note_number, amount, status
        FROM customer_credit_notes
-       WHERE applied_in_invoice_id = $1 OR invoice_id = $1`,
+       WHERE (applied_in_invoice_id = $1 OR invoice_id = $1)
+         AND status IN ('approved', 'applied')`,
       [invoiceId]
     );
     const invoice = result.rows[0];
@@ -977,7 +982,9 @@ exports.downloadInvoicesZip = async (req, res) => {
   }
 };
 
-function creditNoteListFilters(query, { includeStatus = true } = {}) {
+const CN_BILL_DATE = `COALESCE(cn.to_date, cn.from_date, (cn.created_at AT TIME ZONE 'Asia/Kolkata')::date)`;
+
+function creditNoteListFilters(query, { includeStatus = true, includePeriod = true } = {}) {
   const { customer_id, status, search, ttspl } = query;
   const params = [];
   const where = ['1=1'];
@@ -985,24 +992,50 @@ function creditNoteListFilters(query, { includeStatus = true } = {}) {
     params.push(customer_id);
     where.push(`cn.customer_id = $${params.length}`);
   }
+  if (includePeriod) {
+    const month = Number(query.month);
+    const year = Number(query.year);
+    if (month >= 1 && month <= 12) {
+      params.push(month);
+      where.push(`EXTRACT(MONTH FROM ${CN_BILL_DATE}) = $${params.length}`);
+    }
+    if (year >= 2000 && year <= 2100) {
+      params.push(year);
+      where.push(`EXTRACT(YEAR FROM ${CN_BILL_DATE}) = $${params.length}`);
+    }
+  }
   if (includeStatus && status) {
     params.push(status);
     where.push(`cn.status = $${params.length}`);
+  } else if (includeStatus) {
+    where.push(`cn.status <> 'cancelled'`);
   }
   const ttsplKeys = (Array.isArray(ttspl) ? ttspl : String(ttspl || '').split(','))
     .map((s) => String(s).trim())
     .filter(Boolean);
   if (ttsplKeys.length) {
     params.push(ttsplKeys);
-    where.push(`EXISTS (
-      SELECT 1
-        FROM jsonb_array_elements_text(
-          CASE WHEN jsonb_typeof(COALESCE(cn.ttspl_ids, '[]'::jsonb)) = 'array'
-               THEN COALESCE(cn.ttspl_ids, '[]'::jsonb)
-               ELSE '[]'::jsonb
-          END
-        ) AS t(code)
-       WHERE t.code = ANY($${params.length}::text[])
+    where.push(`(
+      EXISTS (
+        SELECT 1
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(COALESCE(cn.ttspl_ids, '[]'::jsonb)) = 'array'
+                 THEN COALESCE(cn.ttspl_ids, '[]'::jsonb)
+                 ELSE '[]'::jsonb
+            END
+          ) AS t(code)
+         WHERE t.code = ANY($${params.length}::text[])
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(COALESCE(cn.line_items, '[]'::jsonb)) = 'array'
+                 THEN COALESCE(cn.line_items, '[]'::jsonb)
+                 ELSE '[]'::jsonb
+            END
+          ) AS li
+         WHERE li->>'ttspl_id' = ANY($${params.length}::text[])
+      )
     )`);
   }
   const qSearch = String(search || '').trim();
@@ -1017,6 +1050,7 @@ function creditNoteListFilters(query, { includeStatus = true } = {}) {
       OR COALESCE(cn.description, '') ILIKE $${n}
       OR COALESCE(ci.invoice_number, '') ILIKE $${n}
       OR COALESCE(cn.ttspl_ids::text, '') ILIKE $${n}
+      OR COALESCE(cn.line_items::text, '') ILIKE $${n}
     )`);
   }
   return { params, where };
@@ -1041,13 +1075,16 @@ exports.listCreditNotes = async (req, res) => {
     const laptopScope = creditNoteListFilters(laptopQuery, { includeStatus: true });
     list.params.push(limit, offset);
 
-    const [listRes, countRes, summaryRes, laptopRes] = await Promise.all([
+    const monthScope = creditNoteListFilters(req.query, { includeStatus: true, includePeriod: false });
+    const [listRes, countRes, summaryRes, laptopRes, monthRes] = await Promise.all([
       pool.query(
         `SELECT cn.*,
                 c.company_name AS customer_name,
                 ci.invoice_number,
                 COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
-                COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
+                COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id,
+                EXTRACT(MONTH FROM ${CN_BILL_DATE})::int AS billing_month,
+                EXTRACT(YEAR FROM ${CN_BILL_DATE})::int AS billing_year
          ${CREDIT_NOTE_FROM}
          WHERE ${list.where.join(' AND ')}
          ORDER BY cn.created_at DESC
@@ -1090,6 +1127,17 @@ exports.listCreditNotes = async (req, res) => {
          LIMIT 500`,
         laptopScope.params
       ),
+      pool.query(
+        `SELECT EXTRACT(YEAR FROM ${CN_BILL_DATE})::int AS year,
+                EXTRACT(MONTH FROM ${CN_BILL_DATE})::int AS month,
+                COUNT(*)::int AS count,
+                COALESCE(SUM(cn.amount), 0) AS amount
+         ${CREDIT_NOTE_FROM}
+         WHERE ${monthScope.where.join(' AND ')}
+         GROUP BY 1, 2
+         ORDER BY 1 DESC, 2 DESC`,
+        monthScope.params
+      ),
     ]);
 
     const total = countRes.rows[0]?.n || 0;
@@ -1098,11 +1146,393 @@ exports.listCreditNotes = async (req, res) => {
       credit_notes: listRes.rows,
       summary: summaryRes.rows[0] || {},
       laptops: laptopRes.rows.map((r) => r.ttspl),
+      months: monthRes.rows,
       page,
       limit,
       total,
       total_pages: Math.max(1, Math.ceil(total / limit)),
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const CREDIT_NOTE_DETAIL_SELECT = `
+  SELECT cn.*,
+         c.company_name AS customer_name,
+         c.name AS customer_contact_name,
+         c.email AS customer_email,
+         c.phone AS customer_phone,
+         c.gst_no AS gst_number,
+         c.billing_address,
+         c.billing_city,
+         c.billing_state,
+         c.billing_pincode,
+         COALESCE(c.billing_type, 'prepaid') AS billing_type,
+         ci.invoice_number
+  FROM customer_credit_notes cn
+  LEFT JOIN customers c ON c.customer_id = cn.customer_id
+  LEFT JOIN customer_invoices ci ON ci.invoice_id = COALESCE(cn.applied_in_invoice_id, cn.invoice_id)
+`;
+
+async function listApprovedRelatedCreditNotes(cn) {
+  const result = await pool.query(
+    `SELECT credit_note_id,
+            credit_note_number,
+            status,
+            amount,
+            jsonb_array_length(COALESCE(line_items, '[]'::jsonb)) AS laptop_count,
+            created_at
+       FROM customer_credit_notes
+      WHERE customer_id = $1
+        AND status IN ('approved', 'applied')
+        AND (
+          credit_note_id = $2
+          OR (
+            COALESCE(source, '') = COALESCE($3, '')
+            AND COALESCE(reason, '') = COALESCE($4, '')
+          )
+        )
+        AND date_trunc('month', COALESCE(to_date, from_date, (created_at AT TIME ZONE 'Asia/Kolkata')::date))
+          = date_trunc('month', COALESCE($5::date, $6::date, ($7::timestamptz AT TIME ZONE 'Asia/Kolkata')::date))
+      ORDER BY created_at DESC, credit_note_id DESC`,
+    [
+      cn.customer_id,
+      cn.credit_note_id,
+      cn.source || '',
+      cn.reason || '',
+      cn.to_date || null,
+      cn.from_date || null,
+      cn.created_at || null,
+    ]
+  );
+  return result.rows;
+}
+
+async function listRelatedCreditNotesDetailed(cn, statuses) {
+  const result = await pool.query(
+    `${CREDIT_NOTE_DETAIL_SELECT}
+     WHERE cn.customer_id = $1
+       AND cn.status = ANY($2::text[])
+       AND (
+         cn.credit_note_id = $3
+         OR (
+           COALESCE(cn.source, '') = COALESCE($4, '')
+           AND COALESCE(cn.reason, '') = COALESCE($5, '')
+         )
+       )
+       AND date_trunc('month', ${CN_BILL_DATE})
+         = date_trunc('month', COALESCE($6::date, $7::date, ($8::timestamptz AT TIME ZONE 'Asia/Kolkata')::date))
+     ORDER BY cn.created_at DESC, cn.credit_note_id DESC`,
+    [
+      cn.customer_id,
+      statuses,
+      cn.credit_note_id,
+      cn.source || '',
+      cn.reason || '',
+      cn.to_date || null,
+      cn.from_date || null,
+      cn.created_at || null,
+    ]
+  );
+  const notes = [];
+  for (const row of result.rows) {
+    const mapped = await hydrateCreditNoteDocument(row);
+    notes.push({
+      credit_note_id: row.credit_note_id,
+      credit_note_number: row.credit_note_number,
+      status: row.status,
+      amount: mapped.subtotal ?? row.amount,
+      laptop_count: (mapped.line_items || []).length,
+      line_items: mapped.line_items || [],
+    });
+  }
+  return notes;
+}
+
+async function loadCreditNoteForApprovedPdf(creditNoteId) {
+  const result = await pool.query(
+    `${CREDIT_NOTE_DETAIL_SELECT} WHERE cn.credit_note_id = $1`,
+    [creditNoteId]
+  );
+  return result.rows[0] || null;
+}
+
+exports.generateCreditNotesBulk = async (req, res) => {
+  try {
+    const { customer_ids, all, month, year } = req.body || {};
+    const m = Number(month);
+    const y = Number(year);
+    if (!m || !y) {
+      return res.status(400).json({ success: false, message: 'month and year required' });
+    }
+
+    let results;
+    const actorUserId = req.user?.user_id || req.user?.id || null;
+    if (all) {
+      results = await generateReturnCreditNotesForCustomers({
+        all: true, month: m, year: y, actorUserId,
+      });
+    } else {
+      const ids = Array.isArray(customer_ids)
+        ? [...new Set(customer_ids.map((id) => Number(id)).filter((id) => id > 0))]
+        : [];
+      if (!ids.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Select at least one customer, or enable “All billable customers”',
+        });
+      }
+      results = await generateReturnCreditNotesForCustomers({
+        customerIds: ids, month: m, year: y, actorUserId,
+      });
+    }
+
+    const created = results.reduce((n, r) => n + Number(r.created || 0), 0);
+    const skipped = results.filter((r) => r.skipped && !r.error).length;
+    const errors = results.filter((r) => r.error).length;
+
+    res.json({
+      success: true,
+      summary: {
+        total: results.length,
+        created,
+        skipped,
+        errors,
+      },
+      results,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.generateCreditNote = async (req, res) => {
+  try {
+    const { customer_id, month, year } = req.body || {};
+    const customerId = Number(customer_id);
+    const m = Number(month);
+    const y = Number(year);
+    if (!customerId || !m || !y) {
+      return res.status(400).json({ success: false, message: 'customer_id, month and year required' });
+    }
+    const result = await generateReturnCreditNotesForCustomer(
+      customerId,
+      m,
+      y,
+      req.user?.user_id || req.user?.id || null,
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.listCreditNoteReviewGroups = async (req, res) => {
+  try {
+    const list = creditNoteListFilters({ ...req.query, status: 'pending' }, { includeStatus: true });
+    const result = await pool.query(
+      `SELECT cn.*,
+              c.company_name AS customer_name,
+              ci.invoice_number,
+              COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
+              COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
+       ${CREDIT_NOTE_FROM}
+       WHERE ${list.where.join(' AND ')}
+       ORDER BY COALESCE(c.company_name, c.name, ''), cn.created_at DESC`,
+      list.params
+    );
+
+    const groupsMap = new Map();
+    for (const row of result.rows) {
+      const key = Number(row.customer_id);
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, {
+          customer_id: key,
+          customer_name: row.customer_name || `Customer #${key}`,
+          pending_count: 0,
+          pending_amount: 0,
+          credit_notes: [],
+        });
+      }
+      const group = groupsMap.get(key);
+      group.pending_count += 1;
+      group.pending_amount += Number(row.amount || 0);
+      group.credit_notes.push(row);
+    }
+
+    const groups = [...groupsMap.values()];
+    res.json({
+      success: true,
+      groups,
+      summary: {
+        customer_count: groups.length,
+        pending_count: result.rows.length,
+        pending_amount: groups.reduce((n, g) => n + g.pending_amount, 0),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function flattenCreditNoteLaptopRows(cn) {
+  const stored = parseJsonArray(cn.line_items);
+  const ttspls = parseJsonArray(cn.ttspl_ids);
+  const lines = stored.length
+    ? stored
+    : ttspls.length
+      ? ttspls.map((code) => ({
+        ttspl_id: code,
+        amount: cn.amount,
+        quantity: cn.quantity,
+        from_date: cn.from_date,
+        to_date: cn.to_date,
+        return_dc_number: cn.return_dc_number,
+      }))
+      : [{
+        ttspl_id: null,
+        amount: cn.amount,
+        quantity: cn.quantity,
+        from_date: cn.from_date,
+        to_date: cn.to_date,
+        return_dc_number: cn.return_dc_number,
+      }];
+  return lines.map((line, index) => ({
+    row_key: `${cn.credit_note_id}-${line.ttspl_id || index}`,
+    credit_note_id: cn.credit_note_id,
+    credit_note_number: cn.credit_note_number,
+    customer_id: cn.customer_id,
+    customer_name: cn.customer_name,
+    invoice_number: cn.invoice_number,
+    status: cn.status,
+    ttspl_id: line.ttspl_id || null,
+    serial_id: line.serial_id || cn.serial_id || null,
+    amount: Number(line.amount || 0),
+    quantity: Number(line.quantity || line.days_in_month || 0),
+    from_date: line.from_date || line.rent_start || cn.from_date || null,
+    to_date: line.to_date || line.rent_end || cn.to_date || null,
+    return_dc_number: line.return_dc_number || cn.return_dc_number || null,
+    support_ticket_id: cn.support_ticket_id || null,
+  }));
+}
+
+exports.listCreditNoteLaptops = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(500, Math.max(10, parseInt(req.query.limit, 10) || 50));
+    const offset = (page - 1) * limit;
+    const list = creditNoteListFilters(req.query, { includeStatus: true });
+    const result = await pool.query(
+      `SELECT cn.*,
+              c.company_name AS customer_name,
+              ci.invoice_number,
+              COALESCE(cn.return_dc_number, st.return_dc_number) AS return_dc_number,
+              COALESCE(cn.support_ticket_id, st.id) AS support_ticket_id
+       ${CREDIT_NOTE_FROM}
+       WHERE ${list.where.join(' AND ')}
+       ORDER BY COALESCE(c.company_name, c.name, ''), cn.created_at DESC`,
+      list.params
+    );
+    const rows = result.rows.flatMap(flattenCreditNoteLaptopRows);
+    const customers = new Set(rows.map((r) => r.customer_id));
+    res.json({
+      success: true,
+      laptops: rows.slice(offset, offset + limit),
+      page,
+      limit,
+      total: rows.length,
+      total_pages: Math.max(1, Math.ceil(rows.length / limit)),
+      summary: {
+        laptop_count: rows.length,
+        customer_count: customers.size,
+        credit_note_count: result.rows.length,
+        amount: rows.reduce((n, row) => n + Number(row.amount || 0), 0),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getCreditNote = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `${CREDIT_NOTE_DETAIL_SELECT} WHERE cn.credit_note_id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Credit note not found' });
+    }
+    const creditNote = result.rows[0];
+    const mapped = await hydrateCreditNoteDocument(creditNote);
+    creditNote.line_items = mapped.line_items;
+    creditNote.subtotal = mapped.subtotal;
+    creditNote.gst_percent = mapped.gst_percent;
+    creditNote.gst_amount = mapped.gst_amount;
+    creditNote.grand_total = mapped.grand_total;
+    const [approvedRelated, pendingRelated] = await Promise.all([
+      listRelatedCreditNotesDetailed(creditNote, ['approved', 'applied']),
+      listRelatedCreditNotesDetailed(creditNote, ['pending']),
+    ]);
+    res.json({
+      success: true,
+      credit_note: creditNote,
+      approved_credit_notes: approvedRelated,
+      pending_credit_notes: pendingRelated,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.downloadCreditNotePdf = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `${CREDIT_NOTE_DETAIL_SELECT} WHERE cn.credit_note_id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Credit note not found' });
+    }
+    let creditNote = result.rows[0];
+    const status = String(creditNote.status || '').toLowerCase();
+    if (status !== 'approved' && status !== 'applied') {
+      const approvedRelated = await listApprovedRelatedCreditNotes(creditNote);
+      const latestApprovedId = approvedRelated[0]?.credit_note_id;
+      if (!latestApprovedId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Approve laptops first. The PDF only includes approved credit notes.',
+        });
+      }
+      creditNote = await loadCreditNoteForApprovedPdf(latestApprovedId);
+      if (!creditNote) {
+        return res.status(400).json({
+          success: false,
+          message: 'Approve laptops first. The PDF only includes approved credit notes.',
+        });
+      }
+    }
+    const format = normalizeInvoiceFormat(req.query.format);
+    const pdfPath = await generateCustomerCreditNotePdf(creditNote, { format });
+    res.download(
+      path.join(__dirname, '..', pdfPath),
+      creditNotePdfDownloadName(creditNote.credit_note_number, format),
+    );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -1146,13 +1576,24 @@ exports.createCreditNote = async (req, res) => {
 exports.approveCreditNote = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await approveAndApplyCreditNote(Number(id), req.user?.user_id || null);
+    const body = req.body || {};
+    const hasSelection = Boolean(
+      (Array.isArray(body.line_keys) && body.line_keys.length)
+      || (Array.isArray(body.serial_ids) && body.serial_ids.length)
+      || (Array.isArray(body.ttspl_ids) && body.ttspl_ids.length)
+    );
+    const result = hasSelection
+      ? await approveSelectedCreditNoteLines(Number(id), body, req.user?.user_id || null)
+      : await approveAndApplyCreditNote(Number(id), req.user?.user_id || null);
     if (!result.ok) {
-      return res.status(404).json({ success: false, message: result.reason });
+      return res.status(result.reason && /not found/i.test(result.reason) ? 404 : 400)
+        .json({ success: false, message: result.reason });
     }
     res.json({
       success: true,
       credit_note: result.credit_note,
+      leftover_credit_note: result.leftover_credit_note || null,
+      split: Boolean(result.split),
       applied: result.applied,
       invoice_id: result.invoice_id,
     });

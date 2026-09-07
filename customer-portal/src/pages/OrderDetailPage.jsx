@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import api from '../utils/api';
 import StatusBadge from '../components/StatusBadge';
-import { fmtDate, inr } from '../utils/format';
+import { fmtDate, formatAddress, inr } from '../utils/format';
 
 function Field({ label, children }) {
   return (
@@ -15,11 +15,7 @@ function Field({ label, children }) {
 }
 
 function addressText(address) {
-  if (!address) return null;
-  if (typeof address === 'string') return address;
-  return [address.address, address.city, address.state, address.pincode]
-    .filter(Boolean)
-    .join(', ');
+  return formatAddress(address);
 }
 
 export default function OrderDetailPage() {
@@ -83,7 +79,7 @@ export default function OrderDetailPage() {
         {addressText(order.shipping_address) && (
           <div className="pt-2 border-t border-slate-100">
             <Field label="Delivery Address">
-              {addressText(order.shipping_address)}
+              <span className="whitespace-pre-line">{addressText(order.shipping_address)}</span>
               {order.is_wfh && <span className="ml-2 text-xs text-slate-500">(Work from home)</span>}
             </Field>
           </div>

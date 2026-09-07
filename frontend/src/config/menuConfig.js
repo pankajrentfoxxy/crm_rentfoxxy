@@ -27,6 +27,7 @@ import {
   Warehouse,
   Boxes,
   ScanLine,
+  Laptop,
 } from 'lucide-react';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
@@ -141,7 +142,8 @@ export const reportsMenuItems = [
 export const financeMenuItems = [
   { icon: LayoutDashboard, label: 'Finance Dashboard', path: '/finance/dashboard', section: 'billing_dashboard' },
   { icon: FileText, label: 'Customer Invoices', path: '/customer-billing/invoices', section: 'customer_billing', countKey: 'draft_invoices' },
-  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes' },
+  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes', end: true },
+  { icon: Laptop, label: 'Credit Note Laptops', path: '/customer-billing/credit-notes/laptops', section: 'credit_notes' },
   { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
   { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
   { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },

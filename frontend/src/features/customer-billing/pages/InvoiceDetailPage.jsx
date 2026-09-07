@@ -100,7 +100,10 @@ export default function InvoiceDetailPage() {
     try {
       const res = await getInvoice(id);
       setInvoice(res.data?.invoice);
-      setCreditNotes(res.data?.credit_notes || []);
+      setCreditNotes((res.data?.credit_notes || []).filter((cn) => {
+        const status = String(cn.status || '').toLowerCase();
+        return status === 'approved' || status === 'applied';
+      }));
       setZohoCandidates(res.data?.zoho_candidates || []);
     } catch {
       toast.error('Invoice not found');
@@ -414,18 +417,20 @@ export default function InvoiceDetailPage() {
               <ul className="space-y-2">
                 {creditNotes.map((cn) => {
                   const status = String(cn.status || '').toLowerCase();
-                  const label = status === 'pending' ? 'Draft' : cn.status;
                   const inTotal = status === 'applied';
                   return (
                     <li key={cn.credit_note_number} className="flex justify-between gap-3">
                       <span>
-                        <span className="font-medium">{cn.credit_note_number}</span>
-                        <span className="text-gray-500"> · {label}</span>
-                        {status === 'pending' && (
-                          <span className="block text-[11px] text-amber-700">Awaiting approval — not in total</span>
+                        {cn.credit_note_id ? (
+                          <Link to={`/customer-billing/credit-notes/${cn.credit_note_id}`} className="font-medium text-blue-600 hover:underline">
+                            {cn.credit_note_number}
+                          </Link>
+                        ) : (
+                          <span className="font-medium">{cn.credit_note_number}</span>
                         )}
+                        <span className="text-gray-500"> · {status === 'approved' ? 'Approved' : 'Applied'}</span>
                       </span>
-                      <span className={inTotal ? 'text-red-600' : 'text-slate-400'}>
+                      <span className={inTotal ? 'text-red-600' : 'text-slate-500'}>
                         {inTotal ? '-' : ''}{fmt(cn.amount)}
                       </span>
                     </li>

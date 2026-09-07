@@ -15,8 +15,20 @@ const pool = require('../config/db');
 const { deriveItemCurrentStep } = require('./supportTicketFlow');
 const { listSalesOrdersGrouped } = require('./salesManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('./customerDeployedAssets');
+const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+const {
+  IN_TRANSIT: CUSTOMER_DELIVERY_IN_TRANSIT,
+  applyDeliveryTimeline,
+} = require('../utils/deliveryTimeline');
 
 const TERMINAL_ITEM_STATUSES = new Set(['resolved', 'closed', 'inventory_updated', 'cancelled']);
+const PENDING_ITEM_STATUS_SQL = `LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')`;
+
+function wantsPendingItemList(filters = {}) {
+  const type = String(filters.ticket_type || '').trim().toLowerCase();
+  const pending = ['1', 'true', 'yes'].includes(String(filters.item_pending || '').trim().toLowerCase());
+  return pending && (type === 'pickup' || type === 'replacement');
+}
 
 /** The only ticket stages a customer is ever shown, in progress order. */
 const CUSTOMER_STAGES = [
@@ -339,7 +351,9 @@ async function getCustomerOrder(customerId, salesOrderNumber) {
     total_value: totalValue,
     amount_paid: paid,
     payment_status: paymentStatus(head.quotation_type, totalValue, paid),
-    shipping_address: head.customer_shipping_address || head.delivery_address || null,
+    shipping_address: normalizeDeliveryAddress(
+      head.customer_shipping_address || head.delivery_address || null
+    ),
     is_wfh: Boolean(head.is_wfh),
     lines: linesRes.rows.map((l) => ({
       id: l.id,
@@ -383,12 +397,26 @@ function buildTicketWhere(customerId, filters, params) {
   let where = `WHERE ${ticketScopeSql(params.length)}`;
 
   if (filters.search) {
-    params.push(`%${filters.search}%`);
+    const q = String(filters.search).trim();
+    params.push(`%${q}%`);
     const i = params.length;
+    const digits = q.replace(/^t-?/i, '');
+    params.push(`%${digits}%`);
+    const d = params.length;
     where += ` AND (
-      CAST(st.id AS TEXT) ILIKE $${i}
+      CAST(st.id AS TEXT) ILIKE $${d}
+      OR ('T-' || st.id::text) ILIKE $${i}
       OR COALESCE(st.top_level_remarks, '') ILIKE $${i}
       OR COALESCE(st.ttspl_id, '') ILIKE $${i}
+      OR EXISTS (
+        SELECT 1 FROM support_ticket_items sti
+         WHERE sti.ticket_id = st.id
+           AND (
+             COALESCE(sti.ttspl_id, '') ILIKE $${i}
+             OR COALESCE(sti.serial_number, '') ILIKE $${i}
+             OR COALESCE(sti.unique_serial_number, '') ILIKE $${i}
+           )
+      )
     )`;
   }
   if (filters.ttspl) {
@@ -414,7 +442,7 @@ function buildTicketWhere(customerId, filters, params) {
               OR COALESCE(sti.unique_serial_number, '') ILIKE $${i})
     )`;
   }
-  if (filters.ticket_type) {
+  if (filters.ticket_type && !wantsPendingItemList(filters)) {
     params.push(String(filters.ticket_type).toLowerCase());
     where += ` AND LOWER(COALESCE(st.ticket_category, 'complaint')) = $${params.length}`;
   }
@@ -427,15 +455,13 @@ function buildTicketWhere(customerId, filters, params) {
     where += ` AND LOWER(st.status) = $${params.length}`;
   }
   const pendingType = String(filters.ticket_type || '').trim().toLowerCase();
-  const wantPendingItems = ['1', 'true', 'yes'].includes(String(filters.item_pending || '').trim().toLowerCase())
-    && (pendingType === 'pickup' || pendingType === 'replacement');
-  if (wantPendingItems) {
+  if (wantsPendingItemList(filters)) {
     params.push(pendingType);
     where += ` AND EXISTS (
       SELECT 1 FROM support_ticket_items sti
        WHERE sti.ticket_id = st.id
          AND sti.item_type = $${params.length}
-         AND LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')
+         AND ${PENDING_ITEM_STATUS_SQL}
     )`;
   }
   if (filters.date_from) {
@@ -525,11 +551,183 @@ function publicItem(item) {
   };
 }
 
+function tryParseJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Migrated tickets store `[TICKET-001635] [{"comment":"..."}] same text again`.
+ * Customers should only see the readable comment.
+ */
+function cleanTicketRemarks(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return { subject: 'Support request', description: '' };
+
+  text = text.replace(/\[TICKET-\d+\]\s*/gi, '').trim();
+
+  const comments = [];
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    const parsed = tryParseJson(jsonMatch[0]);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        const c = typeof item === 'string' ? item : item?.comment;
+        if (c && String(c).trim()) comments.push(String(c).trim());
+      }
+      text = `${text.slice(0, jsonMatch.index)} ${text.slice(jsonMatch.index + jsonMatch[0].length)}`.trim();
+    }
+  }
+  if (text) comments.push(text);
+
+  const unique = [];
+  const seen = new Set();
+  for (const c of comments) {
+    const key = c.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(c.replace(/\s+/g, ' ').trim());
+  }
+
+  const description = unique.join('\n\n');
+  return { subject: unique[0] || 'Support request', description };
+}
+
 function firstLine(text) {
-  return String(text || '').split('\n')[0].trim();
+  return cleanTicketRemarks(text).subject;
+}
+
+/**
+ * Dashboard Pending Pickup / Replacement counts laptops (items), not tickets.
+ * One ticket can hold several pickups, and a replacement ticket can still have
+ * a pending pickup item — those must appear here so the list total matches.
+ */
+async function listPendingSupportItems(customerId, filters = {}) {
+  const { page, limit, offset } = paginate(filters);
+  const itemType = String(filters.ticket_type || '').trim().toLowerCase();
+  const stageFilter = String(filters.stage || '').trim().toLowerCase();
+  const params = [customerId, itemType];
+  let where = `WHERE ${ticketScopeSql(1)}
+      AND sti.item_type = $2
+      AND ${PENDING_ITEM_STATUS_SQL}`;
+
+  if (filters.search) {
+    const q = String(filters.search).trim();
+    params.push(`%${q}%`);
+    const i = params.length;
+    const digits = q.replace(/^t-?/i, '');
+    params.push(`%${digits}%`);
+    const d = params.length;
+    where += ` AND (
+      CAST(st.id AS TEXT) ILIKE $${d}
+      OR ('T-' || st.id::text) ILIKE $${i}
+      OR COALESCE(st.top_level_remarks, '') ILIKE $${i}
+      OR COALESCE(st.ttspl_id, '') ILIKE $${i}
+      OR COALESCE(sti.ttspl_id, '') ILIKE $${i}
+      OR COALESCE(sti.serial_number, '') ILIKE $${i}
+      OR COALESCE(sti.unique_serial_number, '') ILIKE $${i}
+    )`;
+  }
+  if (filters.ttspl) {
+    params.push(`%${filters.ttspl}%`);
+    const i = params.length;
+    where += ` AND (
+      COALESCE(st.ttspl_id, '') ILIKE $${i}
+      OR COALESCE(sti.ttspl_id, '') ILIKE $${i}
+      OR COALESCE(sti.unique_serial_number, '') ILIKE $${i}
+    )`;
+  }
+  if (filters.serial) {
+    params.push(`%${filters.serial}%`);
+    const i = params.length;
+    where += ` AND (
+      COALESCE(sti.serial_number, '') ILIKE $${i}
+      OR COALESCE(sti.unique_serial_number, '') ILIKE $${i}
+    )`;
+  }
+  const status = String(filters.status || '').trim().toLowerCase();
+  if (status === 'open') {
+    where += ` AND LOWER(st.status) IN ('open', 'in_progress')`;
+  } else if (status) {
+    params.push(status);
+    where += ` AND LOWER(st.status) = $${params.length}`;
+  }
+  if (filters.date_from) {
+    params.push(filters.date_from);
+    where += ` AND st.created_at >= $${params.length}::date`;
+  }
+  if (filters.date_to) {
+    params.push(filters.date_to);
+    where += ` AND st.created_at < ($${params.length}::date + INTERVAL '1 day')`;
+  }
+
+  const fromSql = `
+    FROM support_ticket_items sti
+    JOIN support_tickets st ON st.id = sti.ticket_id
+    ${where}`;
+
+  const sqlLimit = stageFilter ? 500 : limit;
+  const sqlOffset = stageFilter ? 0 : offset;
+  const listParams = [...params, sqlLimit, sqlOffset];
+  const [countRes, listRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params),
+    pool.query(
+      `SELECT st.id, st.status, st.priority, st.ticket_category, st.top_level_remarks,
+              st.ttspl_id, st.created_at, st.updated_at, st.last_activity_at, st.closed_at,
+              sti.id AS pending_item_id
+         ${fromSql}
+        ORDER BY st.created_at DESC, sti.id ASC
+        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    ),
+  ]);
+
+  const itemsByTicket = await loadTicketItems([...new Set(listRes.rows.map((r) => r.id))]);
+
+  let tickets = listRes.rows.map((t) => {
+    const allItems = (itemsByTicket.get(t.id) || []).map(publicItem);
+    const pendingItem = allItems.find((i) => i.item_id === t.pending_item_id) || allItems.find((i) => i.is_open) || {};
+    const stage = pendingItem.stage || customerStageForTicket(t.status, allItems.filter((i) => i.is_open).map((i) => i.stage));
+    return {
+      ticket_id: t.id,
+      item_id: t.pending_item_id,
+      ticket_number: `T-${t.id}`,
+      ticket_type: pendingItem.item_type || itemType,
+      ttspl_id: pendingItem.ttspl_id || t.ttspl_id || null,
+      serial_number: pendingItem.serial_number || null,
+      subject: firstLine(t.top_level_remarks) || 'Support request',
+      created_at: pendingItem.created_at || t.created_at,
+      stage,
+      stage_label: CUSTOMER_STAGE_LABELS[stage] || 'In Progress',
+      status: t.status,
+      last_updated: t.last_activity_at || t.updated_at,
+      closed_at: t.closed_at,
+      item_count: 1,
+      open_item_count: pendingItem.is_open ? 1 : 0,
+    };
+  });
+
+  let total = countRes.rows[0]?.total || 0;
+  if (stageFilter) {
+    tickets = tickets.filter((t) => t.stage === stageFilter);
+    total = tickets.length;
+    tickets = tickets.slice(offset, offset + limit);
+  }
+
+  return {
+    tickets,
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+  };
 }
 
 async function listCustomerTickets(customerId, filters = {}) {
+  if (wantsPendingItemList(filters)) {
+    return listPendingSupportItems(customerId, filters);
+  }
+
   const { page, limit, offset } = paginate(filters);
   const stageFilter = String(filters.stage || '').trim().toLowerCase();
 
@@ -648,7 +846,7 @@ async function getCustomerTicket(customerId, ticketId) {
     ticket_number: `T-${t.id}`,
     ticket_type: t.ticket_category || 'complaint',
     subject: firstLine(t.top_level_remarks) || 'Support request',
-    description: t.top_level_remarks || '',
+    description: cleanTicketRemarks(t.top_level_remarks).description,
     ttspl_id: t.ttspl_id || publicItems[0]?.ttspl_id || null,
     status: t.status,
     stage,
@@ -690,8 +888,6 @@ async function findCustomerAsset(customerId, assetRef) {
 }
 
 /* -------------------------------------------------------------- deliveries */
-
-const CUSTOMER_DELIVERY_IN_TRANSIT = ['in_transit', 'reached', 'shipped'];
 
 async function listCustomerDeliveries(customerId, filters = {}) {
   const { page, limit, offset } = paginate(filters);
@@ -760,9 +956,9 @@ async function getCustomerDelivery(customerId, dcNumber) {
     `SELECT DISTINCT ON (dc_number)
             dc_number, sales_order_number, status, dispatch_mode, ship_by,
             courier_name, awb_number, courier_tracking_url, porter_tracking_id,
-            created_at, dispatched_at, reached_at, delivered_at, estimated_delivery,
-            pod_type, pod_photo_url, esign_url, pod_submitted_at,
-            delivery_notes, rejection_reason, rejected_at, pdf_path, serial_number
+            created_at, dispatched_at, reached_at, delivered_at, delivery_completed_at,
+            estimated_delivery, pod_type, pod_photo_url, esign_url, pod_submitted_at,
+            delivery_notes, rejection_reason, rejected_at, pdf_path
        FROM delivery_challan_lines
       WHERE dc_number = $1 AND customer_id = $2
         AND COALESCE(movement_type, 'outbound') = 'outbound'
@@ -773,22 +969,47 @@ async function getCustomerDelivery(customerId, dcNumber) {
   if (!dc) return null;
 
   const unitsRes = await pool.query(
-    `SELECT sos.ttspl_id, vsn.serial_number,
+    `SELECT
+            COALESCE(vsn.inventory_asset_code, NULLIF(split_part(elem, '|', 3), '')) AS ttspl_id,
+            COALESCE(vsn.serial_number, NULLIF(split_part(elem, '|', 2), '')) AS serial_number,
             vsn.extra->>'brand' AS brand,
             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model_name,
-            vsn.extra->>'processor' AS processor, vsn.extra->>'generation' AS generation,
-            vsn.extra->>'ram' AS ram, vsn.extra->>'storage' AS storage,
-            vsn.extra->>'gpu' AS gpu, vsn.extra->>'screen_size' AS screen_size
-       FROM sales_order_serials sos
-       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
-      WHERE sos.dc_number = $1
-      ORDER BY sos.allocation_id ASC`,
-    [dcNumber]
+            vsn.extra->>'processor' AS processor,
+            vsn.extra->>'generation' AS generation,
+            vsn.extra->>'ram' AS ram,
+            vsn.extra->>'storage' AS storage,
+            vsn.extra->>'gpu' AS gpu,
+            vsn.extra->>'screen_size' AS screen_size,
+            vsn.inventory_status
+       FROM delivery_challan_lines dcl
+       CROSS JOIN LATERAL jsonb_array_elements_text(dcl.serial_number) AS elem
+       LEFT JOIN LATERAL (
+         SELECT v.inventory_asset_code, v.serial_number, v.extra, v.inventory_status
+           FROM vendor_serial_numbers v
+          WHERE v.deleted_at IS NULL
+            AND (
+              (split_part(elem, '|', 1) ~ '^[0-9]+$' AND v.serial_id = split_part(elem, '|', 1)::int)
+              OR v.inventory_asset_code = NULLIF(split_part(elem, '|', 3), '')
+              OR v.serial_number = NULLIF(split_part(elem, '|', 2), '')
+            )
+          ORDER BY
+            CASE WHEN split_part(elem, '|', 1) ~ '^[0-9]+$' AND v.serial_id = split_part(elem, '|', 1)::int THEN 0 ELSE 1 END
+          LIMIT 1
+       ) vsn ON TRUE
+      WHERE dcl.dc_number = $1 AND dcl.customer_id = $2
+        AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+        AND jsonb_typeof(dcl.serial_number) = 'array'
+      ORDER BY ttspl_id NULLS LAST, serial_number`,
+    [dcNumber, customerId]
   );
 
-  const { serial_number: _rawSerials, ...head } = dc;
+  const derived = applyDeliveryTimeline(dc);
+
   return {
-    ...head,
+    ...dc,
+    status: derived.status,
+    dispatched_at: derived.dispatched_at,
+    delivered_at: derived.delivered_at,
     units: unitsRes.rows.map((u) => ({
       ttspl_id: u.ttspl_id,
       serial_number: u.serial_number,
@@ -796,14 +1017,7 @@ async function getCustomerDelivery(customerId, dcNumber) {
       model_name: u.model_name,
       config: configLabel(u),
     })),
-    timeline: [
-      { key: 'created', label: 'Challan created', at: dc.created_at },
-      { key: 'dispatched', label: 'Dispatched', at: dc.dispatched_at },
-      { key: 'reached', label: 'Reached location', at: dc.reached_at },
-      dc.rejected_at
-        ? { key: 'rejected', label: 'Refused', at: dc.rejected_at }
-        : { key: 'delivered', label: 'Delivered', at: dc.delivered_at },
-    ].filter((s) => s.at || ['created', 'dispatched', 'delivered'].includes(s.key)),
+    timeline: derived.timeline,
   };
 }
 
@@ -826,12 +1040,12 @@ async function getCustomerDashboard(customerId) {
             JOIN support_tickets st2 ON st2.id = sti.ticket_id
            WHERE (st2.portal_customer_id = $1 OR st2.customer_id = $1)
              AND sti.item_type = 'pickup'
-             AND LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')) AS pending_pickup,
+             AND ${PENDING_ITEM_STATUS_SQL}) AS pending_pickup,
          (SELECT COUNT(*)::int FROM support_ticket_items sti
             JOIN support_tickets st3 ON st3.id = sti.ticket_id
            WHERE (st3.portal_customer_id = $1 OR st3.customer_id = $1)
              AND sti.item_type = 'replacement'
-             AND LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')) AS pending_replacement,
+             AND ${PENDING_ITEM_STATUS_SQL}) AS pending_replacement,
          (SELECT COUNT(DISTINCT dc_number)::int FROM delivery_challan_lines
            WHERE customer_id = $1
              AND COALESCE(movement_type, 'outbound') = 'outbound'

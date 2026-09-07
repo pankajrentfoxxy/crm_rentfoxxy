@@ -1364,7 +1364,15 @@ export default function Layout({ children }) {
                           <NavLink
                             key={child.path}
                             to={child.path}
+                            end={child.end ?? false}
                             onClick={() => setSidebarOpen(false)}
+                            isActive={() => {
+                              const p = location.pathname;
+                              if (child.path === '/customer-billing/credit-notes') {
+                                return p === child.path || /^\/customer-billing\/credit-notes\/\d+/.test(p);
+                              }
+                              return p === child.path || p.startsWith(`${child.path}/`);
+                            }}
                             className={({ isActive }) =>
                               [
                                 'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',

@@ -144,7 +144,8 @@ exports.me = async (req, res) => {
       `SELECT customer_id, name, company_name, email, phone, gst_no AS gst_number,
               billing_address, billing_city, billing_state, billing_pincode,
               shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
-              kyc_verified, portal_last_login, whatsapp_number, pan_number
+              kyc_verified, portal_last_login, whatsapp_number, pan_number,
+              (portal_password_hash IS NOT NULL AND TRIM(portal_password_hash) <> '') AS has_portal_password
        FROM customers WHERE customer_id = $1`,
       [req.customer.customer_id]
     );
@@ -408,6 +409,7 @@ exports.listCreditNotes = async (req, res) => {
               return_ticket_id, applied_in_invoice_id
        FROM customer_credit_notes
        WHERE customer_id = $1
+         AND status IN ('approved', 'applied')
        ORDER BY created_at DESC`,
       [req.customer.customer_id]
     );
@@ -693,21 +695,27 @@ exports.getTicket = async (req, res) => {
 exports.changePassword = async (req, res) => {
   try {
     const { current_password, new_password } = req.body || {};
-    if (!current_password || !new_password || new_password.length < 6) {
-      return res.status(400).json({ success: false, message: 'Valid current and new password required' });
+    if (!new_password || String(new_password).length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' });
     }
 
     const result = await pool.query(
       `SELECT portal_password_hash FROM customers WHERE customer_id = $1`,
       [req.customer.customer_id]
     );
-    if (!result.rows.length || !result.rows[0].portal_password_hash) {
-      return res.status(400).json({ success: false, message: 'No portal password set' });
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    const valid = await bcrypt.compare(current_password, result.rows[0].portal_password_hash);
-    if (!valid) {
-      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    const existingHash = result.rows[0].portal_password_hash;
+    if (existingHash) {
+      if (!current_password) {
+        return res.status(400).json({ success: false, message: 'Current password is required' });
+      }
+      const valid = await bcrypt.compare(current_password, existingHash);
+      if (!valid) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
     }
 
     const hash = await bcrypt.hash(new_password, 10);

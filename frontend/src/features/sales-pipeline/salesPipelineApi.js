@@ -96,6 +96,8 @@ export const regenerateReturnDcPdf = (rdcNumber) => api.post(`${base}/return-dc/
 export const downloadReturnDcPdf = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/download-pdf`, { responseType: 'blob' });
 export const confirmReturnDcWarehouse = (rdcNumber, data) =>
   api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/warehouse-confirm`, data);
+export const remintReturnDcConfigTokens = (rdcNumber, data) =>
+  api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/config-tokens`, data || {});
 
 export const getDeliveryCounts = () => api.get('/delivery-register-management/counts');
 export const listByStatus = (status, p) => api.get(`/delivery-register-management/${status}`, { params: p });

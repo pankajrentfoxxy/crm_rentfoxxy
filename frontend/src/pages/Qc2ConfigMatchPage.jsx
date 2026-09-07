@@ -61,6 +61,17 @@ const CAPTURE_UI = {
     laptopHint: 'laptop returned by the vendor',
     ps1Title: 'Vendor Return',
   },
+  rdc: {
+    apiPrefix: 'rdc-capture',
+    brand: 'Return DC',
+    accessHint: 'Return DC',
+    screenHint: 'Return DC screen',
+    successHint: 'Return DC — warehouse can e-sign after this match',
+    scriptFile: 'rentfoxxy-rdc-verify.ps1',
+    exeFile: 'rentfoxxy-rdc-verify.exe',
+    laptopHint: 'laptop on this Return DC',
+    ps1Title: 'Return DC',
+  },
 };
 
 export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {

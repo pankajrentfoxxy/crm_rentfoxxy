@@ -1,5 +1,6 @@
 /**
  * Run migration 226 — BlueDart AWB tracking permission section.
+ * Usage: node scripts/run-migration-226.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.DB_SSL = process.env.DB_SSL || 'false';
@@ -18,7 +19,8 @@ async function main() {
     await client.query('BEGIN');
     await client.query(sql);
     await client.query(
-      `INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
+      `INSERT INTO schema_migrations (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING`,
       [MIGRATION_NAME]
     );
     await client.query('COMMIT');
