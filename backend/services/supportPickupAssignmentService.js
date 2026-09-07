@@ -335,8 +335,90 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
   }
 }
 
+function isCourierDetailsEditable(item) {
+  if (!item || item.item_type !== 'pickup') return false;
+  if (item.pickup_method !== 'courier') return false;
+  if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(item.status || ''))) {
+    return false;
+  }
+  if (item.warehouse_received_at || item.gate_inward_at) return false;
+  return true;
+}
+
+/** Update courier name + AWB after pickup started but before gate inward. */
+async function updatePickupCourierDetails({ itemId, courierName, awbNumber }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const itemRes = await client.query(
+      'SELECT * FROM support_ticket_items WHERE id = $1 FOR UPDATE',
+      [itemId]
+    );
+    if (!itemRes.rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 404, message: 'Pickup item not found' };
+    }
+    const item = itemRes.rows[0];
+    if (!isCourierDetailsEditable(item)) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        status: 409,
+        message: 'Courier details cannot be updated for this pickup',
+      };
+    }
+
+    const name = String(courierName || '').trim();
+    const awb = String(awbNumber || '').trim();
+    if (!name) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, message: 'Courier name is required' };
+    }
+    if (!awb) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, message: 'AWB number is required' };
+    }
+
+    await client.query(
+      `UPDATE support_ticket_items SET
+          pickup_courier_name = $2,
+          pickup_awb = $3,
+          updated_at = NOW()
+       WHERE id = $1`,
+      [itemId, name, awb]
+    );
+
+    if (item.return_dc_number) {
+      await client.query(
+        `UPDATE delivery_challan_lines SET
+            courier_name = $2,
+            awb_number = $3,
+            updated_at = NOW()
+         WHERE dc_number = $1 AND movement_type = 'return'`,
+        [item.return_dc_number, name, awb]
+      );
+    }
+
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      ticket_id: item.ticket_id,
+      return_dc_number: item.return_dc_number,
+      courier_name: name,
+      awb_number: awb,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   isPickupAssignmentEditable,
+  isCourierDetailsEditable,
   applyReturnPickupAssignment,
   applyTechnicianPickupOnClient,
+  updatePickupCourierDetails,
 };

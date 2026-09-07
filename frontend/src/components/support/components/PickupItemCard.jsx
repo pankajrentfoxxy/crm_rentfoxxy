@@ -6,7 +6,7 @@ import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
-import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable } from '../utils';
+import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable, isCourierDetailsEditable, resolvePickupCourierName, resolvePickupAwb, resolvePickupPorterTracking, resolvePickupPorterOrder } from '../utils';
 import { formatDeliveryAddressLine, parseDeliveryAddress } from '../../../features/sales-pipeline/salesPipelineUtils';
 import { applyPincodeAutofill, sanitizePincode } from '../../../utils/pincodeLookup';
 import {
@@ -36,6 +36,9 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const [changeBusy, setChangeBusy] = useState(false);
   const [assignPickupOpen, setAssignPickupOpen] = useState(false);
   const [assignPickupBusy, setAssignPickupBusy] = useState(false);
+  const [courierEditOpen, setCourierEditOpen] = useState(false);
+  const [courierEditBusy, setCourierEditBusy] = useState(false);
+  const [courierForm, setCourierForm] = useState({ courier_name: '', awb_number: '' });
   const [addrEditing, setAddrEditing] = useState(false);
   const [addrSaving, setAddrSaving] = useState(false);
   const [addrForm, setAddrForm] = useState({
@@ -68,10 +71,16 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const techSigned = !!item.technician_esign_url;
   const returnDcPdfUrl = uploadAssetUrl(item.return_dc_pdf_path);
 
+  const courierName = resolvePickupCourierName(item);
+  const awbNumber = resolvePickupAwb(item);
+  const porterTrackingId = resolvePickupPorterTracking(item);
+  const porterOrderId = resolvePickupPorterOrder(item);
+  const canEditCourierDetails = lead && !readOnly && isCourierDetailsEditable(item);
+
   const dispatchBadge = isCourier
-    ? `🚚 Courier${item.pickup_courier_name ? ` — ${item.pickup_courier_name}` : ''}`
+    ? `🚚 Courier${courierName ? ` — ${courierName}` : ''}`
     : isPorter
-      ? `🛵 Porter${item.porter_tracking_id ? ` — ${item.porter_tracking_id}` : ''}`
+      ? `🛵 Porter${porterTrackingId ? ` — ${porterTrackingId}` : ''}`
       : '👤 Technician';
   const pickupTypeBadge = item.pickup_type === 'repair' ? '🔧 Repair Pickup' : '🔄 Return Pickup';
 
@@ -235,10 +244,36 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const pickupInitialValues = {
     dispatch_mode: item.pickup_method || 'technician',
     technician_user_id: item.pickup_assigned_to || item.assigned_to,
-    courier_name: item.pickup_courier_name,
-    awb_number: item.pickup_awb,
-    porter_tracking_id: item.porter_tracking_id,
-    porter_order_id: item.porter_order_id,
+    courier_name: courierName || '',
+    awb_number: awbNumber || '',
+    porter_tracking_id: porterTrackingId || '',
+    porter_order_id: porterOrderId || '',
+  };
+
+  const openCourierEdit = () => {
+    setCourierForm({
+      courier_name: courierName || '',
+      awb_number: awbNumber || '',
+    });
+    setCourierEditOpen(true);
+  };
+
+  const saveCourierDetails = async (e) => {
+    e.preventDefault();
+    setCourierEditBusy(true);
+    try {
+      await api.patch(`/support/items/${item.id}/courier-details`, {
+        courier_name: courierForm.courier_name,
+        awb_number: courierForm.awb_number,
+      });
+      toast.success('Courier details updated');
+      setCourierEditOpen(false);
+      onRefresh?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update courier details');
+    } finally {
+      setCourierEditBusy(false);
+    }
   };
 
   return (
@@ -490,11 +525,85 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
 
       {/* Dispatch tracking info */}
       {(isCourier || isPorter) && (
-        <div className="mx-4 mt-3 p-3 bg-blue-50 rounded-xl text-xs text-blue-800 space-y-0.5">
-          {isCourier && item.pickup_courier_name && <p><strong>Courier:</strong> {item.pickup_courier_name}</p>}
-          {isCourier && item.pickup_awb && <p><strong>AWB:</strong> {item.pickup_awb}</p>}
-          {isPorter && item.porter_tracking_id && <p><strong>Porter ID:</strong> {item.porter_tracking_id}</p>}
-          {isPorter && item.porter_order_id && <p><strong>Order ID:</strong> {item.porter_order_id}</p>}
+        <div className="mx-4 mt-3 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-900 space-y-1">
+          <p className="font-semibold text-sm text-blue-950">
+            {isCourier ? 'Courier dispatch' : 'Porter dispatch'}
+          </p>
+          {isCourier && (
+            <>
+              <p><strong>Courier:</strong> {courierName || '—'}</p>
+              <p><strong>AWB:</strong> {awbNumber || '—'}</p>
+              {!courierName && !awbNumber && (
+                <p className="text-amber-800 pt-1">
+                  Courier name and AWB were not recorded when this pickup was assigned.
+                </p>
+              )}
+            </>
+          )}
+          {isPorter && (
+            <>
+              <p><strong>Porter ID:</strong> {porterTrackingId || '—'}</p>
+              <p><strong>Order ID:</strong> {porterOrderId || '—'}</p>
+              {!porterTrackingId && !porterOrderId && (
+                <p className="text-amber-800 pt-1">
+                  Porter tracking details were not recorded when this pickup was assigned.
+                </p>
+              )}
+            </>
+          )}
+          {canEditCourierDetails && (
+            <div className="pt-2">
+              {!courierEditOpen ? (
+                <button
+                  type="button"
+                  className="w-full py-2 text-sm font-semibold border border-blue-200 text-blue-700 rounded-xl bg-white"
+                  onClick={openCourierEdit}
+                >
+                  {courierName || awbNumber ? 'Update courier details' : 'Add courier details'}
+                </button>
+              ) : (
+                <form className="rounded-xl border border-blue-100 bg-white p-3 space-y-2" onSubmit={saveCourierDetails}>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-gray-600">Courier name</span>
+                    <input
+                      type="text"
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+                      value={courierForm.courier_name}
+                      onChange={(ev) => setCourierForm((f) => ({ ...f, courier_name: ev.target.value }))}
+                      required
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-gray-600">AWB number</span>
+                    <input
+                      type="text"
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+                      value={courierForm.awb_number}
+                      onChange={(ev) => setCourierForm((f) => ({ ...f, awb_number: ev.target.value }))}
+                      required
+                    />
+                  </label>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      className="flex-1 py-2 text-sm border border-gray-200 rounded-xl"
+                      onClick={() => setCourierEditOpen(false)}
+                      disabled={courierEditBusy}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-2 text-sm font-semibold bg-blue-600 text-white rounded-xl disabled:opacity-50"
+                      disabled={courierEditBusy}
+                    >
+                      {courierEditBusy ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
         </div>
       )}
 

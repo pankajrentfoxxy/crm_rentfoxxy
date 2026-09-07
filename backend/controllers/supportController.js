@@ -29,7 +29,11 @@ const { nextDocumentNumber, ensureReturnDcPickupItems } = require('../services/s
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
-const { applyReturnPickupAssignment, applyTechnicianPickupOnClient } = require('../services/supportPickupAssignmentService');
+const {
+  applyReturnPickupAssignment,
+  applyTechnicianPickupOnClient,
+  updatePickupCourierDetails,
+} = require('../services/supportPickupAssignmentService');
 const {
     assertMachinesEligibleForSupport,
     assertSerialEligibleForSupportTicket,
@@ -956,7 +960,12 @@ const getTicketWithItems = async (ticketId, user) => {
         LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
         LEFT JOIN customer_inventory ci ON ci.id = i.customer_inventory_id
         LEFT JOIN LATERAL (
-            SELECT pdf_path, sales_order_number, original_dc_number
+            SELECT pdf_path, sales_order_number, original_dc_number,
+                   dispatch_mode AS return_dc_dispatch_mode,
+                   courier_name AS return_dc_courier_name,
+                   awb_number AS return_dc_awb_number,
+                   porter_tracking_id AS return_dc_porter_tracking_id,
+                   porter_order_id AS return_dc_porter_order_id
               FROM delivery_challan_lines
              WHERE dc_number = i.return_dc_number AND movement_type = 'return'
              LIMIT 1
@@ -5079,6 +5088,41 @@ exports.assignReturnPickupDispatch = async (req, res) => {
     } catch (e) {
         console.error('assignReturnPickupDispatch:', e);
         return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to assign pickup' });
+    }
+};
+
+/** Add or update courier name + AWB after pickup started but before gate inward. */
+exports.updatePickupCourierDetails = async (req, res) => {
+    if (!canManageAsTicketLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can update courier details' });
+    }
+    const itemId = parseInt(req.params.itemId, 10);
+    const { courier_name: courierName, awb_number: awbNumber } = req.body || {};
+    try {
+        const result = await updatePickupCourierDetails({
+            itemId,
+            courierName,
+            awbNumber,
+        });
+        if (!result.ok) {
+            return res.status(result.status || 400).json({ success: false, message: result.message });
+        }
+
+        if (result.return_dc_number) {
+            try { await regenerateReturnDcPdfByRdc(pool, result.return_dc_number); } catch (pdfErr) {
+                console.error('[support] return DC pdf (courier details):', pdfErr.message);
+            }
+        }
+
+        const data = await getTicketWithItems(result.ticket_id, req.user);
+        res.json({
+            success: true,
+            message: 'Courier details updated',
+            ...data,
+        });
+    } catch (e) {
+        console.error('updatePickupCourierDetails:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to update courier details' });
     }
 };
 

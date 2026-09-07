@@ -393,6 +393,33 @@ export function isReturnPickupEditable(item) {
   return true;
 }
 
+export function resolvePickupCourierName(item) {
+  return String(item?.pickup_courier_name || item?.return_dc_courier_name || '').trim();
+}
+
+export function resolvePickupAwb(item) {
+  return String(item?.pickup_awb || item?.return_dc_awb_number || '').trim();
+}
+
+export function resolvePickupPorterTracking(item) {
+  return String(item?.porter_tracking_id || item?.return_dc_porter_tracking_id || '').trim();
+}
+
+export function resolvePickupPorterOrder(item) {
+  return String(item?.porter_order_id || item?.return_dc_porter_order_id || '').trim();
+}
+
+/** Courier name + AWB can be filled in after pickup starts but before gate inward. */
+export function isCourierDetailsEditable(item) {
+  if (!item || item.item_type !== 'pickup') return false;
+  if (item.pickup_method !== 'courier') return false;
+  if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(item.status || ''))) {
+    return false;
+  }
+  if (item.warehouse_received_at || item.gate_inward_at) return false;
+  return true;
+}
+
 /** Return pickup assignee can change before technician marks reached / OTP. */
 export const isPickupAssignmentEditable = (item) => {
   if (!item || item.item_type !== 'pickup') return false;

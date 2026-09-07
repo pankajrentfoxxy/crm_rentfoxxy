@@ -56,6 +56,7 @@ const {
     getReplacementContext,
     assignReturnPickupDispatch,
     changeReturnPickupAssignment,
+    updatePickupCourierDetails,
     moveComplaintToReplacement,
     updateReplacementOrder,
     deliverReplacement,
@@ -175,6 +176,7 @@ router.patch('/tickets/:ticketId/return-pickup-machines', requireTicketLead, edi
 router.post('/tickets/:ticketId/cancel-return-pickup', requireTicketLead, cancelReturnPickup);
 router.post('/tickets/:ticketId/assign-return-pickup', requireTicketLead, assignReturnPickupDispatch);
 router.patch('/tickets/:ticketId/return-pickup-assignment', requireTicketLead, changeReturnPickupAssignment);
+router.patch('/items/:itemId/courier-details', requireTicketLead, updatePickupCourierDetails);
 router.get('/tickets/:ticketId/replacement-context', requireTicketLead, getReplacementContext);
 router.post('/items/:itemId/move-to-replacement', requireTicketLead, moveComplaintToReplacement);
 router.get('/customers/:customerId/available-assets', getAvailableAssets);
