@@ -31,6 +31,10 @@ import PartVendorRepairDcDetailPage from './pages/PartVendorRepairDcDetailPage';
 import DiscardedPartsPage from './pages/DiscardedPartsPage';
 import ScrapChallanListPage from './pages/ScrapChallanListPage';
 import ScrapChallanDetailPage from './pages/ScrapChallanDetailPage';
+import PhysicalDeadPartsPage from './pages/PhysicalDeadPartsPage';
+import PhysicalPartInwardPage from './pages/PhysicalPartInwardPage';
+import PhysicalPartInwardDetailPage from './pages/PhysicalPartInwardDetailPage';
+import PhysicalPartOutwardDetailPage from './pages/PhysicalPartOutwardDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -50,6 +54,7 @@ function InventoryIndexRedirect() {
   if (canView('part_vendor_repair')) return <Navigate to="part-vendor-repair" replace />;
   if (canView('parts_discarded')) return <Navigate to="discarded-parts" replace />;
   if (canView('scrap_challans')) return <Navigate to="scrap-challans" replace />;
+  if (canView('physical_dead_parts')) return <Navigate to="physical-parts" replace />;
   if (canView('customer_inventory')) return <Navigate to="customer-assets" replace />;
   if (canView('ttspl_history')) return <Navigate to="ttspl-history" replace />;
   return <Navigate to="/dashboard" replace />;
@@ -86,6 +91,10 @@ export default function InventoryManagementApp() {
         <Route path="discarded-parts" element={g('parts_discarded', <DiscardedPartsPage />)} />
         <Route path="scrap-challans" element={g('scrap_challans', <ScrapChallanListPage />)} />
         <Route path="scrap-challans/:challanNumber" element={g('scrap_challans', <ScrapChallanDetailPage />)} />
+        <Route path="physical-parts" element={g('physical_dead_parts', <PhysicalDeadPartsPage />)} />
+        <Route path="physical-parts/inward" element={g('physical_dead_parts', <PhysicalPartInwardPage />)} />
+        <Route path="physical-parts/inward/:inwardNumber" element={g('physical_dead_parts', <PhysicalPartInwardDetailPage />)} />
+        <Route path="physical-parts/outward/:outwardNumber" element={g('physical_dead_parts', <PhysicalPartOutwardDetailPage />)} />
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />

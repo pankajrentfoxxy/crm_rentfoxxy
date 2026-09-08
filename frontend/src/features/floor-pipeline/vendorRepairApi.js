@@ -94,7 +94,9 @@ export function sendAccountsVrdcEwayMail(dcNumber) {
 }
 
 export function uploadVrdcEway(dcNumber, body) {
-  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/vrdc-eway`, body);
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/vrdc-eway`, body, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 }
 
 export async function downloadVendorRepairReceivePdf(dcNumber) {

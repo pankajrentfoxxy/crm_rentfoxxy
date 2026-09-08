@@ -74,6 +74,7 @@ exports.createPartVendorReturn = async (req, res) => {
       porter_order_id: req.body.porter_order_id || req.body.porterOrderId,
       porter_booking_url: req.body.porter_booking_url || req.body.porterBookingUrl,
       delivery_person_id: req.body.delivery_person_id || req.body.deliveryPersonId,
+      vehicle_number: req.body.vehicle_number || req.body.vehicleNumber,
       vendor_pickup_person: req.body.vendor_pickup_person || req.body.vendorPickupPerson,
       vendor_pickup_mobile: req.body.vendor_pickup_mobile || req.body.vendorPickupMobile,
       ...actor(req),

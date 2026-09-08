@@ -6,9 +6,12 @@ import {
 } from 'recharts';
 import {
   AlertTriangle, ArrowDownToLine, Boxes, Laptop, Loader2,
-  PackageCheck, RefreshCw, TrendingUp, Wallet,
+  PackageCheck, PackagePlus, RefreshCw, TrendingUp, Wallet,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { fetchPartsDashboard } from '../partTrackingApi';
+import { fetchPhysicalPartCounts } from '../physicalDeadPartApi';
+import usePermission from '../../../hooks/usePermission';
 import { partCategoryLabel } from '../../../constants/laptopConditions';
 import PartsDrilldownPanel from '../components/PartsDrilldownPanel';
 import PartsExportButton from '../components/PartsExportButton';
@@ -118,6 +121,7 @@ function DrillNumber({ value, onClick, className = '' }) {
 }
 
 export default function PartsDashboardPage() {
+  const { canView } = usePermission();
   const [preset, setPreset] = useState('30d');
   const [from, setFrom] = useState(daysAgo(29));
   const [to, setTo] = useState(isoDate(new Date()));
@@ -125,6 +129,7 @@ export default function PartsDashboardPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [drilldown, setDrilldown] = useState(null);
+  const [physicalCounts, setPhysicalCounts] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,6 +144,14 @@ export default function PartsDashboardPage() {
   }, [from, to, category]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!canView('physical_dead_parts')) return undefined;
+    fetchPhysicalPartCounts()
+      .then(({ data: res }) => setPhysicalCounts(res.counts || null))
+      .catch(() => setPhysicalCounts(null));
+    return undefined;
+  }, [canView]);
 
   function applyPreset(p) {
     setPreset(p.id);
@@ -205,6 +218,35 @@ export default function PartsDashboardPage() {
           </button>
         </div>
       </header>
+
+      {canView('physical_dead_parts') ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-950 m-0 flex items-center gap-2">
+              <PackagePlus className="w-4 h-4" /> Dead / Physical Parts
+            </p>
+            <p className="text-xs text-amber-800 mt-1 m-0">
+              Register warehouse-found parts that are not in CRM. Available now:{' '}
+              <strong>{physicalCounts?.available ?? '—'}</strong>
+              {physicalCounts != null ? ` · Pending ${physicalCounts.pending || 0} · Out ${physicalCounts.out}` : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/inventory-management/physical-parts/inward"
+              className="inline-flex items-center h-9 px-3 rounded-lg text-sm font-semibold bg-teal-700 text-white"
+            >
+              Part Inward
+            </Link>
+            <Link
+              to="/inventory-management/physical-parts"
+              className="inline-flex items-center h-9 px-3 rounded-lg text-sm font-semibold border border-amber-300 bg-white text-amber-950"
+            >
+              Open inventory
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap gap-1.5">

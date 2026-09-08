@@ -603,6 +603,7 @@ async function createOutForRepairDc(client, {
   porter_order_id,
   porter_booking_url,
   delivery_person_id,
+  vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
   actorUserId,
@@ -628,6 +629,7 @@ async function createOutForRepairDc(client, {
     porter_order_id,
     porter_booking_url,
     delivery_person_id,
+    vehicle_number,
     vendor_pickup_person,
     vendor_pickup_mobile,
   });
@@ -721,9 +723,9 @@ async function createOutForRepairDc(client, {
         items_dispatched_count, items_received_count,
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
         porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
-        vendor_pickup_person, vendor_pickup_mobile,
+        vehicle_number, vendor_pickup_person, vendor_pickup_mobile,
         eway_bill_number, eway_bill_date, item_domain
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'laptop')`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'laptop')`,
     [
       dcNumber,
       vendorId || null,
@@ -747,6 +749,7 @@ async function createOutForRepairDc(client, {
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      dispatch.vehicle_number,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
       eway.eway_bill_number,
@@ -824,6 +827,7 @@ function formatVendorBillingFromRow(vendor) {
   const lines = [vendorDisplayName(vendor)].filter(Boolean);
   const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
   if (street) lines.push(street);
+  if (vendor.gst_number) lines.push(`GSTIN: ${vendor.gst_number}`);
   return lines.join('\n');
 }
 
@@ -949,6 +953,7 @@ async function getVendorRepairDc(dcNumber) {
             v.shipping_city AS vendor_ship_city,
             v.shipping_state AS vendor_ship_state,
             v.shipping_pincode AS vendor_ship_pincode,
+            v.gst_number AS vendor_gst_number,
             dt.first_name AS delivery_person_first_name,
             dt.last_name AS delivery_person_last_name,
             dt.phone AS delivery_person_phone
@@ -986,6 +991,7 @@ async function getVendorRepairDc(dcNumber) {
     shipping_city: refreshedHead.vendor_ship_city,
     shipping_state: refreshedHead.vendor_ship_state,
     shipping_pincode: refreshedHead.vendor_ship_pincode,
+    gst_number: refreshedHead.vendor_gst_number,
   } : null;
   const vendor_billing_display = formatVendorBillingFromRow(vendorMaster) || refreshedHead.vendor_address || refreshedHead.vendor_name;
   const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || refreshedHead.shipping_address || refreshedHead.vendor_address;
@@ -1054,6 +1060,7 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
         porter_order_id = $8,
         porter_booking_url = $9,
         delivery_person_id = $10,
+        vehicle_number = $13,
         vendor_pickup_person = $11,
         vendor_pickup_mobile = $12,
         updated_at = NOW()
@@ -1071,6 +1078,7 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
       dispatch.delivery_person_id,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
+      dispatch.vehicle_number,
     ]
   );
   return { dc_number: dcNumber, ...dispatch };
@@ -1244,6 +1252,7 @@ async function signDispatchDc(client, {
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vehicle_number: head.vehicle_number,
       vendor_pickup_person: head.vendor_pickup_person,
       vendor_pickup_mobile: head.vendor_pickup_mobile,
     };
@@ -1275,6 +1284,7 @@ async function signDispatchDc(client, {
         porter_order_id = $10,
         porter_booking_url = $11,
         delivery_person_id = $12,
+        vehicle_number = $18,
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
         vendor_pickup_person = $16,
         vendor_pickup_mobile = $17,
@@ -1300,6 +1310,7 @@ async function signDispatchDc(client, {
       vendorSignerName,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
+      dispatch.vehicle_number,
     ]
   );
 

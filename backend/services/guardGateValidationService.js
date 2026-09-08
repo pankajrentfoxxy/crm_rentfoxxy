@@ -218,6 +218,7 @@ function classifyDocumentNumber(raw) {
     return { docType: 'vrdc_receive', docNumber: original };
   }
   if (/^VRDC/i.test(n)) return { docType: 'vrdc', docNumber: original };
+  if (/^POUT/i.test(n)) return { docType: 'pout', docNumber: original };
   if (/^RDC/i.test(n)) return { docType: 'rdc', docNumber: original };
   if (/^SDC/i.test(n)) return { docType: 'sdc', docNumber: original };
   if (/^GRN/i.test(n)) return { docType: 'grn', docNumber: original };
@@ -291,7 +292,15 @@ function buildLaptopChecks({ expected, serial, ctx, scanRaw, sessionDirection })
 
   const expCfg = expected?.configuration || '';
   const serialConfigSource = resolveSerialConfigSource(serial);
-  const configCmp = compareMovementConfigs(expCfg, serialConfigSource);
+  const configCmp = ctx?.reference_type === 'pout'
+    ? {
+        matched: !expCfg
+          || String(expCfg).trim().toLowerCase() === String(serial?.configuration || expCfg).trim().toLowerCase(),
+        expected: expCfg || null,
+        scanned: serial?.configuration || expCfg || null,
+        mismatch_message: 'Part does not match this outward',
+      }
+    : compareMovementConfigs(expCfg, serialConfigSource);
   const configOk = configCmp.matched;
 
   const selected = sessionDirection || ctx?.session_direction || ctx?.direction;
@@ -366,6 +375,7 @@ function publicMovement(ctx) {
     movement_mode: ctx.movement_mode || null,
     expected_count: ctx.laptops?.length || 0,
     allow_partial: Boolean(ctx.allow_partial),
+    skip_unit_verify: Boolean(ctx.skip_unit_verify),
     active: ctx.active !== false,
     inactive_reason: ctx.inactive_reason || null,
   };
@@ -1046,7 +1056,71 @@ async function loadDocument(db, docType, docNumber, preferredDirection) {
   if (docType === 'vrdc') return loadVendorRepairDc(db, docNumber, preferredDirection);
   if (docType === 'vrdc_receive') return loadVendorRepairReceiveDc(db, docNumber);
   if (docType === 'grn') return loadGrn(db, docNumber);
+  if (docType === 'pout') return loadPhysicalOutward(db, docNumber);
   return null;
+}
+
+async function loadPhysicalOutward(db, outwardNumber) {
+  const headRes = await db.query(
+    `SELECT * FROM physical_part_outwards WHERE outward_number = $1 LIMIT 1`,
+    [outwardNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) return null;
+
+  const items = await db.query(
+    `SELECT p.dp_number, p.serial_number, p.part_name, p.category, p.status
+       FROM physical_dead_parts p
+      WHERE p.outward_id = $1
+      ORDER BY p.dp_number`,
+    [head.outward_id]
+  );
+
+  const units = items.rows.map((row) => ({
+    serial_id: null,
+    ttspl: row.dp_number,
+    serial_number: row.serial_number || row.dp_number,
+    configuration: row.part_name,
+  }));
+  const laptops = uniqueLaptops(await enrichLaptops(db, units));
+
+  const status = String(head.status || '').toLowerCase();
+  let active = true;
+  let inactive_reason = null;
+  if (status === 'draft') {
+    active = false;
+    inactive_reason = 'Warehouse has not e-signed this outward for dispatch yet.';
+  } else if (status === 'dispatched') {
+    active = false;
+    inactive_reason = 'This physical outward has already gone out through the gate.';
+  } else if (status === 'cancelled') {
+    active = false;
+    inactive_reason = 'This physical outward is cancelled.';
+  } else if (status !== 'dispatch_ready') {
+    active = false;
+    inactive_reason = 'This physical outward is not waiting at the gate.';
+  } else if (!laptops.length) {
+    active = false;
+    inactive_reason = 'No parts on this outward are waiting for guard outward.';
+  }
+
+  return {
+    direction: 'outward',
+    source_type: 'physical_outward',
+    source_label: 'Physical Part Outward',
+    reference_type: 'pout',
+    reference_number: head.outward_number,
+    party_name: head.receiver_name || null,
+    so_number: null,
+    awb_number: head.awb_number || head.porter_tracking_id || null,
+    movement_mode: movementModeLabel(head.ship_by, head.dispatch_mode),
+    allow_partial: false,
+    skip_unit_verify: true,
+    document_confirm: true,
+    active,
+    inactive_reason,
+    laptops,
+  };
 }
 
 function filterContextByAwb(ctx, awb) {
@@ -1371,6 +1445,60 @@ async function scannedInSession(db, sessionId, serialId) {
   return r.rows.length > 0;
 }
 
+async function scannedInSessionByCode(db, sessionId, ttspl) {
+  if (!ttspl) return false;
+  const r = await db.query(
+    `SELECT 1 FROM gate_movements
+      WHERE session_id = $1
+        AND validation_result = 'valid'
+        AND UPPER(REPLACE(COALESCE(ttspl, ''), '-', '')) = UPPER(REPLACE($2, '-', ''))
+      LIMIT 1`,
+    [sessionId, String(ttspl)]
+  );
+  return r.rows.length > 0;
+}
+
+async function findPhysicalPartUnit(db, raw, ctx) {
+  if (!ctx?.reference_number || ctx.reference_type !== 'pout') return null;
+  const code = String(raw || '').trim();
+  if (!code) return null;
+  const fromList = (ctx.laptops || []).find((l) => {
+    const ttspl = normalizeTtspl(l.ttspl || '') || normalizeCode(l.ttspl);
+    const scan = normalizeTtspl(code) || normalizeCode(code);
+    return (ttspl && scan && ttspl === scan)
+      || (normalizeCode(l.serial_number) && normalizeCode(l.serial_number) === normalizeCode(code));
+  });
+  if (fromList) {
+    return {
+      serial_id: null,
+      ttspl: fromList.ttspl,
+      serial_number: fromList.serial_number || fromList.ttspl,
+      configuration: fromList.configuration,
+    };
+  }
+  const r = await db.query(
+    `SELECT p.dp_number, p.serial_number, p.part_name
+       FROM physical_dead_parts p
+       JOIN physical_part_outwards o ON o.outward_id = p.outward_id
+      WHERE o.outward_number = $1
+        AND (
+          p.dp_number ILIKE $2
+          OR REPLACE(p.dp_number, '-', '') ILIKE REPLACE($2, '-', '')
+          OR (p.serial_number IS NOT NULL AND p.serial_number ILIKE $2)
+        )
+      LIMIT 1`,
+    [ctx.reference_number, code]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    serial_id: null,
+    ttspl: row.dp_number,
+    serial_number: row.serial_number || row.dp_number,
+    configuration: row.part_name,
+  };
+}
+
 async function attachScanState(db, session, laptops, ctx) {
   const scans = await db.query(
     `SELECT serial_id, ttspl, serial_number, validation_result, scan_time, confirmed_at, metadata
@@ -1497,7 +1625,8 @@ async function sessionView(db, session, ctx) {
   );
   const pendingCount = pending.rows[0]?.n || 0;
   const allowPartial = Boolean(ctx.allow_partial);
-  const complete = allGreen || (allowPartial && pendingCount > 0);
+  const skipVerify = Boolean(ctx.skip_unit_verify);
+  const complete = skipVerify || allGreen || (allowPartial && pendingCount > 0);
   let block_submit_reason = null;
   if (session.status !== 'open') {
     block_submit_reason = 'This movement has already been submitted.';
@@ -1517,17 +1646,17 @@ async function sessionView(db, session, ctx) {
     session_id: session.session_id,
     status: session.status,
     allow_partial: allowPartial,
+    skip_unit_verify: skipVerify,
     expected_count: laptops.length,
-    scanned_count: verifiedCount,
-    remaining_count: Math.max(0, laptops.length - verifiedCount),
-    all_checks_passed: allGreen,
+    scanned_count: skipVerify ? laptops.length : verifiedCount,
+    remaining_count: skipVerify ? 0 : Math.max(0, laptops.length - verifiedCount),
+    all_checks_passed: skipVerify || allGreen,
     block_submit_reason,
     movement: publicMovement({ ...ctx, laptops, allow_partial: allowPartial }),
     laptops,
     can_confirm: session.status === 'open'
       && ctx.active !== false
-      && pendingCount > 0
-      && complete,
+      && (skipVerify || (pendingCount > 0 && complete)),
   };
 }
 
@@ -1719,7 +1848,7 @@ async function resolveScan({ direction, scan, user }) {
 
   const mismatch = directionMismatch(ctx, requested);
   const autoSwitch = Boolean(
-    mismatch && ['dc', 'rdc', 'sdc', 'grn'].includes(String(ctx.reference_type || ''))
+    mismatch && ['dc', 'rdc', 'sdc', 'grn', 'pout'].includes(String(ctx.reference_type || ''))
   );
   if (mismatch && !autoSwitch) {
     return {
@@ -1778,13 +1907,15 @@ async function resolveScan({ direction, scan, user }) {
 
   const fromDocument = Boolean(resolved.ctx) && !resolved.unitScan;
   let autoVerified = 0;
-  if (fromDocument) {
+  if (fromDocument && !ctx.skip_unit_verify) {
     autoVerified = await autoVerifyDocumentLaptops(db, { session, ctx, actor });
   }
   const view = await sessionView(db, session, ctx);
 
-  let message = 'Now scan the laptop TTSPL or serial to verify, then submit.';
-  if (autoSwitch) {
+  let message = ctx.skip_unit_verify
+    ? 'Physical part outward — no unit verify. Submit OUTWARD to record this movement.'
+    : 'Now scan the laptop TTSPL or serial to verify, then submit.';
+  if (autoSwitch && !ctx.skip_unit_verify) {
     message = `Opened as ${ctx.direction.toUpperCase()} for this document.`;
   }
   if (autoVerified > 0) {
@@ -1803,6 +1934,29 @@ async function resolveScan({ direction, scan, user }) {
     auto_verified: autoVerified,
     message,
   };
+}
+
+async function seedDocumentConfirmMovements(db, { session, ctx, actor }) {
+  for (const laptop of ctx.laptops || []) {
+    const already = laptop.serial_id
+      ? await scannedInSession(db, session.session_id, laptop.serial_id)
+      : await scannedInSessionByCode(db, session.session_id, laptop.ttspl);
+    if (already) continue;
+    await recordMovement(db, {
+      session,
+      ctx,
+      serial: {
+        serial_id: laptop.serial_id || null,
+        ttspl: laptop.ttspl || null,
+        serial_number: laptop.serial_number || laptop.ttspl || null,
+        configuration: laptop.configuration || null,
+      },
+      actor,
+      awb: laptop.awb_number || session.awb_number,
+      result: 'valid',
+      message: 'Physical part outward recorded at gate (no unit verify).',
+    });
+  }
 }
 
 async function autoVerifyDocumentLaptops(db, { session, ctx, actor }) {
@@ -1881,7 +2035,10 @@ async function scanSerialIntoSession(db, {
     };
   }
 
-  if (await scannedInSession(db, session.session_id, serial.serial_id)) {
+  const alreadyScanned = serial.serial_id
+    ? await scannedInSession(db, session.session_id, serial.serial_id)
+    : await scannedInSessionByCode(db, session.session_id, serial.ttspl);
+  if (alreadyScanned) {
     const view = await sessionView(db, session, ctx);
     const existing = (view.laptops || []).find((l) => laptopMatches(l, serial));
     return {
@@ -1986,6 +2143,9 @@ async function scanUnit({ sessionId, scan, user }) {
   }
 
   let serial = await findSerial(db, raw);
+  if (!serial && session.reference_type === 'pout') {
+    serial = await findPhysicalPartUnit(db, raw, ctx);
+  }
   if (!serial) {
     const byAwb = (ctx.laptops || []).find((l) => l.awb_number && normalizeCode(l.awb_number) === normalizeCode(raw));
     if (byAwb) {
@@ -2233,6 +2393,10 @@ async function confirmSession({ sessionId, remarks, user }) {
       return { ok: false, message: ctx.inactive_reason || 'This movement is no longer active.' };
     }
 
+    if (ctx.skip_unit_verify) {
+      await seedDocumentConfirmMovements(client, { session, ctx, actor });
+    }
+
     const view = await sessionView(client, session, ctx);
     if (!view.can_confirm) {
       await client.query('ROLLBACK');
@@ -2246,7 +2410,9 @@ async function confirmSession({ sessionId, remarks, user }) {
       };
     }
 
-    const remaining = (view.laptops || []).filter((l) => !l.verified).length;
+    const remaining = ctx.skip_unit_verify
+      ? 0
+      : (view.laptops || []).filter((l) => !l.verified).length;
     const stamped = await client.query(
       `UPDATE gate_movements
           SET confirmed_at = NOW(),
@@ -2277,6 +2443,7 @@ async function confirmSession({ sessionId, remarks, user }) {
 
     for (const row of stamped.rows) {
       if (!row.ttspl) continue;
+      if (session.reference_type === 'pout') continue;
       await logTtsplEvent({
         ttsplId: row.ttspl,
         vendorSerialId: row.serial_id,
@@ -2316,6 +2483,10 @@ async function confirmSession({ sessionId, remarks, user }) {
         actorUserId: actor.userId,
         actorName: actor.name,
       });
+    }
+    if (session.reference_type === 'pout' && session.direction === 'outward' && remaining === 0) {
+      const { confirmGateOutward } = require('./physicalDeadPartService');
+      await confirmGateOutward(client, { outwardNumber: session.reference_number, actor });
     }
     let inwardVrdc = null;
     if (

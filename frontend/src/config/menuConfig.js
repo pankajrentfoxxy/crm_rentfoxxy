@@ -78,6 +78,7 @@ export const partsManagementAccordionChildren = [
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po', section: 'parts_procurement' },
   { label: 'Part Vendor Repair DC', path: '/inventory-management/part-vendor-repair', section: 'part_vendor_repair' },
   { label: 'Discarded Parts', path: '/inventory-management/discarded-parts', section: 'parts_discarded' },
+  { label: 'Dead / Physical Parts', path: '/inventory-management/physical-parts', section: 'physical_dead_parts' },
   { label: 'Scrap Challans', path: '/inventory-management/scrap-challans', section: 'scrap_challans' },
   { label: 'Support Part Queue', path: '/support-parts/queue', section: 'support_part_challan', countKey: 'support_part_requests' },
   { label: 'Technician Parts Bucket', path: '/support-parts/tech-bucket', section: 'support_part_requests' },
@@ -90,6 +91,7 @@ export function isPartsManagementRoute(pathname) {
   if (pathname.startsWith('/vendor-management/spare-parts-po')) return true;
   if (pathname.startsWith('/inventory-management/part-vendor-repair')) return true;
   if (pathname.startsWith('/inventory-management/discarded-parts')) return true;
+  if (pathname.startsWith('/inventory-management/physical-parts')) return true;
   if (pathname.startsWith('/inventory-management/scrap-challans')) return true;
   // parts, parts-dashboard, parts-history, parts-approval
   if (pathname.startsWith('/inventory-management/parts')) return true;
@@ -283,6 +285,7 @@ export const MENU_GROUPS = [
           'parts_procurement',
           'part_vendor_repair',
           'parts_discarded',
+          'physical_dead_parts',
           'scrap_challans',
           'parts_detach',
           'parts',

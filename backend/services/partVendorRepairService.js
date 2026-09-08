@@ -56,6 +56,7 @@ async function createPartVendorReturnDc(client, {
   porter_order_id,
   porter_booking_url,
   delivery_person_id,
+  vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
   actorUserId,
@@ -139,6 +140,7 @@ async function createPartVendorReturnDc(client, {
       porter_order_id,
       porter_booking_url,
       delivery_person_id,
+      vehicle_number,
       vendor_pickup_person,
       vendor_pickup_mobile,
     });
@@ -153,6 +155,7 @@ async function createPartVendorReturnDc(client, {
       porter_order_id: null,
       porter_booking_url: null,
       delivery_person_id: null,
+      vehicle_number: null,
       vendor_pickup_person: null,
       vendor_pickup_mobile: null,
     };
@@ -192,9 +195,9 @@ async function createPartVendorReturnDc(client, {
         items_dispatched_count, items_received_count,
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
         porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
-        vendor_pickup_person, vendor_pickup_mobile,
+        vehicle_number, vendor_pickup_person, vendor_pickup_mobile,
         eway_bill_number, eway_bill_date, item_domain
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'part')`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'part')`,
     [
       dcNumber,
       resolvedVendorId,
@@ -218,6 +221,7 @@ async function createPartVendorReturnDc(client, {
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      dispatch.vehicle_number,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
       eway.eway_bill_number,
@@ -312,6 +316,7 @@ async function dispatchPartVendorReturnDc(client, {
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vehicle_number: head.vehicle_number,
       vendor_pickup_person: head.vendor_pickup_person,
       vendor_pickup_mobile: head.vendor_pickup_mobile,
     };
@@ -342,6 +347,7 @@ async function dispatchPartVendorReturnDc(client, {
         porter_order_id = $10,
         porter_booking_url = $11,
         delivery_person_id = $12,
+        vehicle_number = $18,
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
         vendor_pickup_person = $16,
         vendor_pickup_mobile = $17,
@@ -359,6 +365,7 @@ async function dispatchPartVendorReturnDc(client, {
       dispatch.porter_tracking_id,       dispatch.porter_order_id, dispatch.porter_booking_url,
       dispatch.delivery_person_id, podPath, whSignerName, vendorSignerName,
       dispatch.vendor_pickup_person, dispatch.vendor_pickup_mobile,
+      dispatch.vehicle_number,
     ]
   );
 

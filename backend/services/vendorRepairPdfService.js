@@ -53,6 +53,7 @@ async function loadDc(dcNumber) {
             v.shipping_city AS vendor_ship_city,
             v.shipping_state AS vendor_ship_state,
             v.shipping_pincode AS vendor_ship_pincode,
+            v.gst_number AS vendor_gst_number,
             dt.first_name AS delivery_person_first_name,
             dt.last_name AS delivery_person_last_name
        FROM vendor_repair_delivery_challans d
@@ -87,9 +88,11 @@ async function loadDc(dcNumber) {
     shipping_city: head.vendor_ship_city,
     shipping_state: head.vendor_ship_state,
     shipping_pincode: head.vendor_ship_pincode,
+    gst_number: head.vendor_gst_number,
   } : null;
   return {
     ...head,
+    vendor_gst_number: head.vendor_gst_number || null,
     items: itemsRes.rows.map(enrichVrdcItemRow),
     vendor_billing_display: formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name,
     vendor_shipping_display: formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address,
@@ -108,6 +111,7 @@ function formatVendorBillingFromRow(vendor) {
   const lines = [vendorDisplayName(vendor)].filter(Boolean);
   const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
   if (street) lines.push(street);
+  if (vendor.gst_number) lines.push(`GSTIN: ${vendor.gst_number}`);
   return lines.join('\n');
 }
 
@@ -455,6 +459,7 @@ function dispatchTagsForDc(dc) {
   if (dc.vendor_pickup_mobile) tags.push(dc.vendor_pickup_mobile);
   const person = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ').trim();
   if (person) tags.push(person);
+  if (dc.vehicle_number) tags.push(dc.vehicle_number);
   if (dc.courier_name) tags.push(dc.courier_name);
   if (dc.awb_number) tags.push(dc.awb_number);
   if (dc.porter_tracking_id) tags.push(dc.porter_tracking_id);
@@ -531,7 +536,23 @@ async function generateVendorRepairPdf(dcNumber) {
     doc.text(`Vendor: ${dc.vendor_name || '—'}`, 40, y);
     y += 12;
     doc.text(`Contact: ${dc.contact_person || '—'} · ${dc.contact_mobile || '—'}`, 40, y);
-    y += 16;
+    y += 12;
+    doc.text(`Vendor GSTIN: ${dc.vendor_gst_number || '—'}`, 40, y);
+    y += 12;
+    if (
+      dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse'
+      || dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup'
+      || dc.vehicle_number
+    ) {
+      const techName = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ');
+      if (techName) {
+        doc.text(`Delivery person: ${techName}`, 40, y);
+        y += 12;
+      }
+      doc.text(`Vehicle number: ${dc.vehicle_number || '—'}`, 40, y);
+      y += 12;
+    }
+    y += 4;
 
     y = writeItemsTable(doc, y, dc.items);
     const totalDeclared = (dc.items || []).reduce((sum, it) => {
@@ -646,6 +667,7 @@ async function loadPartDc(dcNumber) {
             v.shipping_city AS vendor_ship_city,
             v.shipping_state AS vendor_ship_state,
             v.shipping_pincode AS vendor_ship_pincode,
+            v.gst_number AS vendor_gst_number,
             dt.first_name AS delivery_person_first_name,
             dt.last_name AS delivery_person_last_name
        FROM vendor_repair_delivery_challans d
@@ -674,9 +696,11 @@ async function loadPartDc(dcNumber) {
     shipping_city: head.vendor_ship_city,
     shipping_state: head.vendor_ship_state,
     shipping_pincode: head.vendor_ship_pincode,
+    gst_number: head.vendor_gst_number,
   } : null;
   return {
     ...head,
+    vendor_gst_number: head.vendor_gst_number || null,
     items: itemsRes.rows,
     vendor_billing_display: formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name,
     vendor_shipping_display: formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address,
@@ -803,6 +827,8 @@ async function generatePartVendorRepairPdf(dcNumber) {
     y += 12;
     doc.text(`Contact: ${dc.contact_person || '—'} · ${dc.contact_mobile || '—'}`, 40, y);
     y += 12;
+    doc.text(`Vendor GSTIN: ${dc.vendor_gst_number || '—'}`, 40, y);
+    y += 12;
     if (dc.warehouse_name) {
       doc.text(`From warehouse: ${dc.warehouse_name}`, 40, y);
       y += 12;
@@ -810,6 +836,14 @@ async function generatePartVendorRepairPdf(dcNumber) {
     const techName = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ');
     if (techName) {
       doc.text(`Delivery technician: ${techName}`, 40, y);
+      y += 12;
+    }
+    if (
+      dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse'
+      || dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup'
+      || dc.vehicle_number
+    ) {
+      doc.text(`Vehicle number: ${dc.vehicle_number || '—'}`, 40, y);
       y += 12;
     }
     y += 6;

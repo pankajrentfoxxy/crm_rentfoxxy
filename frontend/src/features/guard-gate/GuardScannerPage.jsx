@@ -22,6 +22,7 @@ const SOURCE_LABELS = {
   replacement: 'Replacement',
   service_return: 'Service Return',
   refused_delivery: 'Refused Delivery',
+  physical_outward: 'Physical Part Outward',
 };
 
 const CHECKS = [
@@ -63,7 +64,7 @@ function looksLikeDocumentScan(value) {
   const s = String(value || '').trim();
   if (!s) return false;
   if (/RFXG1\|/i.test(s)) return true;
-  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO)[\/-]/i.test(s)) return true;
+  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO|POUT)[\/-]/i.test(s)) return true;
   return false;
 }
 
@@ -135,14 +136,20 @@ export default function GuardScannerPage() {
             checks: data.checks || null,
           });
         } else {
-          const verified = Number(data.auto_verified || data.scanned_count || 0);
           const allOk = Boolean(data.all_checks_passed || data.can_confirm);
+          const skipVerify = Boolean(data.skip_unit_verify || data.movement?.skip_unit_verify);
           setFlash({
-            tone: allOk ? 'success' : 'info',
-            title: allOk ? 'Verified from document' : (nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification'),
-            message: data.message || (allOk
-              ? 'TTSPL, serial, and configuration matched this DC. Submit to process.'
-              : 'Now scan the laptop TTSPL or serial to verify.'),
+            tone: allOk || skipVerify ? 'success' : 'info',
+            title: skipVerify
+              ? 'Ready to submit'
+              : allOk
+                ? 'Verified from document'
+                : (nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification'),
+            message: data.message || (skipVerify
+              ? 'Submit OUTWARD to record this part movement.'
+              : allOk
+                ? 'TTSPL, serial, and configuration matched this DC. Submit to process.'
+                : 'Now scan the laptop TTSPL or serial to verify.'),
           });
         }
       } else if (data?.kind === 'direction_mismatch' && nextDir) {
@@ -219,6 +226,15 @@ export default function GuardScannerPage() {
   const handleScan = useCallback((value) => {
     if (looksLikeDocumentScan(value)) {
       runResolve(value);
+      return;
+    }
+    if (session?.skip_unit_verify || session?.movement?.skip_unit_verify) {
+      setFlash({
+        tone: 'info',
+        title: 'No unit verify',
+        message: 'Submit OUTWARD to record this part movement. Individual DP scans are not required.',
+      });
+      setCode('');
       return;
     }
     if (session?.session_id && session.status === 'open') {
@@ -301,7 +317,10 @@ export default function GuardScannerPage() {
   const movement = session?.movement;
   const laptops = session?.laptops || [];
   const verifying = Boolean(session?.session_id);
-  const allGreen = Boolean(session?.all_checks_passed) || (laptops.length > 0 && laptops.every(laptopAllGreen));
+  const skipUnitVerify = Boolean(session?.skip_unit_verify || movement?.skip_unit_verify);
+  const allGreen = skipUnitVerify
+    || Boolean(session?.all_checks_passed)
+    || (laptops.length > 0 && laptops.every(laptopAllGreen));
   const submitEnabled = Boolean(session?.can_confirm && session.status === 'open');
 
   const flashClass = {
@@ -319,10 +338,12 @@ export default function GuardScannerPage() {
           </h1>
           <p className="text-sm text-slate-500">
             {verifying
-              ? (submitEnabled
-                ? 'Document units matched. Submit to process this movement.'
-                : 'Confirm laptop details. Submit stays locked until every check is green.')
-              : 'Select direction, then scan a DC / Return DC / Repair DC QR'}
+              ? (skipUnitVerify
+                ? 'Physical part outward — no unit verify. Submit to record this movement in history.'
+                : submitEnabled
+                  ? 'Document units matched. Submit to process this movement.'
+                  : 'Confirm laptop details. Submit stays locked until every check is green.')
+              : 'Select direction, then scan a DC / Return DC / Repair DC / Part Outward QR'}
           </p>
         </div>
         {session ? (
@@ -367,7 +388,13 @@ export default function GuardScannerPage() {
         onChange={setCode}
         onScan={handleScan}
         autoFocus
-        placeholder={verifying ? 'Scan TTSPL, serial, or AWB to verify…' : 'Scan DC / Return DC / Repair DC QR'}
+        placeholder={
+          skipUnitVerify
+            ? 'Scan another document QR, or submit this outward'
+            : verifying
+              ? 'Scan TTSPL, serial, or AWB to verify…'
+              : 'Scan DC / Return DC / Repair DC / Part Outward QR'
+        }
         disabled={busy || session?.status === 'confirmed'}
         aria-label="Gate scanner"
       />
@@ -408,14 +435,33 @@ export default function GuardScannerPage() {
                 : movement.awb_number)}
             />
             <DetailRow
-              label="Laptops"
-              value={`${session.scanned_count || 0} / ${session.expected_count || laptops.length} verified`}
+              label={skipUnitVerify ? 'Parts' : 'Laptops'}
+              value={skipUnitVerify
+                ? `${session.expected_count || laptops.length} going out`
+                : `${session.scanned_count || 0} / ${session.expected_count || laptops.length} verified`}
             />
           </dl>
         </div>
       ) : null}
 
-      {laptops.length ? (
+      {laptops.length && skipUnitVerify ? (
+        <ul className="space-y-2">
+          {laptops.map((laptop) => (
+            <li
+              key={laptop.ttspl || laptop.serial_number}
+              className="bg-white rounded-2xl border border-slate-200 p-3 flex items-center justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-mono font-semibold text-slate-900 truncate">{laptop.ttspl || '—'}</p>
+                <p className="text-xs text-slate-500 truncate">{laptop.configuration || laptop.serial_number || 'Physical part'}</p>
+              </div>
+              <span className="text-xs font-bold text-slate-500 shrink-0">OUT</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {laptops.length && !skipUnitVerify ? (
         <ul className="space-y-3">
           {laptops.map((laptop) => {
             const green = laptopAllGreen(laptop);
@@ -511,6 +557,10 @@ export default function GuardScannerPage() {
           {!submitEnabled ? (
             <p className="text-center text-xs text-red-600">
               {session.block_submit_reason || 'All checks must pass before submit.'}
+            </p>
+          ) : skipUnitVerify ? (
+            <p className="text-center text-xs text-emerald-700">
+              Submit to record this part outward in guard history.
             </p>
           ) : allGreen ? (
             <p className="text-center text-xs text-emerald-700">

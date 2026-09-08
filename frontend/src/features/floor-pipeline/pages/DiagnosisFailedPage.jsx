@@ -253,6 +253,7 @@ export default function DiagnosisFailedPage() {
         porter_order_id: dispatchFields.porter_order_id,
         porter_booking_url: dispatchFields.porter_booking_url,
         delivery_person_id: dispatchFields.delivery_person_id || undefined,
+        vehicle_number: dispatchFields.vehicle_number || undefined,
         vendor_pickup_person: dispatchFields.vendor_pickup_person,
         vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile,
       });

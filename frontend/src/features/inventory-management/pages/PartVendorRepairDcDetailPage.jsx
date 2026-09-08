@@ -157,6 +157,7 @@ export default function PartVendorRepairDcDetailPage() {
         porter_order_id: row?.porter_order_id || '',
         porter_booking_url: row?.porter_booking_url || '',
         delivery_person_id: row?.delivery_person_id || '',
+        vehicle_number: row?.vehicle_number || '',
       });
       setWhSignerName(
         row?.warehouse_dispatch_signer_name

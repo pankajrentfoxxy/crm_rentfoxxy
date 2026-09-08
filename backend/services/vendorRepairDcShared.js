@@ -125,6 +125,10 @@ function saveDispatchPod(dcNumber, dataUrl) {
   return saveEsign('dispatch_pod', dcNumber, dataUrl);
 }
 
+function normalizeVehicleNumber(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
 function normalizeShipBy(shipBy, dispatchMode) {
   const by = String(shipBy || '').trim().toLowerCase();
   if (by === 'by_hand' || by === 'inhouse' || by === 'hand') return 'by_hand';
@@ -168,6 +172,9 @@ function validateDispatchDetails(details = {}) {
   if (shipBy === 'by_hand' && !deliveryPersonId) {
     throw new Error('Delivery person is required for By Hand dispatch');
   }
+  if (shipBy === 'by_hand' && !normalizeVehicleNumber(details.vehicleNumber || details.vehicle_number)) {
+    throw new Error('Vehicle number is required for Inhouse / delivery boy dispatch');
+  }
   const vendorPickupPerson = details.vendorPickupPerson || details.vendor_pickup_person;
   const vendorPickupMobile = details.vendorPickupMobile ?? details.vendor_pickup_mobile;
   if (shipBy === 'by_vendor_pickup') {
@@ -179,6 +186,9 @@ function validateDispatchDetails(details = {}) {
       label: 'Vendor pickup mobile',
     });
     if (!mobileResult.ok) throw new Error(mobileResult.error);
+    if (!normalizeVehicleNumber(details.vehicleNumber || details.vehicle_number)) {
+      throw new Error('Vehicle number is required for Vendor Pickup');
+    }
   }
 }
 
@@ -213,8 +223,12 @@ function dispatchPayloadFromBody(body) {
     deliveryPersonId,
     vendorPickupPerson: body.vendor_pickup_person || body.vendorPickupPerson,
     vendorPickupMobile: body.vendor_pickup_mobile || body.vendorPickupMobile,
+    vehicleNumber: body.vehicle_number || body.vehicleNumber,
   });
   const vendorPickup = vendorPickupFieldsFromBody(body, shipBy);
+  const vehicleNumber = (shipBy === 'by_hand' || shipBy === 'by_vendor_pickup')
+    ? normalizeVehicleNumber(body.vehicle_number || body.vehicleNumber) || null
+    : null;
   return {
     ship_by: shipBy,
     dispatch_mode: dispatchMode,
@@ -225,6 +239,7 @@ function dispatchPayloadFromBody(body) {
     porter_order_id: shipBy === 'by_porter' ? (body.porter_order_id || body.porterOrderId || '').trim() || null : null,
     porter_booking_url: shipBy === 'by_porter' ? (body.porter_booking_url || body.porterBookingUrl || '').trim() || null : null,
     delivery_person_id: shipBy === 'by_hand' && deliveryPersonId ? Number(deliveryPersonId) : null,
+    vehicle_number: vehicleNumber,
     vendor_pickup_person: vendorPickup.vendor_pickup_person,
     vendor_pickup_mobile: vendorPickup.vendor_pickup_mobile,
   };
@@ -252,6 +267,7 @@ module.exports = {
   saveEsign,
   saveDispatchPod,
   normalizeShipBy,
+  normalizeVehicleNumber,
   shipByToDispatchMode,
   validateDispatchDetails,
   dispatchPayloadFromBody,

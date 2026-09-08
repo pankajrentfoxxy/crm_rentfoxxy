@@ -109,6 +109,7 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
     dispatch_mail_from: getDispatchFromAddress(),
     eway_bill_number: head?.eway_bill_number || null,
     eway_bill_date: head?.eway_bill_date || null,
+    eway_bill_pdf_path: head?.eway_bill_pdf_path || null,
     eway_bill_uploaded_at: head?.eway_bill_uploaded_at || null,
     lock_message: needsEway && !ewayComplete && !canDownload
       ? 'E-way Bill is required for this VRDC. Please ask the Accounts Team to add the E-way Bill before downloading.'
@@ -236,8 +237,11 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
         </tr>
         ${formatLaptopTableRows(laptops)}
       </table>
+      <p style="margin:0 0 16px;line-height:1.6;">
+        The generated <strong>VRDC PDF is attached</strong> for GST portal entry.
+      </p>
       <p style="margin:0 0 20px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
-        Action required: please enter the <strong>E-Way Bill Number</strong>${'' /* date supported in CRM */} on this VRDC.
+        Action required: generate the E-Way Bill, then enter the number/date and upload the E-Way Bill image or PDF on this VRDC.
       </p>
       <a href="${escapeHtml(portalUrl)}"
          style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:14px;">
@@ -252,38 +256,58 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
 </body>
 </html>`;
 
-  const sent = await sendDispatchMail({
-    to: ACCOUNTS_EMAIL,
-    cc: ACCOUNTS_EMAIL_CC,
-    subject: `${dcNumber} : ${vendorName || 'Vendor'} : VRDC E-Way Bill Required`,
-    text: [
-      'Hi Accounts Team,',
-      '',
-      `VRDC ${dcNumber} for vendor ${vendorName || '—'} requires an E-Way Bill.`,
-      `Total declared value: ₹${valueStr} (threshold ₹${thresholdStr}).`,
-      `Laptops (${laptops.length}):`,
-      laptopText,
-      '',
-      `Open in CRM: ${portalUrl}`,
-      '',
-      'Please enter the E-Way Bill Number on the VRDC page.',
-      '',
-      'Regards,',
-      'Team Rentfoxxy',
-    ].join('\n'),
-    html,
-    replyTo: process.env.DISPATCH_SMTP_REPLY_TO || fromAddress,
-  });
+  let pdfRel = null;
+  try {
+    const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
+    pdfRel = await generateVendorRepairPdf(dcNumber);
+  } catch (pdfErr) {
+    console.error('[vrdcEway] VRDC PDF attach failed:', pdfErr.message);
+  }
+  if (!pdfRel) {
+    throw new Error('Could not generate the VRDC PDF to attach for Accounts');
+  }
+  const pdfRelativePath = `uploads/${String(pdfRel).replace(/^uploads\//, '')}`;
 
-  if (!sent) {
-    throw new Error('Failed to send mail — check DISPATCH_SMTP settings');
+  try {
+    const sent = await sendDispatchMail({
+      to: ACCOUNTS_EMAIL,
+      cc: ACCOUNTS_EMAIL_CC,
+      subject: `${dcNumber} : ${vendorName || 'Vendor'} : VRDC E-Way Bill Required`,
+      text: [
+        'Hi Accounts Team,',
+        '',
+        `VRDC ${dcNumber} for vendor ${vendorName || '—'} requires an E-Way Bill.`,
+        `Total declared value: ₹${valueStr} (threshold ₹${thresholdStr}).`,
+        `Laptops (${laptops.length}):`,
+        laptopText,
+        '',
+        'The generated VRDC PDF is attached for GST portal entry.',
+        `Open in CRM: ${portalUrl}`,
+        '',
+        'Please enter the E-Way Bill number/date and upload the E-Way Bill image or PDF on the VRDC page.',
+        '',
+        'Regards,',
+        'Team Rentfoxxy',
+      ].join('\n'),
+      html,
+      pdfRelativePath,
+      replyTo: process.env.DISPATCH_SMTP_REPLY_TO || fromAddress,
+    });
+
+    if (!sent) {
+      throw new Error('Failed to send mail — check DISPATCH_SMTP settings');
+    }
+  } finally {
+    try {
+      await purgeLockedVrdcPublicPdf(dcNumber);
+    } catch (_) { /* warehouse PDF stays locked until e-way is saved */ }
   }
 
-  console.log(`Accounts VRDC e-way email sent: ${dcNumber} → ${ACCOUNTS_EMAIL}`);
-  return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL, cc: ACCOUNTS_EMAIL_CC };
+  console.log(`Accounts VRDC e-way email sent: ${dcNumber} → ${ACCOUNTS_EMAIL} (VRDC PDF attached)`);
+  return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL, cc: ACCOUNTS_EMAIL_CC, pdf_attached: true };
 }
 
-async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, userId }) {
+async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, ewayBillPdfPath, userId }) {
   const num = normalizeEwayBillNumber(ewayBillNumber);
   if (!num) throw new Error('E-Way Bill number is required');
   const date = ewayBillDate ? String(ewayBillDate).trim() || null : null;
@@ -296,16 +320,27 @@ async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, userId
     throw new Error('E-Way Bill upload applies only when VRDC value is above the configured threshold');
   }
 
+  const existing = await pool.query(
+    `SELECT eway_bill_pdf_path FROM vendor_repair_delivery_challans WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  const existingPath = existing.rows[0]?.eway_bill_pdf_path || null;
+  if (!ewayBillPdfPath && !existingPath) {
+    throw new Error('E-Way Bill document (image or PDF) is required');
+  }
+  const pdfPath = ewayBillPdfPath || existingPath;
+
   await pool.query(
     `UPDATE vendor_repair_delivery_challans SET
         eway_bill_number = $2,
         eway_bill_date = $3::date,
+        eway_bill_pdf_path = $5,
         eway_bill_uploaded_at = NOW(),
         eway_bill_uploaded_by = $4,
         pdf_path = NULL,
         updated_at = NOW()
       WHERE dc_number = $1`,
-    [dcNumber, num, date, userId || null]
+    [dcNumber, num, date, userId || null, pdfPath]
   );
 
   try {
@@ -315,7 +350,7 @@ async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, userId
     console.error('[vrdcEway] post-upload PDF generation failed:', pdfErr.message);
   }
 
-  return { eway_bill_number: num, eway_bill_date: date };
+  return { eway_bill_number: num, eway_bill_date: date, eway_bill_pdf_path: pdfPath };
 }
 
 module.exports = {

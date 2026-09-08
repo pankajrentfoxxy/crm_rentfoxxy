@@ -396,6 +396,7 @@ async function dispatchReturnDc(client, {
   porter_order_id,
   porter_booking_url,
   delivery_person_id,
+  vehicle_number,
   actorUserId,
   actorName,
 }) {
@@ -417,6 +418,7 @@ async function dispatchReturnDc(client, {
     porter_order_id,
     porter_booking_url,
     delivery_person_id,
+    vehicle_number,
   });
 
   const items = await client.query(

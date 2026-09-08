@@ -87,6 +87,7 @@ export default function ReturnToVendorDetailPage() {
       porter_order_id: dispatchFields.porter_order_id,
       porter_booking_url: dispatchFields.porter_booking_url,
       delivery_person_id: dispatchFields.delivery_person_id || undefined,
+      vehicle_number: dispatchFields.vehicle_number || undefined,
     }));
   };
 
