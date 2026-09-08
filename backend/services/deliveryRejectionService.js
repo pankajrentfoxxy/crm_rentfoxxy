@@ -691,6 +691,7 @@ async function getSoCancelDcEligibility(client, soNumber) {
 
 module.exports = {
   ensureDeliveryRejectionSchema,
+  getDcHead,
   collectDcSerials,
   markDeliveryRejectedByCustomer,
   completeRejectedReturnToWarehouse,
