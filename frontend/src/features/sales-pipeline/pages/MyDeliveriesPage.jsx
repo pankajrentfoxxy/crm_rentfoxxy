@@ -32,9 +32,10 @@ function LaptopLine({ s }) {
 }
 
 function DeliveryCard({ dc, onChanged }) {
+  const isVendorReturn = dc.dc_purpose === 'vendor_return';
   const [serial, setSerial] = useState('');
   const [otp, setOtp] = useState('');
-  const [podType, setPodType] = useState('photo');
+  const [podType, setPodType] = useState(dc.dc_purpose === 'vendor_return' ? 'esign' : 'photo');
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [esignData, setEsignData] = useState(null);
@@ -78,7 +79,12 @@ function DeliveryCard({ dc, onChanged }) {
     setBusy(true);
     try {
       const r = await verifySerialAndGenerateOtp(dc.dc_number, { serial_number: serial.trim() });
-      toast.success(r.data?.message || 'OTP sent to the customer on WhatsApp. Ask them for the 6-digit code.');
+      toast.success(
+        r.data?.message
+        || (isVendorReturn
+          ? 'Serial verified. Capture POD and confirm delivery to the vendor.'
+          : 'OTP sent to the customer on WhatsApp. Ask them for the 6-digit code.')
+      );
       onChanged();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Serial verification failed');
@@ -97,17 +103,21 @@ function DeliveryCard({ dc, onChanged }) {
   };
 
   const handleConfirm = async () => {
-    if (!otp.trim()) { toast.error('Enter the OTP from the customer'); return; }
-    if (podType === 'photo' && !photoFile) { toast.error('Capture a POD photo or choose another POD option'); return; }
-    if (podType === 'esign' && !esignData) { toast.error('Capture the customer signature'); return; }
+    if (!isVendorReturn && !otp.trim()) { toast.error('Enter the OTP from the customer'); return; }
+    if (isVendorReturn && !esignData) {
+      toast.error('Vendor / receiver e-signature is required before submitting');
+      return;
+    }
+    if (!isVendorReturn && podType === 'photo' && !photoFile) { toast.error('Capture a POD photo or choose another POD option'); return; }
+    if (!isVendorReturn && podType === 'esign' && !esignData) { toast.error('Capture the customer signature'); return; }
     setBusy(true);
     try {
       const fd = new FormData();
       fd.append('otp', otp.trim());
-      fd.append('pod_type', podType);
+      fd.append('pod_type', isVendorReturn ? 'esign' : podType);
       fd.append('notes', notes);
-      if (podType === 'photo' && photoFile) fd.append('pod_photo', photoFile);
-      if (podType === 'esign' && esignData) fd.append('esign_data', esignData);
+      if (photoFile) fd.append('pod_photo', photoFile);
+      if (esignData) fd.append('esign_data', esignData);
       await submitDeliveryWithPod(dc.dc_number, fd);
       toast.success('Delivery confirmed ✓');
       onChanged();
@@ -175,6 +185,9 @@ function DeliveryCard({ dc, onChanged }) {
           {dc.dc_purpose === 'replacement' && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-pink-100 text-pink-800">REPLACEMENT</span>
           )}
+          {isVendorReturn && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-800">VENDOR RETURN</span>
+          )}
           {dc.movement_type === 'return' && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">
               {dc.dc_purpose === 'replacement' ? 'REPLACEMENT PICKUP' : 'PICKUP'}
@@ -214,8 +227,8 @@ function DeliveryCard({ dc, onChanged }) {
           </div>
         )}
 
-        {/* STATE: reached, serial not yet verified -> Step 1 */}
-        {dc.status === 'reached' && !dc.otp_pending && (
+        {/* STATE: reached, serial not yet verified -> Step 1 (customer DCs only) */}
+        {!isVendorReturn && dc.status === 'reached' && !dc.otp_pending && (
           <div className="border-t pt-3 space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase">Step 1 · Verify Laptop Serial</p>
             <div className="flex gap-2">
@@ -230,18 +243,26 @@ function DeliveryCard({ dc, onChanged }) {
           </div>
         )}
 
-        {/* STATE: reached, OTP sent -> Step 2 OTP + POD + confirm */}
-        {dc.status === 'reached' && dc.otp_pending && (
+        {/* STATE: reached — vendor return e-sign, or customer OTP + POD */}
+        {dc.status === 'reached' && (isVendorReturn || dc.otp_pending) && (
           <div className="border-t pt-3 space-y-3">
+            {!isVendorReturn && (
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Step 2 · Ask the customer for their WhatsApp OTP</p>
               <p className="text-xs text-gray-500 mb-1">The code is sent to the customer. You cannot see it.</p>
               <input value={otp} onChange={(e) => setOtp(e.target.value)} inputMode="numeric"
                 placeholder="6-digit OTP" className="w-full border rounded-xl px-3 py-3 text-sm tracking-widest" />
             </div>
+            )}
+            {isVendorReturn && (
+              <p className="text-xs text-slate-600">
+                All laptops on this return are listed above. Capture the vendor / receiver e-signature (required). No per-laptop TTSPL scan and no customer OTP.
+              </p>
+            )}
 
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Proof of Delivery</p>
+              {!isVendorReturn && (
               <div className="flex gap-2 text-xs mb-2">
                 {[['photo', 'Photo'], ['esign', 'E-Sign']].map(([val, label]) => (
                   <button key={val} type="button" onClick={() => setPodType(val)}
@@ -250,8 +271,31 @@ function DeliveryCard({ dc, onChanged }) {
                   </button>
                 ))}
               </div>
+              )}
 
-              {podType === 'photo' && (
+              {isVendorReturn && (
+                <div className="space-y-2 mb-2">
+                  {showSign ? (
+                    <SignaturePadComponent
+                      onSave={(data) => { setEsignData(data); setShowSign(false); toast.success('Signature captured'); }}
+                      onCancel={() => setShowSign(false)}
+                    />
+                  ) : (
+                    <button type="button" onClick={() => setShowSign(true)}
+                      className="w-full flex items-center justify-center gap-2 py-3 border rounded-xl text-sm font-medium">
+                      <PenLine className="w-4 h-4" /> {esignData ? 'E-sign captured · Re-sign' : 'Capture vendor e-signature *'}
+                    </button>
+                  )}
+                  <label className="cursor-pointer block">
+                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhoto} />
+                    <div className="border border-dashed border-slate-200 rounded-xl p-3 text-center text-xs text-slate-500">
+                      {photoPreview ? 'Photo attached (optional)' : 'Optional photo of handover'}
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {!isVendorReturn && podType === 'photo' && (
                 <label className="cursor-pointer block">
                   <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhoto} />
                   <div className="border-2 border-dashed border-blue-200 rounded-xl p-5 text-center bg-blue-50">
@@ -261,14 +305,14 @@ function DeliveryCard({ dc, onChanged }) {
                       <>
                         <Camera className="w-9 h-9 text-blue-400 mx-auto mb-2" />
                         <p className="text-sm text-blue-700 font-medium">Tap to take photo</p>
-                        <p className="text-xs text-blue-500">Photo of delivered laptop at customer site</p>
+                        <p className="text-xs text-blue-500">{isVendorReturn ? 'Photo of laptops handed over at the vendor' : 'Photo of delivered laptop at customer site'}</p>
                       </>
                     )}
                   </div>
                 </label>
               )}
 
-              {podType === 'esign' && (
+              {!isVendorReturn && podType === 'esign' && (
                 showSign ? (
                   <SignaturePadComponent
                     onSave={(data) => { setEsignData(data); setShowSign(false); toast.success('Signature captured'); }}
@@ -277,7 +321,7 @@ function DeliveryCard({ dc, onChanged }) {
                 ) : (
                   <button type="button" onClick={() => setShowSign(true)}
                     className="w-full flex items-center justify-center gap-2 py-3 border rounded-xl text-sm font-medium">
-                    <PenLine className="w-4 h-4" /> {esignData ? 'Signature captured · Re-sign' : 'Open Signature Pad'}
+                    <PenLine className="w-4 h-4" /> {esignData ? 'Signature captured · Re-sign' : (isVendorReturn ? 'Vendor signature' : 'Open Signature Pad')}
                   </button>
                 )
               )}
@@ -286,7 +330,7 @@ function DeliveryCard({ dc, onChanged }) {
             <input value={notes} onChange={(e) => setNotes(e.target.value)}
               placeholder="Delivery notes (optional)" className="w-full border rounded-xl px-3 py-2.5 text-sm" />
 
-            <button type="button" disabled={busy} onClick={handleConfirm}
+            <button type="button" disabled={busy || (isVendorReturn && !esignData)} onClick={handleConfirm}
               className="w-full flex items-center justify-center gap-2 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Confirm Delivery
             </button>
@@ -327,7 +371,7 @@ function DeliveryCard({ dc, onChanged }) {
         )}
 
         {/* Customer rejected option while still attempting delivery */}
-        {(dc.status === 'in_transit' || dc.status === 'reached') && (
+        {!isVendorReturn && (dc.status === 'in_transit' || dc.status === 'reached') && (
           <div className="border-t pt-3">
             <button type="button" onClick={() => setRejectOpen(true)}
               className="w-full py-2.5 text-sm text-red-700 border border-red-200 rounded-xl hover:bg-red-50">
@@ -367,10 +411,16 @@ export default function MyDeliveriesPage({ movement = null }) {
     try {
       const r = await getMyDeliveries();
       let list = r.data?.items || [];
-      // Sales "My Deliveries" shows outbound Delivery Challans (DC) only.
-      // Return DCs (RDC / support pickups) live under Support's "My Pickups".
-      const filterMovement = movement || 'outbound';
-      list = list.filter((d) => (d.movement_type || 'outbound') === filterMovement);
+      // Support "My Pickups" is return-only. Sales My Deliveries shows every
+      // in-house job assigned to this technician (DC, Return DC, vendor return).
+      if (movement) {
+        list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      }
+      const activity = (d) => Math.max(
+        ...[d.updated_at, d.reached_at, d.serial_verified_at, d.dispatched_at, d.created_at]
+          .map((t) => (t ? new Date(t).getTime() : 0))
+      );
+      list = [...list].sort((a, b) => activity(b) - activity(a));
       setItems(list);
     } catch {
       toast.error('Failed to load your assignments');

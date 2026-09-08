@@ -285,7 +285,7 @@ export default function ReturnDcListPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Return DC"
-        subtitle="Return pickup challans (RDC series) — filter by status, warehouse, technician, date, or column"
+        subtitle="Customer return pickups (RDC). This is the register — assigned in-house pickups are actioned in Technician Bucket / My Deliveries."
         icon={RotateCcw}
         actions={(
           <Button

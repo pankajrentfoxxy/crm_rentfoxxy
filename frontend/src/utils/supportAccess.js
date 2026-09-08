@@ -8,6 +8,8 @@ export const SUPPORT_ROLES = ['super_admin', 'admin', 'manager', 'support_lead',
 /** Sales / delivery sections a support_tech may open outside /support when granted. */
 export const SUPPORT_TECH_DELIVERY_SECTIONS = [
   'technician_bucket',
+  'delivery_my_deliveries',
+  'technicians_bucket_list',
   'delivery_challans',
   'delivery_register_management',
   'return_dc',

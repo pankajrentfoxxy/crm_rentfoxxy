@@ -1,14 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, CheckCircle, Truck, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Download, Truck, XCircle } from 'lucide-react';
 import { PageHeader, Button } from '../../../components/ui/primitives';
+import { getBackendOrigin } from '../../../utils/api';
 import {
   cancelReturnToVendorDc,
   completeReturnToVendorDc,
   dispatchReturnToVendorDc,
+  downloadReturnToVendorDcPdf,
   fetchReturnToVendorDc,
 } from '../vendorManagementApi';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import { vendorRepairDispatchModeLabel } from '../../floor-pipeline/vendorRepairUi';
+import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 
 function fmtDateTime(d) {
   if (!d) return '—';
@@ -17,17 +22,21 @@ function fmtDateTime(d) {
   });
 }
 
+function uploadUrl(p) {
+  if (!p) return null;
+  if (String(p).startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/uploads/${String(p).replace(/^\/?uploads\//, '')}`;
+}
+
 export default function ReturnToVendorDetailPage() {
   const { dcNumber } = useParams();
   const [dc, setDc] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
-  const [dispatchForm, setDispatchForm] = useState({
-    ship_by: 'by_courier',
-    courier_name: '',
-    awb_number: '',
-    delivery_person_id: '',
-  });
+  const [shipBy, setShipBy] = useState('');
+  const [dispatchFields, setDispatchFields] = useState({});
+  const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,6 +52,12 @@ export default function ReturnToVendorDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    fetchDeliveryTechnicians({ limit: 200 })
+      .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
+      .catch(() => {});
+  }, []);
+
   const run = async (action, fn) => {
     setBusy(action);
     try {
@@ -56,6 +71,42 @@ export default function ReturnToVendorDetailPage() {
       setBusy('');
     }
   };
+
+  const handleDispatch = () => {
+    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    if (dispatchErr) {
+      toast.error(dispatchErr);
+      return;
+    }
+    return run('dispatch', () => dispatchReturnToVendorDc(dcNumber, {
+      ship_by: shipBy,
+      courier_name: dispatchFields.courier_name,
+      awb_number: dispatchFields.awb_number,
+      courier_tracking_url: dispatchFields.courier_tracking_url,
+      porter_tracking_id: dispatchFields.porter_tracking_id,
+      porter_order_id: dispatchFields.porter_order_id,
+      porter_booking_url: dispatchFields.porter_booking_url,
+      delivery_person_id: dispatchFields.delivery_person_id || undefined,
+    }));
+  };
+
+  const handleDownloadPdf = async () => {
+    setPdfBusy(true);
+    try {
+      await downloadReturnToVendorDcPdf(dcNumber);
+    } catch (err) {
+      toast.error(err.message || 'PDF download failed');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  const technicianName = (() => {
+    if (!dc?.delivery_person_id) return null;
+    const t = deliveryTechnicians.find((row) => String(row.technician_id) === String(dc.delivery_person_id));
+    if (!t) return `Technician #${dc.delivery_person_id}`;
+    return [t.first_name, t.last_name].filter(Boolean).join(' ') || `Technician #${dc.delivery_person_id}`;
+  })();
 
   if (loading) {
     return <p className="text-sm text-slate-500 p-6">Loading…</p>;
@@ -75,9 +126,18 @@ export default function ReturnToVendorDetailPage() {
         title={dc.dc_number}
         subtitle={`${dc.vendor_name || 'Vendor'}${dc.po_number || dc.po_id ? ` · PO ${dc.po_number || dc.po_id}` : (dc.items?.length > 1 ? ' · Multiple POs' : '')}`}
         actions={(
-          <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
-            <ArrowLeft className="w-4 h-4" /> Back
-          </Link>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              loading={pdfBusy}
+              onClick={handleDownloadPdf}
+            >
+              <Download className="w-4 h-4" /> Download PDF
+            </Button>
+            <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
+              <ArrowLeft className="w-4 h-4" /> Back
+            </Link>
+          </div>
         )}
       />
 
@@ -88,8 +148,37 @@ export default function ReturnToVendorDetailPage() {
           <p><span className="text-slate-500">Return date:</span> {fmtDateTime(dc.return_date)}</p>
           <p><span className="text-slate-500">Dispatched:</span> {fmtDateTime(dc.dispatched_at)}</p>
           <p><span className="text-slate-500">Vendor received:</span> {fmtDateTime(dc.vendor_received_at)}</p>
-          {dc.courier_name ? (
-            <p><span className="text-slate-500">Courier:</span> {dc.courier_name} {dc.awb_number ? `· AWB ${dc.awb_number}` : ''}</p>
+          {dc.ship_by || dc.dispatch_mode ? (
+            <p><span className="text-slate-500">Send mode:</span> {vendorRepairDispatchModeLabel(dc.ship_by, dc.dispatch_mode)}</p>
+          ) : null}
+          {(dc.ship_by === 'by_courier' || dc.dispatch_mode === 'courier') && dc.courier_name ? (
+            <p>
+              <span className="text-slate-500">Courier:</span> {dc.courier_name}
+              {dc.awb_number ? ` · AWB ${dc.awb_number}` : ''}
+              {dc.courier_tracking_url ? (
+                <> · <a href={dc.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Track</a></>
+              ) : null}
+            </p>
+          ) : null}
+          {(dc.ship_by === 'by_porter' || dc.dispatch_mode === 'porter') && dc.porter_tracking_id ? (
+            <p><span className="text-slate-500">Porter:</span> {dc.porter_tracking_id}</p>
+          ) : null}
+          {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && technicianName ? (
+            <p><span className="text-slate-500">Delivery person:</span> {technicianName}</p>
+          ) : null}
+          {uploadUrl(dc.delivery_pod_path) ? (
+            <div className="pt-2 border-t space-y-1">
+              <p className="text-slate-500 text-xs uppercase font-semibold">
+                {dc.delivery_pod_type === 'esign' ? 'Vendor / receiver e-signature' : 'Proof of delivery'}
+              </p>
+              <a href={uploadUrl(dc.delivery_pod_path)} target="_blank" rel="noreferrer">
+                <img
+                  src={uploadUrl(dc.delivery_pod_path)}
+                  alt="Vendor e-signature"
+                  className="max-h-28 w-full object-contain rounded border bg-white"
+                />
+              </a>
+            </div>
           ) : null}
         </div>
 
@@ -129,40 +218,20 @@ export default function ReturnToVendorDetailPage() {
       {dc.status === 'draft' && (
         <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <h3 className="font-semibold flex items-center gap-2"><Truck className="w-4 h-4" /> Dispatch to vendor</h3>
-          <div className="grid sm:grid-cols-3 gap-3 text-sm">
-            <label>
-              Ship by
-              <select
-                className="mt-1 w-full border rounded-lg px-2 py-1.5"
-                value={dispatchForm.ship_by}
-                onChange={(e) => setDispatchForm((f) => ({ ...f, ship_by: e.target.value }))}
-              >
-                <option value="by_courier">Courier</option>
-                <option value="by_hand">By hand</option>
-                <option value="by_porter">Porter</option>
-              </select>
-            </label>
-            <label>
-              Courier name *
-              <input
-                className="mt-1 w-full border rounded-lg px-2 py-1.5"
-                value={dispatchForm.courier_name}
-                onChange={(e) => setDispatchForm((f) => ({ ...f, courier_name: e.target.value }))}
-              />
-            </label>
-            <label>
-              AWB / tracking *
-              <input
-                className="mt-1 w-full border rounded-lg px-2 py-1.5"
-                value={dispatchForm.awb_number}
-                onChange={(e) => setDispatchForm((f) => ({ ...f, awb_number: e.target.value }))}
-              />
-            </label>
+          <div className="max-w-xl">
+            <VrdcDispatchFields
+              shipBy={shipBy}
+              onShipByChange={setShipBy}
+              fields={dispatchFields}
+              onFieldsChange={setDispatchFields}
+              deliveryTechnicians={deliveryTechnicians}
+              disabled={busy === 'dispatch'}
+            />
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               loading={busy === 'dispatch'}
-              onClick={() => run('dispatch', () => dispatchReturnToVendorDc(dcNumber, dispatchForm))}
+              onClick={handleDispatch}
             >
               <Truck className="w-4 h-4" /> Dispatch
             </Button>
@@ -176,13 +245,23 @@ export default function ReturnToVendorDetailPage() {
           </div>
           <p className="text-xs text-slate-500">
             On dispatch, inventory is updated (laptop removed from warehouse stock).
+            By hand assigns the technician — they see it in My Deliveries / Technician Bucket,
+            then mark Reached → vendor e-sign (no TTSPL scan, no customer OTP).
           </p>
         </div>
       )}
 
       {dc.status === 'dispatched' && (
-        <div className="rounded-xl border bg-emerald-50 border-emerald-200 p-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-emerald-900">Mark complete when the vendor confirms receipt of all laptops.</p>
+        <div className="rounded-xl border bg-emerald-50 border-emerald-200 p-4 space-y-3">
+          {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') ? (
+            <p className="text-sm text-emerald-900">
+              Assigned to <strong>{technicianName || 'the delivery partner'}</strong>.
+              They mark delivery in <strong>My Deliveries</strong> (Reached → vendor e-sign).
+              Use the button below only if warehouse is confirming instead.
+            </p>
+          ) : (
+            <p className="text-sm text-emerald-900">Mark complete when the vendor confirms receipt of all laptops.</p>
+          )}
           <Button
             loading={busy === 'complete'}
             onClick={() => run('complete', () => completeReturnToVendorDc(dcNumber))}

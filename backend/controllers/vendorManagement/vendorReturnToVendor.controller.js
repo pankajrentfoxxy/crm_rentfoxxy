@@ -3,6 +3,7 @@ const {
   actorFromReq,
   requireWarehouseRole,
   listEligibleLaptops,
+  listEligibleVendors,
   listReturnDcs,
   getReturnDc,
   createReturnDc,
@@ -15,6 +16,15 @@ function handleError(res, err) {
   const status = err.status || 500;
   return res.status(status).json({ success: false, message: err.message });
 }
+
+exports.listEligibleVendors = async (req, res) => {
+  try {
+    const data = await listEligibleVendors();
+    res.json({ success: true, data });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
 
 exports.listEligible = async (req, res) => {
   try {
@@ -128,6 +138,25 @@ exports.completeDc = async (req, res) => {
     handleError(res, err);
   } finally {
     client.release();
+  }
+};
+
+exports.downloadPdf = async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const dcNumber = req.params.dcNumber;
+    const { generateVendorReturnDcPdf } = require('../../services/vendorReturnToVendorPdfService');
+    const rel = await generateVendorReturnDcPdf(dcNumber);
+    if (!rel) return res.status(404).json({ success: false, message: 'Return DC not found' });
+    const abs = path.join(__dirname, '../../uploads', rel);
+    if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="VRTDC_${safe}.pdf"`);
+    res.download(abs, `VRTDC_${safe}.pdf`);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
   }
 };
 

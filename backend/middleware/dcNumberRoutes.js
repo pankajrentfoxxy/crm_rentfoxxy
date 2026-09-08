@@ -98,6 +98,17 @@ function vrdcRoute(suffix, ...handlers) {
   return [vrdcSuffixPattern(suffix), bindDcNumber, ...handlers];
 }
 
+/** Prefix + slash-safe DC number + suffix (e.g. /return-to-vendor/dc/VRTDC/26-27/0001/pdf). */
+function prefixedDcSuffixPattern(prefix, suffix) {
+  const pre = String(prefix || '').replace(/\/$/, '');
+  const esc = String(suffix || '').replace(/\//g, '\\/');
+  return new RegExp(`^${pre}/(.+)${esc}$`);
+}
+
+function prefixedDcRoute(prefix, suffix, ...handlers) {
+  return [prefixedDcSuffixPattern(prefix, suffix), bindDcNumber, ...handlers];
+}
+
 module.exports = {
   DC_ACTION_SUFFIXES,
   normalizeDcNumber,
@@ -107,4 +118,6 @@ module.exports = {
   dcSuffixPattern,
   vrdcRoute,
   vrdcSuffixPattern,
+  prefixedDcRoute,
+  prefixedDcSuffixPattern,
 };

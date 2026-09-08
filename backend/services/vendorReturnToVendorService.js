@@ -9,7 +9,6 @@ const { transitionAsset, STATUS } = require('./inventoryStateMachine');
 const {
   currentFinancialYearLabel,
   dispatchPayloadFromBody,
-  validateDispatchDetails,
 } = require('./vendorRepairDcShared');
 
 const WAREHOUSE_STATUSES = new Set(['in_stock', 'returned', 'qc_failed']);
@@ -161,6 +160,7 @@ async function listEligibleLaptops({ vendorId, poId, search, page = 1, limit = 5
       `SELECT COUNT(*)::int AS n
          FROM vendor_serial_numbers vsn
          JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+         JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL
         WHERE ${where.join(' AND ')}`,
       params.slice(0, -2)
     ),
@@ -175,6 +175,31 @@ async function listEligibleLaptops({ vendorId, poId, search, page = 1, limit = 5
       totalPages: Math.max(1, Math.ceil((count.rows[0]?.n || 0) / limit)),
     },
   };
+}
+
+/** Vendors that currently have inward / warehouse laptops eligible to return. */
+async function listEligibleVendors() {
+  const { rows } = await pool.query(
+    `SELECT v.vendor_id,
+            v.business_name,
+            v.first_name,
+            COUNT(*)::int AS inward_count
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+       JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL
+      WHERE vsn.deleted_at IS NULL
+        AND vsn.po_id IS NOT NULL
+        AND vsn.inventory_status IN ('in_stock', 'returned', 'qc_failed')
+        AND NOT EXISTS (
+          SELECT 1 FROM vendor_return_dc_items i
+          JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
+          WHERE i.serial_id = vsn.serial_id
+            AND d.status NOT IN ('cancelled', 'completed')
+        )
+      GROUP BY v.vendor_id, v.business_name, v.first_name
+      ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`
+  );
+  return rows;
 }
 
 async function listReturnDcs({ status, vendorId, page = 1, limit = 25 }) {
@@ -383,7 +408,7 @@ async function dispatchReturnDc(client, {
   if (head.status !== 'draft') throw new Error(`Cannot dispatch — DC status is ${head.status}`);
 
   const dispatch = dispatchPayloadFromBody({
-    ship_by: ship_by || shipBy || 'by_courier',
+    ship_by: ship_by || shipBy,
     dispatch_mode,
     courier_name,
     awb_number,
@@ -393,7 +418,6 @@ async function dispatchReturnDc(client, {
     porter_booking_url,
     delivery_person_id,
   });
-  validateDispatchDetails(dispatch);
 
   const items = await client.query(
     `SELECT * FROM vendor_return_dc_items WHERE dc_number = $1 FOR UPDATE`,
@@ -546,6 +570,7 @@ module.exports = {
   actorFromReq,
   requireWarehouseRole,
   listEligibleLaptops,
+  listEligibleVendors,
   listReturnDcs,
   getReturnDc,
   createReturnDc,

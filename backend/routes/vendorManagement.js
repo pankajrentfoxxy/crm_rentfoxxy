@@ -13,6 +13,7 @@ const serials = require('../controllers/vendorManagement/serialNumbers.controlle
 const billing = require('../controllers/vendorManagement/billing.controller');
 const replaced = require('../controllers/vendorManagement/replacedProducts.controller');
 const vendorReturn = require('../controllers/vendorManagement/vendorReturnToVendor.controller');
+const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 
 const router = express.Router();
 
@@ -252,10 +253,17 @@ const authorizeReturnToVendor = [
   checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'view'),
 ];
 
+router.get('/return-to-vendor/eligible-vendors', authorizeReturnToVendor, vendorReturn.listEligibleVendors);
 router.get('/return-to-vendor/eligible-laptops', authorizeReturnToVendor, vendorReturn.listEligible);
 router.get('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.listDcs);
-router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
 router.post('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.createDc);
+const vrtdcBase = '/return-to-vendor/dc';
+router.get(...prefixedDcRoute(vrtdcBase, '/pdf', ...authorizeReturnToVendor, vendorReturn.downloadPdf));
+router.post(...prefixedDcRoute(vrtdcBase, '/dispatch', ...authorizeReturnToVendor, vendorReturn.dispatchDc));
+router.post(...prefixedDcRoute(vrtdcBase, '/complete', ...authorizeReturnToVendor, vendorReturn.completeDc));
+router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...authorizeReturnToVendor, vendorReturn.cancelDc));
+router.get(...prefixedDcRoute(vrtdcBase, '', ...authorizeReturnToVendor, vendorReturn.getDc));
+router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
 router.post('/return-to-vendor/dc/:dcNumber/dispatch', authorizeReturnToVendor, vendorReturn.dispatchDc);
 router.post('/return-to-vendor/dc/:dcNumber/complete', authorizeReturnToVendor, vendorReturn.completeDc);
 router.post('/return-to-vendor/dc/:dcNumber/cancel', authorizeReturnToVendor, vendorReturn.cancelDc);
