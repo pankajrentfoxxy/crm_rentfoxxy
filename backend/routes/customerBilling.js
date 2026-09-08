@@ -29,6 +29,7 @@ router.post('/credit-notes/generate', cp('credit_notes', 'create'), ctrl.generat
 router.post('/credit-notes/generate-bulk', cp('credit_notes', 'create'), ctrl.generateCreditNotesBulk);
 router.post('/credit-notes', cp('credit_notes', 'create'), ctrl.createCreditNote);
 router.post('/credit-notes/approve-bulk', cp('credit_notes', 'edit'), ctrl.approveCreditNotesBulk);
+router.get('/credit-notes/pdf-zip', cp('credit_notes', 'view'), ctrl.downloadCreditNotesZip);
 router.get('/credit-notes/:id/pdf', cp('credit_notes', 'view'), ctrl.downloadCreditNotePdf);
 router.get('/credit-notes/:id', cp('credit_notes', 'view'), ctrl.getCreditNote);
 router.patch('/credit-notes/:id/approve', cp('credit_notes', 'edit'), ctrl.approveCreditNote);

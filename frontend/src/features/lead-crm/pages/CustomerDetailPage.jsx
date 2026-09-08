@@ -20,6 +20,9 @@ import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
 import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
 import MultiSelectFilter from '../components/MultiSelectFilter';
 import usePermission from '../../../hooks/usePermission';
+import InventorySpecFilterBar from '../../inventory-management/components/InventorySpecFilterBar';
+import { EMPTY_SPEC_FILTERS, hasActiveSpecFilters } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 
 const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Tickets', 'Orders', 'Lead Origin', 'Portal Access'];
 const TAB_PROFILE = 0;
@@ -214,6 +217,8 @@ export default function CustomerDetailPage() {
   const [assetFrom, setAssetFrom] = useState('');
   const [assetTo, setAssetTo] = useState('');
   const [assetStatuses, setAssetStatuses] = useState([]);
+  const [assetSpecFilters, setAssetSpecFilters] = useState(EMPTY_SPEC_FILTERS);
+  const debouncedAssetSpecParams = useDebouncedSpecParams(assetSpecFilters);
   const [assetPagination, setAssetPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: ASSET_PAGE_SIZE });
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [tab, setTab] = useState(0);
@@ -273,6 +278,7 @@ export default function CustomerDetailPage() {
         from: assetFrom || undefined,
         to: assetTo || undefined,
         status: assetStatuses.length ? assetStatuses.join(',') : undefined,
+        ...debouncedAssetSpecParams,
       });
       setAssetRows(lapRes.data?.data || []);
       if (lapRes.data?.counts) setAssetCounts(lapRes.data.counts);
@@ -287,7 +293,7 @@ export default function CustomerDetailPage() {
     } finally {
       setAssetsLoading(false);
     }
-  }, [id, assetView, assetPage, assetSearch, assetFrom, assetTo, assetStatuses]);
+  }, [id, assetView, assetPage, assetSearch, assetFrom, assetTo, assetStatuses, debouncedAssetSpecParams]);
 
   const loadAssetActivity = useCallback(async () => {
     setAssetActivityLoading(true);
@@ -314,6 +320,7 @@ export default function CustomerDetailPage() {
         from: assetFrom || undefined,
         to: assetTo || undefined,
         status: assetStatuses.length ? assetStatuses.join(',') : undefined,
+        ...debouncedAssetSpecParams,
       });
       toast.success(lifecycle === 'returned' ? 'Returned laptops export downloaded' : 'Rented laptops export downloaded');
     } catch {
@@ -372,7 +379,7 @@ export default function CustomerDetailPage() {
     loadTickets();
   }, [tab, loadTickets]);
 
-  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo, assetStatuses]);
+  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo, assetStatuses, debouncedAssetSpecParams]);
   useEffect(() => { setAssetStatuses([]); }, [assetView]);
   useEffect(() => { setTicketPage(1); }, [ticketSearch, ticketStatuses]);
 
@@ -667,16 +674,28 @@ export default function CustomerDetailPage() {
                 className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
               />
             </label>
-            {(assetFrom || assetTo || assetStatuses.length > 0) && (
+            {(assetFrom || assetTo || assetStatuses.length > 0 || hasActiveSpecFilters(assetSpecFilters)) && (
               <button
                 type="button"
-                onClick={() => { setAssetFrom(''); setAssetTo(''); setAssetStatuses([]); }}
+                onClick={() => {
+                  setAssetFrom('');
+                  setAssetTo('');
+                  setAssetStatuses([]);
+                  setAssetSpecFilters(EMPTY_SPEC_FILTERS);
+                }}
                 className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
               >
                 Clear filters
               </button>
             )}
           </div>
+
+          <InventorySpecFilterBar
+            filters={assetSpecFilters}
+            onChange={setAssetSpecFilters}
+            onClear={() => setAssetSpecFilters(EMPTY_SPEC_FILTERS)}
+            className="w-full"
+          />
 
           {assetsLoading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>

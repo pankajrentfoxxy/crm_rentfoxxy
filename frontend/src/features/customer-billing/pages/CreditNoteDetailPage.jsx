@@ -92,6 +92,13 @@ function lineKey(line, idx) {
   return `i:${idx}`;
 }
 
+function approvalLineKey(line) {
+  const prefix = `${line?.credit_note_id}-`;
+  const rowKey = String(line?.row_key || '');
+  if (rowKey.startsWith(prefix)) return rowKey.slice(prefix.length);
+  return lineKey(line, 0);
+}
+
 export default function CreditNoteDetailPage() {
   const { id } = useParams();
   const [creditNote, setCreditNote] = useState(null);
@@ -239,20 +246,23 @@ export default function CreditNoteDetailPage() {
   };
 
   const handleApprove = async () => {
-    if (!selected.size) {
+    const currentSelected = selectedLines.filter((line) => Number(line.credit_note_id) === Number(id));
+    if (!currentSelected.length) {
       toast.error('Select at least one laptop to approve');
       return;
     }
     setApproving(true);
     try {
-      const res = await approveCreditNote(id, { line_keys: [...selected] });
+      const res = await approveCreditNote(id, {
+        line_keys: currentSelected.map(approvalLineKey),
+      });
       const approvedNumber = res.data?.credit_note?.credit_note_number;
       const leftover = res.data?.leftover_credit_note;
       if (res.data?.split && leftover) {
         toast.success(
           res.data?.applied
-            ? `${selected.size} laptop${selected.size === 1 ? '' : 's'} approved as ${approvedNumber} and applied`
-            : `${selected.size} laptop${selected.size === 1 ? '' : 's'} approved as ${approvedNumber}`
+            ? `${currentSelected.length} laptop${currentSelected.length === 1 ? '' : 's'} approved as ${approvedNumber} and applied`
+            : `${currentSelected.length} laptop${currentSelected.length === 1 ? '' : 's'} approved as ${approvedNumber}`
         );
       } else {
         toast.success(res.data?.applied

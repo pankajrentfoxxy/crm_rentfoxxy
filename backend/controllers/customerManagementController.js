@@ -26,6 +26,10 @@ const {
 const { parseExtra } = require('../services/qcManagementService');
 const productionAssetService = require('../services/productionAssetService');
 const {
+  buildCustomerActiveAssetSpecWhere,
+  buildCustomerReturnedAssetSpecWhere,
+} = require('../utils/inventorySpecFilter');
+const {
   buildAssetBeforeState,
   buildAssetChangeSet,
   logCustomerAssetEdit,
@@ -2088,8 +2092,8 @@ const RETURNED_COUNT_FROM_SQL = `
     )
 `;
 
-function activeFilterFromSql({ search = '', from = '', to = '' } = {}) {
-  const needsInv = Boolean(search);
+function activeFilterFromSql({ search = '', from = '', to = '', specWhere = '' } = {}) {
+  const needsInv = Boolean(search) || Boolean(specWhere);
   const needsPod = Boolean(from || to);
   if (!needsInv && !needsPod) return ACTIVE_CORE_FROM_SQL;
   return `
@@ -2116,13 +2120,14 @@ async function countCustomerReturnedAssets(customerId) {
   return rows[0]?.total || 0;
 }
 
-async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', statuses = '', limit, offset, skipCount = false } = {}) {
+async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', statuses = '', specQuery = {}, limit, offset, skipCount = false } = {}) {
   const statusList = resolveActiveInventoryStatuses(statuses);
   const params = [customerId, statusList];
   const searchSql = buildActiveSearchSql(search, params);
   const dateSql = buildActiveDateSql(from, to, params);
-  const filterFrom = `${activeFilterFromSql({ search, from, to })}${searchSql}${dateSql}`;
-  const hydrateFrom = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}`;
+  const specSql = buildCustomerActiveAssetSpecWhere(specQuery, params);
+  const filterFrom = `${activeFilterFromSql({ search, from, to, specWhere: specSql })}${searchSql}${dateSql}${specSql}`;
+  const hydrateFrom = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}${specSql}`;
 
   const countSql = withActiveCte(`SELECT COUNT(*)::int AS total ${filterFrom}`);
   let listSql = withActiveCte(
@@ -2150,12 +2155,13 @@ async function queryCustomerActiveAssets(customerId, { search = '', from = '', t
 // screen instead of maintaining a second copy of the query.
 exports.queryCustomerActiveAssets = queryCustomerActiveAssets;
 
-async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', statuses = '', limit, offset, skipCount = false } = {}) {
+async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', statuses = '', specQuery = {}, limit, offset, skipCount = false } = {}) {
   const params = [customerId];
   const searchSql = buildReturnedSearchSql(search, params);
   const dateSql = buildReturnedDateSql(from, to, params);
   const pickupTypeSql = buildReturnedPickupTypeSql(resolveReturnedPickupTypes(statuses), params);
-  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}${dateSql}${pickupTypeSql}`;
+  const specSql = buildCustomerReturnedAssetSpecWhere(specQuery, params);
+  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}${dateSql}${pickupTypeSql}${specSql}`;
 
   let total;
   if (!skipCount) {
@@ -2763,7 +2769,7 @@ exports.getCustomerLaptops = async (req, res) => {
 
     const offset = (page - 1) * limit;
     const cacheKey = buildCustomerLaptopsCacheKey({
-      customerId, lifecycle, page, limit, search, from, to, statuses, paginate: true,
+      customerId, lifecycle, page, limit, search, from, to, statuses, specQuery: req.query, paginate: true,
     });
     const cached = await getCachedCustomerLaptops(cacheKey);
     if (cached) {
@@ -2772,8 +2778,8 @@ exports.getCustomerLaptops = async (req, res) => {
 
     const [result, otherTotal] = await Promise.all([
       lifecycle === 'returned'
-        ? queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit, offset })
-        : queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit, offset }),
+        ? queryCustomerReturnedAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit, offset })
+        : queryCustomerActiveAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit, offset }),
       lifecycle === 'returned'
         ? countCustomerActiveAssets(customerId)
         : countCustomerReturnedAssets(customerId),
@@ -2848,8 +2854,8 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
     const XLSX = require('xlsx');
 
     const result = lifecycle === 'returned'
-      ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 })
-      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 });
+      ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit: EXPORT_LIMIT, offset: 0 })
+      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit: EXPORT_LIMIT, offset: 0 });
 
     const rows = [...result.rows].sort((a, b) => {
       const loc = locationSortKey(a).localeCompare(locationSortKey(b));

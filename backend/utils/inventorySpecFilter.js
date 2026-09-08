@@ -507,6 +507,50 @@ function buildProductionAssetPendingSpecFilter(filters, params) {
   return { whereSql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '' };
 }
 
+function customerActiveAssetSpecExpr(field) {
+  const map = {
+    brand: `COALESCE(NULLIF(TRIM(vsn.extra->>'brand'), ''), NULLIF(TRIM(vsn.extra->>'brand_name'), ''), inv.brand)`,
+    model: `COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''), inv.model)`,
+    processor: `COALESCE(NULLIF(TRIM(vsn.extra->>'processor'), ''), inv.processor)`,
+    generation: `COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), inv.generation)`,
+    ram: `COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), inv.ram)`,
+    storage: `COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), inv.storage)`,
+    screen_size: `COALESCE(NULLIF(TRIM(vsn.extra->>'screen_size'), ''), inv.screen_size)`,
+    gpu: `COALESCE(NULLIF(TRIM(vsn.extra->>'gpu'), ''), inv.gpu)`,
+  };
+  return map[field];
+}
+
+function customerReturnedAssetSpecExpr(field) {
+  const map = {
+    brand: `COALESCE(NULLIF(TRIM(vsn.extra->>'brand'), ''), NULLIF(TRIM(rl.brand), ''))`,
+    model: `COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''), NULLIF(TRIM(rl.model_name), ''))`,
+    processor: `COALESCE(NULLIF(TRIM(vsn.extra->>'processor'), ''), NULLIF(TRIM(rl.processor), ''))`,
+    generation: `COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), NULLIF(TRIM(rl.generation), ''))`,
+    ram: `COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), NULLIF(TRIM(rl.ram), ''))`,
+    storage: `COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), NULLIF(TRIM(rl.storage), ''))`,
+    screen_size: `COALESCE(NULLIF(TRIM(vsn.extra->>'screen_size'), ''), NULLIF(TRIM(rl.screen_size), ''))`,
+    gpu: `COALESCE(NULLIF(TRIM(vsn.extra->>'gpu'), ''), NULLIF(TRIM(rl.gpu), ''))`,
+  };
+  return map[field];
+}
+
+function buildCustomerActiveAssetSpecWhere(query, params) {
+  const filters = pickMultiSpecFilters(query);
+  const clauses = appendMultiSpecClauses(filters, params, customerActiveAssetSpecExpr);
+  return clauses.length ? ` AND ${clauses.join(' AND ')}` : '';
+}
+
+function buildCustomerReturnedAssetSpecWhere(query, params) {
+  const filters = pickMultiSpecFilters(query);
+  const clauses = appendMultiSpecClauses(filters, params, customerReturnedAssetSpecExpr);
+  return clauses.length ? ` AND ${clauses.join(' AND ')}` : '';
+}
+
+function hasCustomerAssetSpecFilters(query = {}) {
+  return hasMultiSpecFilters(pickMultiSpecFilters(query));
+}
+
 module.exports = {
   SPEC_QUERY_KEYS,
   parseMultiSpecValues,
@@ -517,6 +561,9 @@ module.exports = {
   buildSerialSpecFilter,
   buildTicketSpecFilter,
   buildProductionAssetPendingSpecFilter,
+  buildCustomerActiveAssetSpecWhere,
+  buildCustomerReturnedAssetSpecWhere,
+  hasCustomerAssetSpecFilters,
   appendRepairSpecClauses,
   appendMultiSpecClauses,
   reportRowSpecExpr,

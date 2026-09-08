@@ -20,10 +20,45 @@ function parseJsonArray(value) {
 }
 
 function ymdParts(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const iso = value.toISOString().slice(0, 10);
+    const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  }
   const raw = String(value || '').slice(0, 10);
   const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
   return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
+function dateKey(value) {
+  const parts = ymdParts(value);
+  if (parts) {
+    return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+  }
+  return String(value || '').slice(0, 10);
+}
+
+function creditNoteBillingDate(cn) {
+  return cn?.to_date || cn?.from_date || cn?.created_at || null;
+}
+
+function earlierDate(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return new Date(a) <= new Date(b) ? a : b;
+}
+
+function laterDate(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return new Date(a) >= new Date(b) ? a : b;
+}
+
+function lineSortKey(line) {
+  const start = dateKey(line?.rent_start || line?.from_date);
+  const code = String(line?.ttspl_id || '').trim();
+  return `${start}|${code}`;
 }
 
 function creditNoteLines(cn) {
@@ -194,12 +229,77 @@ async function hydrateCreditNoteDocument(cn) {
   return invoice;
 }
 
+async function loadApprovedCreditNotesForCustomerMonth(cn) {
+  const customerId = Number(cn?.customer_id);
+  if (!Number.isFinite(customerId) || customerId <= 0) return [];
+  const result = await pool.query(
+    `SELECT *
+       FROM customer_credit_notes
+      WHERE customer_id = $1
+        AND LOWER(COALESCE(status, '')) IN ('approved', 'applied')
+        AND date_trunc('month', COALESCE(to_date, from_date, (created_at AT TIME ZONE 'Asia/Kolkata')::date))
+          = date_trunc('month', COALESCE($2::date, $3::date, ($4::timestamptz AT TIME ZONE 'Asia/Kolkata')::date))
+      ORDER BY COALESCE(from_date, to_date, (created_at AT TIME ZONE 'Asia/Kolkata')::date) ASC,
+               credit_note_id ASC`,
+    [customerId, cn.to_date || null, cn.from_date || null, cn.created_at || null]
+  );
+  return result.rows;
+}
+
+async function buildConsolidatedCreditNoteDocument(primaryCn, siblingRows = []) {
+  const byId = new Map();
+  for (const row of siblingRows) {
+    if (row?.credit_note_id != null) byId.set(Number(row.credit_note_id), row);
+  }
+  if (primaryCn?.credit_note_id != null && !byId.has(Number(primaryCn.credit_note_id))) {
+    byId.set(Number(primaryCn.credit_note_id), primaryCn);
+  }
+  const notes = [...byId.values()].sort((a, b) => {
+    const aDate = dateKey(creditNoteBillingDate(a));
+    const bDate = dateKey(creditNoteBillingDate(b));
+    if (aDate !== bDate) return aDate.localeCompare(bDate);
+    return Number(a.credit_note_id) - Number(b.credit_note_id);
+  });
+
+  const lineItems = [];
+  let minFrom = primaryCn.from_date || null;
+  let maxTo = primaryCn.to_date || null;
+  for (const note of notes) {
+    const fromParts = ymdParts(note.from_date) || ymdParts(note.to_date) || ymdParts(note.created_at);
+    const month = fromParts?.month;
+    const year = fromParts?.year;
+    for (const line of creditNoteLines(note)) {
+      lineItems.push(toInvoiceLine(line, month, year));
+    }
+    minFrom = earlierDate(minFrom, note.from_date || lineItems[lineItems.length - 1]?.rent_start);
+    maxTo = laterDate(maxTo, note.to_date || lineItems[lineItems.length - 1]?.rent_end);
+  }
+  lineItems.sort((a, b) => lineSortKey(a).localeCompare(lineSortKey(b)));
+
+  const invoice = creditNoteToInvoiceDocument(primaryCn);
+  invoice.line_items = await hydrateCreditNoteLines(lineItems, primaryCn.customer_id);
+  const total = invoice.line_items.reduce((n, line) => n + Number(line.amount || 0), 0);
+  invoice.subtotal = total;
+  invoice.grand_total = total;
+  invoice.from_date = minFrom || invoice.from_date;
+  invoice.to_date = maxTo || invoice.to_date;
+  const period = ymdParts(invoice.to_date) || ymdParts(invoice.from_date);
+  if (period) {
+    invoice.invoice_month = period.month;
+    invoice.invoice_year = period.year;
+  }
+  return invoice;
+}
+
 async function generateCustomerCreditNotePdf(creditNote, options = {}) {
   const status = String(creditNote?.status || '').toLowerCase();
   if (status !== 'approved' && status !== 'applied') {
     throw new Error('PDF is available only for approved credit notes');
   }
-  const invoice = await hydrateCreditNoteDocument(creditNote);
+  const siblings = await loadApprovedCreditNotesForCustomerMonth(creditNote);
+  const invoice = siblings.length > 1
+    ? await buildConsolidatedCreditNoteDocument(creditNote, siblings)
+    : await hydrateCreditNoteDocument(creditNote);
   return generateCustomerInvoicePdf(invoice, options);
 }
 

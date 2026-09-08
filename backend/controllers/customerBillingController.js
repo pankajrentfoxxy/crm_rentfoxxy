@@ -2,7 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
-const archiver = require('archiver');
+const archiverLib = require('archiver');
+
+function createZipArchive(options = { zlib: { level: 9 } }) {
+  if (typeof archiverLib === 'function') return archiverLib('zip', options);
+  const ZipArchive = archiverLib.ZipArchive;
+  if (typeof ZipArchive === 'function') return new ZipArchive(options);
+  throw new Error('ZIP archive is not available');
+}
 const { generateCustomerInvoicePdf, invoicePdfDownloadName, uniqueCustomerPdfName } = require('../services/customerInvoicePdfService');
 const { generateCustomerCreditNotePdf, creditNotePdfDownloadName, hydrateCreditNoteDocument } = require('../services/customerCreditNotePdfService');
 const { normalizeInvoiceFormat, parseLineItems, enrichLineItemsWithSpecs } = require('../services/customerInvoiceHtmlService');
@@ -952,7 +959,7 @@ exports.downloadInvoicesZip = async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
 
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = createZipArchive();
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
       else res.end();
@@ -1535,6 +1542,92 @@ exports.downloadCreditNotePdf = async (req, res) => {
     );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.downloadCreditNotesZip = async (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  if (!(month >= 1 && month <= 12) || !(year >= 2000 && year <= 2100)) {
+    return res.status(400).json({ success: false, message: 'month and year are required' });
+  }
+  const format = normalizeInvoiceFormat(req.query.format || 'laptop_details');
+  const createdFiles = [];
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const file of createdFiles) fs.unlink(file, () => {});
+  };
+  try {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const result = await pool.query(
+      `${CREDIT_NOTE_DETAIL_SELECT}
+       WHERE EXTRACT(MONTH FROM ${CN_BILL_DATE}) = $1
+         AND EXTRACT(YEAR FROM ${CN_BILL_DATE}) = $2
+         AND LOWER(COALESCE(cn.status, '')) IN ('approved', 'applied')
+       ORDER BY cn.customer_id, cn.created_at DESC, cn.credit_note_id DESC`,
+      [month, year]
+    );
+    const byCustomer = new Map();
+    for (const row of result.rows) {
+      const customerId = Number(row.customer_id);
+      if (!byCustomer.has(customerId)) byCustomer.set(customerId, row);
+    }
+    const anchors = [...byCustomer.values()].sort((a, b) => String(
+      a.customer_name || a.customer_contact_name || a.credit_note_number || ''
+    ).localeCompare(
+      b.customer_name || b.customer_contact_name || b.credit_note_number || '',
+      undefined,
+      { sensitivity: 'base' }
+    ));
+    if (!anchors.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'No approved credit notes found for that month',
+      });
+    }
+
+    const generated = await mapPool(anchors, 3, async (creditNote) => {
+      const pdfPath = await generateCustomerCreditNotePdf(creditNote, { format });
+      const abs = path.join(__dirname, '..', pdfPath);
+      createdFiles.push(abs);
+      return { creditNote, abs };
+    });
+
+    const monthLabel = MONTH_NAMES[month] || String(month);
+    const zipName = `Credit-Notes-${monthLabel}-${year}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+    const archive = createZipArchive();
+    archive.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+      else res.end();
+    });
+    archive.pipe(res);
+    res.on('finish', cleanup);
+    res.on('close', cleanup);
+
+    const usedNames = new Set();
+    for (const item of generated) {
+      archive.file(item.abs, {
+        name: uniqueCustomerPdfName(
+          item.creditNote.customer_name || item.creditNote.customer_contact_name,
+          item.creditNote.credit_note_number,
+          usedNames,
+        ),
+      });
+    }
+    await archive.finalize();
+  } catch (err) {
+    cleanup();
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    } else {
+      res.end();
+    }
   }
 };
 

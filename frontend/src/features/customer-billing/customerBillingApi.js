@@ -51,6 +51,11 @@ export const downloadCreditNotePdf = (id, { format } = {}) => api.get(`${base}/c
   params: format ? { format } : undefined,
   responseType: 'blob',
 });
+export const downloadCreditNotesZip = ({ month, year, format } = {}) => api.get(`${base}/credit-notes/pdf-zip`, {
+  params: { month, year, ...(format ? { format } : {}) },
+  responseType: 'blob',
+  timeout: 15 * 60 * 1000,
+});
 export const listSecurityDeposits = (p) => api.get(`${base}/security-deposits`, { params: p });
 export const recordSecurityDeposit = (d) => api.post(`${base}/security-deposits`, d);
 export const refundSecurityDeposit = (id, d) => api.patch(`${base}/security-deposits/${id}/refund`, d);

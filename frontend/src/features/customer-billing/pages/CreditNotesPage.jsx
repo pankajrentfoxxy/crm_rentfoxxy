@@ -12,6 +12,7 @@ import {
   approveCreditNotesBulk,
   creditNotePdfErrorMessage,
   downloadCreditNotePdf,
+  downloadCreditNotesZip,
   generateCreditNotesBulk,
   listCreditNotes,
   listInvoiceCoverage,
@@ -126,6 +127,12 @@ export default function CreditNotesPage() {
   const [ttsplIds, setTtsplIds] = useState([]);
   const [selected, setSelected] = useState(() => new Set());
   const [approving, setApproving] = useState(false);
+  const [zipOpen, setZipOpen] = useState(false);
+  const [zipLoading, setZipLoading] = useState(false);
+  const [zipForm, setZipForm] = useState({
+    month: String(new Date().getMonth() + 1),
+    year: String(new Date().getFullYear()),
+  });
   const [genOpen, setGenOpen] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
   const [billableCustomers, setBillableCustomers] = useState([]);
@@ -373,6 +380,48 @@ export default function CreditNotesPage() {
     }
   };
 
+  const openZipModal = () => {
+    setZipForm({
+      month: String(month || new Date().getMonth() + 1),
+      year: String(year || new Date().getFullYear()),
+    });
+    setZipOpen(true);
+  };
+
+  const handleZipDownload = async () => {
+    if (!zipForm.month || !zipForm.year) {
+      toast.error('Select month and year');
+      return;
+    }
+    setZipLoading(true);
+    try {
+      const res = await downloadCreditNotesZip({
+        month: Number(zipForm.month),
+        year: Number(zipForm.year),
+        format: 'laptop_details',
+      });
+      const blob = new Blob([res.data], { type: 'application/zip' });
+      if (blob.type.includes('json') || (res.data?.type && String(res.data.type).includes('json'))) {
+        const text = await blob.text();
+        const json = JSON.parse(text);
+        throw new Error(json.message || 'Download failed');
+      }
+      const zipMonth = MONTHS[Number(zipForm.month)] || zipForm.month;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Credit-Notes-${zipMonth}-${zipForm.year}.zip`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('ZIP downloaded');
+      setZipOpen(false);
+    } catch (err) {
+      toast.error(await creditNotePdfErrorMessage(err, err.message || 'ZIP download failed'));
+    } finally {
+      setZipLoading(false);
+    }
+  };
+
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <PageHeader
@@ -381,6 +430,7 @@ export default function CreditNotesPage() {
         icon={FileMinus}
         actions={(
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={Download} onClick={openZipModal}>Download</Button>
             <PermissionGate section="credit_notes" action="create">
               <Button icon={Plus} onClick={openGenerateModal}>Generate Credit Notes</Button>
             </PermissionGate>
@@ -710,6 +760,53 @@ export default function CreditNotesPage() {
                 Approve selected
               </Button>
             </PermissionGate>
+          </div>
+        </div>
+      )}
+
+      {zipOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4">
+          <button type="button" className="fixed inset-0 bg-black/40" onClick={() => !zipLoading && setZipOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full my-6 p-6 space-y-4">
+            <h3 className="font-semibold text-lg">Download credit notes</h3>
+            <p className="text-sm text-gray-500">
+              Download one PDF per customer for the selected month as a ZIP. Each file includes all approved credit notes for that customer and is named with the customer name. A full month can take a few minutes.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1 text-xs text-slate-600">
+                Month
+                <select
+                  value={zipForm.month}
+                  onChange={(e) => setZipForm((f) => ({ ...f, month: e.target.value }))}
+                  className="border rounded-lg px-3 py-2 text-sm min-h-[44px]"
+                  disabled={zipLoading}
+                >
+                  {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-600">
+                Year
+                <select
+                  value={zipForm.year}
+                  onChange={(e) => setZipForm((f) => ({ ...f, year: e.target.value }))}
+                  className="border rounded-lg px-3 py-2 text-sm min-h-[44px]"
+                  disabled={zipLoading}
+                >
+                  {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="flex gap-2 justify-end pt-1">
+              <button type="button" onClick={() => setZipOpen(false)} className="px-4 py-2 text-sm border rounded-lg" disabled={zipLoading}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleZipDownload}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
+                disabled={zipLoading}
+              >
+                {zipLoading ? 'Preparing ZIP…' : 'Download ZIP'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@
  */
 const { cacheGet, cacheSet, cacheDelPattern, CACHE_TTL } = require('../utils/cacheService');
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const LIST_TTL_SEC = parseInt(
   process.env.CACHE_TTL_CUSTOMER_LAPTOPS_SEC || String(CACHE_TTL.CUSTOMER_LAPTOPS || 45),
   10
@@ -27,6 +27,7 @@ function buildCustomerLaptopsCacheKey({
   from,
   to,
   statuses,
+  specQuery = {},
   paginate,
 }) {
   return [
@@ -41,6 +42,7 @@ function buildCustomerLaptopsCacheKey({
     sanitizePart(from),
     sanitizePart(to),
     sanitizePart(statuses),
+    sanitizePart(JSON.stringify(specQuery || {})),
   ].join(':');
 }
 

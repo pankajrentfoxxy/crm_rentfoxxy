@@ -782,6 +782,22 @@ async function receiveIntoInventory(db, productionAssetId, {
       ? await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true })
       : null;
     if (pa.status === 'received' && openPendingTicket) {
+      const newerOpen = pa.vendor_serial_id
+        ? await db.query(
+            `SELECT production_asset_id
+               FROM production_assets
+              WHERE vendor_serial_id = $1
+                AND production_asset_id <> $2
+                AND status IN ('pending_inventory', 'qc2_passed')
+              LIMIT 1`,
+            [pa.vendor_serial_id, productionAssetId]
+          )
+        : { rows: [] };
+      if (newerOpen.rows[0]) {
+        const err = new Error('This unit is already in QC Ready on a newer ticket. Receive that row instead.');
+        err.status = 400;
+        throw err;
+      }
       await db.query(
         `UPDATE production_assets
             SET ticket_id = $2,
@@ -1136,8 +1152,13 @@ async function listPendingInventory(db, query = {}) {
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pa.vendor_serial_id
        LEFT JOIN vendor_purchase_orders p ON p.po_id = COALESCE(pa.po_id, vsn.po_id) AND p.deleted_at IS NULL
       WHERE (
-         pa.status = 'pending_inventory'
-         OR (s.stage_name = 'Pending Inventory' AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor'))
+         pa.status IN ('pending_inventory', 'qc2_passed')
+         OR (
+           s.stage_name = 'Pending Inventory'
+           AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+           AND COALESCE(pa.status, '') <> 'received'
+           AND (pa.ticket_id IS NULL OR pa.ticket_id = t.ticket_id)
+         )
       )
       ${searchSql}
       ${specFilter.whereSql}

@@ -1703,8 +1703,19 @@ async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
   }
 }
 
-function lineMatchesApprovalSelection(line, index, selection) {
-  const keys = new Set((selection.line_keys || []).map((s) => String(s).trim()).filter(Boolean));
+function normalizeApprovalLineKeys(lineKeys, creditNoteId) {
+  const prefix = `${Number(creditNoteId)}-`;
+  return (lineKeys || []).map((raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (Number.isFinite(Number(creditNoteId)) && s.startsWith(prefix)) return s.slice(prefix.length);
+    const prefixed = s.match(/^\d+-(s:\d+|t:.+|i:\d+)$/);
+    return prefixed ? prefixed[1] : s;
+  }).filter(Boolean);
+}
+
+function lineMatchesApprovalSelection(line, index, selection, creditNoteId) {
+  const keys = new Set(normalizeApprovalLineKeys(selection.line_keys, creditNoteId));
   const serialIds = new Set(
     (selection.serial_ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
   );
@@ -1745,7 +1756,7 @@ async function approveSelectedCreditNoteLines(creditNoteId, selection = {}, acto
     const selected = [];
     const remainder = [];
     lines.forEach((line, index) => {
-      if (lineMatchesApprovalSelection(line, index, selection || {})) selected.push(line);
+      if (lineMatchesApprovalSelection(line, index, selection || {}, approveId)) selected.push(line);
       else remainder.push(line);
     });
     if (!selected.length) {
