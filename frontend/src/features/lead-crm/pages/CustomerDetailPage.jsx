@@ -711,6 +711,7 @@ export default function CustomerDetailPage() {
                     {lap.entity_code === 'gorefurbo'
                       ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
                       : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
+                    {lap.delivery_location && <span className="text-slate-600">{lap.delivery_location}</span>}
                     {lap.dc_number && <span className="font-mono">DC {lap.dc_number}</span>}
                     {lap.dispatch_date && <span>Dispatch: {fmtAssetDate(lap.dispatch_date)}</span>}
                     {lap.delivered_at && <span>Delivered: {fmtAssetDate(lap.delivered_at)}</span>}
@@ -744,6 +745,7 @@ export default function CustomerDetailPage() {
                   <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
                   <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                    {lap.delivery_location && <span className="text-slate-600">{lap.delivery_location}</span>}
                     {lap.dc_number && <span className="font-mono">Return DC {lap.dc_number}</span>}
                     {lap.delivered_at && <span>Delivered to customer: {fmtAssetDate(lap.delivered_at)}</span>}
                     {lap.returned_at && <span>Returned: {fmtAssetDate(lap.returned_at)}</span>}
@@ -760,15 +762,15 @@ export default function CustomerDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>
                   {(assetView === 'active'
-                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
-                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'POD', 'Status', 'Actions']
+                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'Location', 'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
+                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Location', 'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'POD', 'Status', 'Actions']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {assetView === 'active' ? (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={13} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                    <tr><td colSpan={14} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -786,6 +788,7 @@ export default function CustomerDetailPage() {
                           ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
                           : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                       </td>
+                      <td className="p-3 text-xs max-w-[220px]" title={lap.delivery_location || ''}>{lap.delivery_location || '—'}</td>
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
                       <td className="p-3 text-xs">{fmtAssetDate(lap.dispatch_date)}</td>
                       <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
@@ -810,7 +813,7 @@ export default function CustomerDetailPage() {
                   ))
                 ) : (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
+                    <tr><td colSpan={13} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -823,6 +826,7 @@ export default function CustomerDetailPage() {
                       <td className="p-3 text-xs font-mono">{lap.serial_number || '—'}</td>
                       <td className="p-3">{lap.model_name || '—'}</td>
                       <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
+                      <td className="p-3 text-xs max-w-[220px]" title={lap.delivery_location || ''}>{lap.delivery_location || '—'}</td>
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
                       <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
                       <td className="p-3 text-xs">{fmtAssetDate(lap.returned_at)}</td>

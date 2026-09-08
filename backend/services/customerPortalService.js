@@ -892,7 +892,7 @@ async function findCustomerAsset(customerId, assetRef) {
 async function listCustomerDeliveries(customerId, filters = {}) {
   const { page, limit, offset } = paginate(filters);
   const params = [customerId];
-  let where = `WHERE dcl.customer_id = $1 AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'`;
+  let where = `WHERE dcl.customer_id = $1 AND COALESCE(dcl.movement_type, 'outbound') IN ('outbound', 'return')`;
 
   if (filters.search) {
     params.push(`%${filters.search}%`);
@@ -931,7 +931,8 @@ async function listCustomerDeliveries(customerId, filters = {}) {
               dcl.dispatch_mode, dcl.ship_by, dcl.courier_name, dcl.awb_number,
               dcl.courier_tracking_url, dcl.porter_tracking_id,
               dcl.created_at, dcl.dispatched_at, dcl.delivered_at,
-              dcl.estimated_delivery, dcl.rejection_reason
+              dcl.estimated_delivery, dcl.rejection_reason,
+              COALESCE(dcl.movement_type, 'outbound') AS movement_type
          FROM delivery_challan_lines dcl
          ${where}
         ORDER BY dcl.dc_number, dcl.created_at DESC
@@ -952,6 +953,10 @@ async function listCustomerDeliveries(customerId, filters = {}) {
  * on it. Technician identity, OTP codes and warehouse-return handling stay out.
  */
 async function getCustomerDelivery(customerId, dcNumber) {
+  if (isReturnDcNumber(dcNumber)) {
+    return getCustomerReturnDelivery(customerId, dcNumber);
+  }
+
   const { rows } = await pool.query(
     `SELECT DISTINCT ON (dc_number)
             dc_number, sales_order_number, status, dispatch_mode, ship_by,
@@ -966,7 +971,7 @@ async function getCustomerDelivery(customerId, dcNumber) {
     [dcNumber, customerId]
   );
   const dc = rows[0];
-  if (!dc) return null;
+  if (!dc) return getCustomerReturnDelivery(customerId, dcNumber);
 
   const unitsRes = await pool.query(
     `SELECT
@@ -1007,6 +1012,7 @@ async function getCustomerDelivery(customerId, dcNumber) {
 
   return {
     ...dc,
+    kind: 'delivery',
     status: derived.status,
     dispatched_at: derived.dispatched_at,
     delivered_at: derived.delivered_at,
@@ -1018,6 +1024,125 @@ async function getCustomerDelivery(customerId, dcNumber) {
       config: configLabel(u),
     })),
     timeline: derived.timeline,
+  };
+}
+
+function isReturnDcNumber(dcNumber) {
+  return /^RDC/i.test(String(dcNumber || '').trim());
+}
+
+function earliestDate(values) {
+  const dates = values
+    .map((v) => (v ? new Date(v) : null))
+    .filter((d) => d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a - b);
+  return dates[0] || null;
+}
+
+function latestDate(values) {
+  const dates = values
+    .map((v) => (v ? new Date(v) : null))
+    .filter((d) => d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => b - a);
+  return dates[0] || null;
+}
+
+/**
+ * Customer-safe Return DC (RDC) tracking. Technician / OTP / warehouse
+ * internals stay out — only pickup progress the customer already knows.
+ */
+async function getCustomerReturnDelivery(customerId, rdcNumber) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (dc_number)
+            dc_number, sales_order_number, status, dispatch_mode, ship_by,
+            courier_name, awb_number, courier_tracking_url, porter_tracking_id,
+            created_at, dispatched_at, delivered_at, support_ticket_id,
+            original_dc_number, rejection_reason
+       FROM delivery_challan_lines
+      WHERE dc_number = $1 AND customer_id = $2
+        AND movement_type = 'return'
+      ORDER BY dc_number, created_at DESC`,
+    [rdcNumber, customerId]
+  );
+  const dc = rows[0];
+  if (!dc) return null;
+
+  const itemsRes = await pool.query(
+    `SELECT sti.id, sti.ticket_id, sti.status, sti.picked_up_at,
+            sti.warehouse_received_at, sti.reached_warehouse_at,
+            sti.customer_otp_verified_at, sti.pod_image_path,
+            COALESCE(vsn.inventory_asset_code, sti.ttspl_id, sti.unique_serial_number) AS ttspl_id,
+            COALESCE(vsn.serial_number, sti.serial_number) AS serial_number,
+            COALESCE(vsn.extra->>'brand', sti.brand) AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', sti.model) AS model,
+            COALESCE(vsn.extra->>'processor', sti.processor) AS processor,
+            COALESCE(vsn.extra->>'generation', sti.generation) AS generation,
+            COALESCE(vsn.extra->>'ram', sti.ram) AS ram,
+            COALESCE(vsn.extra->>'storage', sti.storage) AS storage
+       FROM support_ticket_items sti
+       LEFT JOIN LATERAL (
+         SELECT v.inventory_asset_code, v.serial_number, v.extra
+           FROM vendor_serial_numbers v
+          WHERE v.deleted_at IS NULL
+            AND (
+              v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number)
+              OR v.serial_number = sti.serial_number
+            )
+          ORDER BY CASE WHEN v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number) THEN 0 ELSE 1 END
+          LIMIT 1
+       ) vsn ON TRUE
+      WHERE sti.return_dc_number = $1
+        AND sti.item_type = 'pickup'
+        AND LOWER(COALESCE(sti.status, '')) <> 'cancelled'
+      ORDER BY sti.id ASC`,
+    [rdcNumber]
+  );
+  const items = itemsRes.rows;
+  const pickedUpAt = earliestDate(items.map((i) => i.picked_up_at || i.customer_otp_verified_at));
+  const receivedAt = items.length && items.every((i) => i.warehouse_received_at || i.reached_warehouse_at)
+    ? latestDate(items.map((i) => i.warehouse_received_at || i.reached_warehouse_at))
+    : null;
+  const allReceived = Boolean(receivedAt) || ['delivered', 'completed'].includes(String(dc.status || '').toLowerCase());
+  const status = allReceived ? 'delivered' : (pickedUpAt ? 'in_transit' : 'pending');
+
+  const ticketId = dc.support_ticket_id || items[0]?.ticket_id || null;
+  const podAt = earliestDate(items.map((i) => i.customer_otp_verified_at || i.picked_up_at));
+  const podPhoto = items.find((i) => i.pod_image_path)?.pod_image_path || null;
+
+  return {
+    dc_number: dc.dc_number,
+    kind: 'return',
+    sales_order_number: dc.sales_order_number,
+    status,
+    dispatch_mode: dc.dispatch_mode,
+    courier_name: dc.courier_name,
+    awb_number: dc.awb_number,
+    courier_tracking_url: dc.courier_tracking_url,
+    porter_tracking_id: dc.porter_tracking_id,
+    created_at: dc.created_at,
+    dispatched_at: pickedUpAt,
+    delivered_at: receivedAt || dc.delivered_at,
+    estimated_delivery: null,
+    rejection_reason: dc.rejection_reason,
+    original_dc_number: dc.original_dc_number || null,
+    ticket_id: ticketId,
+    ticket_number: ticketId ? `T-${ticketId}` : null,
+    pod_submitted_at: podAt,
+    pod_type: podAt ? 'pickup' : null,
+    pod_photo_url: podPhoto,
+    esign_url: null,
+    units: items.map((u) => ({
+      ttspl_id: u.ttspl_id || u.unique_serial_number || null,
+      serial_number: u.serial_number || null,
+      brand: u.brand || null,
+      model_name: u.model || null,
+      config: configLabel(u),
+    })),
+    timeline: [
+      { key: 'created', label: 'Return challan created', at: dc.created_at },
+      { key: 'picked_up', label: 'Picked up', at: pickedUpAt },
+      { key: 'received', label: 'Received at service centre', at: receivedAt },
+    ],
   };
 }
 

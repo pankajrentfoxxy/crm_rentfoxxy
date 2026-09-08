@@ -71,7 +71,7 @@ export async function exportCustomerLaptopsExcel(customerId, params = {}) {
     params,
     responseType: 'blob',
   });
-  downloadBlobResponse(response, `customer_${customerId}_${lifecycle}_laptops.xlsx`);
+  downloadBlobResponse(response, `customer_${customerId}_${lifecycle === 'returned' ? 'returned' : 'rented'}_laptops.xlsx`);
 }
 export const getCustomerTickets = (id, params) =>
   api.get(`/customer-management/customers/${id}/tickets`, { params });

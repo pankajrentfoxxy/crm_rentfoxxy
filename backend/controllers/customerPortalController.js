@@ -429,7 +429,11 @@ exports.listDeliveries = async (req, res) => {
     res.json({
       success: true,
       pagination,
-      deliveries: deliveries.map((d) => ({ ...d, so_number: d.sales_order_number })),
+      deliveries: deliveries.map((d) => ({
+        ...d,
+        so_number: d.sales_order_number,
+        kind: d.movement_type === 'return' ? 'return' : 'delivery',
+      })),
     });
   } catch (err) {
     console.error('customerPortal listDeliveries:', err);
@@ -445,7 +449,7 @@ exports.getDelivery = async (req, res) => {
       decodeDocNumber(req.params[0] ?? req.params.dcNumber)
     );
     if (!delivery) {
-      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+      return res.status(404).json({ success: false, message: 'Challan not found' });
     }
     res.json({ success: true, delivery });
   } catch (err) {

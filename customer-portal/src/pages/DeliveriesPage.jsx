@@ -32,6 +32,14 @@ export default function DeliveriesPage() {
       label: 'DC Number',
       mobilePrimary: true,
       className: 'font-mono text-xs whitespace-nowrap',
+      render: (r) => (
+        <span>
+          {r.dc_number}
+          {r.kind === 'return' || r.movement_type === 'return' ? (
+            <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-500">Return</span>
+          ) : null}
+        </span>
+      ),
     },
     {
       key: 'sales_order_number',
