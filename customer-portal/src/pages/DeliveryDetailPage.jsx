@@ -68,6 +68,8 @@ export default function DeliveryDetailPage() {
   }
   if (!delivery) return null;
 
+  const isReturn = delivery.kind === 'return';
+
   return (
     <div className="space-y-6">
       <Link to="/deliveries" className="inline-flex items-center gap-1 text-sm text-brand hover:underline">
@@ -78,28 +80,49 @@ export default function DeliveryDetailPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold font-mono">{delivery.dc_number}</h1>
-            {delivery.sales_order_number && (
-              <p className="text-sm text-slate-500 mt-1">
-                Order{' '}
-                <Link
-                  to={`/orders/${encodeURIComponent(delivery.sales_order_number)}`}
-                  className="font-mono text-brand hover:underline"
-                >
-                  {delivery.sales_order_number}
-                </Link>
-              </p>
-            )}
+            <p className="text-sm text-slate-500 mt-1">
+              {isReturn ? 'Return pickup' : 'Delivery'}
+              {delivery.sales_order_number && (
+                <>
+                  {' · Order '}
+                  <Link
+                    to={`/orders/${encodeURIComponent(delivery.sales_order_number)}`}
+                    className="font-mono text-brand hover:underline"
+                  >
+                    {delivery.sales_order_number}
+                  </Link>
+                </>
+              )}
+              {isReturn && delivery.ticket_id && (
+                <>
+                  {' · Ticket '}
+                  <Link
+                    to={`/support/tickets/${delivery.ticket_id}`}
+                    className="font-mono text-brand hover:underline"
+                  >
+                    {delivery.ticket_number || `T-${delivery.ticket_id}`}
+                  </Link>
+                </>
+              )}
+            </p>
           </div>
-          <StatusBadge status={delivery.status} />
+          <StatusBadge
+            status={delivery.status}
+            label={isReturn && delivery.status === 'delivered' ? 'Received' : undefined}
+          />
         </div>
 
         <dl className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-slate-100">
-          <Field label="Dispatch Mode"><span className="capitalize">{delivery.dispatch_mode || '—'}</span></Field>
+          <Field label={isReturn ? 'Pickup Mode' : 'Dispatch Mode'}>
+            <span className="capitalize">{delivery.dispatch_mode || '—'}</span>
+          </Field>
           <Field label="Courier">{delivery.courier_name || '—'}</Field>
           <Field label="AWB / Tracking">
             <span className="font-mono text-xs">{delivery.awb_number || '—'}</span>
           </Field>
-          <Field label="Expected Delivery">{fmtDate(delivery.estimated_delivery)}</Field>
+          <Field label={isReturn ? 'Collected On' : 'Expected Delivery'}>
+            {fmtDate(isReturn ? delivery.delivered_at : delivery.estimated_delivery)}
+          </Field>
         </dl>
 
         {(delivery.courier_tracking_url || delivery.porter_tracking_id) && (
@@ -144,11 +167,11 @@ export default function DeliveryDetailPage() {
         </section>
 
         <section className="bg-white border rounded-xl p-6">
-          <h2 className="font-semibold mb-4">Proof of Delivery</h2>
+          <h2 className="font-semibold mb-4">{isReturn ? 'Proof of Pickup' : 'Proof of Delivery'}</h2>
           {delivery.pod_submitted_at ? (
             <div className="space-y-3">
               <p className="text-sm text-slate-600">
-                Received {fmtDateTime(delivery.pod_submitted_at)}
+                {isReturn ? 'Collected' : 'Received'} {fmtDateTime(delivery.pod_submitted_at)}
                 {delivery.pod_type ? ` · ${delivery.pod_type}` : ''}
               </p>
               <div className="flex flex-wrap gap-2">
@@ -176,7 +199,9 @@ export default function DeliveryDetailPage() {
             </div>
           ) : (
             <p className="text-sm text-slate-500">
-              Proof of delivery will appear here once the laptops are handed over.
+              {isReturn
+                ? 'Pickup confirmation will appear here once the laptops are collected.'
+                : 'Proof of delivery will appear here once the laptops are handed over.'}
             </p>
           )}
         </section>

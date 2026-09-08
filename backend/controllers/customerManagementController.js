@@ -39,6 +39,10 @@ const {
   invalidateCustomerLaptopsCache,
 } = require('../services/customerLaptopsCache');
 const { lookupGstin, sanitizeGstin, isValidGstin } = require('../services/gstinLookupService');
+const {
+  normalizeDeliveryAddress,
+  formatDeliveryAddressLine,
+} = require('../utils/deliveryAddressUtils');
 
 /** Prefer the GST API tradeNam. Lookup is best-effort so save still works if Zoho is down. */
 async function resolveGstTradeName(gstNumber, explicitTradeName) {
@@ -1617,6 +1621,38 @@ function podFromFilePath(raw) {
   return out;
 }
 
+function isNoisyAddressPart(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+  return !v || ['ujjain', 'uttar pradesh', 'india'].includes(v);
+}
+
+function mapDeliveryLocation(raw) {
+  const addr = normalizeDeliveryAddress(raw);
+  const street = String(addr?.address || addr?.address_line_1 || addr?.line1 || '').trim();
+  const pin = String(addr?.pincode || addr?.zip_code || '').trim();
+  const city = isNoisyAddressPart(addr?.city) ? '' : String(addr?.city || '').trim();
+  const fallback = formatDeliveryAddressLine(raw);
+  const line = [street, city, pin].filter(Boolean).join(', ') || fallback;
+  if (!line) {
+    return {
+      delivery_location: null,
+      delivery_city: null,
+      delivery_pincode: null,
+      delivery_address: null,
+    };
+  }
+  return {
+    delivery_location: line,
+    delivery_city: city || null,
+    delivery_pincode: pin || null,
+    delivery_address: street || line,
+  };
+}
+
+function locationSortKey(lap) {
+  return String(lap.delivery_location || 'zzz_unknown').toLowerCase();
+}
+
 function mapActiveAssetRow(r) {
   const podFiles = [
     ...podFromFilePath(r.pod_file_path),
@@ -1645,6 +1681,7 @@ function mapActiveAssetRow(r) {
     lifecycle: 'active',
     dc_pdf_path: r.dc_pdf_path || null,
     pod_files: [...new Set(podFiles)],
+    ...mapDeliveryLocation(r.customer_shipping_address),
   };
 }
 
@@ -1673,6 +1710,7 @@ function mapReturnedAssetRow(r) {
     status: 'returned',
     lifecycle: 'returned',
     pod_files: [...new Set(podFiles)],
+    ...mapDeliveryLocation(r.customer_shipping_address),
   };
 }
 
@@ -1851,7 +1889,8 @@ const INVENTORY_JOIN_SQL = `
 const POD_JOIN_SQL = `
   LEFT JOIN LATERAL (
     SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url,
-           dcl.pdf_path, dcl.delivery_completed_at, dcl.dispatched_at
+           dcl.pdf_path, dcl.delivery_completed_at, dcl.dispatched_at,
+           dcl.customer_shipping_address
     FROM delivery_challan_lines dcl
     WHERE dcl.dc_number = vsn.current_dc_number
       AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
@@ -1946,7 +1985,8 @@ const ACTIVE_SELECT_SQL = `
          pod.pod_image_url AS pod_image_url,
          pod.pod_photo_url AS pod_photo_url,
          pod.esign_url AS pod_esign_url,
-         pod.pdf_path AS dc_pdf_path
+         pod.pdf_path AS dc_pdf_path,
+         pod.customer_shipping_address AS customer_shipping_address
 `;
 
 const RETURNED_FROM_SQL = `
@@ -1969,7 +2009,8 @@ const RETURNED_FROM_SQL = `
     LIMIT 1
   ) vsn ON TRUE
   LEFT JOIN LATERAL (
-    SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at
+    SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at,
+           dcl.customer_shipping_address
       FROM delivery_challan_lines dcl
       CROSS JOIN LATERAL jsonb_array_elements_text(
         CASE WHEN jsonb_typeof(dcl.serial_number) = 'array' THEN dcl.serial_number ELSE '[]'::jsonb END
@@ -2000,6 +2041,7 @@ const RETURNED_SELECT_SQL = `
          rl.created_at,
          ${RETURNED_AT_SQL} AS returned_at,
          outbound.delivered_at AS delivered_at,
+         outbound.customer_shipping_address AS customer_shipping_address,
          COALESCE(sti.ttspl_id, sti.unique_serial_number, vsn.inventory_asset_code,
                   vsn.extra->>'ttspl_id', NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id,
          COALESCE(sti.serial_number, vsn.serial_number,
@@ -2803,9 +2845,17 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
     const customerName = custRes.rows[0]?.customer_name || `Customer ${customerId}`;
 
     const EXPORT_LIMIT = 20000;
+    const XLSX = require('xlsx');
+
     const result = lifecycle === 'returned'
       ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 })
       : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 });
+
+    const rows = [...result.rows].sort((a, b) => {
+      const loc = locationSortKey(a).localeCompare(locationSortKey(b));
+      if (loc !== 0) return loc;
+      return String(a.ttspl_id || '').localeCompare(String(b.ttspl_id || ''));
+    });
 
     let sheetRows;
     let columnOrder;
@@ -2814,15 +2864,16 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
     if (lifecycle === 'returned') {
       sheetName = 'Returned Laptops';
       columnOrder = [
-        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config',
+        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Location',
         'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'Status',
       ];
-      sheetRows = result.rows.map((lap, idx) => ({
+      sheetRows = rows.map((lap, idx) => ({
         'S.No': idx + 1,
         'TTSPL ID': lap.ttspl_id || '',
         'Serial No': lap.serial_number || '',
         Model: lap.model_name || '',
         Config: assetConfigLine(lap),
+        Location: lap.delivery_location || '',
         'Return DC': lap.dc_number || '',
         'Delivered to Customer': fmtExcelCalendarDate(lap.delivered_at),
         'Returned from Customer': fmtExcelCalendarDate(lap.returned_at),
@@ -2832,16 +2883,17 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
     } else {
       sheetName = 'Rented Laptops';
       columnOrder = [
-        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity',
+        'S.No', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'Location',
         'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'Status',
       ];
-      sheetRows = result.rows.map((lap, idx) => ({
+      sheetRows = rows.map((lap, idx) => ({
         'S.No': idx + 1,
         'TTSPL ID': lap.ttspl_id || '',
         'Serial No': lap.serial_number || '',
         Model: lap.model_name || '',
         Config: assetConfigLine(lap),
         Entity: entityLabel(lap.entity_code),
+        Location: lap.delivery_location || '',
         'DC Number': lap.dc_number || '',
         'Dispatch Date': fmtExcelCalendarDate(lap.dispatch_date),
         'Delivered Date': fmtExcelCalendarDate(lap.delivered_at),
@@ -2849,8 +2901,6 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
         Status: lap.status || 'rented',
       }));
     }
-
-    const XLSX = require('xlsx');
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(sheetRows, { header: columnOrder });
     XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
