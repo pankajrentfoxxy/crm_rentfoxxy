@@ -1,8 +1,34 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { vrdcRoute } = require('../middleware/dcNumberRoutes');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const ctrl = require('../controllers/vendorRepairController');
+
+const vrdcEwayStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const safeDc = String(req.params.dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+    const dir = path.join(__dirname, '../uploads/vrdc-eway', safeDc);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.pdf';
+    cb(null, `eway_${Date.now()}${ext}`);
+  },
+});
+const uploadVrdcEwayDoc = multer({
+  storage: vrdcEwayStorage,
+  limits: multerLimits({ files: 1 }),
+  fileFilter: (req, file, cb) => {
+    const ok = /^(image\/(jpeg|jpg|png|webp|gif)|application\/pdf)$/i.test(file.mimetype);
+    if (!ok) return cb(new Error('Only PDF or image files allowed'));
+    cb(null, true);
+  },
+});
 
 const invView = checkSectionPermission('inventory_management', 'view');
 /** Laptop Vendor Repair DC list/detail/PDF — dedicated RBAC (+ legacy floor viewers). */
@@ -34,7 +60,7 @@ router.post(...vrdcRoute('/mark-delivered-to-vendor', ctrl.requireVendorRepairDi
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireVendorRepairDispatch, ctrl.signDispatch));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));
 router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.sendAccountsVrdcEwayMail));
-router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, ctrl.uploadVrdcEway));
+router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, wrapMulter(uploadVrdcEwayDoc.single('eway_bill_pdf')), ctrl.uploadVrdcEway));
 router.get(...vrdcRoute('', vendorRepairView, ctrl.getVendorRepairDc));
 
 router.post('/inventory/erp/:serialId/receive-back', ctrl.requireWarehouse, ctrl.receiveErpRepairBack);

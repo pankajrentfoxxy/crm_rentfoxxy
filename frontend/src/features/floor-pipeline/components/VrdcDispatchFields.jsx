@@ -26,6 +26,9 @@ export function validateVrdcDispatch(shipBy, fields) {
   if (shipBy === 'by_hand' && !fields.delivery_person_id) {
     return 'Select a delivery person for Inhouse dispatch';
   }
+  if (shipBy === 'by_hand' && !String(fields.vehicle_number || '').trim()) {
+    return 'Vehicle number is required for Inhouse / delivery boy dispatch';
+  }
   if (shipBy === 'by_vendor_pickup') {
     if (!fields.vendor_pickup_person?.trim()) {
       return 'Vendor pickup person name is required';
@@ -118,7 +121,7 @@ export default function VrdcDispatchFields({
       ) : null}
 
       {shipBy === 'by_hand' ? (
-        <div>
+        <div className="space-y-2">
           <select
             className="w-full border rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
             value={fields.delivery_person_id || ''}
@@ -133,6 +136,17 @@ export default function VrdcDispatchFields({
               </option>
             ))}
           </select>
+          <input
+            className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase disabled:bg-slate-50"
+            placeholder="Vehicle number *"
+            value={fields.vehicle_number || ''}
+            onChange={(e) => onFieldsChange({
+              ...fields,
+              vehicle_number: e.target.value.toUpperCase().replace(/\s+/g, ''),
+            })}
+            disabled={disabled}
+            maxLength={20}
+          />
           {!deliveryTechnicians.length ? (
             <p className="text-xs text-amber-600 mt-1">No delivery technicians found. Add via Delivery Technicians.</p>
           ) : null}

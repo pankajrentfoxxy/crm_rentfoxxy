@@ -192,6 +192,7 @@ export default function VendorRepairDcDetailPage() {
       porter_order_id: head.porter_order_id || '',
       porter_booking_url: head.porter_booking_url || '',
       delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
+      vehicle_number: head.vehicle_number || '',
       vendor_pickup_person: head.vendor_pickup_person || '',
       vendor_pickup_mobile: head.vendor_pickup_mobile || '',
     });
@@ -877,7 +878,11 @@ export default function VendorRepairDcDetailPage() {
               </p>
             )}
             {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && (
-              <p>Delivery person: {dc.delivery_person_name || '—'}{dc.delivery_person_phone ? ` · ${dc.delivery_person_phone}` : ''}</p>
+              <p>
+                Delivery person: {dc.delivery_person_name || '—'}
+                {dc.delivery_person_phone ? ` · ${dc.delivery_person_phone}` : ''}
+                {dc.vehicle_number ? ` · Vehicle: ${dc.vehicle_number}` : ''}
+              </p>
             )}
             {(dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup') && (
               <p>

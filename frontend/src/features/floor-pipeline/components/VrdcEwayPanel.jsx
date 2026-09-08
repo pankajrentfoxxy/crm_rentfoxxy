@@ -2,6 +2,13 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatDate, formatDateTime } from '../../sales-pipeline/salesPipelineUtils';
 import { sendAccountsVrdcEwayMail, uploadVrdcEway } from '../vendorRepairApi';
+import { getBackendOrigin } from '../../../utils/api';
+
+function docUrl(path) {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+}
 
 export default function VrdcEwayPanel({
   dcNumber,
@@ -18,6 +25,7 @@ export default function VrdcEwayPanel({
 
   const [ewayNumber, setEwayNumber] = useState(c.eway_bill_number || '');
   const [ewayDate, setEwayDate] = useState(c.eway_bill_date ? String(c.eway_bill_date).slice(0, 10) : '');
+  const [ewayFile, setEwayFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [sendingMail, setSendingMail] = useState(false);
 
@@ -28,7 +36,7 @@ export default function VrdcEwayPanel({
       toast.error('Dispatch mail is not configured on the server (DISPATCH_SMTP_*)');
       return;
     }
-    if (!window.confirm(`Send E-way Bill request to ${c.accounts_email || 'Accounts'}?`)) return;
+    if (!window.confirm(`Send E-way Bill request to ${c.accounts_email || 'Accounts'}? The VRDC PDF will be attached.`)) return;
     setSendingMail(true);
     try {
       const res = await sendAccountsVrdcEwayMail(dcNumber);
@@ -51,13 +59,19 @@ export default function VrdcEwayPanel({
       toast.error('E-way Bill number is required');
       return;
     }
+    if (!ewayFile && !c.eway_bill_pdf_path) {
+      toast.error('E-Way Bill document (image or PDF) is required');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('eway_bill_number', ewayNumber.trim());
+    if (ewayDate) fd.append('eway_bill_date', ewayDate);
+    if (ewayFile) fd.append('eway_bill_pdf', ewayFile);
     setSaving(true);
     try {
-      const res = await uploadVrdcEway(dcNumber, {
-        eway_bill_number: ewayNumber.trim(),
-        eway_bill_date: ewayDate || undefined,
-      });
+      const res = await uploadVrdcEway(dcNumber, fd);
       toast.success(res.data?.message || 'E-way Bill saved — VRDC download enabled');
+      setEwayFile(null);
       onReload?.();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Save failed');
@@ -88,6 +102,7 @@ export default function VrdcEwayPanel({
           <p className="text-sm text-gray-600">
             Send E-way Bill request to <strong>{c.accounts_email || 'Accounts'}</strong>
             {c.dispatch_mail_from ? <> from <strong>{c.dispatch_mail_from}</strong></> : null}.
+            {' '}The generated VRDC PDF is attached automatically.
           </p>
           {c.accounts_notified_at && (
             <p className="text-xs text-emerald-700">Sent {formatDateTime(c.accounts_notified_at)}</p>
@@ -110,6 +125,11 @@ export default function VrdcEwayPanel({
         <section className="bg-white border rounded-xl p-5 text-sm space-y-2">
           <p><span className="text-gray-500">E-way Bill:</span> {c.eway_bill_number || '—'}</p>
           {c.eway_bill_date && <p><span className="text-gray-500">Date:</span> {formatDate(c.eway_bill_date)}</p>}
+          {c.eway_bill_pdf_path && (
+            <a href={docUrl(c.eway_bill_pdf_path)} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
+              View E-Way Bill document
+            </a>
+          )}
           {c.eway_bill_uploaded_at && (
             <p className="text-xs text-gray-500">Added {formatDateTime(c.eway_bill_uploaded_at)}</p>
           )}
@@ -137,6 +157,22 @@ export default function VrdcEwayPanel({
               onChange={(e) => setEwayDate(e.target.value)}
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              E-Way Bill image / PDF {c.eway_bill_pdf_path ? '(optional update)' : '*'}
+            </label>
+            <input
+              type="file"
+              accept=".pdf,image/*"
+              className="w-full text-sm"
+              onChange={(e) => setEwayFile(e.target.files?.[0] || null)}
+            />
+            {c.eway_bill_pdf_path ? (
+              <p className="mt-1 text-xs text-gray-500">A document is already on file. Upload again only to replace it.</p>
+            ) : (
+              <p className="mt-1 text-xs text-gray-500">Upload the GST portal E-Way Bill as proof (PDF or image).</p>
+            )}
+          </div>
           <button
             type="button"
             disabled={saving}
@@ -148,7 +184,7 @@ export default function VrdcEwayPanel({
         </section>
       ) : !uploaded ? (
         <section className="bg-white border rounded-xl p-5 text-sm text-gray-600">
-          Accounts Team will enter the E-way Bill. After it is saved, VRDC download unlocks.
+          Accounts Team will enter the E-way Bill and upload the proof document. After it is saved, VRDC download unlocks.
         </section>
       ) : null}
     </div>

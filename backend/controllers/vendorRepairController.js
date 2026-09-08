@@ -132,6 +132,7 @@ exports.createOutForRepair = async (req, res) => {
       porter_order_id: req.body.porter_order_id || req.body.porterOrderId,
       porter_booking_url: req.body.porter_booking_url || req.body.porterBookingUrl,
       delivery_person_id: req.body.delivery_person_id || req.body.deliveryPersonId,
+      vehicle_number: req.body.vehicle_number || req.body.vehicleNumber,
       vendor_pickup_person: req.body.vendor_pickup_person || req.body.vendorPickupPerson,
       vendor_pickup_mobile: req.body.vendor_pickup_mobile || req.body.vendorPickupMobile,
       actorUserId: req.user.user_id,
@@ -527,13 +528,20 @@ exports.sendAccountsVrdcEwayMail = async (req, res) => {
   }
 };
 
+function relativeUploadPath(absPath) {
+  const rel = path.relative(path.join(__dirname, '..'), absPath).replace(/\\/g, '/');
+  return rel.startsWith('uploads/') ? rel : `uploads/${rel.replace(/^uploads\//, '')}`;
+}
+
 exports.uploadVrdcEway = async (req, res) => {
   const dcNumber = req.params.dcNumber;
   try {
+    const file = req.file || req.files?.eway_bill_pdf?.[0] || req.files?.eway_bill_pdf || null;
     const saved = await vrdcEway.saveVrdcEwayBill({
       dcNumber,
       ewayBillNumber: req.body?.eway_bill_number || req.body?.ewayBillNumber,
       ewayBillDate: req.body?.eway_bill_date || req.body?.ewayBillDate,
+      ewayBillPdfPath: file?.path ? relativeUploadPath(file.path) : undefined,
       userId: req.user?.user_id,
     });
 
