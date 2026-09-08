@@ -186,6 +186,9 @@ function validateDispatchDetails(details = {}) {
       label: 'Vendor pickup mobile',
     });
     if (!mobileResult.ok) throw new Error(mobileResult.error);
+    if (!normalizeVehicleNumber(details.vehicleNumber || details.vehicle_number)) {
+      throw new Error('Vehicle number is required for Vendor Pickup');
+    }
   }
 }
 
@@ -223,7 +226,7 @@ function dispatchPayloadFromBody(body) {
     vehicleNumber: body.vehicle_number || body.vehicleNumber,
   });
   const vendorPickup = vendorPickupFieldsFromBody(body, shipBy);
-  const vehicleNumber = shipBy === 'by_hand'
+  const vehicleNumber = (shipBy === 'by_hand' || shipBy === 'by_vendor_pickup')
     ? normalizeVehicleNumber(body.vehicle_number || body.vehicleNumber) || null
     : null;
   return {

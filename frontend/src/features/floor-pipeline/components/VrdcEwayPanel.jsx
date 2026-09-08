@@ -158,20 +158,21 @@ export default function VrdcEwayPanel({
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              E-Way Bill image / PDF {c.eway_bill_pdf_path ? '(optional update)' : '*'}
+            <label className="block text-xs font-semibold text-gray-800 mb-1">
+              Upload E-Way Bill image / PDF {c.eway_bill_pdf_path ? '(optional replace)' : '*'}
             </label>
-            <input
-              type="file"
-              accept=".pdf,image/*"
-              className="w-full text-sm"
-              onChange={(e) => setEwayFile(e.target.files?.[0] || null)}
-            />
-            {c.eway_bill_pdf_path ? (
-              <p className="mt-1 text-xs text-gray-500">A document is already on file. Upload again only to replace it.</p>
-            ) : (
-              <p className="mt-1 text-xs text-gray-500">Upload the GST portal E-Way Bill as proof (PDF or image).</p>
-            )}
+            <label className="flex flex-col items-start gap-2 w-full border-2 border-dashed border-blue-300 bg-blue-50 rounded-lg px-4 py-3 cursor-pointer hover:bg-blue-100">
+              <span className="text-sm font-semibold text-blue-800">Choose image or PDF</span>
+              <span className="text-xs text-blue-700">
+                {ewayFile ? ewayFile.name : (c.eway_bill_pdf_path ? 'A document is already saved. Pick a new file to replace it.' : 'JPG, PNG, or PDF — required as proof')}
+              </span>
+              <input
+                type="file"
+                accept=".pdf,image/jpeg,image/png,image/webp,image/gif"
+                className="text-sm"
+                onChange={(e) => setEwayFile(e.target.files?.[0] || null)}
+              />
+            </label>
           </div>
           <button
             type="button"

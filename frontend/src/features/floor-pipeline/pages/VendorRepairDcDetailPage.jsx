@@ -888,6 +888,7 @@ export default function VendorRepairDcDetailPage() {
               <p>
                 Collector: {dc.vendor_pickup_person || '—'}
                 {dc.vendor_pickup_mobile ? ` · ${dc.vendor_pickup_mobile}` : ''}
+                {dc.vehicle_number ? ` · Vehicle: ${dc.vehicle_number}` : ''}
               </p>
             )}
             {dc.vendor_delivered_at ? (

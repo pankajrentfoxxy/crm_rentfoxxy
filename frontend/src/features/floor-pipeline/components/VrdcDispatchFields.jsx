@@ -35,6 +35,9 @@ export function validateVrdcDispatch(shipBy, fields) {
     }
     const mobileErr = indianMobileError(fields.vendor_pickup_mobile, { label: 'Vendor pickup mobile' });
     if (mobileErr) return mobileErr;
+    if (!String(fields.vehicle_number || '').trim()) {
+      return 'Vehicle number is required for Vendor Pickup';
+    }
   }
   return null;
 }
@@ -179,6 +182,17 @@ export default function VrdcDispatchFields({
               inputMode="numeric"
             />
           </div>
+          <input
+            className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase disabled:bg-slate-50"
+            placeholder="Vehicle number *"
+            value={fields.vehicle_number || ''}
+            onChange={(e) => onFieldsChange({
+              ...fields,
+              vehicle_number: e.target.value.toUpperCase().replace(/\s+/g, ''),
+            })}
+            disabled={disabled}
+            maxLength={20}
+          />
         </div>
       ) : null}
     </div>

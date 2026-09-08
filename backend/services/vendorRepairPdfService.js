@@ -539,7 +539,11 @@ async function generateVendorRepairPdf(dcNumber) {
     y += 12;
     doc.text(`Vendor GSTIN: ${dc.vendor_gst_number || '—'}`, 40, y);
     y += 12;
-    if (dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse' || dc.vehicle_number) {
+    if (
+      dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse'
+      || dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup'
+      || dc.vehicle_number
+    ) {
       const techName = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ');
       if (techName) {
         doc.text(`Delivery person: ${techName}`, 40, y);
@@ -834,7 +838,11 @@ async function generatePartVendorRepairPdf(dcNumber) {
       doc.text(`Delivery technician: ${techName}`, 40, y);
       y += 12;
     }
-    if (dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse' || dc.vehicle_number) {
+    if (
+      dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse'
+      || dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup'
+      || dc.vehicle_number
+    ) {
       doc.text(`Vehicle number: ${dc.vehicle_number || '—'}`, 40, y);
       y += 12;
     }
