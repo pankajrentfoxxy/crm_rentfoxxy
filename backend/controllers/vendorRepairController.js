@@ -132,6 +132,8 @@ exports.createOutForRepair = async (req, res) => {
       porter_order_id: req.body.porter_order_id || req.body.porterOrderId,
       porter_booking_url: req.body.porter_booking_url || req.body.porterBookingUrl,
       delivery_person_id: req.body.delivery_person_id || req.body.deliveryPersonId,
+      vendor_pickup_person: req.body.vendor_pickup_person || req.body.vendorPickupPerson,
+      vendor_pickup_mobile: req.body.vendor_pickup_mobile || req.body.vendorPickupMobile,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
       actorRole: req.user.role,

@@ -106,9 +106,10 @@ export function formatVrdcProductLines(item) {
 
 export function vendorRepairDispatchModeLabel(shipBy, dispatchMode) {
   const v = shipBy || dispatchMode;
-  if (v === 'by_hand' || v === 'inhouse') return 'By Hand';
-  if (v === 'by_courier' || v === 'courier') return 'By Courier';
-  if (v === 'by_porter' || v === 'porter') return 'By Porter';
+  if (v === 'by_hand' || v === 'inhouse') return 'Inhouse';
+  if (v === 'by_courier' || v === 'courier') return 'Courier';
+  if (v === 'by_porter' || v === 'porter') return 'Porter';
+  if (v === 'by_vendor_pickup' || v === 'vendor_pickup') return 'Vendor Pickup';
   return '—';
 }
 

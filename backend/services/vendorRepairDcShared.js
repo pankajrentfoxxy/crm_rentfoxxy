@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { stripBrandFromModel } = require('../utils/assetConfigNormalize');
+const { parseIndianMobile } = require('../utils/phoneValidation');
 
 const EWAY_VALUE_THRESHOLD = 50000;
 
@@ -129,16 +130,19 @@ function normalizeShipBy(shipBy, dispatchMode) {
   if (by === 'by_hand' || by === 'inhouse' || by === 'hand') return 'by_hand';
   if (by === 'by_courier' || by === 'courier') return 'by_courier';
   if (by === 'by_porter' || by === 'porter') return 'by_porter';
+  if (by === 'by_vendor_pickup' || by === 'vendor_pickup') return 'by_vendor_pickup';
   const mode = String(dispatchMode || '').trim().toLowerCase();
   if (mode === 'inhouse' || mode === 'by_hand' || mode === 'hand') return 'by_hand';
   if (mode === 'porter' || mode === 'by_porter') return 'by_porter';
   if (mode === 'courier' || mode === 'by_courier') return 'by_courier';
+  if (mode === 'vendor_pickup' || mode === 'by_vendor_pickup') return 'by_vendor_pickup';
   return null;
 }
 
 function shipByToDispatchMode(shipBy) {
   if (shipBy === 'by_hand') return 'inhouse';
   if (shipBy === 'by_porter') return 'porter';
+  if (shipBy === 'by_vendor_pickup') return 'vendor_pickup';
   if (shipBy === 'by_courier' || shipBy === 'courier') return 'courier';
   return null;
 }
@@ -154,7 +158,7 @@ function validateDispatchDetails(details = {}) {
   const deliveryPersonId = rawDeliveryPersonId != null && String(rawDeliveryPersonId).trim() !== ''
     ? Number(rawDeliveryPersonId)
     : null;
-  if (!shipBy) throw new Error('Send mode is required (By Hand, Courier, or Porter)');
+  if (!shipBy) throw new Error('Send mode is required (Inhouse, Courier, Porter, or Vendor Pickup)');
   if (shipBy === 'by_courier' && !String(courierName || '').trim()) {
     throw new Error('Courier name is required for By Courier dispatch');
   }
@@ -164,6 +168,35 @@ function validateDispatchDetails(details = {}) {
   if (shipBy === 'by_hand' && !deliveryPersonId) {
     throw new Error('Delivery person is required for By Hand dispatch');
   }
+  const vendorPickupPerson = details.vendorPickupPerson || details.vendor_pickup_person;
+  const vendorPickupMobile = details.vendorPickupMobile ?? details.vendor_pickup_mobile;
+  if (shipBy === 'by_vendor_pickup') {
+    if (!String(vendorPickupPerson || '').trim()) {
+      throw new Error('Vendor pickup person name is required');
+    }
+    const mobileResult = parseIndianMobile(vendorPickupMobile, {
+      required: true,
+      label: 'Vendor pickup mobile',
+    });
+    if (!mobileResult.ok) throw new Error(mobileResult.error);
+  }
+}
+
+function vendorPickupFieldsFromBody(body, shipBy) {
+  if (shipBy !== 'by_vendor_pickup') {
+    return { vendor_pickup_person: null, vendor_pickup_mobile: null };
+  }
+  const person = String(body.vendor_pickup_person || body.vendorPickupPerson || '').trim();
+  const mobileResult = parseIndianMobile(
+    body.vendor_pickup_mobile || body.vendorPickupMobile,
+    { required: true, label: 'Vendor pickup mobile' },
+  );
+  if (!person) throw new Error('Vendor pickup person name is required');
+  if (!mobileResult.ok) throw new Error(mobileResult.error);
+  return {
+    vendor_pickup_person: person,
+    vendor_pickup_mobile: mobileResult.value,
+  };
 }
 
 function dispatchPayloadFromBody(body) {
@@ -178,7 +211,10 @@ function dispatchPayloadFromBody(body) {
     courierName: body.courier_name || body.courierName,
     porterTrackingId: body.porter_tracking_id || body.porterTrackingId,
     deliveryPersonId,
+    vendorPickupPerson: body.vendor_pickup_person || body.vendorPickupPerson,
+    vendorPickupMobile: body.vendor_pickup_mobile || body.vendorPickupMobile,
   });
+  const vendorPickup = vendorPickupFieldsFromBody(body, shipBy);
   return {
     ship_by: shipBy,
     dispatch_mode: dispatchMode,
@@ -189,6 +225,8 @@ function dispatchPayloadFromBody(body) {
     porter_order_id: shipBy === 'by_porter' ? (body.porter_order_id || body.porterOrderId || '').trim() || null : null,
     porter_booking_url: shipBy === 'by_porter' ? (body.porter_booking_url || body.porterBookingUrl || '').trim() || null : null,
     delivery_person_id: shipBy === 'by_hand' && deliveryPersonId ? Number(deliveryPersonId) : null,
+    vendor_pickup_person: vendorPickup.vendor_pickup_person,
+    vendor_pickup_mobile: vendorPickup.vendor_pickup_mobile,
   };
 }
 

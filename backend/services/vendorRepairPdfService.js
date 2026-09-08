@@ -447,9 +447,12 @@ function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
 function dispatchTagsForDc(dc) {
   const tags = [];
   const shipBy = dc.ship_by || dc.dispatch_mode;
-  if (shipBy === 'by_hand' || shipBy === 'inhouse') tags.push('By Hand');
+  if (shipBy === 'by_hand' || shipBy === 'inhouse') tags.push('Inhouse');
   else if (shipBy === 'by_courier' || shipBy === 'courier') tags.push('By Courier');
   else if (shipBy === 'by_porter' || shipBy === 'porter') tags.push('By Porter');
+  else if (shipBy === 'by_vendor_pickup' || shipBy === 'vendor_pickup') tags.push('Vendor Pickup');
+  if (dc.vendor_pickup_person) tags.push(dc.vendor_pickup_person);
+  if (dc.vendor_pickup_mobile) tags.push(dc.vendor_pickup_mobile);
   const person = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ').trim();
   if (person) tags.push(person);
   if (dc.courier_name) tags.push(dc.courier_name);

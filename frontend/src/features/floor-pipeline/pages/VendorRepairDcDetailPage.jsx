@@ -178,7 +178,11 @@ export default function VendorRepairDcDetailPage() {
   const syncDispatchFromDc = useCallback((head) => {
     if (!head) return;
     const mode = head.ship_by
-      || (head.dispatch_mode === 'inhouse' ? 'by_hand' : head.dispatch_mode === 'porter' ? 'by_porter' : head.dispatch_mode === 'courier' ? 'by_courier' : '');
+      || (head.dispatch_mode === 'inhouse' ? 'by_hand'
+        : head.dispatch_mode === 'porter' ? 'by_porter'
+          : head.dispatch_mode === 'courier' ? 'by_courier'
+            : head.dispatch_mode === 'vendor_pickup' ? 'by_vendor_pickup'
+              : '');
     setShipBy(mode || '');
     setDispatchFields({
       courier_name: head.courier_name || '',
@@ -188,6 +192,8 @@ export default function VendorRepairDcDetailPage() {
       porter_order_id: head.porter_order_id || '',
       porter_booking_url: head.porter_booking_url || '',
       delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
+      vendor_pickup_person: head.vendor_pickup_person || '',
+      vendor_pickup_mobile: head.vendor_pickup_mobile || '',
     });
   }, []);
 
@@ -342,6 +348,7 @@ export default function VendorRepairDcDetailPage() {
     if (dc.dispatch_mode === 'inhouse') return 'by_hand';
     if (dc.dispatch_mode === 'porter') return 'by_porter';
     if (dc.dispatch_mode === 'courier') return 'by_courier';
+    if (dc.dispatch_mode === 'vendor_pickup') return 'by_vendor_pickup';
     return '';
   }, [shipBy, dc]);
 
@@ -872,6 +879,12 @@ export default function VendorRepairDcDetailPage() {
             {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && (
               <p>Delivery person: {dc.delivery_person_name || '—'}{dc.delivery_person_phone ? ` · ${dc.delivery_person_phone}` : ''}</p>
             )}
+            {(dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup') && (
+              <p>
+                Collector: {dc.vendor_pickup_person || '—'}
+                {dc.vendor_pickup_mobile ? ` · ${dc.vendor_pickup_mobile}` : ''}
+              </p>
+            )}
             {dc.vendor_delivered_at ? (
               <p className="text-green-700 font-medium">Delivered to vendor: {fmtVendorRepairDate(dc.vendor_delivered_at)}</p>
             ) : dc.dispatched_at ? (
@@ -940,7 +953,7 @@ export default function VendorRepairDcDetailPage() {
             <>
               {!effectiveShipBy ? (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Select send mode above (By Hand, Courier, or Porter) before confirming dispatch.
+                  Select send mode above (Inhouse, Courier, Porter, or Vendor Pickup) before confirming dispatch.
                 </p>
               ) : null}
               <button

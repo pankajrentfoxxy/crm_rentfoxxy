@@ -603,6 +603,8 @@ async function createOutForRepairDc(client, {
   porter_order_id,
   porter_booking_url,
   delivery_person_id,
+  vendor_pickup_person,
+  vendor_pickup_mobile,
   actorUserId,
   actorName,
   actorRole,
@@ -626,6 +628,8 @@ async function createOutForRepairDc(client, {
     porter_order_id,
     porter_booking_url,
     delivery_person_id,
+    vendor_pickup_person,
+    vendor_pickup_mobile,
   });
 
   const tRes = await client.query(
@@ -717,8 +721,9 @@ async function createOutForRepairDc(client, {
         items_dispatched_count, items_received_count,
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
         porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
+        vendor_pickup_person, vendor_pickup_mobile,
         eway_bill_number, eway_bill_date, item_domain
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'laptop')`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'laptop')`,
     [
       dcNumber,
       vendorId || null,
@@ -742,6 +747,8 @@ async function createOutForRepairDc(client, {
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
       eway.eway_bill_number,
       eway.eway_bill_date,
     ]
@@ -1047,6 +1054,8 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
         porter_order_id = $8,
         porter_booking_url = $9,
         delivery_person_id = $10,
+        vendor_pickup_person = $11,
+        vendor_pickup_mobile = $12,
         updated_at = NOW()
       WHERE dc_number = $1`,
     [
@@ -1060,6 +1069,8 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
     ]
   );
   return { dc_number: dcNumber, ...dispatch };
@@ -1233,9 +1244,11 @@ async function signDispatchDc(client, {
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vendor_pickup_person: head.vendor_pickup_person,
+      vendor_pickup_mobile: head.vendor_pickup_mobile,
     };
   } else {
-    throw new Error('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
+    throw new Error('Send mode is required before dispatch (select Inhouse, Courier, Porter, or Vendor Pickup)');
   }
 
   const whUrl = warehouseEsign ? saveEsign('wh_dispatch', dcNumber, warehouseEsign) : head.warehouse_dispatch_esign_url;
@@ -1263,6 +1276,8 @@ async function signDispatchDc(client, {
         porter_booking_url = $11,
         delivery_person_id = $12,
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
+        vendor_pickup_person = $16,
+        vendor_pickup_mobile = $17,
         status = 'dispatch_ready',
         items_dispatched_count = (SELECT COUNT(*)::int FROM vendor_repair_dc_items WHERE dc_number = $1),
         updated_at = NOW()
@@ -1283,6 +1298,8 @@ async function signDispatchDc(client, {
       podPath,
       whSignerName,
       vendorSignerName,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
     ]
   );
 

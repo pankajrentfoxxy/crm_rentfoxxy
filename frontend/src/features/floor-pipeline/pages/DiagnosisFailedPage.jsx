@@ -253,6 +253,8 @@ export default function DiagnosisFailedPage() {
         porter_order_id: dispatchFields.porter_order_id,
         porter_booking_url: dispatchFields.porter_booking_url,
         delivery_person_id: dispatchFields.delivery_person_id || undefined,
+        vendor_pickup_person: dispatchFields.vendor_pickup_person,
+        vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile,
       });
       toast.success(data.message || (data.eway_required
         ? 'VRDC created — E-way Bill required before PDF download'

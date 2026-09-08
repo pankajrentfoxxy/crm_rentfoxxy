@@ -1,14 +1,17 @@
 import React from 'react';
+import { formatIndianMobileInput, indianMobileError } from '../../../utils/phoneValidation';
 
 const SHIP_OPTIONS = [
-  { value: 'by_hand', label: 'By Hand' },
-  { value: 'by_courier', label: 'By Courier' },
-  { value: 'by_porter', label: 'By Porter' },
+  { value: 'by_hand', label: 'Inhouse' },
+  { value: 'by_courier', label: 'Courier' },
+  { value: 'by_porter', label: 'Porter' },
+  { value: 'by_vendor_pickup', label: 'Vendor Pickup' },
 ];
 
 export function shipByToDispatchMode(shipBy) {
   if (shipBy === 'by_hand') return 'inhouse';
   if (shipBy === 'by_porter') return 'porter';
+  if (shipBy === 'by_vendor_pickup') return 'vendor_pickup';
   return 'courier';
 }
 
@@ -21,7 +24,14 @@ export function validateVrdcDispatch(shipBy, fields) {
     return 'Porter tracking / booking ID is required';
   }
   if (shipBy === 'by_hand' && !fields.delivery_person_id) {
-    return 'Select a delivery person for By Hand dispatch';
+    return 'Select a delivery person for Inhouse dispatch';
+  }
+  if (shipBy === 'by_vendor_pickup') {
+    if (!fields.vendor_pickup_person?.trim()) {
+      return 'Vendor pickup person name is required';
+    }
+    const mobileErr = indianMobileError(fields.vendor_pickup_mobile, { label: 'Vendor pickup mobile' });
+    if (mobileErr) return mobileErr;
   }
   return null;
 }
@@ -126,6 +136,35 @@ export default function VrdcDispatchFields({
           {!deliveryTechnicians.length ? (
             <p className="text-xs text-amber-600 mt-1">No delivery technicians found. Add via Delivery Technicians.</p>
           ) : null}
+        </div>
+      ) : null}
+
+      {shipBy === 'by_vendor_pickup' ? (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-600 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            Vendor will send their own person to collect from the warehouse.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              className="border rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
+              placeholder="Collector name *"
+              value={fields.vendor_pickup_person || ''}
+              onChange={set('vendor_pickup_person')}
+              disabled={disabled}
+            />
+            <input
+              className="border rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
+              placeholder="Collector mobile *"
+              value={fields.vendor_pickup_mobile || ''}
+              onChange={(e) => onFieldsChange({
+                ...fields,
+                vendor_pickup_mobile: formatIndianMobileInput(e.target.value),
+              })}
+              disabled={disabled}
+              maxLength={10}
+              inputMode="numeric"
+            />
+          </div>
         </div>
       ) : null}
     </div>

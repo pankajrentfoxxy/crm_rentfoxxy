@@ -169,9 +169,11 @@ async function dispatchScrapChallan(client, {
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vendor_pickup_person: head.vendor_pickup_person,
+      vendor_pickup_mobile: head.vendor_pickup_mobile,
     };
   } else {
-    throw new Error('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
+    throw new Error('Send mode is required before dispatch (select Inhouse, Courier, Porter, or Vendor Pickup)');
   }
 
   const whUrl = warehouseEsign
@@ -212,6 +214,8 @@ async function dispatchScrapChallan(client, {
         porter_order_id = $12,
         porter_booking_url = $13,
         delivery_person_id = $14,
+        vendor_pickup_person = $17,
+        vendor_pickup_mobile = $18,
         eway_bill_number = $15,
         eway_bill_date = $16,
         status = 'dispatched',
@@ -235,6 +239,8 @@ async function dispatchScrapChallan(client, {
       dispatch.delivery_person_id,
       eway.eway_bill_number,
       eway.eway_bill_date,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
     ]
   );
 

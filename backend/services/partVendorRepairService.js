@@ -56,6 +56,8 @@ async function createPartVendorReturnDc(client, {
   porter_order_id,
   porter_booking_url,
   delivery_person_id,
+  vendor_pickup_person,
+  vendor_pickup_mobile,
   actorUserId,
   actorName,
   actorRole,
@@ -137,6 +139,8 @@ async function createPartVendorReturnDc(client, {
       porter_order_id,
       porter_booking_url,
       delivery_person_id,
+      vendor_pickup_person,
+      vendor_pickup_mobile,
     });
   } catch {
     dispatch = {
@@ -149,6 +153,8 @@ async function createPartVendorReturnDc(client, {
       porter_order_id: null,
       porter_booking_url: null,
       delivery_person_id: null,
+      vendor_pickup_person: null,
+      vendor_pickup_mobile: null,
     };
   }
 
@@ -186,8 +192,9 @@ async function createPartVendorReturnDc(client, {
         items_dispatched_count, items_received_count,
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
         porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
+        vendor_pickup_person, vendor_pickup_mobile,
         eway_bill_number, eway_bill_date, item_domain
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'part')`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'part')`,
     [
       dcNumber,
       resolvedVendorId,
@@ -211,6 +218,8 @@ async function createPartVendorReturnDc(client, {
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
       eway.eway_bill_number,
       eway.eway_bill_date,
     ]
@@ -303,9 +312,11 @@ async function dispatchPartVendorReturnDc(client, {
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vendor_pickup_person: head.vendor_pickup_person,
+      vendor_pickup_mobile: head.vendor_pickup_mobile,
     };
   } else {
-    throw new Error('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
+    throw new Error('Send mode is required before dispatch (select Inhouse, Courier, Porter, or Vendor Pickup)');
   }
 
   const whUrl = warehouseEsign ? saveEsign('wh_dispatch', dcNumber, warehouseEsign) : head.warehouse_dispatch_esign_url;
@@ -332,6 +343,8 @@ async function dispatchPartVendorReturnDc(client, {
         porter_booking_url = $11,
         delivery_person_id = $12,
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
+        vendor_pickup_person = $16,
+        vendor_pickup_mobile = $17,
         status = 'dispatched',
         dispatched_at = NOW(),
         items_dispatched_count = (
@@ -343,8 +356,9 @@ async function dispatchPartVendorReturnDc(client, {
       dcNumber, whUrl, vUrl,
       dispatch.ship_by, dispatch.dispatch_mode, dispatch.courier_name,
       dispatch.awb_number, dispatch.courier_tracking_url,
-      dispatch.porter_tracking_id, dispatch.porter_order_id, dispatch.porter_booking_url,
+      dispatch.porter_tracking_id,       dispatch.porter_order_id, dispatch.porter_booking_url,
       dispatch.delivery_person_id, podPath, whSignerName, vendorSignerName,
+      dispatch.vendor_pickup_person, dispatch.vendor_pickup_mobile,
     ]
   );
 
