@@ -5,12 +5,12 @@ import toast from 'react-hot-toast';
 import { PageHeader, StatCard, DateRangeFilter } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
-import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES, EXCLUDED_LEAD_ASSIGNEES } from '../leadConstants';
+import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
 import {
   assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, getLeadRecentActivity, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
 import {
-  followUpTone, formatLeadDate, filterAssignableUsers,
+  followUpTone, formatLeadDate,
 } from '../leadCrmUtils';
 import LeadCard from '../components/LeadCard';
 import LeadFormDrawer from '../components/LeadFormDrawer';
@@ -19,6 +19,7 @@ import LeadConfigCell from '../components/LeadConfigCell';
 import LeadListExpandPanel from '../components/LeadListExpandPanel';
 import QuickStatusUpdate from '../components/QuickStatusUpdate';
 import LeadFollowUpCell from '../components/LeadFollowUpCell';
+import LeadAssigneeCell from '../components/LeadAssigneeCell';
 import MultiSelectFilter from '../components/MultiSelectFilter';
 
 const PAGE_SIZE = 25;
@@ -44,10 +45,9 @@ export default function LeadListPage() {
     date_from: '', date_to: '', follow_up: '',
   });
 
-  const assignableUsers = useMemo(
-    () => filterAssignableUsers(users, EXCLUDED_LEAD_ASSIGNEES),
-    [users],
-  );
+  const canChangeAssignee = hasPermission('lead_assignee_change', 'edit') || hasPermission('leads', 'edit');
+
+  const assignableUsers = useMemo(() => users, [users]);
 
   const assigneeOptions = useMemo(
     () => [
@@ -134,11 +134,13 @@ export default function LeadListPage() {
   }, [expandedId, loadActivitiesFor]);
 
   useEffect(() => {
-    if (!hasPermission('leads', 'edit')) return;
+    if (!canChangeAssignee && !hasPermission('leads', 'view')) return;
     getAssignableUsers()
       .then((r) => setUsers(r.data?.users || []))
-      .catch(() => toast.error('Failed to load sales users for assignment'));
-  }, [hasPermission]);
+      .catch(() => {
+        if (canChangeAssignee) toast.error('Failed to load assignees');
+      });
+  }, [canChangeAssignee, hasPermission]);
 
   const stats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -434,7 +436,14 @@ export default function LeadListPage() {
                             <p className="text-[11px] text-gray-500 mt-1 max-w-[140px] truncate">{lead.leadStage}</p>
                           ) : null}
                         </td>
-                        <td className="p-2.5 align-top text-xs text-gray-700">{lead.assignedUser?.name || '—'}</td>
+                        <td className="p-2.5 align-top">
+                          <LeadAssigneeCell
+                            lead={lead}
+                            assignableUsers={assignableUsers}
+                            canChange={canChangeAssignee}
+                            onUpdated={refreshList}
+                          />
+                        </td>
                         <td className="p-2.5 align-top">
                           <LeadFollowUpCell lead={lead} onUpdated={refreshList} />
                         </td>
@@ -473,9 +482,8 @@ export default function LeadListPage() {
               <button type="button" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="px-3 py-1 border rounded-lg disabled:opacity-40">Next</button>
             </div>
           </div>
-          {selected.size > 0 && (
-            <PermissionGate section="leads" action="edit">
-              <div className="mt-4 p-3 rounded-xl border border-blue-100 bg-blue-50 flex flex-wrap gap-2 items-center">
+          {selected.size > 0 && canChangeAssignee && (
+            <div className="mt-4 p-3 rounded-xl border border-blue-100 bg-blue-50 flex flex-wrap gap-2 items-center">
                 <span className="text-sm">{selected.size} selected</span>
                 <select className="text-sm border rounded-lg px-2 py-1" onChange={async (e) => {
                   const uid = e.target.value;
@@ -493,8 +501,7 @@ export default function LeadListPage() {
                   <option value="">Assign to...</option>
                   {assignableUsers.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
                 </select>
-              </div>
-            </PermissionGate>
+            </div>
           )}
         </>
       )}

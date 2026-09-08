@@ -6,6 +6,7 @@ const prisma = require('../prisma/client');
 const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
+const { listLeadAssigneeUsers, filterEligibleAssigneeIds } = require('../services/leadAssigneeService');
 const {
   runLeadEmailSync,
   getLeadEmailSyncStatus,
@@ -1097,14 +1098,7 @@ exports.getSampleCsv = async (req, res) => {
 
 exports.getAssignableSalesUsers = async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT user_id, name, email, role
-         FROM users
-        WHERE role = 'sales'
-          AND active = true
-          AND COALESCE(status, 'active') = 'active'
-        ORDER BY name ASC`
-    );
+    const rows = await listLeadAssigneeUsers();
     res.json({ success: true, users: rows });
   } catch (error) {
     console.error('getAssignableSalesUsers error:', error);
@@ -1137,19 +1131,12 @@ exports.assignLeads = async (req, res) => {
       : (sales_user_id ? [parseInt(sales_user_id, 10)] : []);
 
     if (!requestedUserIds.length) {
-      return res.status(400).json({ success: false, message: 'At least one sales user is required' });
+      return res.status(400).json({ success: false, message: 'Select a sales team assignee' });
     }
 
-    const eligibleUsers = await prisma.user.findMany({
-      where: {
-        userId: { in: requestedUserIds },
-        role: 'sales'
-      },
-      select: { userId: true }
-    });
-    const eligibleUserIds = eligibleUsers.map((u) => u.userId);
+    const eligibleUserIds = await filterEligibleAssigneeIds(requestedUserIds);
     if (!eligibleUserIds.length) {
-      return res.status(400).json({ success: false, message: 'No valid sales users selected' });
+      return res.status(400).json({ success: false, message: 'Assignee must be an active sales user' });
     }
 
     const assignmentPlan = distributeAssignments(targetLeadIds, eligibleUserIds);
@@ -2556,7 +2543,14 @@ exports.updateLeadFullProfile = async (req, res) => {
 
     if (pick('assigned_user_id', 'assignedUserId') !== undefined) {
       const uid = pick('assigned_user_id', 'assignedUserId');
-      addField('assigned_user_id', uid ? parseInt(uid, 10) : null, 'assignee', existing.assignedUserId);
+      const parsed = uid ? parseInt(uid, 10) : null;
+      if (parsed) {
+        const eligible = await filterEligibleAssigneeIds([parsed]);
+        if (!eligible.length) {
+          return res.status(400).json({ success: false, message: 'Assignee must be an active sales user' });
+        }
+      }
+      addField('assigned_user_id', parsed, 'assignee', existing.assignedUserId);
     }
 
     if (pick('follow_up_date', 'followUpDate') !== undefined) {

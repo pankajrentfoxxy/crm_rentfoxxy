@@ -55,8 +55,8 @@ export const STATUSES_WITH_STAGES = Object.entries(STAGES_BY_STATUS)
 
 export const INQUIRY_TYPES = ['rental', 'sales', 'both'];
 
-/** Sales users excluded from lead assignment dropdowns */
-export const EXCLUDED_LEAD_ASSIGNEES = ['Pradeep'];
+/** @deprecated — no longer excluded; assignee pool is Admin + Pradeep only from API */
+export const EXCLUDED_LEAD_ASSIGNEES = [];
 
 export const LEAD_SOURCES = [
   'Email', 'Teams', 'Reference', 'Website', 'Cold Call', 'LinkedIn',

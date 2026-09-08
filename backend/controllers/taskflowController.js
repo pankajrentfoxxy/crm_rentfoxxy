@@ -26,7 +26,12 @@ exports.getSsoUrl = async (req, res) => {
 exports.getPendingCount = async (req, res) => {
   try {
     const result = await fetchPendingCount(req.user);
-    res.json({ success: true, count: result.count, mapped: result.mapped });
+    res.json({
+      success: true,
+      count: result.count,
+      mapped: result.mapped,
+      status: result.status || 'ok',
+    });
   } catch (err) {
     res.status(err.status || 500).json({
       success: false,

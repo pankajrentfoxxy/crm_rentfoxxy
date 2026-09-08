@@ -7,12 +7,19 @@ const POLL_MS = 45000;
 
 export default function TaskflowNavButton() {
   const [count, setCount] = useState(0);
+  const [integrationStatus, setIntegrationStatus] = useState('ok');
   const [opening, setOpening] = useState(false);
 
   const loadCount = useCallback(() => {
     getTaskflowPendingCount()
-      .then((data) => setCount(Number(data?.count || 0)))
-      .catch(() => setCount(0));
+      .then((data) => {
+        setCount(Number(data?.count || 0));
+        setIntegrationStatus(data?.status || 'ok');
+      })
+      .catch(() => {
+        setCount(0);
+        setIntegrationStatus('unreachable');
+      });
   }, []);
 
   useEffect(() => {
@@ -50,13 +57,26 @@ export default function TaskflowNavButton() {
   };
 
   const badge = count > 99 ? '99+' : String(count);
+  const statusHint = {
+    endpoint_missing: 'TaskFlow CRM integration is not deployed on task.rentfoxxy.com yet',
+    sso_rejected: 'TaskFlow rejected CRM login — CRM_SSO_SECRET must match on both servers',
+    timeout: 'TaskFlow server timed out — count unavailable',
+    unreachable: 'Could not reach TaskFlow server',
+    unmapped: 'Your CRM email is not linked to a TaskFlow user yet',
+    taskflow_error: 'TaskFlow returned an error',
+  }[integrationStatus];
+  const title = statusHint
+    ? `Open TaskFlow — ${statusHint}`
+    : count > 0
+      ? `Open TaskFlow — ${count} pending task${count === 1 ? '' : 's'}`
+      : 'Open TaskFlow in a new tab';
 
   return (
     <button
       type="button"
       onClick={openTaskflow}
       disabled={opening}
-      title="Open TaskFlow in a new tab"
+      title={title}
       className="relative inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg disabled:opacity-60"
     >
       <ListTodo className="w-4 h-4" />
@@ -65,6 +85,9 @@ export default function TaskflowNavButton() {
         <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold leading-[18px] text-center">
           {badge}
         </span>
+      )}
+      {count === 0 && integrationStatus !== 'ok' && integrationStatus !== 'unmapped' && (
+        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-white" aria-hidden />
       )}
     </button>
   );

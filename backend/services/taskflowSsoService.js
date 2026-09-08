@@ -124,21 +124,37 @@ async function fetchPendingCount(reqUser) {
   const user = await loadCrmUser(reqUser);
   const token = signCrmTaskflowToken(user, 'crm_pending_count', COUNT_EXPIRES);
   try {
-    const { data } = await axios.get(`${taskflowApiUrl()}/auth/crm/pending-count`, {
+    const { status, data } = await axios.get(`${taskflowApiUrl()}/auth/crm/pending-count`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       timeout: 8000,
-      validateStatus: (s) => s >= 200 && s < 500,
+      validateStatus: () => true,
     });
+    if (status === 404) {
+      console.warn(
+        'TaskFlow pending count: /auth/crm/pending-count not found — deploy CRM SSO routes on TaskFlow server'
+      );
+      return { count: 0, mapped: false, status: 'endpoint_missing' };
+    }
+    if (status === 401 || status === 403) {
+      console.warn('TaskFlow pending count rejected CRM token — check CRM_SSO_SECRET matches TASKFLOW_SSO_SECRET');
+      return { count: 0, mapped: false, status: 'sso_rejected' };
+    }
+    if (status >= 500) {
+      console.warn(`TaskFlow pending count server error (${status})`);
+      return { count: 0, mapped: false, status: 'taskflow_error' };
+    }
     if (!data || data.success === false || data.error) {
-      return { count: 0, mapped: false };
+      return { count: 0, mapped: false, status: data?.mapped === false ? 'unmapped' : 'taskflow_error' };
     }
     return {
       count: Number(data.count || 0),
       mapped: data.mapped !== false,
+      status: data.mapped === false ? 'unmapped' : 'ok',
     };
   } catch (err) {
+    const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
     console.warn('TaskFlow pending count failed:', err.message);
-    return { count: 0, mapped: false };
+    return { count: 0, mapped: false, status: isTimeout ? 'timeout' : 'unreachable' };
   }
 }
 

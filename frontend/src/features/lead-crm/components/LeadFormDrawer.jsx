@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import {
-  COMPANY_TYPES, INQUIRY_TYPES, LEAD_SOURCES, USE_CASES, EXCLUDED_LEAD_ASSIGNEES,
+  COMPANY_TYPES, INQUIRY_TYPES, LEAD_SOURCES, USE_CASES,
 } from '../leadConstants';
-import { filterAssignableUsers } from '../leadCrmUtils';
 import { INDIAN_STATES } from '../../../constants/indianStates';
 import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
@@ -67,7 +66,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
   useEffect(() => {
     if (open) {
       getAssignableUsers()
-        .then((r) => setUsers(filterAssignableUsers(r.data?.users || [], EXCLUDED_LEAD_ASSIGNEES)))
+        .then((r) => setUsers(r.data?.users || []))
         .catch(() => {});
     }
   }, [open]);
@@ -360,7 +359,11 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
                 <select value={form.assigned_user_id} onChange={(e) => set('assigned_user_id', e.target.value)}
                   className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
                   <option value="">Auto-assign</option>
-                  {users.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
+                  {users.map((u) => {
+                    const id = u.user_id || u.userId;
+                    const suffix = u.role === 'sales' ? ' (Sales)' : '';
+                    return <option key={id} value={id}>{u.name}{suffix}</option>;
+                  })}
                 </select>
               </div>
               {field('follow_up_date', 'Follow-up Date', { type: 'date' })}
