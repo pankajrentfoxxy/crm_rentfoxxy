@@ -4,6 +4,7 @@ export const APPLICATION_SECTIONS = [
   'taskflow',
   'analytics_dashboard',
   'leads',
+  'lead_assignee_change',
   'lead_follow_ups',
   'lead_conversion',
   'customers',
@@ -110,6 +111,7 @@ export const SECTION_LABELS = {
   taskflow: 'TaskFlow',
   analytics_dashboard: 'Analytics Dashboards (Manager & Sales)',
   leads: 'Leads',
+  lead_assignee_change: 'Lead Assignee Change (Sales team)',
   lead_follow_ups: 'Follow-ups',
   lead_conversion: 'Lead Conversion',
   customers: 'Customers',
@@ -214,7 +216,7 @@ export const SECTION_LABELS = {
 export const SECTION_GROUPS = {
   Core: ['dashboard', 'taskflow'],
   'Lead & Sales CRM': [
-    'leads', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
+    'leads', 'lead_assignee_change', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
     'sales_quotations', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement',
     'replacement_so_laptop_qc', 'so_laptop_qc', 'sales_order_cancel', 'delivery_challans', 'bluedart_awb_tracking', 'return_dc',
     'delivery_register_management', 'delivery_register_otp', 'technician_bucket', 'delivery_technicians', 'delivery_my_deliveries', 'technicians_bucket_list', 'payment_records',

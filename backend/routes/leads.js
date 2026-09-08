@@ -4,7 +4,7 @@ const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
 const path = require('path');
 const fs = require('fs');
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const leadController = require('../controllers/leadController');
 
 // RBAC via the role_permissions matrix (section 'leads').
@@ -13,6 +13,8 @@ const leadsView = cp('leads', 'view');
 const leadsCreate = cp('leads', 'create');
 const leadsEdit = cp('leads', 'edit');
 const leadsDelete = cp('leads', 'delete');
+const canViewAssignees = checkAnySectionPermission(['leads', 'lead_assignee_change'], 'view');
+const canChangeAssignee = checkAnySectionPermission(['leads', 'lead_assignee_change'], 'edit');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -46,14 +48,14 @@ router.post('/follow-up-reminders/:id/ack', leadsView, leadController.ackFollowU
 router.get('/orders', leadsView, leadController.getLeadOrders);
 router.get('/reports', leadsView, leadController.getReports);
 router.get('/auto-assign-config', leadsView, leadController.getAutoAssignConfig);
-router.get('/assignable-users', leadsEdit, leadController.getAssignableSalesUsers);
+router.get('/assignable-users', canViewAssignees, leadController.getAssignableSalesUsers);
 router.get('/sample', leadsView, leadController.getSampleCsv);
 router.get('/:id/recent-activity', leadsView, leadController.getLeadRecentActivity);
 router.get('/:id', leadsView, leadController.getLeadById);
 
 router.post('/', leadsCreate, leadController.createLead);
 router.post('/upload', leadsCreate, upload.single('file'), leadController.uploadLeadsCsv);
-router.post('/assign', leadsEdit, leadController.assignLeads);
+router.post('/assign', canChangeAssignee, leadController.assignLeads);
 router.post('/:id/research', leadsEdit, leadController.runResearch);
 router.post('/:id/send-quotation', leadsEdit, leadController.sendLeadQuotation);
 router.post('/:id/orders', leadsCreate, leadController.createLeadOrder);
