@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Plus, RotateCcw, Truck } from 'lucide-react';
+import { Download, Plus, RotateCcw, Truck } from 'lucide-react';
 import { PageHeader, Button, ResponsiveTable, ListPagination } from '../../../components/ui/primitives';
-import { fetchReturnToVendorDcs } from '../vendorManagementApi';
+import { downloadReturnToVendorDcPdf, fetchReturnToVendorDcs } from '../vendorManagementApi';
 
 const STATUS_CLASS = {
   draft: 'bg-slate-100 text-slate-700',
@@ -23,7 +23,19 @@ export default function ReturnToVendorListPage() {
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [pdfBusy, setPdfBusy] = useState(null);
   const limit = 25;
+
+  const handleDownloadPdf = async (dcNumber) => {
+    setPdfBusy(dcNumber);
+    try {
+      await downloadReturnToVendorDcPdf(dcNumber);
+    } catch (err) {
+      toast.error(err.message || 'PDF download failed');
+    } finally {
+      setPdfBusy(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +88,21 @@ export default function ReturnToVendorListPage() {
     { key: 'return_date', header: 'Return date', render: (r) => fmtDate(r.return_date) },
     { key: 'dispatched_at', header: 'Dispatched', render: (r) => fmtDate(r.dispatched_at) },
     { key: 'vendor_received_at', header: 'Vendor received', render: (r) => fmtDate(r.vendor_received_at) },
+    {
+      key: 'pdf',
+      header: '',
+      render: (r) => (
+        <button
+          type="button"
+          disabled={pdfBusy === r.dc_number}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDownloadPdf(r.dc_number); }}
+          className="text-xs text-blue-600 hover:underline disabled:opacity-50 inline-flex items-center gap-1"
+        >
+          <Download className="w-3.5 h-3.5" />
+          {pdfBusy === r.dc_number ? '…' : 'PDF'}
+        </button>
+      ),
+    },
   ];
 
   return (

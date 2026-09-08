@@ -115,7 +115,7 @@ export const salesPipelineAccordionChildren = [
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
   { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'delivery_technicians' },
   { label: 'Technician Bucket', path: '/sales-pipeline/technician-bucket', section: 'technicians_bucket_list' },
-  { label: 'My Deliveries', path: '/sales-pipeline/my-deliveries', section: 'delivery_my_deliveries' },
+  { label: 'My Deliveries', path: '/sales-pipeline/my-deliveries', section: 'delivery_my_deliveries', sections: ['delivery_my_deliveries', 'technician_bucket'] },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
   { label: 'Demo Agreements', path: '/sales-pipeline/demo', section: 'demo_management' },
 ];
@@ -459,6 +459,7 @@ export function isDispatchChildVisible(child, canView) {
 }
 
 export function isSalesPipelineChildVisible(child, canView) {
+  if (child.sections?.length) return child.sections.some((section) => canView(section));
   if (child.section) return canView(child.section);
   return false;
 }

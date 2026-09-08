@@ -49,13 +49,20 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Sales technician bucket shows outbound Delivery Challans (DC) only.
-      // Return DCs (RDC / support pickups) belong in the Support pickup bucket.
-      const apiMovement = movement || 'outbound';
-      const r = await listDeliveryFlow({ status: 'inhouse', movement: apiMovement });
+      // Support pickup bucket is return-only. Sales bucket shows outbound DCs,
+      // in-house Return DCs, and vendor returns assigned to a delivery partner.
+      const params = { status: 'inhouse' };
+      if (movement) params.movement = movement;
+      const r = await listDeliveryFlow(params);
       let list = r.data?.items || [];
-      // Safety net in case older rows come back without movement_type set.
-      list = list.filter((d) => (d.movement_type || 'outbound') === apiMovement);
+      if (movement) {
+        list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      }
+      const activity = (d) => Math.max(
+        ...[d.updated_at, d.reached_at, d.serial_verified_at, d.dispatched_at, d.created_at]
+          .map((t) => (t ? new Date(t).getTime() : 0))
+      );
+      list = [...list].sort((a, b) => activity(b) - activity(a));
       setItems(list);
     } catch {
       toast.error('Failed to load the bucket');
@@ -95,7 +102,7 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
           <p className="text-sm text-gray-500">
             {isReturn
               ? 'In-house return pickups currently with technicians'
-              : 'In-person deliveries only. Send OTP to the customer, then enter the code to confirm delivery. OTP is shown here once sent.'}
+              : 'In-person work only: customer deliveries, Return DC pickups, and vendor returns. Customer jobs need OTP; vendor returns need serial + POD.'}
           </p>
         </div>
         <select
@@ -124,6 +131,7 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {dcs.map((dc) => {
+                  const isVendorReturn = dc.dc_purpose === 'vendor_return';
                   const addrText = formatDeliveryAddressLine(dc.delivery_address);
                   const phone = deliveryAddressPhone(dc.delivery_address, dc.customer_phone);
                   const mapsUrl = (dc.tech_latitude && dc.tech_longitude)
@@ -132,7 +140,12 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                   return (
                     <div key={dc.dc_number} className="bg-white border rounded-xl p-4 space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="font-mono font-semibold text-blue-700">{dc.dc_number}</span>
+                        <span className="font-mono font-semibold text-blue-700 flex items-center gap-1.5">
+                          {dc.dc_number}
+                          {isVendorReturn ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-800">VENDOR RETURN</span>
+                          ) : null}
+                        </span>
                         <span className={`px-2 py-0.5 rounded-full text-xs ${STATUS_STYLE(dc.status)}`}>
                           {statusLabel(dc.status)} | {timeSince(dc.reached_at || dc.dispatched_at)}
                         </span>
@@ -158,7 +171,13 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                         ))}
                       </div>
                       <div className="flex flex-wrap gap-2 pt-1">
-                        {dc.otp_verified_at ? (
+                        {isVendorReturn ? (
+                          <span className="text-xs px-2.5 py-1 rounded-lg bg-orange-50 text-orange-800">
+                            {dc.status === 'reached'
+                              ? 'Reached · confirm with vendor e-sign'
+                              : 'No customer OTP — mark reached, then vendor e-sign'}
+                          </span>
+                        ) : dc.otp_verified_at ? (
                           <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700">
                             OTP verified
                           </span>
@@ -177,12 +196,12 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                                 : 'Send OTP to customer'}
                           </button>
                         )}
-                        {dc.otp_sent_at && !dc.otp_verified_at && dc.otp_code ? (
+                        {!isVendorReturn && dc.otp_sent_at && !dc.otp_verified_at && dc.otp_code ? (
                           <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 font-mono font-bold tracking-widest inline-flex items-center gap-1.5 border border-amber-200">
                             <KeyRound className="w-3.5 h-3.5 shrink-0" />
                             OTP {dc.otp_code}
                           </span>
-                        ) : dc.otp_sent_at && !dc.otp_verified_at ? (
+                        ) : !isVendorReturn && dc.otp_sent_at && !dc.otp_verified_at ? (
                           <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700">
                             OTP sent · ask customer
                           </span>
@@ -199,14 +218,20 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                         )}
                         <button
                           type="button"
-                          disabled={!dc.otp_sent_at && !dc.otp_verified_at}
+                          disabled={isVendorReturn ? dc.status !== 'reached' : (!dc.otp_sent_at && !dc.otp_verified_at)}
                           title={
-                            dc.otp_sent_at || dc.otp_verified_at
-                              ? 'Enter the customer OTP to confirm delivery'
-                              : 'Send OTP to the customer first'
+                            isVendorReturn
+                              ? (dc.status === 'reached' ? 'Confirm vendor handover with e-sign' : 'Technician must mark reached first')
+                              : (dc.otp_sent_at || dc.otp_verified_at
+                                ? 'Enter the customer OTP to confirm delivery'
+                                : 'Send OTP to the customer first')
                           }
                           onClick={() => {
-                            if (!dc.otp_sent_at && !dc.otp_verified_at) {
+                            if (isVendorReturn && dc.status !== 'reached') {
+                              toast.error('Technician must mark reached first.');
+                              return;
+                            }
+                            if (!isVendorReturn && !dc.otp_sent_at && !dc.otp_verified_at) {
                               toast.error('Send OTP to the customer first, then ask them for the code.');
                               return;
                             }

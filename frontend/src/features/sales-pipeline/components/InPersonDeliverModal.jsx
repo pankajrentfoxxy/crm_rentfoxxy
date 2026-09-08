@@ -1,16 +1,20 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Upload, KeyRound } from 'lucide-react';
+import { Upload, KeyRound, PenLine } from 'lucide-react';
 import { submitDeliveryWithPod } from '../salesPipelineApi';
+import SignaturePadComponent from './SignaturePad';
 
 /**
- * In-person (by-hand) delivery: technician asks the customer for the WhatsApp OTP
- * and cannot mark delivered without it.
+ * In-person (by-hand) delivery: customer DCs need WhatsApp OTP + POD.
+ * Vendor returns need the receiver e-signature only (no per-laptop scan, no OTP).
  */
 export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
+  const isVendorReturn = dc?.dc_purpose === 'vendor_return';
   const [otp, setOtp] = useState('');
   const [podFile, setPodFile] = useState(null);
   const [podPreview, setPodPreview] = useState(null);
+  const [esignData, setEsignData] = useState(null);
+  const [showSign, setShowSign] = useState(false);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -25,11 +29,15 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
 
   const handleSubmit = async () => {
     const code = otp.trim();
-    if (!code) {
+    if (!isVendorReturn && !code) {
       toast.error('Enter the OTP the customer received on WhatsApp');
       return;
     }
-    if (!podFile) {
+    if (isVendorReturn && !esignData) {
+      toast.error('Vendor / receiver e-signature is required before submitting');
+      return;
+    }
+    if (!isVendorReturn && !podFile) {
       toast.error('Upload a POD photo of the delivered laptop');
       return;
     }
@@ -37,9 +45,10 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
     try {
       const fd = new FormData();
       fd.append('otp', code);
-      fd.append('pod_type', 'photo');
+      fd.append('pod_type', isVendorReturn ? 'esign' : 'photo');
       fd.append('notes', notes);
-      fd.append('pod_photo', podFile);
+      if (podFile) fd.append('pod_photo', podFile);
+      if (esignData) fd.append('esign_data', esignData);
       await submitDeliveryWithPod(dc.dc_number, fd);
       toast.success('Delivery confirmed');
       onDelivered?.();
@@ -51,14 +60,20 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
     }
   };
 
+  const confirmDisabled = saving
+    || (isVendorReturn ? !esignData : (!otp.trim() || !podFile));
+
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
         <h3 className="font-semibold text-gray-900 mb-1">Confirm in-person delivery</h3>
         <p className="text-xs text-slate-600 mb-4">
-          {dc?.dc_number} · Ask the customer for the WhatsApp OTP. You cannot see the code.
+          {dc?.dc_number} · {isVendorReturn
+            ? 'Vendor return — capture the receiver e-signature. No TTSPL scan and no customer OTP.'
+            : 'Ask the customer for the WhatsApp OTP. You cannot see the code.'}
         </p>
 
+        {!isVendorReturn && (
         <label className="block mb-3">
           <span className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1.5">
             <KeyRound className="w-4 h-4" /> Customer OTP*
@@ -72,10 +87,32 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
             className="w-full border rounded-lg px-3 py-2.5 text-sm tracking-widest font-mono"
           />
         </label>
+        )}
+
+        {isVendorReturn && (
+          <div className="mb-3">
+            <span className="text-sm font-medium text-gray-700 block mb-1">
+              Vendor / receiver e-signature <span className="text-red-500">*</span>
+            </span>
+            {showSign ? (
+              <SignaturePadComponent
+                onSave={(data) => { setEsignData(data); setShowSign(false); toast.success('Signature captured'); }}
+                onCancel={() => setShowSign(false)}
+              />
+            ) : (
+              <button type="button" onClick={() => setShowSign(true)}
+                className="w-full flex items-center justify-center gap-2 py-3 border rounded-xl text-sm font-medium">
+                <PenLine className="w-4 h-4" /> {esignData ? 'E-sign captured · Re-sign' : 'Capture vendor e-signature'}
+              </button>
+            )}
+          </div>
+        )}
 
         <label className="block mb-3">
           <span className="text-sm font-medium text-gray-700 block mb-1">
-            POD Photo* <span className="text-red-500">(required)</span>
+            {isVendorReturn ? 'Handover photo (optional)' : (
+              <>POD Photo* <span className="text-red-500">(required)</span></>
+            )}
           </span>
           <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} className="hidden" id="inperson-pod" />
           <label htmlFor="inperson-pod" className="cursor-pointer border-2 border-dashed border-gray-200 rounded-xl p-4 text-center block hover:border-blue-300">
@@ -84,7 +121,7 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
               : (
                 <>
                   <Upload className="w-8 h-8 text-gray-300 mx-auto mb-1" />
-                  <p className="text-sm text-gray-500">Photo of the laptop at the customer site</p>
+                  <p className="text-sm text-gray-500">{isVendorReturn ? 'Optional photo of handover at the vendor' : 'Photo of the laptop at the customer site'}</p>
                 </>
               )}
           </label>
@@ -106,7 +143,7 @@ export default function InPersonDeliverModal({ dc, onClose, onDelivered }) {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={saving || !otp.trim() || !podFile}
+            disabled={confirmDisabled}
             className="flex-1 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
           >
             {saving ? 'Confirming…' : 'Confirm delivery'}

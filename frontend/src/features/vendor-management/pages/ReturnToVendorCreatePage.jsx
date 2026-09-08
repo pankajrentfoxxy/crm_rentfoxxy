@@ -6,9 +6,14 @@ import { PageHeader, Button, SearchField } from '../../../components/ui/primitiv
 import {
   createReturnToVendorDc,
   fetchReturnToVendorEligible,
+  fetchReturnToVendorEligibleVendors,
 } from '../vendorManagementApi';
 
-const STEPS = ['Select Laptops', 'Confirm'];
+const STEPS = ['Select Vendor', 'Select Laptops', 'Confirm'];
+
+function vendorLabel(v) {
+  return [v.business_name, v.first_name].filter(Boolean).join(' · ') || `Vendor ${v.vendor_id}`;
+}
 
 function statusPill(status) {
   const map = {
@@ -22,40 +27,77 @@ function statusPill(status) {
 export default function ReturnToVendorCreatePage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
+  const [vendors, setVendors] = useState([]);
+  const [vendorsLoading, setVendorsLoading] = useState(false);
+  const [vendorId, setVendorId] = useState('');
   const [laptops, setLaptops] = useState([]);
+  const [laptopTotal, setLaptopTotal] = useState(0);
   const [selected, setSelected] = useState(new Set());
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [returnReason, setReturnReason] = useState('');
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const loadVendors = useCallback(async () => {
+    setVendorsLoading(true);
+    try {
+      const res = await fetchReturnToVendorEligibleVendors();
+      setVendors(res.data?.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to load vendors');
+      setVendors([]);
+    } finally {
+      setVendorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVendors();
+  }, [loadVendors]);
+
   const loadLaptops = useCallback(async () => {
+    if (!vendorId) {
+      setLaptops([]);
+      setLaptopTotal(0);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetchReturnToVendorEligible({
+        vendor_id: Number(vendorId),
         search: search || undefined,
+        page: 1,
         limit: 200,
       });
       setLaptops(res.data?.data || []);
+      setLaptopTotal(res.data?.pagination?.total || (res.data?.data || []).length);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to load laptops');
       setLaptops([]);
+      setLaptopTotal(0);
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [vendorId, search]);
 
   useEffect(() => {
-    loadLaptops();
-  }, [loadLaptops]);
+    if (step >= 1 && vendorId) loadLaptops();
+  }, [loadLaptops, step, vendorId]);
+
+  const selectedVendor = useMemo(
+    () => vendors.find((v) => String(v.vendor_id) === String(vendorId)) || null,
+    [vendors, vendorId]
+  );
 
   const selectedRows = laptops.filter((r) => selected.has(r.serial_id));
-
-  const selectedVendor = useMemo(() => {
-    const names = [...new Set(selectedRows.map((r) => r.vendor_name).filter(Boolean))];
-    return names.length === 1 ? names[0] : names.length > 1 ? null : '';
-  }, [selectedRows]);
+  const allSelected = laptops.length > 0 && laptops.every((r) => selected.has(r.serial_id));
 
   const toggle = (serialId) => {
     setSelected((prev) => {
@@ -66,13 +108,25 @@ export default function ReturnToVendorCreatePage() {
     });
   };
 
+  const toggleAll = () => {
+    setSelected((prev) => {
+      if (allSelected) return new Set();
+      return new Set(laptops.map((r) => r.serial_id));
+    });
+  };
+
+  const handleVendorNext = () => {
+    if (!vendorId) {
+      toast.error('Select a vendor first');
+      return;
+    }
+    setSelected(new Set());
+    setStep(1);
+  };
+
   const handleCreate = async () => {
     if (!selected.size) {
       toast.error('Select at least one laptop');
-      return;
-    }
-    if (selectedVendor === null) {
-      toast.error('All selected laptops must belong to the same vendor');
       return;
     }
     if (!returnReason.trim()) {
@@ -82,6 +136,7 @@ export default function ReturnToVendorCreatePage() {
     setSaving(true);
     try {
       const res = await createReturnToVendorDc({
+        vendor_id: Number(vendorId),
         serial_ids: [...selected],
         return_reason: returnReason.trim(),
         remarks: remarks.trim() || undefined,
@@ -99,7 +154,7 @@ export default function ReturnToVendorCreatePage() {
     <div className="space-y-4 pb-8">
       <PageHeader
         title="Return Laptop to Vendor"
-        subtitle="Select warehouse laptops to send back to the original supplier"
+        subtitle="Select a vendor, then pick their inward warehouse laptops to send back"
         actions={(
           <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
             <ArrowLeft className="w-4 h-4" /> Back to list
@@ -123,25 +178,56 @@ export default function ReturnToVendorCreatePage() {
       <div className="rounded-xl border bg-white shadow-sm p-4 space-y-4">
         {step === 0 && (
           <>
+            <label className="block text-sm max-w-xl">
+              <span className="font-medium text-slate-700">Vendor *</span>
+              <select
+                className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white disabled:opacity-60"
+                value={vendorId}
+                disabled={vendorsLoading}
+                onChange={(e) => setVendorId(e.target.value)}
+              >
+                <option value="">{vendorsLoading ? 'Loading vendors…' : 'Select vendor'}</option>
+                {vendors.map((v) => (
+                  <option key={v.vendor_id} value={String(v.vendor_id)}>
+                    {vendorLabel(v)} ({v.inward_count} inward)
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!vendorsLoading && vendors.length === 0 && (
+              <p className="text-sm text-slate-500">No vendor currently has inward warehouse laptops to return.</p>
+            )}
+            <div className="flex justify-end">
+              <Button disabled={!vendorId} onClick={handleVendorNext}>
+                Next: Show inward laptops
+              </Button>
+            </div>
+          </>
+        )}
+
+        {step === 1 && (
+          <>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between">
               <p className="text-sm text-slate-600">
-                Pick one or more laptops in warehouse. Selected: <strong>{selected.size}</strong>
+                Inward laptops for <strong>{selectedVendor ? vendorLabel(selectedVendor) : 'vendor'}</strong>
+                {' — '}
+                {laptopTotal} listed, <strong>{selected.size}</strong> selected
               </p>
-              <SearchField value={search} onChange={setSearch} placeholder="Search TTSPL / serial / vendor…" />
+              <SearchField
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search TTSPL / serial…"
+              />
             </div>
-            {selectedVendor === null && selected.size > 0 && (
-              <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                Selected laptops belong to different vendors — pick laptops from one vendor only.
-              </p>
-            )}
             <div className="overflow-x-auto border rounded-lg max-h-[28rem] overflow-y-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 sticky top-0 text-xs uppercase text-slate-500">
                   <tr>
-                    <th className="px-3 py-2 text-left w-10" />
+                    <th className="px-3 py-2 text-left w-10">
+                      <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!laptops.length} />
+                    </th>
                     <th className="px-3 py-2 text-left">Asset ID</th>
                     <th className="px-3 py-2 text-left">Serial</th>
-                    <th className="px-3 py-2 text-left">Vendor</th>
                     <th className="px-3 py-2 text-left">PO</th>
                     <th className="px-3 py-2 text-left">Brand / Model</th>
                     <th className="px-3 py-2 text-left">Status</th>
@@ -150,9 +236,9 @@ export default function ReturnToVendorCreatePage() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">Loading…</td></tr>
+                    <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">Loading…</td></tr>
                   ) : laptops.length === 0 ? (
-                    <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">No eligible laptops in warehouse</td></tr>
+                    <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">No inward laptops for this vendor</td></tr>
                   ) : laptops.map((row) => (
                     <tr key={row.serial_id} className="border-t hover:bg-slate-50/80">
                       <td className="px-3 py-2">
@@ -164,7 +250,6 @@ export default function ReturnToVendorCreatePage() {
                       </td>
                       <td className="px-3 py-2 font-medium">{row.ttspl_id}</td>
                       <td className="px-3 py-2">{row.serial_number}</td>
-                      <td className="px-3 py-2">{row.vendor_name || '—'}</td>
                       <td className="px-3 py-2 text-xs">{row.po_number || row.po_id || '—'}</td>
                       <td className="px-3 py-2">{[row.brand, row.model].filter(Boolean).join(' ') || '—'}</td>
                       <td className="px-3 py-2">
@@ -180,19 +265,28 @@ export default function ReturnToVendorCreatePage() {
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end">
-              <Button disabled={!selected.size || selectedVendor === null} onClick={() => setStep(1)}>
+            <div className="flex justify-between">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setStep(0);
+                  setSelected(new Set());
+                }}
+              >
+                Back
+              </Button>
+              <Button disabled={!selected.size} onClick={() => setStep(2)}>
                 Next: Confirm
               </Button>
             </div>
           </>
         )}
 
-        {step === 1 && (
+        {step === 2 && (
           <>
             <div className="rounded-lg bg-slate-50 p-3 text-sm">
               <p className="text-xs uppercase text-slate-500">Vendor</p>
-              <p className="font-medium">{selectedVendor || '—'}</p>
+              <p className="font-medium">{selectedVendor ? vendorLabel(selectedVendor) : '—'}</p>
             </div>
             <label className="block text-sm">
               <span className="font-medium text-slate-700">Return reason *</span>
@@ -228,7 +322,7 @@ export default function ReturnToVendorCreatePage() {
               </ul>
             </div>
             <div className="flex justify-between">
-              <Button variant="secondary" onClick={() => setStep(0)}>Back</Button>
+              <Button variant="secondary" onClick={() => setStep(1)}>Back</Button>
               <Button loading={saving} onClick={handleCreate}>
                 <Package className="w-4 h-4" /> Generate Return DC
               </Button>

@@ -125,26 +125,40 @@ function saveDispatchPod(dcNumber, dataUrl) {
 }
 
 function normalizeShipBy(shipBy, dispatchMode) {
-  if (shipBy === 'by_hand' || shipBy === 'by_courier' || shipBy === 'by_porter') return shipBy;
-  if (dispatchMode === 'inhouse') return 'by_hand';
-  if (dispatchMode === 'porter') return 'by_porter';
-  if (dispatchMode === 'courier') return 'by_courier';
+  const by = String(shipBy || '').trim().toLowerCase();
+  if (by === 'by_hand' || by === 'inhouse' || by === 'hand') return 'by_hand';
+  if (by === 'by_courier' || by === 'courier') return 'by_courier';
+  if (by === 'by_porter' || by === 'porter') return 'by_porter';
+  const mode = String(dispatchMode || '').trim().toLowerCase();
+  if (mode === 'inhouse' || mode === 'by_hand' || mode === 'hand') return 'by_hand';
+  if (mode === 'porter' || mode === 'by_porter') return 'by_porter';
+  if (mode === 'courier' || mode === 'by_courier') return 'by_courier';
   return null;
 }
 
 function shipByToDispatchMode(shipBy) {
   if (shipBy === 'by_hand') return 'inhouse';
   if (shipBy === 'by_porter') return 'porter';
-  if (shipBy === 'courier') return 'courier';
+  if (shipBy === 'by_courier' || shipBy === 'courier') return 'courier';
   return null;
 }
 
-function validateDispatchDetails({ shipBy, courierName, porterTrackingId, deliveryPersonId }) {
+function validateDispatchDetails(details = {}) {
+  const shipBy = normalizeShipBy(
+    details.shipBy || details.ship_by,
+    details.dispatchMode || details.dispatch_mode
+  );
+  const courierName = details.courierName || details.courier_name;
+  const porterTrackingId = details.porterTrackingId || details.porter_tracking_id;
+  const rawDeliveryPersonId = details.deliveryPersonId ?? details.delivery_person_id;
+  const deliveryPersonId = rawDeliveryPersonId != null && String(rawDeliveryPersonId).trim() !== ''
+    ? Number(rawDeliveryPersonId)
+    : null;
   if (!shipBy) throw new Error('Send mode is required (By Hand, Courier, or Porter)');
-  if (shipBy === 'by_courier' && !courierName?.trim()) {
+  if (shipBy === 'by_courier' && !String(courierName || '').trim()) {
     throw new Error('Courier name is required for By Courier dispatch');
   }
-  if (shipBy === 'by_porter' && !porterTrackingId?.trim()) {
+  if (shipBy === 'by_porter' && !String(porterTrackingId || '').trim()) {
     throw new Error('Porter tracking / booking ID is required');
   }
   if (shipBy === 'by_hand' && !deliveryPersonId) {

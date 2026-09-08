@@ -284,6 +284,10 @@ export function createReplaced(payload) {
 }
 
 // ---------- Return laptop to vendor -------------------------------------------------
+export function fetchReturnToVendorEligibleVendors() {
+  return api.get(`${base}/return-to-vendor/eligible-vendors`);
+}
+
 export function fetchReturnToVendorEligible(params) {
   return api.get(`${base}/return-to-vendor/eligible-laptops`, { params });
 }
@@ -310,4 +314,47 @@ export function completeReturnToVendorDc(dcNumber) {
 
 export function cancelReturnToVendorDc(dcNumber) {
   return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/cancel`);
+}
+
+async function parseBlobError(err) {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      const json = JSON.parse(text);
+      return json.message || text;
+    } catch {
+      return 'Download failed';
+    }
+  }
+  return err?.response?.data?.message || err?.message || 'Download failed';
+}
+
+function downloadBlobResponse(response, fallbackName) {
+  const blob = new Blob([response.data], {
+    type: response.headers['content-type'] || 'application/octet-stream',
+  });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const disposition = response.headers['content-disposition'] || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  a.href = url;
+  a.download = match?.[1] || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadReturnToVendorDcPdf(dcNumber) {
+  try {
+    const response = await api.get(
+      `${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/pdf`,
+      { responseType: 'blob' }
+    );
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    downloadBlobResponse(response, `VRTDC_${safe}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
 }

@@ -15,6 +15,15 @@ const { emailDocument, generateDocumentPdf } = require('../services/salesManagem
 const { getDeliveryChallanLines } = require('../services/salesManagementService');
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 const sm = require('./salesManagementController');
+const vrtdcFlow = require('../services/vendorReturnDeliveryFlow');
+
+function latestActivityMs(row) {
+  const times = [row?.updated_at, row?.reached_at, row?.serial_verified_at, row?.dispatched_at, row?.created_at];
+  return times.reduce((max, t) => {
+    const n = t ? new Date(t).getTime() : 0;
+    return Number.isFinite(n) && n > max ? n : max;
+  }, 0);
+}
 
 // Rebuild the branded DC PDF so freshly-saved data (e.g. the technician's
 // e-signature) is reflected in the stored document. Best-effort: never block
@@ -228,6 +237,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       technician_phone: first.technician_phone || null,
       delivery_address: shipping,
       created_at: first.created_at,
+      updated_at: first.updated_at,
       dispatched_at: first.dispatched_at,
       reached_at: first.reached_at,
       tech_latitude: first.tech_latitude,
@@ -368,7 +378,17 @@ exports.listDeliveryFlow = async (req, res) => {
     }
 
     const items = await buildDcFlow(where, params, { includeOtp });
-    res.json({ success: true, items });
+    const movement = String(req.query.movement || '').toLowerCase();
+    const includeVendorReturn = movement !== 'return'
+      && ['inhouse', 'active', 'all', 'in_transit', 'reached', ''].includes(status);
+    let merged = items;
+    if (includeVendorReturn && !paginate) {
+      const vendorReturns = await vrtdcFlow.listBucketVendorReturns({
+        technicianId: req.query.technician_id ? parseInt(req.query.technician_id, 10) : null,
+      });
+      merged = [...items, ...vendorReturns].sort((a, b) => latestActivityMs(b) - latestActivityMs(a));
+    }
+    res.json({ success: true, items: merged });
   } catch (error) {
     console.error('listDeliveryFlow:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -399,7 +419,12 @@ exports.getMyDeliveries = async (req, res) => {
                            AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
                      )`;
     const items = await buildDcFlow(where, params, { includeOtp: false });
-    res.json({ success: true, technician_id: techId, items });
+    const vendorReturns = await vrtdcFlow.listBucketVendorReturns({
+      technicianId: techId,
+      userId: req.user.user_id,
+    });
+    const merged = [...items, ...vendorReturns].sort((a, b) => latestActivityMs(b) - latestActivityMs(a));
+    res.json({ success: true, technician_id: techId, items: merged });
   } catch (error) {
     console.error('getMyDeliveries:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -410,6 +435,11 @@ exports.getMyDeliveries = async (req, res) => {
 exports.markTechReached = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
+    if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
+      const { latitude, longitude } = req.body || {};
+      await vrtdcFlow.markReached(dcNumber, { latitude, longitude });
+      return res.json({ success: true, otp_generated: false });
+    }
     const { latitude, longitude } = req.body || {};
     const upd = await pool.query(
       `UPDATE delivery_challan_lines
@@ -432,6 +462,10 @@ exports.markTechReached = async (req, res) => {
 exports.verifySerialAndGenerateOtp = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
+    if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
+      const result = await vrtdcFlow.verifySerial(dcNumber, req.body?.serial_number);
+      return res.json(result);
+    }
     const input = String(req.body?.serial_number || '').trim();
     if (!input) {
       return res.status(400).json({ success: false, message: 'serial_number is required' });
@@ -534,9 +568,25 @@ function saveEsign(dcNumber, dataUrl) {
 
 // POST /delivery-challans/:dcNumber/deliver  (multipart: otp, pod_type, pod_photo|esign_data, notes)
 exports.submitDeliveryWithPod = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
+    try {
+      const body = req.body || {};
+      const result = await vrtdcFlow.deliverWithPod(dcNumber, {
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name || req.user?.email,
+        podPhotoPath: req.file ? `pod/${req.file.filename}` : null,
+        esignData: body.esign_data,
+        notes: body.notes,
+        podType: body.pod_type,
+      });
+      return res.json(result);
+    } catch (err) {
+      return res.status(err.status || 400).json({ success: false, message: err.message || 'Delivery failed' });
+    }
+  }
   const client = await pool.connect();
   try {
-    const dcNumber = req.params.dcNumber;
     const body = req.body || {};
     const otp = String(body.otp || '').trim();
 
