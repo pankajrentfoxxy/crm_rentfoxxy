@@ -13,6 +13,7 @@ import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { GSTIN_RE, IFSC_RE } from '../vendorMgmtUi';
 import { formatIndianMobileInput, indianMobileError } from '../../../utils/phoneValidation';
+import { useVendorMgmtCapabilities } from '../hooks/useVendorMgmtCapabilities';
 
 const STATE_OPTIONS = INDIAN_STATE_OPTIONS;
 
@@ -140,6 +141,7 @@ function TextArea({ label, value, onChange, onBlur, error, required, rows = 2 })
 
 export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved }) {
   const isEdit = mode === 'edit' && vendorId != null;
+  const { canManageVendorPortal } = useVendorMgmtCapabilities();
 
   const [form, setForm] = useState(() => emptyVendorForm());
   const [files, setFiles] = useState({});
@@ -415,7 +417,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
   }
 
   async function togglePortal() {
-    if (!isEdit) return;
+    if (!isEdit || !canManageVendorPortal) return;
     setPortalBusy(true);
     try {
       const { data } = await updateVendorPortalAccess(vendorId, { portal_enabled: !portalEnabled });
@@ -430,7 +432,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
   }
 
   async function resetPortalPassword() {
-    if (!isEdit) return;
+    if (!isEdit || !canManageVendorPortal) return;
     setPortalBusy(true);
     try {
       const { data } = await updateVendorPortalAccess(vendorId, { reset_password: true });
@@ -747,30 +749,37 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
             {isEdit ? (
               <SectionCard title="Portal Access">
                 <div className="space-y-3 text-sm">
-                  <label className="inline-flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={portalEnabled}
-                      disabled={portalBusy}
-                      onChange={togglePortal}
-                      className="rounded border-gray-300 text-blue-600 w-4 h-4"
-                    />
-                    <span className="text-gray-800 font-medium">
-                      {portalEnabled ? 'Portal enabled' : 'Portal disabled'}
-                    </span>
-                  </label>
+                  <p className="text-gray-800 font-medium">
+                    {portalEnabled ? 'Portal enabled' : 'Portal disabled'}
+                  </p>
                   <p className="text-xs text-gray-500">
                     Last login:{' '}
                     {portalLastLogin ? new Date(portalLastLogin).toLocaleString() : 'Never logged in'}
                   </p>
-                  <button
-                    type="button"
-                    disabled={portalBusy}
-                    onClick={resetPortalPassword}
-                    className="h-9 px-4 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    Reset password
-                  </button>
+                  {canManageVendorPortal ? (
+                    <>
+                      <label className="inline-flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={portalEnabled}
+                          disabled={portalBusy}
+                          onChange={togglePortal}
+                          className="rounded border-gray-300 text-blue-600 w-4 h-4"
+                        />
+                        <span className="text-gray-800 font-medium">Allow portal login</span>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={portalBusy}
+                        onClick={resetPortalPassword}
+                        className="h-9 px-4 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Reset password
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-xs text-gray-500">Only Admin and Super Admin can change portal permissions.</p>
+                  )}
                 </div>
               </SectionCard>
             ) : null}

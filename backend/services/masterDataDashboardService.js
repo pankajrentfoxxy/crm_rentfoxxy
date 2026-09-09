@@ -220,6 +220,14 @@ function buildMasterFilters(query = {}) {
     clauses.push(SQL_IS_RENTAL);
   }
 
+  const purchaseTypes = parseCsvQuery(query.purchase_type || query.purchase_order_type)
+    .map((t) => String(t || '').trim().toLowerCase())
+    .filter(Boolean);
+  if (purchaseTypes.length) {
+    params.push(purchaseTypes);
+    clauses.push(`LOWER(COALESCE(p.purchase_order_type, '')) = ANY($${params.length}::text[])`);
+  }
+
   const dateRange = resolveMasterDateRange(query);
   const usePurchaseDate = String(query.date_basis || query.dateBasis || '').toLowerCase() === 'purchase';
   if (usePurchaseDate) {
@@ -1007,6 +1015,7 @@ module.exports = {
   mapLaptopRow,
   SQL_IS_SALE,
   SQL_IS_RENTAL,
+  formatPurchaseOrderType,
   SQL_CUSTOMER_RENTAL,
   SQL_CUSTOMER_SOLD,
   SQL_CUSTOMER_IN_TRANSIT,

@@ -1540,7 +1540,11 @@ const listValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
   query('vendor_id').optional().isInt().toInt(),
-  query('search').optional().isString().trim()
+  query('search').optional().isString().trim(),
+  query('purchase_type').optional().isString().trim(),
+  query('purchase_order_type').optional().isString().trim(),
+  query('date_from').optional().isString().trim(),
+  query('date_to').optional().isString().trim(),
 ];
 
 async function list(req, res) {
@@ -1560,6 +1564,26 @@ async function list(req, res) {
   if (vid) {
     where += ` AND p.vendor_id = $${idx}`;
     p.push(vid);
+    idx += 1;
+  }
+  const poType = String(req.query.purchase_type || req.query.purchase_order_type || '')
+    .trim()
+    .toLowerCase();
+  if (poType && poType !== 'all') {
+    where += ` AND LOWER(COALESCE(p.purchase_order_type, '')) = $${idx}`;
+    p.push(poType);
+    idx += 1;
+  }
+  const dateFrom = String(req.query.date_from || '').trim();
+  const dateTo = String(req.query.date_to || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+    where += ` AND p.purchase_order_date >= $${idx}::date`;
+    p.push(dateFrom);
+    idx += 1;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+    where += ` AND p.purchase_order_date <= $${idx}::date`;
+    p.push(dateTo);
     idx += 1;
   }
   if (search) {

@@ -670,6 +670,14 @@ async function updatePortalAccess(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
+  const privileged = req.user?.role === 'admin' || req.user?.role === 'super_admin' || req.user?.is_superadmin === true;
+  if (!privileged) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only administrators can change vendor portal permissions.',
+    });
+  }
+
   const vendor_id = Number(req.params.id);
   const cur = await pool.query(
     `SELECT vendor_id, vendor_portal_enabled, vendor_portal_last_login FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
@@ -833,13 +841,13 @@ const laptopsValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
   query('search').optional().isString().trim(),
-  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
+  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock', 'in_transit']),
 ];
 
 const laptopsExportValidators = [
   param('id').isInt({ min: 1 }).toInt(),
   query('search').optional().isString().trim(),
-  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
+  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock', 'in_transit']),
 ];
 
 const VENDOR_LAPTOPS_FROM_JOINS = `
@@ -873,16 +881,22 @@ function vendorLaptopConfigLine(row) {
 }
 
 function mapVendorLaptopRow(r) {
-  const lc = r.inventory_status === 'returned'
-    ? 'returned'
-    : DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)
-      ? 'active'
-      : 'in_stock';
+  let lc = 'in_stock';
+  if (r.inventory_status === 'returned') lc = 'returned';
+  else if (r.inventory_status === 'in_transit') lc = 'in_transit';
+  else if (DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)) lc = 'active';
   return {
     ...r,
     rental_status: displayDeployedStatus(r.inventory_status),
     lifecycle: lc,
   };
+}
+
+function vendorLaptopLifecycleLabel(lifecycle) {
+  if (lifecycle === 'active') return 'Active';
+  if (lifecycle === 'returned') return 'Returned';
+  if (lifecycle === 'in_transit') return 'In Transit';
+  return 'In Stock';
 }
 
 function buildVendorLaptopsFilter(vendorId, { search, lifecycle }) {
@@ -897,6 +911,8 @@ function buildVendorLaptopsFilter(vendorId, { search, lifecycle }) {
       : ` AND NOT (vsn.inventory_status = ANY($${di}::text[])) AND vsn.inventory_status <> 'returned'`;
   } else if (lifecycle === 'returned') {
     where += ` AND vsn.inventory_status = 'returned'`;
+  } else if (lifecycle === 'in_transit') {
+    where += ` AND vsn.inventory_status = 'in_transit'`;
   }
 
   if (search) {
@@ -944,7 +960,8 @@ async function listVendorLaptops(req, res) {
   const countR = await pool.query(
     `SELECT COUNT(*)::int AS total,
             COUNT(*) FILTER (WHERE vsn.inventory_status = ANY($2::text[]))::int AS active,
-            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'in_transit')::int AS in_transit
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
       WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`,
@@ -966,13 +983,19 @@ async function listVendorLaptops(req, res) {
   );
 
   const laptops = listR.rows.map(mapVendorLaptopRow);
+  const total = countR.rows[0]?.total || 0;
+  const active = countR.rows[0]?.active || 0;
+  const returned = countR.rows[0]?.returned || 0;
+  const inTransit = countR.rows[0]?.in_transit || 0;
 
   res.json({
     success: true,
     counts: {
-      total: countR.rows[0]?.total || 0,
-      active: countR.rows[0]?.active || 0,
-      returned: countR.rows[0]?.returned || 0,
+      total,
+      active,
+      returned,
+      in_transit: inTransit,
+      in_stock: Math.max(0, total - active - returned),
     },
     laptops,
     pagination: {
@@ -1032,7 +1055,7 @@ async function exportVendorLaptopsExcel(req, res) {
       Config: vendorLaptopConfigLine(lap),
       'Customer Name': lap.customer_name || '',
       'Rental Status': lap.rental_status || '',
-      Lifecycle: lap.lifecycle === 'active' ? 'Active' : lap.lifecycle === 'returned' ? 'Returned' : 'In Stock',
+      Lifecycle: vendorLaptopLifecycleLabel(lap.lifecycle),
       'DC Number': lap.current_dc_number || '',
       'Dispatch Date': fmtExcelDate(lap.dispatched_at),
       'Delivered Date': fmtExcelDate(lap.delivered_at),

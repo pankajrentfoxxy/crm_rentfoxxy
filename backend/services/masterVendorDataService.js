@@ -13,7 +13,11 @@ const {
   SQL_IS_SALE,
   SQL_IS_RENTAL,
   CUSTOMER_STATUSES,
+  formatPurchaseOrderType,
 } = require('./masterDataDashboardService');
+
+const KNOWN_PURCHASE_TYPES = ['rental_purchase', 'rent_to_own', 'direct_purchase'];
+const SQL_IS_RENTAL_PURCHASE_PO = `LOWER(COALESCE(p.purchase_order_type, '')) = 'rental_purchase'`;
 const {
   appendColumnFilters,
   getColumnDistinctValues,
@@ -62,6 +66,20 @@ function scopedQuery(query = {}) {
   };
 }
 
+function rentalLifecycleClause(lifecycle) {
+  const lc = String(lifecycle || '').trim().toLowerCase();
+  if (lc === 'rented') {
+    return `(${SQL_IS_RENTAL_PURCHASE_PO} AND ${usageSql()} = 'rental')`;
+  }
+  if (lc === 'returned') {
+    return `(${SQL_IS_RENTAL_PURCHASE_PO} AND s.inventory_status = 'returned')`;
+  }
+  if (lc === 'warehouse') {
+    return `(${SQL_IS_RENTAL_PURCHASE_PO} AND ${usageSql()} <> 'rental' AND s.inventory_status <> 'returned')`;
+  }
+  return null;
+}
+
 function buildVendorMasterFilters(query = {}, { excludeColumn } = {}) {
   const base = buildMasterFilters(scopedQuery(query));
   const buckets = parseCsvQuery(query.warehouse_bucket);
@@ -70,10 +88,26 @@ function buildVendorMasterFilters(query = {}, { excludeColumn } = {}) {
     const i = base.params.length;
     base.whereSql = `${base.whereSql} AND (${WAREHOUSE_BUCKET_SQL}) = ANY($${i}::text[])`;
   }
+  const rentalLife = rentalLifecycleClause(query.rental_lifecycle);
+  if (rentalLife) {
+    base.whereSql = `${base.whereSql} AND ${rentalLife}`;
+  }
   return appendColumnFilters(base, query, {
     excludeColumn,
     locationLabelSql: locationLabelSql(),
   });
+}
+
+function rentalPurchaseScopeQuery(query = {}) {
+  return {
+    ...scopedQuery(query),
+    status: '',
+    location: '',
+    stage: '',
+    warehouse_bucket: '',
+    rental_lifecycle: '',
+    pricing_type: '',
+  };
 }
 
 function usageSql() {
@@ -163,15 +197,30 @@ const LIST_SELECT = `
   (${locationLabelSql()}) AS location_label
 `;
 
+function purchaseTypeOption(value) {
+  if (value === 'rental_purchase') return { value, label: 'Rental Purchase' };
+  return { value, label: formatPurchaseOrderType(value) || value };
+}
+
 async function getOverview(query = {}) {
   const base = buildVendorMasterFilters(query);
   const optionFilters = buildMasterFilters({
     ...scopedQuery(query),
     vendor_id: '',
     warehouse_bucket: '',
+    customer_id: '',
+    purchase_type: '',
+    purchase_order_type: '',
   });
+  const customerOptionFilters = buildMasterFilters({
+    ...scopedQuery(query),
+    customer_id: '',
+    warehouse_bucket: '',
+    rental_lifecycle: '',
+  });
+  const rentalScope = buildVendorMasterFilters(rentalPurchaseScopeQuery(query));
   const usage = usageSql();
-  const [kpiRes, vendorRes, optionRes] = await Promise.all([
+  const [kpiRes, vendorRes, optionRes, customerRes, purchaseTypeRes, rentalKpiRes] = await Promise.all([
     pool.query(
       `SELECT
           COUNT(*)::int AS total_purchased,
@@ -236,6 +285,37 @@ async function getOverview(query = {}) {
        LIMIT 400`,
       optionFilters.params
     ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT DISTINCT
+          s.current_customer_id AS customer_id,
+          COALESCE(c.company_name, c.name) AS customer_name
+       ${FROM_SQL}
+       ${customerOptionFilters.joinSql || ''}
+       ${customerOptionFilters.whereSql}
+         AND s.current_customer_id IS NOT NULL
+       ORDER BY customer_name ASC
+       LIMIT 400`,
+      customerOptionFilters.params
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT DISTINCT LOWER(COALESCE(p.purchase_order_type, '')) AS purchase_type
+       ${FROM_SQL}
+       ${optionFilters.joinSql || ''}
+       ${optionFilters.whereSql}
+         AND COALESCE(p.purchase_order_type, '') <> ''
+       ORDER BY 1`,
+      optionFilters.params
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT
+          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL_PURCHASE_PO})::int AS rental_purchase_total,
+          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL_PURCHASE_PO} AND ${usage} = 'rental')::int AS rental_purchase_rented,
+          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL_PURCHASE_PO} AND s.inventory_status = 'returned')::int AS rental_purchase_returned
+       ${FROM_SQL}
+       ${rentalScope.joinSql || ''}
+       ${rentalScope.whereSql}`,
+      rentalScope.params
+    ).catch(() => ({ rows: [{}] })),
   ]);
 
   const k = kpiRes.rows[0] || {};
@@ -258,6 +338,17 @@ async function getOverview(query = {}) {
     current_total: Number(row.purchased_qty || 0),
   }));
 
+  const rk = rentalKpiRes.rows[0] || {};
+  const rentalPurchaseTotal = Number(rk.rental_purchase_total || 0);
+  const rentalPurchaseRented = Number(rk.rental_purchase_rented || 0);
+  const rentalPurchaseReturned = Number(rk.rental_purchase_returned || 0);
+  const rentalPurchaseWarehouse = Math.max(0, rentalPurchaseTotal - rentalPurchaseRented - rentalPurchaseReturned);
+
+  const typeSet = new Set(KNOWN_PURCHASE_TYPES);
+  (purchaseTypeRes.rows || []).forEach((r) => {
+    if (r.purchase_type) typeSet.add(r.purchase_type);
+  });
+
   return {
     kpis: {
       total_purchased: Number(k.total_purchased || 0),
@@ -269,12 +360,21 @@ async function getOverview(query = {}) {
       warehouse_count: Number(k.warehouse_count || 0),
       out_for_repair_count: Number(k.out_for_repair_count || 0),
       warehouse_stages,
+      rental_purchase_total: rentalPurchaseTotal,
+      rental_purchase_rented: rentalPurchaseRented,
+      rental_purchase_warehouse: rentalPurchaseWarehouse,
+      rental_purchase_returned: rentalPurchaseReturned,
     },
     vendors,
     vendor_options: (optionRes.rows || []).map((r) => ({
       value: String(r.vendor_id),
       label: r.vendor_name || `#${r.vendor_id}`,
     })),
+    customer_options: (customerRes.rows || []).map((r) => ({
+      value: String(r.customer_id),
+      label: r.customer_name || `#${r.customer_id}`,
+    })),
+    purchase_type_options: [...typeSet].map(purchaseTypeOption),
   };
 }
 

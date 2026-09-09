@@ -8,6 +8,7 @@ import {
   updateVendorPortalAccess
 } from '../vendorManagementApi';
 import VendorFormModal from '../components/VendorFormModal';
+import { useVendorMgmtCapabilities } from '../hooks/useVendorMgmtCapabilities';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   formatStateLabel,
@@ -65,6 +66,7 @@ function TableSkeleton() {
 }
 
 export default function VendorsPage() {
+  const { canManageVendorPortal } = useVendorMgmtCapabilities();
   const [allRows, setAllRows] = useState([]);
   const [poCountByVendor, setPoCountByVendor] = useState({});
   const [page, setPage] = useState(1);
@@ -170,6 +172,7 @@ export default function VendorsPage() {
   }
 
   async function togglePortalAccess(row) {
+    if (!canManageVendorPortal) return;
     const enabled = row.vendor_portal_enabled !== false;
     setPortalBusyId(row.vendor_id);
     try {
@@ -185,6 +188,7 @@ export default function VendorsPage() {
   }
 
   async function resetPortalPassword(row) {
+    if (!canManageVendorPortal) return;
     setPortalBusyId(row.vendor_id);
     try {
       const { data } = await updateVendorPortalAccess(row.vendor_id, { reset_password: true });
@@ -434,11 +438,11 @@ export default function VendorsPage() {
                               <div className="rounded-lg border border-blue-100 bg-white p-4 text-sm space-y-3 max-w-2xl">
                                 <p className="font-semibold text-gray-900">Portal access — {row.business_name}</p>
                                 <div className="flex flex-wrap items-center gap-4">
-                                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                                  <label className={`inline-flex items-center gap-2 ${canManageVendorPortal ? 'cursor-pointer' : 'cursor-default'}`}>
                                     <input
                                       type="checkbox"
                                       checked={portalOn}
-                                      disabled={portalBusyId === row.vendor_id}
+                                      disabled={!canManageVendorPortal || portalBusyId === row.vendor_id}
                                       onChange={() => togglePortalAccess(row)}
                                       className="rounded border-gray-300 text-blue-600"
                                     />
@@ -448,14 +452,18 @@ export default function VendorsPage() {
                                     Last login: {formatPortalLogin(row.vendor_portal_last_login)}
                                   </span>
                                 </div>
-                                <button
-                                  type="button"
-                                  disabled={portalBusyId === row.vendor_id}
-                                  onClick={() => resetPortalPassword(row)}
-                                  className="h-9 px-4 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-                                >
-                                  Reset Password
-                                </button>
+                                {canManageVendorPortal ? (
+                                  <button
+                                    type="button"
+                                    disabled={portalBusyId === row.vendor_id}
+                                    onClick={() => resetPortalPassword(row)}
+                                    className="h-9 px-4 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                                  >
+                                    Reset Password
+                                  </button>
+                                ) : (
+                                  <p className="text-xs text-gray-500">Only Admin and Super Admin can change portal permissions.</p>
+                                )}
                               </div>
                             </td>
                           </tr>

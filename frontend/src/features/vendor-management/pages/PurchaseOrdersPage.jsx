@@ -6,9 +6,15 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
+  Clock,
   ExternalLink,
   Eye,
+  FileText,
+  Hourglass,
+  Image as ImageIcon,
   Laptop,
+  PackageCheck,
   Pencil,
   Plus,
   PlusCircle,
@@ -45,6 +51,8 @@ import {
   conditionBadgeClass,
   normalizeAllowedConditions
 } from '../../../constants/laptopConditions';
+import { DateRangeFilter, StatCard } from '../../../components/ui/primitives';
+import { dateRangeApiParams } from '../../../utils/dateRangeFilter';
 
 /** Matches Laravel purchase-order-form.blade.php state list (Str::slug(_, '_)) */
 const RAW_INDIAN_STATES = [
@@ -85,6 +93,13 @@ const STATE_OPTIONS = RAW_INDIAN_STATES.map((name) => ({
 
 const LIST_PAGE_SIZE = 25;
 
+const PO_TYPE_FILTERS = [
+  { key: 'all', label: 'All purchase types' },
+  { key: 'rental_purchase', label: 'Rental purchase' },
+  { key: 'rent_to_own', label: 'Rent to Own' },
+  { key: 'direct_purchase', label: 'Direct Purchase' },
+];
+
 function formatPoType(t) {
   if (!t) return '—';
   return String(t)
@@ -108,6 +123,21 @@ function parseLineItems(po) {
   return [];
 }
 
+function poLaptopTotals(po) {
+  const lines = parseLineItems(po);
+  let ordered = 0;
+  let received = 0;
+  lines.forEach((line) => {
+    ordered += Number(line.quantity) || 0;
+    received += Number(line.receivedQty ?? line.received_qty ?? 0) || 0;
+  });
+  return {
+    ordered,
+    received,
+    pending: Math.max(0, ordered - received),
+  };
+}
+
 function parseBillFiles(row) {
   const raw = row?.bill_files;
   if (raw == null) return [];
@@ -123,11 +153,67 @@ function parseBillFiles(row) {
   return [];
 }
 
+function billFilePath(f) {
+  if (!f) return '';
+  if (typeof f === 'string') return f;
+  return String(f.path || f.url || f.file || f.filename || '');
+}
+
+function billFileName(f) {
+  if (typeof f === 'string') return f.split('/').pop() || 'File';
+  return f.name || f.filename || billFilePath(f).split('/').pop() || 'File';
+}
+
+function isImageBillFile(f, mime) {
+  if (mime && String(mime).startsWith('image/')) return true;
+  return /\.(jpe?g|png|gif|webp|bmp|heic|svg)$/i.test(`${billFileName(f)} ${billFilePath(f)}`);
+}
+
+function isPdfBillFile(f, mime) {
+  if (mime && String(mime).includes('pdf')) return true;
+  return /\.pdf$/i.test(`${billFileName(f)} ${billFilePath(f)}`);
+}
+
 function filePublicUrl(p) {
-  if (!p) return '#';
-  if (p.startsWith('http://') || p.startsWith('https://')) return p;
+  const path = billFilePath(p);
+  if (!path) return '#';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
   const origin = getBackendOrigin().replace(/\/$/, '');
-  return `${origin}${p.startsWith('/') ? p : `/${p}`}`;
+  return `${origin}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function PendingBillFileCard({ file, onRemove, onPreview }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!file?.type?.startsWith('image/')) return undefined;
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  const image = !!url;
+  return (
+    <div className="relative rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+      {image ? (
+        <button type="button" className="block w-full aspect-square" onClick={() => onPreview(url, file.name)}>
+          <img src={url} alt={file.name} className="w-full h-full object-cover" />
+        </button>
+      ) : (
+        <div className="aspect-square flex flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-slate-600">
+          <FileText className="w-6 h-6 text-slate-400" />
+          <span className="line-clamp-3 break-all">{file.name}</span>
+        </div>
+      )}
+      <p className="px-1.5 py-1 text-[10px] text-slate-600 truncate" title={file.name}>{file.name}</p>
+      <button
+        type="button"
+        className="absolute top-1 right-1 p-0.5 rounded-full bg-white/90 shadow hover:bg-white"
+        onClick={onRemove}
+        aria-label={`Remove ${file.name}`}
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
 }
 
 function wordCount(str) {
@@ -370,6 +456,10 @@ export default function PurchaseOrdersPage() {
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
+  const [purchaseTypeFilter, setPurchaseTypeFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [receiveKpiFilter, setReceiveKpiFilter] = useState('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [metaLoading, setMetaLoading] = useState(false);
@@ -384,8 +474,10 @@ export default function PurchaseOrdersPage() {
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [previewTab, setPreviewTab] = useState('details');
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
-  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null });
+  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null, po: null });
   const [billUpload, setBillUpload] = useState({ open: false, po: null, bill_name: '' });
+  const [pendingBillFiles, setPendingBillFiles] = useState([]);
+  const [billLightbox, setBillLightbox] = useState({ open: false, items: [], index: 0 });
   /** Read-only summary of the create-PO modal before Save (no API call). */
   const [createPreviewOpen, setCreatePreviewOpen] = useState(false);
 
@@ -397,7 +489,9 @@ export default function PurchaseOrdersPage() {
       let totalPg = 1;
       const baseParams = {
         search: search.trim() || undefined,
-        vendor_id: vendorFilterId || undefined
+        vendor_id: vendorFilterId || undefined,
+        purchase_type: purchaseTypeFilter !== 'all' ? purchaseTypeFilter : undefined,
+        ...dateRangeApiParams(dateFrom, dateTo),
       };
       do {
         const { data } = await fetchPurchaseOrders({ ...baseParams, page: pg, limit: API_LIST_MAX });
@@ -412,7 +506,7 @@ export default function PurchaseOrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, vendorFilterId]);
+  }, [search, vendorFilterId, purchaseTypeFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     loadList();
@@ -432,21 +526,59 @@ export default function PurchaseOrdersPage() {
     return c;
   }, [allRows]);
 
+  const kpis = useMemo(() => {
+    const out = {
+      totalPos: allRows.length,
+      ordered: 0,
+      received: 0,
+      pendingReceive: 0,
+      pendingApproval: 0,
+      completed: 0,
+    };
+    allRows.forEach((r) => {
+      const t = poLaptopTotals(r);
+      out.ordered += t.ordered;
+      out.received += t.received;
+      out.pendingReceive += t.pending;
+      if (isPendingManagerApproval(r.status)) out.pendingApproval += 1;
+      if (normalizePoStatus(r.status) === 'completed') out.completed += 1;
+    });
+    return out;
+  }, [allRows]);
+
   useEffect(() => {
     let list = [...allRows];
     if (statusTab !== 'all') {
       list = list.filter((r) => matchesPoStatusTab(r.status, statusTab));
+    }
+    if (receiveKpiFilter === 'pending') {
+      list = list.filter((r) => poLaptopTotals(r).pending > 0);
+    } else if (receiveKpiFilter === 'received') {
+      list = list.filter((r) => {
+        const t = poLaptopTotals(r);
+        return t.received > 0;
+      });
     }
     setTotal(list.length);
     const tp = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
     setTotalPages(tp);
     const start = (page - 1) * LIST_PAGE_SIZE;
     setRows(list.slice(start, start + LIST_PAGE_SIZE));
-  }, [allRows, statusTab, page]);
+  }, [allRows, statusTab, receiveKpiFilter, page]);
 
   useEffect(() => {
     setPage(1);
-  }, [statusTab, search, vendorFilterId]);
+  }, [statusTab, receiveKpiFilter, search, vendorFilterId, purchaseTypeFilter, dateFrom, dateTo]);
+
+  function applyStatusTab(tab) {
+    setReceiveKpiFilter('all');
+    setStatusTab(tab);
+  }
+
+  function applyReceiveKpi(key) {
+    setStatusTab('all');
+    setReceiveKpiFilter((cur) => (cur === key ? 'all' : key));
+  }
 
   const openModal = useCallback(async (preselectVendorId) => {
     setModalOpen(true);
@@ -769,7 +901,14 @@ export default function PurchaseOrdersPage() {
     }
   }
 
+  function closeBillUpload() {
+    setBillUpload({ open: false, po: null, bill_name: '' });
+    setPendingBillFiles([]);
+    setBillLightbox({ open: false, items: [], index: 0 });
+  }
+
   function openBillUpload(po) {
+    setPendingBillFiles([]);
     setBillUpload({
       open: true,
       po,
@@ -777,38 +916,81 @@ export default function PurchaseOrdersPage() {
     });
   }
 
+  function openBillView(po) {
+    const info = getPoBillInfo(po);
+    setBillView({
+      open: true,
+      bill_name: info.billName || 'Bill',
+      files: info.files,
+      poId: po.po_id,
+      po,
+    });
+  }
+
+  function openBillLightbox(files, startIndex = 0) {
+    const items = (files || [])
+      .filter((f) => isImageBillFile(f))
+      .map((f) => ({ href: filePublicUrl(f), name: billFileName(f) }));
+    if (!items.length) return;
+    setBillLightbox({
+      open: true,
+      items,
+      index: Math.max(0, Math.min(startIndex, items.length - 1)),
+    });
+  }
+
+  useEffect(() => {
+    if (!billLightbox.open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setBillLightbox({ open: false, items: [], index: 0 });
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        setBillLightbox((lb) => ({
+          ...lb,
+          index: (lb.index - 1 + lb.items.length) % lb.items.length,
+        }));
+      }
+      if (e.key === 'ArrowRight') {
+        setBillLightbox((lb) => ({
+          ...lb,
+          index: (lb.index + 1) % lb.items.length,
+        }));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [billLightbox.open]);
+
   async function submitBillUpload(e) {
     e.preventDefault();
     const { po, bill_name } = billUpload;
-    const input = document.getElementById('po-bill-files-input');
-    const files = input?.files;
     if (!po) return;
     const name = bill_name.trim();
     if (!name) {
       toast.error('Bill number is required');
       return;
     }
-    if (!files?.length) {
+    if (!pendingBillFiles.length) {
       toast.error('Select at least one file');
       return;
     }
     const fd = new FormData();
     fd.append('bill_name', name);
-    for (let i = 0; i < files.length; i += 1) {
-      fd.append('files', files[i]);
-    }
+    pendingBillFiles.forEach((file) => fd.append('files', file));
     try {
       const { data } = await uploadPurchaseOrderBills(po.po_id, fd);
       if (!data.success) throw new Error(data.message);
       toast.success(data.message || 'Bill uploaded successfully');
-      setBillUpload({ open: false, po: null, bill_name: '' });
-      if (input) input.value = '';
+      closeBillUpload();
       await loadList();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Upload failed');
     }
   }
 
+  const billUploadExisting = billUpload.open && billUpload.po ? getPoBillInfo(billUpload.po) : { files: [] };
   const previewLines = useMemo(() => parseLineItems(preview.detail), [preview.detail]);
   const lockingHeader =
     preview.detail?.purchase_order_type === 'direct_purchase' ? 'Warranty period' : 'Locking period';
@@ -869,25 +1051,113 @@ export default function PurchaseOrdersPage() {
         </button>
       </header>
 
-      <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900">
-        <p className="font-semibold mb-1">PO approval &amp; vendor flow</p>
-        <ol className="list-decimal list-inside space-y-1 text-blue-800/90 text-xs sm:text-sm">
-          <li>
-            <strong>Procurement</strong> creates a PO and clicks <em>Submit for Approval</em>.
-          </li>
-          <li>
-            <strong>Manager / Admin</strong> reviews POs in the <em>Pending Approval</em> tab and approves or rejects.
-            Managers with SMTP configured receive an email alert; otherwise use the <em>Pending Approval</em> tab.
-          </li>
-          <li>
-            On approval, the vendor receives an email with the PO PDF and can accept/reject in the{' '}
-            <strong>Vendor Portal</strong> (optional — you can still receive goods without portal use).
-          </li>
-          <li>
-            After approval, use the <strong>eye icon</strong> to receive goods. Upload the vendor bill here or during GRN;
-            vendor portal invoices also appear in the bill column.
-          </li>
-        </ol>
+      <div className="flex flex-col gap-3">
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          onRangeChange={({ dateFrom: from, dateTo: to }) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+          fromLabel="PO date from"
+          toLabel="PO date to"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white min-w-[12rem]"
+            value={purchaseTypeFilter}
+            onChange={(e) => setPurchaseTypeFilter(e.target.value)}
+            aria-label="Filter by purchase type"
+          >
+            {PO_TYPE_FILTERS.map((opt) => (
+              <option key={opt.key} value={opt.key}>{opt.label}</option>
+            ))}
+          </select>
+          <input
+            type="search"
+            placeholder="Search PO #, type, remark, vendor…"
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-md"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          {(searchInput || purchaseTypeFilter !== 'all' || dateFrom || dateTo || receiveKpiFilter !== 'all' || statusTab !== 'all') && (
+            <button
+              type="button"
+              className="text-sm text-slate-600 hover:text-slate-900 underline"
+              onClick={() => {
+              setSearchInput('');
+              setPurchaseTypeFilter('all');
+              setDateFrom('');
+              setDateTo('');
+              setReceiveKpiFilter('all');
+              setStatusTab('all');
+              setPage(1);
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <StatCard
+          label="Total POs"
+          value={loading ? '…' : kpis.totalPos}
+          icon={ClipboardList}
+          tone="blue"
+          hint="In current filters"
+          active={statusTab === 'all' && receiveKpiFilter === 'all'}
+          onClick={() => {
+            setReceiveKpiFilter('all');
+            setStatusTab('all');
+          }}
+        />
+        <StatCard
+          label="Laptops ordered"
+          value={loading ? '…' : kpis.ordered}
+          icon={Laptop}
+          tone="gray"
+          hint="Units on these POs"
+        />
+        <StatCard
+          label="Laptops received"
+          value={loading ? '…' : kpis.received}
+          icon={PackageCheck}
+          tone="green"
+          hint="Serials already received"
+          active={receiveKpiFilter === 'received'}
+          onClick={() => applyReceiveKpi('received')}
+        />
+        <StatCard
+          label="Laptops pending"
+          value={loading ? '…' : kpis.pendingReceive}
+          icon={Clock}
+          tone="amber"
+          hint="Still to receive"
+          active={receiveKpiFilter === 'pending'}
+          onClick={() => applyReceiveKpi('pending')}
+        />
+        <StatCard
+          label="Awaiting approval"
+          value={loading ? '…' : kpis.pendingApproval}
+          icon={Hourglass}
+          tone="purple"
+          hint="Need manager approval"
+          active={statusTab === 'pending_approval' && receiveKpiFilter === 'all'}
+          onClick={() => applyStatusTab('pending_approval')}
+        />
+        <StatCard
+          label="Completed"
+          value={loading ? '…' : kpis.completed}
+          icon={Check}
+          tone="teal"
+          hint="Fully received POs"
+          active={statusTab === 'completed' && receiveKpiFilter === 'all'}
+          onClick={() => applyStatusTab('completed')}
+        />
       </div>
 
       <div className="flex flex-wrap gap-1 border-b border-gray-100 bg-white rounded-xl border border-gray-100 p-2 shadow-sm">
@@ -895,7 +1165,7 @@ export default function PurchaseOrdersPage() {
           <button
             key={tab.key}
             type="button"
-            onClick={() => setStatusTab(tab.key)}
+            onClick={() => applyStatusTab(tab.key)}
             className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
               statusTab === tab.key ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
             }`}
@@ -910,28 +1180,6 @@ export default function PurchaseOrdersPage() {
             </span>
           </button>
         ))}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="search"
-          placeholder="Search PO #, type, remark, vendor…"
-          className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-md"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-        />
-        {searchInput && (
-          <button
-            type="button"
-            className="text-sm text-slate-600 hover:text-slate-900 underline"
-            onClick={() => {
-              setSearchInput('');
-              setPage(1);
-            }}
-          >
-            Clear
-          </button>
-        )}
       </div>
 
       {loading ? (
@@ -954,6 +1202,7 @@ export default function PurchaseOrdersPage() {
             const typeBadge = poTypeBadge(r.purchase_order_type);
             const stBadge = poStatusBadge(r.status);
             const billInfo = getPoBillInfo(r);
+            const qty = poLaptopTotals(r);
             return (
               <div key={r.po_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
                 <div className="flex items-start justify-between gap-2">
@@ -973,31 +1222,46 @@ export default function PurchaseOrdersPage() {
                   <span>{r.purchase_order_date}</span>
                 </div>
                 <p className="text-sm text-slate-800 font-medium">{vendorName}</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500">Ordered</p>
+                    <p className="text-sm font-bold text-slate-900 tabular-nums">{qty.ordered}</p>
+                  </div>
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1.5">
+                    <p className="text-[10px] uppercase tracking-wide text-emerald-700">Received</p>
+                    <p className="text-sm font-bold text-emerald-700 tabular-nums">{qty.received}</p>
+                  </div>
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 px-2 py-1.5">
+                    <p className="text-[10px] uppercase tracking-wide text-amber-700">Pending</p>
+                    <p className="text-sm font-bold text-amber-700 tabular-nums">{qty.pending}</p>
+                  </div>
+                </div>
                 {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
                 {st === 'rejected' && r.rejection_reason ? (
                   <p className="text-xs text-red-600">Rejected: {r.rejection_reason}</p>
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  {billInfo.billName ? (
+                  {billInfo.billName || billInfo.files.length ? (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
-                      onClick={() => setBillView({ open: true, bill_name: billInfo.billName, files: billInfo.files, poId: r.po_id })}
+                      onClick={() => openBillView(r)}
                     >
-                      View bill
+                      View bill{billInfo.files.length > 1 ? ` (${billInfo.files.length})` : ''}
                     </button>
-                  ) : showEye ? (
+                  ) : null}
+                  {showEye ? (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
                       onClick={() => openBillUpload(r)}
                     >
-                      Upload bill
+                      {hasPoBill(r) ? 'Add files' : 'Upload bill'}
                     </button>
-                  ) : (
+                  ) : !billInfo.billName && !billInfo.files.length ? (
                     <span className="text-slate-400">Bill after approval</span>
-                  )}
+                  ) : null}
                 </div>
 
                 {(showSubmit || showManagerActions || showEye) && (
@@ -1051,6 +1315,9 @@ export default function PurchaseOrdersPage() {
                 <th className="p-3">S No.</th>
                 <th className="p-3">Purchase order details</th>
                 <th className="p-3">Vendor name</th>
+                <th className="p-3 text-right">Ordered</th>
+                <th className="p-3 text-right">Received</th>
+                <th className="p-3 text-right">Pending</th>
                 <th className="p-3">Remark</th>
                 <th className="p-3">Bill number</th>
                 <th className="p-3">Upload / view</th>
@@ -1069,6 +1336,7 @@ export default function PurchaseOrdersPage() {
                 const typeBadge = poTypeBadge(r.purchase_order_type);
                 const stBadge = poStatusBadge(r.status);
                 const billInfo = getPoBillInfo(r);
+                const qty = poLaptopTotals(r);
 
                 return (
                   <tr key={r.po_id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -1089,6 +1357,9 @@ export default function PurchaseOrdersPage() {
                       </p>
                     </td>
                     <td className="p-3 text-slate-800">{vendorName}</td>
+                    <td className="p-3 text-right tabular-nums font-semibold text-slate-900">{qty.ordered}</td>
+                    <td className="p-3 text-right tabular-nums font-semibold text-emerald-700">{qty.received}</td>
+                    <td className="p-3 text-right tabular-nums font-semibold text-amber-700">{qty.pending}</td>
                     <td className="p-3">
                       <RemarkCell text={r.remarks} />
                     </td>
@@ -1097,16 +1368,12 @@ export default function PurchaseOrdersPage() {
                         <button
                           type="button"
                           className="text-orange-600 font-medium hover:underline text-left"
-                          onClick={() =>
-                            setBillView({
-                              open: true,
-                              bill_name: billInfo.billName,
-                              files: billInfo.files,
-                              poId: r.po_id
-                            })
-                          }
+                          onClick={() => openBillView(r)}
                         >
                           {billInfo.billName}
+                          {billInfo.files.length > 1 ? (
+                            <span className="block text-[10px] text-slate-500 font-normal">{billInfo.files.length} files</span>
+                          ) : null}
                           {billInfo.source === 'vendor' ? (
                             <span className="block text-[10px] text-slate-500 font-normal">via vendor portal</span>
                           ) : null}
@@ -1116,32 +1383,28 @@ export default function PurchaseOrdersPage() {
                       )}
                     </td>
                     <td className="p-3">
-                      {hasPoBill(r) ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
-                          onClick={() =>
-                            setBillView({
-                              open: true,
-                              bill_name: billInfo.billName,
-                              files: billInfo.files,
-                              poId: r.po_id
-                            })
-                          }
-                        >
-                          View bill
-                        </button>
-                      ) : showEye ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
-                          onClick={() => openBillUpload(r)}
-                        >
-                          Upload bill
-                        </button>
-                      ) : (
-                        <span className="text-slate-400 text-xs">After approval</span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {hasPoBill(r) ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                            onClick={() => openBillView(r)}
+                          >
+                            View bill
+                          </button>
+                        ) : null}
+                        {showEye ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
+                            onClick={() => openBillUpload(r)}
+                          >
+                            {hasPoBill(r) ? 'Add files' : 'Upload bill'}
+                          </button>
+                        ) : !hasPoBill(r) ? (
+                          <span className="text-slate-400 text-xs">After approval</span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-3">
                       <div className="flex flex-col gap-2 items-start">
@@ -2162,37 +2425,85 @@ export default function PurchaseOrdersPage() {
             if (e.target === e.currentTarget) setBillView({ ...billView, open: false });
           }}
         >
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5" onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-start gap-2">
-              <h3 className="font-bold text-slate-900">Bill #{billView.bill_name}</h3>
-              <button
-                type="button"
-                className="p-1 rounded hover:bg-slate-100"
-                aria-label="Close"
-                onClick={() => setBillView({ ...billView, open: false })}
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div>
+                <h3 className="font-bold text-slate-900">Bill #{billView.bill_name}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {billView.files.length} file{billView.files.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {billView.po && showReceiveEye(billView.po.status) ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
+                    onClick={() => {
+                      setBillView({ ...billView, open: false });
+                      openBillUpload(billView.po);
+                    }}
+                  >
+                    Add files
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  aria-label="Close"
+                  onClick={() => setBillView({ ...billView, open: false })}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
-            <ul className="mt-4 space-y-2 text-sm">
-              {billView.files.length === 0 && <li className="text-slate-500">No files on record.</li>}
-              {billView.files.map((f, idx) => {
-                const href = filePublicUrl(f);
-                return (
-                  <li key={`${href}-${idx}`}>
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-orange-600 hover:underline"
-                    >
-                      {typeof f === 'string' ? f.split('/').pop() : 'File'}{' '}
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </li>
-                );
-              })}
-            </ul>
+            {billView.files.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500">No files on record.</p>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {billView.files.map((f, idx) => {
+                  const href = filePublicUrl(f);
+                  const name = billFileName(f);
+                  const image = isImageBillFile(f);
+                  const pdf = isPdfBillFile(f);
+                  const imageIndex = billView.files.slice(0, idx + 1).filter((x) => isImageBillFile(x)).length - 1;
+                  return (
+                    <div key={`${href}-${idx}`} className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+                      {image ? (
+                        <button
+                          type="button"
+                          className="block w-full aspect-square bg-slate-100"
+                          onClick={() => openBillLightbox(billView.files, imageIndex)}
+                        >
+                          <img src={href} alt={name} className="w-full h-full object-cover" />
+                        </button>
+                      ) : (
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="aspect-square flex flex-col items-center justify-center gap-1 p-3 text-slate-600 hover:bg-slate-100"
+                        >
+                          {pdf ? <FileText className="w-8 h-8 text-slate-400" /> : <ImageIcon className="w-8 h-8 text-slate-400" />}
+                          <span className="text-[11px] text-center break-all line-clamp-3">{name}</span>
+                        </a>
+                      )}
+                      <div className="flex items-center justify-between gap-1 px-2 py-1.5 border-t border-slate-200 bg-white">
+                        <span className="text-[11px] text-slate-600 truncate" title={name}>{name}</span>
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 text-orange-600 hover:text-orange-700"
+                          title="Open in new tab"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2204,12 +2515,47 @@ export default function PurchaseOrdersPage() {
           role="dialog"
           aria-modal="true"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setBillUpload({ open: false, po: null, bill_name: '' });
+            if (e.target === e.currentTarget) closeBillUpload();
           }}
         >
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5" onMouseDown={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-slate-900">Upload bill / invoice</h3>
-            <p className="text-xs text-slate-500 mt-1">PO {billUpload.po.purchase_order_number}</p>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5" onMouseDown={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">
+              {hasPoBill(billUpload.po) ? 'Add bill files' : 'Upload bill / invoice'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">PO {billUpload.po.purchase_order_number} — images and PDFs, multiple allowed</p>
+            {billUploadExisting.files.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-slate-600 mb-2">Already uploaded</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {billUploadExisting.files.map((f, idx) => {
+                    const href = filePublicUrl(f);
+                    const name = billFileName(f);
+                    const image = isImageBillFile(f);
+                    const imageIndex = billUploadExisting.files.slice(0, idx + 1).filter((x) => isImageBillFile(x)).length - 1;
+                    return image ? (
+                      <button
+                        key={`${href}-${idx}`}
+                        type="button"
+                        className="rounded-lg border overflow-hidden aspect-square"
+                        onClick={() => openBillLightbox(billUploadExisting.files, imageIndex)}
+                      >
+                        <img src={href} alt={name} className="w-full h-full object-cover" />
+                      </button>
+                    ) : (
+                      <a
+                        key={`${href}-${idx}`}
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-lg border bg-slate-50 aspect-square flex items-center justify-center p-1 text-[10px] text-center text-slate-600"
+                      >
+                        {name}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <form onSubmit={submitBillUpload} className="mt-4 space-y-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Bill number</label>
@@ -2221,20 +2567,39 @@ export default function PurchaseOrdersPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Files</label>
+                <label className="text-xs font-semibold text-slate-600">Add files (multiple images or PDF)</label>
                 <input
                   id="po-bill-files-input"
                   type="file"
                   multiple
+                  accept="image/*,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp"
                   className="mt-1 w-full text-sm"
-                  required
+                  onChange={(e) => {
+                    const extra = Array.from(e.target.files || []);
+                    if (extra.length) setPendingBillFiles((prev) => [...prev, ...extra]);
+                    e.target.value = '';
+                  }}
                 />
               </div>
+              {pendingBillFiles.length > 0 ? (
+                <div className="grid grid-cols-3 gap-2">
+                  {pendingBillFiles.map((file, idx) => (
+                    <PendingBillFileCard
+                      key={`${file.name}-${file.size}-${idx}`}
+                      file={file}
+                      onRemove={() => setPendingBillFiles((prev) => prev.filter((_, i) => i !== idx))}
+                      onPreview={(url, name) => setBillLightbox({ open: true, items: [{ href: url, name }], index: 0 })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">Select one or more images to preview them here before upload.</p>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   className="px-3 py-2 rounded-lg border text-sm"
-                  onClick={() => setBillUpload({ open: false, po: null, bill_name: '' })}
+                  onClick={closeBillUpload}
                 >
                   Cancel
                 </button>
@@ -2246,6 +2611,69 @@ export default function PurchaseOrdersPage() {
           </div>
         </div>
       )}
+
+      {billLightbox.open && billLightbox.items.length > 0 ? (
+        <div
+          className="fixed inset-0 z-[120] bg-black/85 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setBillLightbox({ open: false, items: [], index: 0 });
+          }}
+        >
+          <button
+            type="button"
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+            aria-label="Close preview"
+            onClick={() => setBillLightbox({ open: false, items: [], index: 0 })}
+          >
+            <X className="w-6 h-6" />
+          </button>
+          {billLightbox.items.length > 1 ? (
+            <>
+              <button
+                type="button"
+                className="absolute left-3 sm:left-6 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+                aria-label="Previous image"
+                onClick={() =>
+                  setBillLightbox((lb) => ({
+                    ...lb,
+                    index: (lb.index - 1 + lb.items.length) % lb.items.length,
+                  }))
+                }
+              >
+                <ChevronLeft className="w-7 h-7" />
+              </button>
+              <button
+                type="button"
+                className="absolute right-3 sm:right-6 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+                aria-label="Next image"
+                onClick={() =>
+                  setBillLightbox((lb) => ({
+                    ...lb,
+                    index: (lb.index + 1) % lb.items.length,
+                  }))
+                }
+              >
+                <ChevronRight className="w-7 h-7" />
+              </button>
+            </>
+          ) : null}
+          <div className="max-w-5xl w-full text-center" onMouseDown={(e) => e.stopPropagation()}>
+            <img
+              src={billLightbox.items[billLightbox.index].href}
+              alt={billLightbox.items[billLightbox.index].name}
+              className="max-h-[80vh] max-w-full mx-auto object-contain rounded-lg"
+            />
+            <p className="mt-3 text-sm text-white/80">
+              {billLightbox.items[billLightbox.index].name}
+              {billLightbox.items.length > 1
+                ? ` · ${billLightbox.index + 1} / ${billLightbox.items.length}`
+                : ''}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {rejectModal.open && rejectModal.po ? (
         <div

@@ -20,7 +20,9 @@ function decodeJwtPayload() {
 
 export function useVendorMgmtCapabilities() {
   const p = decodeJwtPayload();
+  const canManageVendorPortal = p?.role === 'admin' || p?.role === 'super_admin' || p?.is_superadmin === true;
   return {
-    canLoginAsVendor: p?.role === 'admin' || p?.is_superadmin === true
+    canLoginAsVendor: canManageVendorPortal,
+    canManageVendorPortal,
   };
 }
