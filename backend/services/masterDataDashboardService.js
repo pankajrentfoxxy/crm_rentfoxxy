@@ -72,6 +72,84 @@ const SQL_IS_RENTAL = `(
 /** Delivery / rent start / GRN receive — not row sync updated_at. */
 const MASTER_ACTIVITY_DATE_EXPR = 'COALESCE(s.delivered_at, s.rent_start_date, g.created_at, s.created_at)';
 
+/** Sale completion — delivery preferred, else dispatch (matches Vendor Master sold KPIs). */
+const SOLD_DATE_EXPR = 'COALESCE(s.delivered_at, s.dispatched_at)';
+
+function stripMasterDateFields(query = {}) {
+  const next = { ...query };
+  ['date_mode', 'dateMode', 'month', 'date_from', 'dateFrom', 'date_to', 'dateTo'].forEach((k) => {
+    delete next[k];
+  });
+  return next;
+}
+
+function masterDateFilterActive(query = {}) {
+  const dateRange = resolveMasterDateRange(query);
+  return Boolean(
+    dateRange.dateFrom
+    || dateRange.dateTo
+    || (Array.isArray(dateRange.ranges) && dateRange.ranges.length)
+  );
+}
+
+function applySoldDateRangeFilter(base, query = {}) {
+  const dateRange = resolveMasterDateRange(query);
+  const hasRanges = Array.isArray(dateRange.ranges) && dateRange.ranges.length > 0;
+  if (!hasRanges && !dateRange.dateFrom && !dateRange.dateTo) return base;
+
+  const appendOneRange = (range) => {
+    const parts = appendDateRangeClauses({
+      expr: SOLD_DATE_EXPR,
+      dateFrom: range?.dateFrom,
+      dateTo: range?.dateTo,
+      params: base.params,
+      timezone: 'Asia/Kolkata',
+    });
+    return parts.length ? `(${parts.join(' AND ')})` : null;
+  };
+
+  if (hasRanges && dateRange.ranges.length > 1) {
+    const orParts = dateRange.ranges.map(appendOneRange).filter(Boolean);
+    if (orParts.length) base.whereSql = `${base.whereSql} AND (${orParts.join(' OR ')})`;
+  } else {
+    const parts = appendDateRangeClauses({
+      expr: SOLD_DATE_EXPR,
+      dateFrom: dateRange.dateFrom,
+      dateTo: dateRange.dateTo,
+      params: base.params,
+      timezone: 'Asia/Kolkata',
+    });
+    if (parts.length) base.whereSql = `${base.whereSql} AND ${parts.join(' AND ')}`;
+  }
+  base.whereSql = `${base.whereSql} AND ${SOLD_DATE_EXPR} IS NOT NULL`;
+  return base;
+}
+
+/** Sale units with customer: delivered sold + sale SO dispatched/in transit. */
+function sqlUsageSold(deployedParamRef) {
+  return `(s.inventory_status = ANY(${deployedParamRef}::text[]) AND (${SQL_IS_SALE}))`;
+}
+
+function usesSoldDateList(query = {}) {
+  const statuses = parseCsvQuery(query.status);
+  return masterDateFilterActive(query) && statuses.length === 1 && statuses[0] === 'sold';
+}
+
+function buildSoldMetricsFilters(query = {}, { excludeColumn } = {}) {
+  const stripped = stripMasterDateFields(query);
+  delete stripped.status;
+  const base = buildMasterFilters({
+    ...stripped,
+    from_vendor: stripped.from_vendor ?? '1',
+    apply_vendor_po_exclusion: stripped.apply_vendor_po_exclusion ?? '1',
+  });
+  const deployedIdx = base.params.length + 1;
+  base.params.push(CUSTOMER_STATUSES);
+  base.whereSql = `${base.whereSql} AND ${sqlUsageSold(`$${deployedIdx}`)}`;
+  applySoldDateRangeFilter(base, query);
+  return appendMasterColumnFilters(base, query, { excludeColumn });
+}
+
 const VENDOR_REPAIR_EXISTS = `
   EXISTS (
     SELECT 1
@@ -292,6 +370,9 @@ function buildMasterFilters(query = {}) {
 }
 
 function buildMasterListFilters(query = {}, { excludeColumn } = {}) {
+  if (usesSoldDateList(query)) {
+    return buildSoldMetricsFilters(query, { excludeColumn });
+  }
   const base = buildMasterFilters(query);
   return appendMasterColumnFilters(base, query, { excludeColumn });
 }
@@ -529,49 +610,70 @@ async function getKpis(query = {}) {
   const kpiParams = [...params, CUSTOMER_STATUSES];
   const customerSql = customerKpiSql(`$${deployedIdx}`);
 
-  const kpiRes = await pool.query(
-    `SELECT
-        COUNT(*)::int AS total_laptops,
-        COUNT(DISTINCT s.current_customer_id) FILTER (WHERE s.current_customer_id IS NOT NULL)::int AS total_customers,
-        COUNT(DISTINCT p.vendor_id) FILTER (
-          WHERE p.vendor_id IS NOT NULL
-            AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
-        )::int AS total_vendors,
-        COUNT(*) FILTER (WHERE s.inventory_status = ANY($${deployedIdx}::text[]))::int AS total_active_customer_assets,
-        COUNT(*) FILTER (
-          WHERE s.current_customer_id IS NOT NULL
-             OR s.inventory_status = ANY($${deployedIdx}::text[])
-        )::int AS total_with_customer,
-        COUNT(*) FILTER (WHERE ${customerSql.rental})::int AS customer_rental_units,
-        COUNT(*) FILTER (WHERE ${customerSql.sold})::int AS customer_sold_units,
-        COUNT(*) FILTER (WHERE ${customerSql.inTransit})::int AS customer_in_transit_units,
-        COUNT(*) FILTER (WHERE ${customerSql.demo})::int AS customer_demo_units,
-        COUNT(*) FILTER (
-          WHERE p.vendor_id IS NOT NULL
-            AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
-        )::int AS total_from_vendors,
-        COUNT(*) FILTER (
-          WHERE s.inventory_status = 'in_stock'
-            AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
-        )::int AS total_ready_to_rent_sale,
-        COUNT(*) FILTER (
-          WHERE ${sqlNotDeployed(`$${deployedIdx}`)}
-            AND NOT (
-              s.inventory_status = 'in_stock'
+  const soldDateKpis = masterDateFilterActive(kpiQuery);
+  const kpiQueries = [
+    pool.query(
+      `SELECT
+          COUNT(*)::int AS total_laptops,
+          COUNT(DISTINCT s.current_customer_id) FILTER (WHERE s.current_customer_id IS NOT NULL)::int AS total_customers,
+          COUNT(DISTINCT p.vendor_id) FILTER (
+            WHERE p.vendor_id IS NOT NULL
+              AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
+          )::int AS total_vendors,
+          COUNT(*) FILTER (WHERE s.inventory_status = ANY($${deployedIdx}::text[]))::int AS total_active_customer_assets,
+          COUNT(*) FILTER (
+            WHERE s.current_customer_id IS NOT NULL
+               OR s.inventory_status = ANY($${deployedIdx}::text[])
+          )::int AS total_with_customer,
+          COUNT(*) FILTER (WHERE ${customerSql.rental})::int AS customer_rental_units,
+          COUNT(*) FILTER (WHERE ${customerSql.sold})::int AS customer_sold_units,
+          COUNT(*) FILTER (WHERE ${customerSql.inTransit})::int AS customer_in_transit_units,
+          COUNT(*) FILTER (WHERE ${customerSql.demo})::int AS customer_demo_units,
+          COUNT(*) FILTER (
+            WHERE p.vendor_id IS NOT NULL
+              AND COALESCE(v.exclude_from_vendor_po, FALSE) = FALSE
+          )::int AS total_from_vendors,
+          COUNT(*) FILTER (
+            WHERE s.inventory_status = 'in_stock'
               AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
-            )
-        )::int AS total_qc_process,
-        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (WHERE ${SQL_SOLD_FOR_VALUE}), 0)::numeric AS total_sale_value,
-        COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (
-          WHERE ${SQL_RENTED_FOR_VALUE}
-        ), 0)::numeric AS total_monthly_rental_value
-     ${FROM_SQL}
-     ${joinSql}
-     ${whereSql}`,
-    kpiParams
-  );
+          )::int AS total_ready_to_rent_sale,
+          COUNT(*) FILTER (
+            WHERE ${sqlNotDeployed(`$${deployedIdx}`)}
+              AND NOT (
+                s.inventory_status = 'in_stock'
+                AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
+              )
+          )::int AS total_qc_process,
+          COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (WHERE ${SQL_SOLD_FOR_VALUE}), 0)::numeric AS total_sale_value,
+          COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}) FILTER (
+            WHERE ${SQL_RENTED_FOR_VALUE}
+          ), 0)::numeric AS total_monthly_rental_value
+       ${FROM_SQL}
+       ${joinSql}
+       ${whereSql}`,
+      kpiParams
+    ),
+  ];
 
-  const k = kpiRes.rows[0] || {};
+  if (soldDateKpis) {
+    const soldBase = buildSoldMetricsFilters(kpiQuery);
+    kpiQueries.push(
+      pool.query(
+        `SELECT
+            COUNT(*)::int AS customer_sold_units,
+            COALESCE(SUM(${SQL_CUSTOMER_RATE_EX_GST}), 0)::numeric AS total_sale_value
+         ${FROM_SQL}
+         ${soldBase.joinSql || ''}
+         ${soldBase.whereSql}`,
+        soldBase.params
+      )
+    );
+  }
+
+  const kpiResults = await Promise.all(kpiQueries);
+  const k = kpiResults[0].rows[0] || {};
+  const soldK = soldDateKpis ? (kpiResults[1].rows[0] || {}) : null;
+
   const payload = {
     total_laptops: k.total_laptops || 0,
     total_customers: k.total_customers || 0,
@@ -579,13 +681,13 @@ async function getKpis(query = {}) {
     total_active_customer_assets: k.total_active_customer_assets || 0,
     total_with_customer: k.total_with_customer || 0,
     customer_rental_units: k.customer_rental_units || 0,
-    customer_sold_units: k.customer_sold_units || 0,
+    customer_sold_units: soldK ? (soldK.customer_sold_units || 0) : (k.customer_sold_units || 0),
     customer_in_transit_units: k.customer_in_transit_units || 0,
     customer_demo_units: k.customer_demo_units || 0,
     total_from_vendors: k.total_from_vendors || 0,
     total_ready_to_rent_sale: k.total_ready_to_rent_sale || 0,
     total_qc_process: k.total_qc_process || 0,
-    total_sale_value: Number(k.total_sale_value || 0),
+    total_sale_value: soldK ? Number(soldK.total_sale_value || 0) : Number(k.total_sale_value || 0),
     total_monthly_rental_value: Number(k.total_monthly_rental_value || 0),
   };
   await setCachedKpis(kpiKey, payload);

@@ -714,6 +714,7 @@ export default function InventoryListTable({ routeKey }) {
   const isSuperAdmin = user?.role === 'super_admin';
   const canEditInventory = canEditSection('inventory_management');
   const canEditQc = canEditSection('qc_management');
+  const canMoveToQcTicket = isInventoryAdmin || canEditSection('qc_move_to_ticket');
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
@@ -829,10 +830,10 @@ export default function InventoryListTable({ routeKey }) {
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
   const showRemarkColumn = isQcPending || isQcProcess || isDeadLaptops || isMissingLaptops;
-  const showQcPendingAction = isQcPending && isInventoryAdmin;
-  const showDeadReevalAction = isDeadLaptops && isInventoryAdmin;
+  const showQcPendingAction = isQcPending && canMoveToQcTicket;
+  const showDeadReevalAction = isDeadLaptops && canMoveToQcTicket;
   const showTicketStage = isQcProcess;
-  const showQcCreateTicket = isQcProcess;
+  const showQcCreateTicket = isQcProcess && canMoveToQcTicket;
   const showExportExcel = ['ready-to-rent-or-sell', 'qc-process', 'qc-pending'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
