@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Package, RotateCcw, Warehouse, Wrench,
+  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Package, RefreshCw, RotateCcw, Warehouse, Wrench,
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
@@ -78,7 +78,9 @@ const URL_KEYS = [
   'page', 'q', 'status', 'location', 'stage', 'pricing_type',
   'purchase_type', 'customer_id', 'rental_lifecycle',
   'date_mode', 'month', 'date_from', 'date_to',
-  'vendor_id', 'usage_bucket', 'warehouse_bucket',
+  'purchase_date_mode', 'purchase_month', 'purchase_date_from', 'purchase_date_to',
+  'activity_date_mode', 'activity_month', 'activity_date_from', 'activity_date_to',
+  'vendor_id', 'usage_bucket', 'warehouse_bucket', 'intake_type',
   ...SPEC_FILTER_KEYS,
 ];
 
@@ -183,10 +185,22 @@ export default function MasterVendorDataPage() {
   const vendorId = searchParams.get('vendor_id') || '';
   const usageBucket = searchParams.get('usage_bucket') || '';
   const warehouseBucket = searchParams.get('warehouse_bucket') || '';
-  const dateFrom = searchParams.get('date_from') || '';
-  const dateTo = searchParams.get('date_to') || '';
-  const dateMode = searchParams.get('date_mode') || (dateFrom || dateTo ? 'range' : 'month');
-  const month = searchParams.get('month') || '';
+  const intakeType = searchParams.get('intake_type') || '';
+  const legacyDateFrom = searchParams.get('date_from') || '';
+  const legacyDateTo = searchParams.get('date_to') || '';
+  const legacyDateMode = searchParams.get('date_mode') || '';
+  const legacyMonth = searchParams.get('month') || '';
+  const purchaseDateFrom = searchParams.get('purchase_date_from') || legacyDateFrom || '';
+  const purchaseDateTo = searchParams.get('purchase_date_to') || legacyDateTo || '';
+  const purchaseDateMode = searchParams.get('purchase_date_mode')
+    || legacyDateMode
+    || (purchaseDateFrom || purchaseDateTo ? 'range' : 'month');
+  const purchaseMonth = searchParams.get('purchase_month') || legacyMonth || '';
+  const activityDateFrom = searchParams.get('activity_date_from') || '';
+  const activityDateTo = searchParams.get('activity_date_to') || '';
+  const activityDateMode = searchParams.get('activity_date_mode')
+    || (activityDateFrom || activityDateTo ? 'range' : '');
+  const activityMonth = searchParams.get('activity_month') || '';
   const statuses = useMemo(() => readCsvParam(searchParams, 'status'), [status]);
   const locations = useMemo(() => readCsvParam(searchParams, 'location'), [location]);
   const stagesSelected = useMemo(() => readCsvParam(searchParams, 'stage'), [stage]);
@@ -196,7 +210,10 @@ export default function MasterVendorDataPage() {
   const vendorIds = useMemo(() => readCsvParam(searchParams, 'vendor_id'), [vendorId]);
   const usageBuckets = useMemo(() => readCsvParam(searchParams, 'usage_bucket'), [usageBucket]);
   const warehouseBuckets = useMemo(() => readCsvParam(searchParams, 'warehouse_bucket'), [warehouseBucket]);
-  const months = useMemo(() => readCsvParam(searchParams, 'month'), [month]);
+  const purchaseMonths = useMemo(() => readCsvParam(searchParams, 'purchase_month').length
+    ? readCsvParam(searchParams, 'purchase_month')
+    : readCsvParam(searchParams, 'month'), [purchaseMonth, legacyMonth]);
+  const activityMonths = useMemo(() => readCsvParam(searchParams, 'activity_month'), [activityMonth]);
   const specFilters = useMemo(() => readSpecFilters(searchParams), [queryKey]);
   const debouncedSpecs = useDebouncedSpecParams(specFilters);
   const columnFilters = useMemo(() => readColumnFiltersFromParams(searchParams), [queryKey]);
@@ -240,15 +257,22 @@ export default function MasterVendorDataPage() {
     vendor_id: vendorId || undefined,
     usage_bucket: usageBucket || undefined,
     warehouse_bucket: warehouseBucket || undefined,
-    date_mode: dateMode || undefined,
-    month: dateMode === 'month' ? (month || currentMonthValue()) : undefined,
-    date_from: dateMode === 'range' ? (dateFrom || undefined) : undefined,
-    date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
+    purchase_date_mode: purchaseDateMode || undefined,
+    purchase_month: purchaseDateMode === 'month' ? (purchaseMonths.join(',') || currentMonthValue()) : undefined,
+    purchase_date_from: purchaseDateMode === 'range' ? (purchaseDateFrom || undefined) : undefined,
+    purchase_date_to: purchaseDateMode === 'range' ? (purchaseDateTo || undefined) : undefined,
+    activity_date_mode: activityDateMode || undefined,
+    activity_month: activityDateMode === 'month' ? (activityMonths.join(',') || undefined) : undefined,
+    activity_date_from: activityDateMode === 'range' ? (activityDateFrom || undefined) : undefined,
+    activity_date_to: activityDateMode === 'range' ? (activityDateTo || undefined) : undefined,
+    intake_type: intakeType || undefined,
     ...specFiltersToParams(debouncedSpecs),
   }), [
     search, status, location, stage, pricingType, purchaseType, customerId, rentalLifecycle,
-    vendorId, usageBucket, warehouseBucket,
-    dateMode, month, dateFrom, dateTo, debouncedSpecs,
+    vendorId, usageBucket, warehouseBucket, intakeType,
+    purchaseDateMode, purchaseMonths, purchaseDateFrom, purchaseDateTo,
+    activityDateMode, activityMonths, activityDateFrom, activityDateTo,
+    debouncedSpecs,
   ]);
 
   const listFilterParams = useMemo(() => ({
@@ -315,7 +339,10 @@ export default function MasterVendorDataPage() {
 
   const clearFilters = () => {
     setSearchInput('');
-    setSearchParams(new URLSearchParams({ date_mode: 'month', month: currentMonthValue() }), { replace: true });
+    setSearchParams(new URLSearchParams({
+      purchase_date_mode: 'month',
+      purchase_month: currentMonthValue(),
+    }), { replace: true });
   };
 
   const fetchColumnOptions = useCallback(async (columnKey) => {
@@ -353,7 +380,44 @@ export default function MasterVendorDataPage() {
 
   const toggleUsage = (key) => {
     const next = usageBuckets.includes(key) ? [] : [key];
-    patchParams({ usage_bucket: next, warehouse_bucket: '' });
+    patchParams({ usage_bucket: next, warehouse_bucket: '', intake_type: '', status: '' });
+    listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const isAllPurchasedActive = !usageBucket && !warehouseBucket && !intakeType && !rentalLifecycle && !status;
+
+  const showAllPurchasedCohort = () => {
+    patchParams({
+      usage_bucket: '',
+      warehouse_bucket: '',
+      intake_type: '',
+      status: '',
+      rental_lifecycle: '',
+    });
+    listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const toggleReplacementIntake = () => {
+    const next = intakeType === 'replacement' ? '' : 'replacement';
+    patchParams({
+      intake_type: next,
+      usage_bucket: '',
+      warehouse_bucket: '',
+      status: '',
+      rental_lifecycle: '',
+    });
+    listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const toggleReturnedCohort = () => {
+    const isActive = statuses.length === 1 && statuses[0] === 'returned';
+    patchParams({
+      status: isActive ? '' : 'returned',
+      intake_type: '',
+      usage_bucket: '',
+      warehouse_bucket: '',
+      rental_lifecycle: '',
+    });
     listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -509,67 +573,185 @@ export default function MasterVendorDataPage() {
               searchPlaceholder="Search customer…"
             />
           </div>
-          <select
-            className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem] min-h-[38px]"
-            value={dateMode}
-            onChange={(e) => {
-              const next = e.target.value;
-              if (next === 'month') {
-                patchParams({
-                  date_mode: 'month',
-                  month: months.join(',') || currentMonthValue(),
-                  date_from: '',
-                  date_to: '',
-                });
-              } else if (next === 'range') {
-                patchParams({ date_mode: 'range', month: '' });
-              } else {
-                patchParams({ date_mode: '', month: '', date_from: '', date_to: '' });
-              }
-            }}
-            aria-label="Purchase date mode"
-          >
-            {DATE_MODE_OPTIONS.map((opt) => (
-              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          {dateMode === 'month' ? (
-            <div className="min-w-[11rem] w-44">
-              <SearchableMultiSelect
-                id="vmd-month"
-                value={months.length ? months : [currentMonthValue()]}
-                onChange={(vals) => patchParams({
-                  date_mode: 'month',
-                  month: vals.length ? vals : currentMonthValue(),
+          <div className="flex flex-wrap items-end gap-2 border rounded-lg px-3 py-2 bg-slate-50/80">
+            <span className="text-xs font-semibold text-slate-600 w-full sm:w-auto">Purchase Date</span>
+            <select
+              className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem] min-h-[38px] bg-white"
+              value={purchaseDateMode}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === 'month') {
+                  patchParams({
+                    purchase_date_mode: 'month',
+                    purchase_month: purchaseMonths.join(',') || currentMonthValue(),
+                    purchase_date_from: '',
+                    purchase_date_to: '',
+                    date_mode: '',
+                    month: '',
+                    date_from: '',
+                    date_to: '',
+                  });
+                } else if (next === 'range') {
+                  patchParams({
+                    purchase_date_mode: 'range',
+                    purchase_month: '',
+                    date_mode: '',
+                    month: '',
+                  });
+                } else {
+                  patchParams({
+                    purchase_date_mode: '',
+                    purchase_month: '',
+                    purchase_date_from: '',
+                    purchase_date_to: '',
+                    date_mode: '',
+                    month: '',
+                    date_from: '',
+                    date_to: '',
+                  });
+                }
+              }}
+              aria-label="Purchase date mode"
+            >
+              {DATE_MODE_OPTIONS.map((opt) => (
+                <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {purchaseDateMode === 'month' ? (
+              <div className="min-w-[11rem] w-44">
+                <SearchableMultiSelect
+                  id="vmd-purchase-month"
+                  value={purchaseMonths.length ? purchaseMonths : [currentMonthValue()]}
+                  onChange={(vals) => patchParams({
+                    purchase_date_mode: 'month',
+                    purchase_month: vals.length ? vals.join(',') : currentMonthValue(),
+                    purchase_date_from: '',
+                    purchase_date_to: '',
+                    date_mode: '',
+                    month: '',
+                    date_from: '',
+                    date_to: '',
+                  })}
+                  options={MONTH_OPTIONS}
+                  placeholder="Select months"
+                  countNoun="month"
+                  compact
+                  searchPlaceholder="Search month…"
+                />
+              </div>
+            ) : null}
+            {purchaseDateMode === 'range' ? (
+              <DateRangeFilter
+                layout="inline"
+                showPresets={false}
+                fromLabel="From"
+                toLabel="To"
+                dateFrom={purchaseDateFrom}
+                dateTo={purchaseDateTo}
+                onRangeChange={({ dateFrom: from, dateTo: to }) => patchParams({
+                  purchase_date_mode: 'range',
+                  purchase_month: '',
+                  purchase_date_from: from,
+                  purchase_date_to: to,
+                  date_mode: '',
+                  month: '',
                   date_from: '',
                   date_to: '',
                 })}
-                options={MONTH_OPTIONS}
-                placeholder="Select months"
-                countNoun="month"
-                compact
-                searchPlaceholder="Search month…"
+                onDateFromChange={(v) => patchParams({
+                  purchase_date_mode: 'range',
+                  purchase_month: '',
+                  purchase_date_from: v,
+                  date_mode: '',
+                  month: '',
+                })}
+                onDateToChange={(v) => patchParams({
+                  purchase_date_mode: 'range',
+                  purchase_month: '',
+                  purchase_date_to: v,
+                  date_mode: '',
+                  month: '',
+                })}
               />
-            </div>
-          ) : null}
-          {dateMode === 'range' ? (
-            <DateRangeFilter
-              layout="inline"
-              showPresets={false}
-              fromLabel="From"
-              toLabel="To"
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              onRangeChange={({ dateFrom: from, dateTo: to }) => patchParams({
-                date_mode: 'range',
-                month: '',
-                date_from: from,
-                date_to: to,
-              })}
-              onDateFromChange={(v) => patchParams({ date_mode: 'range', month: '', date_from: v })}
-              onDateToChange={(v) => patchParams({ date_mode: 'range', month: '', date_to: v })}
-            />
-          ) : null}
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-end gap-2 border rounded-lg px-3 py-2 bg-slate-50/80">
+            <span className="text-xs font-semibold text-slate-600 w-full sm:w-auto">Sale &amp; Rental Date</span>
+            <select
+              className="border rounded-lg px-3 py-2 text-sm min-w-[9.5rem] min-h-[38px] bg-white"
+              value={activityDateMode}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === 'month') {
+                  patchParams({
+                    activity_date_mode: 'month',
+                    activity_month: activityMonths.join(',') || currentMonthValue(),
+                    activity_date_from: '',
+                    activity_date_to: '',
+                  });
+                } else if (next === 'range') {
+                  patchParams({ activity_date_mode: 'range', activity_month: '' });
+                } else {
+                  patchParams({
+                    activity_date_mode: '',
+                    activity_month: '',
+                    activity_date_from: '',
+                    activity_date_to: '',
+                  });
+                }
+              }}
+              aria-label="Sale and rental date mode"
+            >
+              {DATE_MODE_OPTIONS.map((opt) => (
+                <option key={`activity-${opt.value || 'all'}`} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {activityDateMode === 'month' ? (
+              <div className="min-w-[11rem] w-44">
+                <SearchableMultiSelect
+                  id="vmd-activity-month"
+                  value={activityMonths.length ? activityMonths : [currentMonthValue()]}
+                  onChange={(vals) => patchParams({
+                    activity_date_mode: 'month',
+                    activity_month: vals.length ? vals.join(',') : currentMonthValue(),
+                    activity_date_from: '',
+                    activity_date_to: '',
+                  })}
+                  options={MONTH_OPTIONS}
+                  placeholder="Select months"
+                  countNoun="month"
+                  compact
+                  searchPlaceholder="Search month…"
+                />
+              </div>
+            ) : null}
+            {activityDateMode === 'range' ? (
+              <DateRangeFilter
+                layout="inline"
+                showPresets={false}
+                fromLabel="From"
+                toLabel="To"
+                dateFrom={activityDateFrom}
+                dateTo={activityDateTo}
+                onRangeChange={({ dateFrom: from, dateTo: to }) => patchParams({
+                  activity_date_mode: 'range',
+                  activity_month: '',
+                  activity_date_from: from,
+                  activity_date_to: to,
+                })}
+                onDateFromChange={(v) => patchParams({
+                  activity_date_mode: 'range',
+                  activity_month: '',
+                  activity_date_from: v,
+                })}
+                onDateToChange={(v) => patchParams({
+                  activity_date_mode: 'range',
+                  activity_month: '',
+                  activity_date_to: v,
+                })}
+              />
+            ) : null}
+          </div>
           <button type="button" onClick={clearFilters} className="text-sm px-3 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">
             Clear
           </button>
@@ -589,31 +771,40 @@ export default function MasterVendorDataPage() {
           onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
         />
         <p className="text-xs text-slate-500">
-          <strong>Purchased / warehouse cards</strong> use vendor PO purchase date.
-          <strong> Sold Laptops</strong> and the sold list use <strong>delivery / dispatch date</strong> (when the sale completed).
+          <strong>Purchase Date</strong> defines the laptop set (unique serials purchased in that window).
+          <strong> Sale &amp; Rental Date</strong> filters when those cohort laptops were sold or rented — not CRM-wide totals.
+          Warehouse / returned counts are current status within the same purchase cohort.
           Excluded Vendor PO vendors are omitted.
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Total Purchased" value={overviewLoading ? '…' : (kpis.total_purchased ?? 0)} icon={Laptop} hint="Vendor PO units in period" />
+        <StatCard
+          label="Total Purchased"
+          value={overviewLoading ? '…' : (kpis.total_purchased ?? 0)}
+          icon={Laptop}
+          tone="gray"
+          hint="Unique purchases in period — click to list all purchased laptops"
+          onClick={showAllPurchasedCohort}
+          active={isAllPurchasedActive}
+        />
         <StatCard label="Purchase Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_purchase_value)} icon={IndianRupee} hint="Vendor PO purchase rate" />
         <StatCard
           label="Sold Laptops"
           value={overviewLoading ? '…' : (kpis.sold_count ?? 0)}
           icon={HardDrive}
           tone="red"
-          hint="Sold in selected month(s) — click to filter list"
+          hint="Cohort laptops sold in Sale & Rental Date window"
           onClick={() => toggleUsage('sold')}
           active={usageBuckets.length === 1 && usageBuckets[0] === 'sold'}
         />
-        <StatCard label="Sale Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_sale_value)} icon={IndianRupee} tone="red" hint="Sold in period — customer sale price" />
+        <StatCard label="Sale Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_sale_value)} icon={IndianRupee} tone="red" hint="Sale & Rental Date window — customer sale price" />
         <StatCard
           label="Rented Laptops"
           value={overviewLoading ? '…' : (kpis.rental_count ?? 0)}
           icon={Package}
           tone="blue"
-          hint="Currently on rent / demo — click to filter list"
+          hint="Cohort laptops rented in Sale & Rental Date window"
           onClick={() => toggleUsage('rental')}
           active={usageBuckets.length === 1 && usageBuckets[0] === 'rental'}
         />
@@ -636,6 +827,24 @@ export default function MasterVendorDataPage() {
           onClick={() => toggleUsage('repair')}
           active={usageBuckets.length === 1 && usageBuckets[0] === 'repair'}
         />
+        <StatCard
+          label="Vendor Replacements"
+          value={overviewLoading ? '…' : (kpis.replacement_count ?? 0)}
+          icon={RefreshCw}
+          tone="purple"
+          hint={`${kpis.replacement_linked_count ?? 0} purchased units have a replacement — click to list replacement intakes`}
+          onClick={toggleReplacementIntake}
+          active={intakeType === 'replacement'}
+        />
+        <StatCard
+          label="Returned"
+          value={overviewLoading ? '…' : (kpis.returned_count ?? 0)}
+          icon={RotateCcw}
+          tone="amber"
+          hint="Purchase cohort currently returned — click to filter list"
+          onClick={toggleReturnedCohort}
+          active={statuses.length === 1 && statuses[0] === 'returned'}
+        />
       </div>
 
       <div>
@@ -649,7 +858,7 @@ export default function MasterVendorDataPage() {
             label="Total Rental Purchase"
             value={overviewLoading ? '…' : (kpis.rental_purchase_total ?? 0)}
             icon={Laptop}
-            hint="rental_purchase PO units"
+            hint="Unique rental_purchase serials in period"
             onClick={() => patchParams({
               purchase_type: 'rental_purchase',
               rental_lifecycle: '',
@@ -765,7 +974,12 @@ export default function MasterVendorDataPage() {
       <div ref={listAnchorRef} className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-700">Laptop inventory</h2>
-          <p className="text-xs text-slate-500">{pagination.total || 0} laptops</p>
+          <p className="text-xs text-slate-500">
+            {kpis.total_purchased ?? pagination.unique_total ?? 0} unique purchases
+            {(pagination.total || 0) > (kpis.total_purchased ?? pagination.unique_total ?? 0)
+              ? ` · ${pagination.total} intake records (excl. vendor repair replacements)`
+              : ''}
+          </p>
         </div>
         <div className="border rounded-xl overflow-x-auto bg-white">
           {listLoading ? (
@@ -795,7 +1009,21 @@ export default function MasterVendorDataPage() {
                 {rows.map((r) => (
                   <tr key={r.serial_id} className="hover:bg-slate-50">
                     <td className="px-3 py-2 font-mono text-xs">
-                      <TtsplHistoryLink ttsplId={r.ttspl_id} onOpen={setHistoryTtspl} />
+                      {r.is_replacement_intake && r.replaced_ttspl_id ? (
+                        <span className="inline-flex items-center gap-1 flex-wrap">
+                          <TtsplHistoryLink ttsplId={r.replaced_ttspl_id} onOpen={setHistoryTtspl} />
+                          <span className="text-slate-400">→</span>
+                          <TtsplHistoryLink ttsplId={r.ttspl_id} onOpen={setHistoryTtspl} />
+                        </span>
+                      ) : r.ttspl_display && r.ttspl_display.includes(' -> ') ? (
+                        <span className="inline-flex items-center gap-1 flex-wrap">
+                          <TtsplHistoryLink ttsplId={r.ttspl_id} onOpen={setHistoryTtspl} />
+                          <span className="text-slate-400">→</span>
+                          <TtsplHistoryLink ttsplId={r.latest_replacement_ttspl} onOpen={setHistoryTtspl} />
+                        </span>
+                      ) : (
+                        <TtsplHistoryLink ttsplId={r.ttspl_id} onOpen={setHistoryTtspl} />
+                      )}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">{r.serial_number || '—'}</td>
                     <td className="px-3 py-2">{r.vendor_name || '—'}</td>
