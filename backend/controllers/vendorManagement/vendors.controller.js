@@ -836,6 +836,93 @@ const laptopsValidators = [
   query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
 ];
 
+const laptopsExportValidators = [
+  param('id').isInt({ min: 1 }).toInt(),
+  query('search').optional().isString().trim(),
+  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
+];
+
+const VENDOR_LAPTOPS_FROM_JOINS = `
+    FROM vendor_serial_numbers vsn
+    JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+    LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
+    LEFT JOIN inventory inv ON (
+      inv.machine_number = vsn.inventory_asset_code OR inv.serial_number = vsn.serial_number
+    )`;
+
+const VENDOR_LAPTOPS_SELECT = `
+    SELECT vsn.serial_id,
+           COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+           vsn.serial_number,
+           COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
+           COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
+           COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
+           vsn.extra->>'generation' AS generation,
+           COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
+           COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
+           vsn.inventory_status,
+           vsn.current_customer_id,
+           c.name AS customer_name,
+           vsn.current_dc_number,
+           vsn.dispatched_at,
+           vsn.delivered_at,
+           po.purchase_order_number`;
+
+function vendorLaptopConfigLine(row) {
+  return [row.processor, row.generation, row.ram, row.storage].filter(Boolean).join(' | ');
+}
+
+function mapVendorLaptopRow(r) {
+  const lc = r.inventory_status === 'returned'
+    ? 'returned'
+    : DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)
+      ? 'active'
+      : 'in_stock';
+  return {
+    ...r,
+    rental_status: displayDeployedStatus(r.inventory_status),
+    lifecycle: lc,
+  };
+}
+
+function buildVendorLaptopsFilter(vendorId, { search, lifecycle }) {
+  const params = [vendorId];
+  let where = ` WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`;
+
+  if (lifecycle === 'active' || lifecycle === 'in_stock') {
+    params.push(DEPLOYED_WITH_CUSTOMER_STATUSES);
+    const di = params.length;
+    where += lifecycle === 'active'
+      ? ` AND vsn.inventory_status = ANY($${di}::text[])`
+      : ` AND NOT (vsn.inventory_status = ANY($${di}::text[])) AND vsn.inventory_status <> 'returned'`;
+  } else if (lifecycle === 'returned') {
+    where += ` AND vsn.inventory_status = 'returned'`;
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    where += ` AND (
+      COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${i}
+      OR COALESCE(vsn.serial_number, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
+      OR COALESCE(c.name, '') ILIKE $${i}
+      OR COALESCE(vsn.current_dc_number, '') ILIKE $${i}
+    )`;
+  }
+
+  return { params, where };
+}
+
+function fmtExcelDate(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
 /**
  * GET /vendors/:id/laptops
  * All laptops (serial units) supplied by a vendor, derived from the authoritative
@@ -864,78 +951,21 @@ async function listVendorLaptops(req, res) {
     [vendorId, DEPLOYED_WITH_CUSTOMER_STATUSES]
   );
 
-  const fromJoins = `
-    FROM vendor_serial_numbers vsn
-    JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
-    LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
-    LEFT JOIN inventory inv ON (
-      inv.machine_number = vsn.inventory_asset_code OR inv.serial_number = vsn.serial_number
-    )`;
+  const { params, where } = buildVendorLaptopsFilter(vendorId, { search, lifecycle });
 
-  const params = [vendorId];
-  let where = ` WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`;
-
-  if (lifecycle === 'active' || lifecycle === 'in_stock') {
-    params.push(DEPLOYED_WITH_CUSTOMER_STATUSES);
-    const di = params.length;
-    where += lifecycle === 'active'
-      ? ` AND vsn.inventory_status = ANY($${di}::text[])`
-      : ` AND NOT (vsn.inventory_status = ANY($${di}::text[])) AND vsn.inventory_status <> 'returned'`;
-  } else if (lifecycle === 'returned') {
-    where += ` AND vsn.inventory_status = 'returned'`;
-  }
-
-  if (search) {
-    params.push(`%${search}%`);
-    const i = params.length;
-    where += ` AND (
-      COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
-      OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${i}
-      OR COALESCE(vsn.serial_number, '') ILIKE $${i}
-      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
-      OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
-      OR COALESCE(c.name, '') ILIKE $${i}
-      OR COALESCE(vsn.current_dc_number, '') ILIKE $${i}
-    )`;
-  }
-
-  const filteredR = await pool.query(`SELECT COUNT(*)::int AS total ${fromJoins}${where}`, params);
+  const filteredR = await pool.query(`SELECT COUNT(*)::int AS total ${VENDOR_LAPTOPS_FROM_JOINS}${where}`, params);
   const filteredTotal = filteredR.rows[0]?.total || 0;
 
   const listParams = [...params, limit, offset];
   const listR = await pool.query(
-    `SELECT vsn.serial_id,
-            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
-            vsn.serial_number,
-            COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
-            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
-            COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
-            vsn.extra->>'generation' AS generation,
-            COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
-            COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
-            vsn.inventory_status,
-            vsn.current_customer_id,
-            c.name AS customer_name,
-            vsn.current_dc_number,
-            po.purchase_order_number
-     ${fromJoins}${where}
+    `${VENDOR_LAPTOPS_SELECT}
+     ${VENDOR_LAPTOPS_FROM_JOINS}${where}
      ORDER BY vsn.updated_at DESC NULLS LAST, vsn.serial_id DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
   );
 
-  const laptops = listR.rows.map((r) => {
-    const lc = r.inventory_status === 'returned'
-      ? 'returned'
-      : DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)
-        ? 'active'
-        : 'in_stock';
-    return {
-      ...r,
-      rental_status: displayDeployedStatus(r.inventory_status),
-      lifecycle: lc,
-    };
-  });
+  const laptops = listR.rows.map(mapVendorLaptopRow);
 
   res.json({
     success: true,
@@ -952,6 +982,80 @@ async function listVendorLaptops(req, res) {
       totalPages: Math.max(1, Math.ceil(filteredTotal / limit)),
     },
   });
+}
+
+/**
+ * GET /vendors/:id/laptops/export.xlsx
+ * Export filtered vendor laptop list (respects lifecycle tab + search).
+ */
+async function exportVendorLaptopsExcel(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendorId = parseInt(req.params.id, 10);
+  const search = (req.query.search || '').trim();
+  const lifecycle = req.query.lifecycle || 'all';
+  const EXPORT_LIMIT = 20000;
+
+  try {
+    const vendorR = await pool.query(
+      `SELECT business_name, first_name FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
+      [vendorId]
+    );
+    if (!vendorR.rows.length) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' });
+    }
+    const vendorName = vendorR.rows[0].business_name || vendorR.rows[0].first_name || `Vendor ${vendorId}`;
+
+    const { params, where } = buildVendorLaptopsFilter(vendorId, { search, lifecycle });
+    const listR = await pool.query(
+      `${VENDOR_LAPTOPS_SELECT}
+       ${VENDOR_LAPTOPS_FROM_JOINS}${where}
+       ORDER BY vsn.updated_at DESC NULLS LAST, vsn.serial_id DESC
+       LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+
+    const rows = listR.rows.map(mapVendorLaptopRow);
+    const XLSX = require('xlsx');
+    const columnOrder = [
+      'S.No', 'Asset Tag', 'Serial No', 'Brand', 'Model', 'Config',
+      'Customer Name', 'Rental Status', 'Lifecycle', 'DC Number',
+      'Dispatch Date', 'Delivered Date', 'PO Number',
+    ];
+    const sheetRows = rows.map((lap, idx) => ({
+      'S.No': idx + 1,
+      'Asset Tag': lap.ttspl_id || '',
+      'Serial No': lap.serial_number || '',
+      Brand: lap.brand || '',
+      Model: lap.model_name || '',
+      Config: vendorLaptopConfigLine(lap),
+      'Customer Name': lap.customer_name || '',
+      'Rental Status': lap.rental_status || '',
+      Lifecycle: lap.lifecycle === 'active' ? 'Active' : lap.lifecycle === 'returned' ? 'Returned' : 'In Stock',
+      'DC Number': lap.current_dc_number || '',
+      'Dispatch Date': fmtExcelDate(lap.dispatched_at),
+      'Delivered Date': fmtExcelDate(lap.delivered_at),
+      'PO Number': lap.purchase_order_number || '',
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sheetRows, { header: columnOrder });
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendor Laptops');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const safeName = String(vendorName).replace(/[^\w.-]+/g, '_').slice(0, 40);
+    const filterLabel = search ? 'filtered' : lifecycle;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="vendor_${vendorId}_${safeName}_${filterLabel}_laptops.xlsx"`
+    );
+    res.send(buf);
+  } catch (err) {
+    console.error('exportVendorLaptopsExcel:', err);
+    res.status(500).json({ success: false, message: 'Export failed' });
+  }
 }
 
 module.exports = {
@@ -971,5 +1075,7 @@ module.exports = {
   portalAccessValidators,
   updatePortalAccess,
   laptopsValidators,
-  listVendorLaptops
+  laptopsExportValidators,
+  listVendorLaptops,
+  exportVendorLaptopsExcel,
 };

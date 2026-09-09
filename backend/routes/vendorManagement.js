@@ -51,6 +51,7 @@ const vendorFiles = upload.fields([
 // ---------- Vendors (Laravel VendorController equivalents) ----------------------------
 router.get('/vendors/info', authorizeVendorRead, vendors.lookupValidators, vendors.lookupVendor);
 router.get('/vendors', authorizeVendorRead, vendors.listValidators, vendors.listVendors);
+router.get('/vendors/:id/laptops/export.xlsx', authorize, vendors.laptopsExportValidators, vendors.exportVendorLaptopsExcel);
 router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors.listVendorLaptops);
 router.get('/vendors/:id', authorizeVendorRead, vendors.getValidators, vendors.getVendor);
 router.post(

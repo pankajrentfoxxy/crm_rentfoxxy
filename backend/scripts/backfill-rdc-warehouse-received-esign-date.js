@@ -13,6 +13,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const pool = require('../config/db');
 const { resetVendorSerialForQcReentry } = require('../services/grnTicketService');
 const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
+const { shouldSkipReturnFlipForReDelivery } = require('../services/repairPickupInventoryService');
 
 const COMMIT = process.argv.includes('--commit');
 
@@ -152,6 +153,21 @@ async function processRdc(client, rdcNumber, customerId) {
     const blockingDc = await hasActiveOutbound(client, code);
     if (blockingDc) {
       actions.push({ itemId: item.id, code, action: 'blocked_active_outbound', dc: blockingDc });
+      continue;
+    }
+
+    const reDelivered = await shouldSkipReturnFlipForReDelivery(client, {
+      code,
+      customerId,
+      returnDcNumber: rdcNumber,
+    });
+    if (reDelivered) {
+      actions.push({
+        itemId: item.id,
+        code,
+        action: 'skipped_re_delivered_after_return',
+        outboundDc: reDelivered.dc_number,
+      });
       continue;
     }
 
