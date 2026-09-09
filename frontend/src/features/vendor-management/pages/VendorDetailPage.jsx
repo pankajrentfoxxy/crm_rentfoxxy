@@ -6,20 +6,19 @@ import {
   Pencil,
   Laptop,
   Package,
-  MapPin,
   Phone,
-  Landmark,
-  FileText,
   ChevronRight,
-  Calendar,
+  PanelRight,
   Users,
   RotateCcw,
   Warehouse,
+  Truck,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Button, SectionLoader, Badge } from '../../../components/ui/primitives';
 import { fetchVendor } from '../vendorManagementApi';
 import VendorFormModal from '../components/VendorFormModal';
+import VendorConfigDrawer from '../components/VendorConfigDrawer';
 import VendorLaptopsPanel from '../components/VendorLaptopsPanel';
 import {
   formatStateLabel,
@@ -28,13 +27,6 @@ import {
   vendorStatusKey,
   vendorStatusLabel,
 } from '../vendorMgmtUi';
-
-function formatDate(value) {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value).slice(0, 10);
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 function vendorStatusTone(key) {
   if (key === 'active') return 'green';
@@ -65,60 +57,16 @@ function MetricCard({ icon: Icon, label, value, tone = 'slate' }) {
   );
 }
 
-function InfoCard({ title, icon: Icon, onEdit, children }) {
-  return (
-    <section className="rounded-xl border border-slate-200/80 bg-white shadow-sm overflow-hidden h-full">
-      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-100 bg-slate-50/50">
-        <div className="flex items-center gap-2 min-w-0">
-          {Icon && (
-            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-slate-500 ring-1 ring-slate-200/80">
-              <Icon className="w-4 h-4" />
-            </span>
-          )}
-          <h3 className="text-sm font-semibold text-slate-800 truncate">{title}</h3>
-        </div>
-        {onEdit && (
-          <button
-            type="button"
-            onClick={onEdit}
-            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800"
-          >
-            <Pencil className="w-3 h-3" />
-            Edit
-          </button>
-        )}
-      </header>
-      <div className="p-4">{children}</div>
-    </section>
-  );
-}
-
-function Field({ label, value, mono, className = '' }) {
-  return (
-    <div className={className}>
-      <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
-      <dd className={`mt-1 text-sm text-slate-900 break-words ${mono ? 'font-mono text-[13px]' : ''}`}>
-        {value || '—'}
-      </dd>
-    </div>
-  );
-}
-
-function FieldGrid({ children, cols = 2 }) {
-  return (
-    <dl className={`grid gap-x-6 gap-y-4 ${cols === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
-      {children}
-    </dl>
-  );
-}
-
 export default function VendorDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
-  const [laptopCounts, setLaptopCounts] = useState({ total: 0, active: 0, returned: 0, in_stock: 0 });
+  const [configOpen, setConfigOpen] = useState(false);
+  const [laptopCounts, setLaptopCounts] = useState({
+    total: 0, active: 0, returned: 0, in_stock: 0, in_transit: 0,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,12 +98,10 @@ export default function VendorDetailPage() {
   const portalOn = vendor.vendor_portal_enabled !== false;
   const displayName = vendor.business_name || vendor.f_name || `Vendor #${vendor.vendor_id}`;
   const cityState = [vendor.city, formatStateLabel(vendor.state)].filter(Boolean).join(', ');
-  const shippingCityState = [vendor.shipping_city, formatStateLabel(vendor.shipping_state)].filter(Boolean).join(', ');
 
   return (
     <div className="min-h-full bg-slate-50/80">
       <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6 space-y-6">
-        {/* Breadcrumb */}
         <nav className="flex items-center gap-1.5 text-sm text-slate-500">
           <Link to="/vendor-management/vendors" className="hover:text-slate-800 transition-colors">
             Vendors
@@ -164,7 +110,6 @@ export default function VendorDetailPage() {
           <span className="text-slate-800 font-medium truncate max-w-[240px] sm:max-w-none">{displayName}</span>
         </nav>
 
-        {/* Hero header */}
         <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
           <div className="px-5 py-5 md:px-6 md:py-6 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div className="flex items-start gap-4 min-w-0">
@@ -190,6 +135,12 @@ export default function VendorDetailPage() {
                       {vendor.business_type}
                     </>
                   )}
+                  {cityState && (
+                    <>
+                      <span className="mx-2 text-slate-300">·</span>
+                      {cityState}
+                    </>
+                  )}
                 </p>
                 {(vendor.contact_person_phone || vendor.email) && (
                   <p className="mt-2 text-sm text-slate-600 flex flex-wrap gap-x-4 gap-y-1">
@@ -208,103 +159,27 @@ export default function VendorDetailPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <Button variant="secondary" size="sm" icon={PanelRight} onClick={() => setConfigOpen(true)}>
+                View Details
+              </Button>
               <Link to={`/vendor-management/purchase-orders?vendor_id=${vendor.vendor_id}`}>
                 <Button variant="secondary" size="sm" icon={Package}>View POs</Button>
               </Link>
               <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditOpen(true)}>
                 Edit Vendor
               </Button>
-              <a href="#vendor-laptops" className="inline-flex">
-                <Button size="sm" icon={Laptop}>View Laptops</Button>
-              </a>
             </div>
           </div>
         </div>
 
-        {/* KPI strip */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
           <MetricCard icon={Laptop} label="Total Laptops" value={laptopCounts.total} tone="blue" />
           <MetricCard icon={Users} label="Active" value={laptopCounts.active} tone="green" />
-          <MetricCard icon={RotateCcw} label="Returned" value={laptopCounts.returned} tone="amber" />
+          <MetricCard icon={Truck} label="In Transit" value={laptopCounts.in_transit} tone="blue" />
           <MetricCard icon={Warehouse} label="In Stock" value={laptopCounts.in_stock} tone="purple" />
-          <MetricCard icon={Calendar} label="Registered On" value={formatDate(vendor.registration_date)} tone="slate" />
+          <MetricCard icon={RotateCcw} label="Returned" value={laptopCounts.returned} tone="amber" />
         </div>
 
-        {/* Profile grid */}
-        <div className="grid lg:grid-cols-2 gap-4 md:gap-5">
-          <InfoCard title="Business Information" icon={Building2} onEdit={() => setEditOpen(true)}>
-            <FieldGrid>
-              <Field label="Legal / trade name" value={vendor.f_name} />
-              <Field label="Business name" value={vendor.business_name} />
-              <Field label="Business type" value={vendor.business_type} />
-              <Field label="Registration date" value={formatDate(vendor.registration_date)} />
-              <Field label="GSTIN" value={vendor.gst_number} mono />
-              <Field label="PAN" value={vendor.pan_number} mono />
-              <Field label="MSME" value={vendor.msme_number} />
-              <Field label="Brand code" value={vendor.brand_code} />
-            </FieldGrid>
-          </InfoCard>
-
-          <InfoCard title="Registered Address" icon={MapPin} onEdit={() => setEditOpen(true)}>
-            <FieldGrid cols={1}>
-              <Field label="Address" value={vendor.address} />
-              <div className="grid sm:grid-cols-2 gap-4">
-                <Field label="City / State" value={cityState} />
-                <Field label="Pincode" value={vendor.pincode} mono />
-              </div>
-            </FieldGrid>
-          </InfoCard>
-
-          <InfoCard title="Contact Information" icon={Phone} onEdit={() => setEditOpen(true)}>
-            <FieldGrid>
-              <Field label="Contact person" value={vendor.contact_person_name || vendor.f_name} />
-              <Field label="Phone" value={vendor.contact_person_phone || vendor.number || vendor.phone} />
-              <Field label="Alternate phone" value={vendor.alternate_phone} />
-              <Field label="Email" value={vendor.email} />
-            </FieldGrid>
-          </InfoCard>
-
-          <InfoCard title="Banking Details" icon={Landmark} onEdit={() => setEditOpen(true)}>
-            <FieldGrid>
-              <Field label="Bank name" value={vendor.bank_name} />
-              <Field label="Account holder" value={vendor.account_holder_name} />
-              <Field label="Account number" value={vendor.account_number} mono />
-              <Field label="IFSC" value={vendor.bank_ifsc_code} mono />
-            </FieldGrid>
-          </InfoCard>
-
-          <InfoCard title="Shipping Address" icon={MapPin} onEdit={() => setEditOpen(true)}>
-            {vendor.shipping_same !== false ? (
-              <p className="text-sm text-slate-600 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5">
-                Same as registered address
-              </p>
-            ) : (
-              <FieldGrid cols={1}>
-                <Field label="Address" value={vendor.shipping_address} />
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <Field label="City / State" value={shippingCityState} />
-                  <Field label="Pincode" value={vendor.shipping_pincode} mono />
-                </div>
-              </FieldGrid>
-            )}
-          </InfoCard>
-
-          <InfoCard title="Commercial & Portal" icon={FileText} onEdit={() => setEditOpen(true)}>
-            <FieldGrid>
-              <Field label="Payment terms" value={paymentTermsLabel(vendor.po_payment_terms)} />
-              <Field label="Credit days" value={vendor.credit_days != null ? String(vendor.credit_days) : null} />
-              <Field
-                label="Portal last login"
-                value={vendor.vendor_portal_last_login
-                  ? new Date(vendor.vendor_portal_last_login).toLocaleString('en-IN')
-                  : 'Never logged in'}
-              />
-              <Field label="Notes" value={vendor.notes} className="sm:col-span-2" />
-            </FieldGrid>
-          </InfoCard>
-        </div>
-
-        {/* Laptops section */}
         <section id="vendor-laptops" className="rounded-2xl border border-slate-200/80 bg-white shadow-sm scroll-mt-6">
           <header className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
@@ -333,6 +208,17 @@ export default function VendorDetailPage() {
           </button>
         </div>
       </div>
+
+      <VendorConfigDrawer
+        open={configOpen}
+        vendor={vendor}
+        onClose={() => setConfigOpen(false)}
+        onEdit={() => {
+          setConfigOpen(false);
+          setEditOpen(true);
+        }}
+        onVendorUpdated={load}
+      />
 
       <VendorFormModal
         open={editOpen}

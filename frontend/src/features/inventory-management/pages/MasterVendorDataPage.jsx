@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Package, Wrench,
+  Building2, FileSpreadsheet, HardDrive, IndianRupee, Laptop, Loader2, Package, RotateCcw, Warehouse, Wrench,
 } from 'lucide-react';
 import { PageHeader, StatCard, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
@@ -50,6 +50,12 @@ const PRICING_TYPE_OPTIONS = [
   { value: 'rental', label: 'Rental' },
 ];
 
+const DEFAULT_PURCHASE_TYPE_OPTIONS = [
+  { value: 'rental_purchase', label: 'Rental Purchase' },
+  { value: 'rent_to_own', label: 'Rent to Own' },
+  { value: 'direct_purchase', label: 'Direct Purchase' },
+];
+
 const DATE_MODE_OPTIONS = [
   { value: '', label: 'All time' },
   { value: 'month', label: 'By month' },
@@ -70,6 +76,7 @@ const WAREHOUSE_STAGE_CARDS = [
 
 const URL_KEYS = [
   'page', 'q', 'status', 'location', 'stage', 'pricing_type',
+  'purchase_type', 'customer_id', 'rental_lifecycle',
   'date_mode', 'month', 'date_from', 'date_to',
   'vendor_id', 'usage_bucket', 'warehouse_bucket',
   ...SPEC_FILTER_KEYS,
@@ -148,6 +155,8 @@ export default function MasterVendorDataPage() {
   const [kpis, setKpis] = useState({});
   const [vendors, setVendors] = useState([]);
   const [vendorOptions, setVendorOptions] = useState([]);
+  const [customerOptions, setCustomerOptions] = useState([]);
+  const [purchaseTypeOptions, setPurchaseTypeOptions] = useState(DEFAULT_PURCHASE_TYPE_OPTIONS);
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [historyTtspl, setHistoryTtspl] = useState(null);
@@ -168,6 +177,9 @@ export default function MasterVendorDataPage() {
   const location = searchParams.get('location') || '';
   const stage = searchParams.get('stage') || '';
   const pricingType = searchParams.get('pricing_type') || '';
+  const purchaseType = searchParams.get('purchase_type') || '';
+  const customerId = searchParams.get('customer_id') || '';
+  const rentalLifecycle = searchParams.get('rental_lifecycle') || '';
   const vendorId = searchParams.get('vendor_id') || '';
   const usageBucket = searchParams.get('usage_bucket') || '';
   const warehouseBucket = searchParams.get('warehouse_bucket') || '';
@@ -179,6 +191,8 @@ export default function MasterVendorDataPage() {
   const locations = useMemo(() => readCsvParam(searchParams, 'location'), [location]);
   const stagesSelected = useMemo(() => readCsvParam(searchParams, 'stage'), [stage]);
   const pricingTypes = useMemo(() => readCsvParam(searchParams, 'pricing_type'), [pricingType]);
+  const purchaseTypes = useMemo(() => readCsvParam(searchParams, 'purchase_type'), [purchaseType]);
+  const customerIds = useMemo(() => readCsvParam(searchParams, 'customer_id'), [customerId]);
   const vendorIds = useMemo(() => readCsvParam(searchParams, 'vendor_id'), [vendorId]);
   const usageBuckets = useMemo(() => readCsvParam(searchParams, 'usage_bucket'), [usageBucket]);
   const warehouseBuckets = useMemo(() => readCsvParam(searchParams, 'warehouse_bucket'), [warehouseBucket]);
@@ -220,6 +234,9 @@ export default function MasterVendorDataPage() {
     location: location || undefined,
     stage: stage || undefined,
     pricing_type: pricingType || undefined,
+    purchase_type: purchaseType || undefined,
+    customer_id: customerId || undefined,
+    rental_lifecycle: rentalLifecycle || undefined,
     vendor_id: vendorId || undefined,
     usage_bucket: usageBucket || undefined,
     warehouse_bucket: warehouseBucket || undefined,
@@ -229,7 +246,8 @@ export default function MasterVendorDataPage() {
     date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
     ...specFiltersToParams(debouncedSpecs),
   }), [
-    search, status, location, stage, pricingType, vendorId, usageBucket, warehouseBucket,
+    search, status, location, stage, pricingType, purchaseType, customerId, rentalLifecycle,
+    vendorId, usageBucket, warehouseBucket,
     dateMode, month, dateFrom, dateTo, debouncedSpecs,
   ]);
 
@@ -238,23 +256,31 @@ export default function MasterVendorDataPage() {
     ...columnFilterParams,
   }), [filterParams, columnFilterParams]);
 
+  const overviewParams = useMemo(() => {
+    const next = { ...filterParams };
+    delete next.rental_lifecycle;
+    return next;
+  }, [filterParams]);
+
   const loadOverview = useCallback(async () => {
     const reqId = ++overviewReqRef.current;
     setOverviewLoading(true);
     try {
-      const { data } = await fetchVendorMasterOverview(filterParams);
+      const { data } = await fetchVendorMasterOverview(overviewParams);
       if (reqId !== overviewReqRef.current) return;
       if (!data?.success) throw new Error(data?.message || 'Failed');
       setKpis(data.kpis || {});
       setVendors(data.vendors || []);
       setVendorOptions(data.vendor_options || []);
+      setCustomerOptions(data.customer_options || []);
+      if (data.purchase_type_options?.length) setPurchaseTypeOptions(data.purchase_type_options);
     } catch (e) {
       if (reqId !== overviewReqRef.current) return;
       toast.error(e.response?.data?.message || e.message || 'Failed to load vendor master KPIs');
     } finally {
       if (reqId === overviewReqRef.current) setOverviewLoading(false);
     }
-  }, [filterParams]);
+  }, [overviewParams]);
 
   const loadList = useCallback(async () => {
     const reqId = ++listReqRef.current;
@@ -274,11 +300,11 @@ export default function MasterVendorDataPage() {
   }, [listFilterParams, page]);
 
   useEffect(() => {
-    const key = JSON.stringify(filterParams);
+    const key = JSON.stringify(overviewParams);
     if (lastOverviewKey.current === key) return;
     lastOverviewKey.current = key;
     loadOverview();
-  }, [filterParams, loadOverview]);
+  }, [overviewParams, loadOverview]);
 
   useEffect(() => {
     const key = JSON.stringify({ ...listFilterParams, page });
@@ -334,6 +360,17 @@ export default function MasterVendorDataPage() {
   const toggleBucket = (key) => {
     const next = warehouseBuckets.includes(key) ? [] : [key];
     patchParams({ warehouse_bucket: next, usage_bucket: '' });
+    listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const applyRentalLifecycle = (key) => {
+    const nextType = purchaseTypes.includes('rental_purchase')
+      ? purchaseTypes
+      : [...purchaseTypes, 'rental_purchase'];
+    patchParams({
+      purchase_type: nextType,
+      rental_lifecycle: rentalLifecycle === key ? '' : key,
+    });
     listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -446,6 +483,30 @@ export default function MasterVendorDataPage() {
               countNoun="type"
               compact
               searchPlaceholder="Search type…"
+            />
+          </div>
+          <div className="min-w-[12rem] w-48">
+            <SearchableMultiSelect
+              id="vmd-purchase-type"
+              value={purchaseTypes}
+              onChange={(vals) => patchParams({ purchase_type: vals, rental_lifecycle: '' })}
+              options={purchaseTypeOptions}
+              placeholder="All purchase types"
+              countNoun="purchase type"
+              compact
+              searchPlaceholder="Search purchase type…"
+            />
+          </div>
+          <div className="min-w-[12rem] w-48">
+            <SearchableMultiSelect
+              id="vmd-customer"
+              value={customerIds}
+              onChange={(vals) => patchParams({ customer_id: vals })}
+              options={customerOptions}
+              placeholder="All customers"
+              countNoun="customer"
+              compact
+              searchPlaceholder="Search customer…"
             />
           </div>
           <select
@@ -575,6 +636,54 @@ export default function MasterVendorDataPage() {
           onClick={() => toggleUsage('repair')}
           active={usageBuckets.length === 1 && usageBuckets[0] === 'repair'}
         />
+      </div>
+
+      <div>
+        <h2 className="text-sm font-semibold text-slate-700 mb-1">Rental Purchase breakup</h2>
+        <p className="text-xs text-slate-500 mb-2">
+          Vendor POs typed <strong>Rental Purchase</strong> in the selected purchase-date window.
+          Customer = All combines every customer. Click a card to filter the laptop list.
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard
+            label="Total Rental Purchase"
+            value={overviewLoading ? '…' : (kpis.rental_purchase_total ?? 0)}
+            icon={Laptop}
+            hint="rental_purchase PO units"
+            onClick={() => patchParams({
+              purchase_type: 'rental_purchase',
+              rental_lifecycle: '',
+            })}
+            active={purchaseTypes.length === 1 && purchaseTypes[0] === 'rental_purchase' && !rentalLifecycle}
+          />
+          <StatCard
+            label="Rented"
+            value={overviewLoading ? '…' : (kpis.rental_purchase_rented ?? 0)}
+            icon={Package}
+            tone="blue"
+            hint="Currently on rent / demo"
+            onClick={() => applyRentalLifecycle('rented')}
+            active={rentalLifecycle === 'rented'}
+          />
+          <StatCard
+            label="In Warehouse"
+            value={overviewLoading ? '…' : (kpis.rental_purchase_warehouse ?? 0)}
+            icon={Warehouse}
+            tone="teal"
+            hint="Not rented and not returned"
+            onClick={() => applyRentalLifecycle('warehouse')}
+            active={rentalLifecycle === 'warehouse'}
+          />
+          <StatCard
+            label="Returned"
+            value={overviewLoading ? '…' : (kpis.rental_purchase_returned ?? 0)}
+            icon={RotateCcw}
+            tone="amber"
+            hint="Current status returned"
+            onClick={() => applyRentalLifecycle('returned')}
+            active={rentalLifecycle === 'returned'}
+          />
+        </div>
       </div>
 
       <div>

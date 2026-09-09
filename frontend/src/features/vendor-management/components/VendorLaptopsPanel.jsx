@@ -10,8 +10,9 @@ const PAGE_SIZE = 25;
 const LIFECYCLE_TABS = [
   { id: 'all', label: 'All' },
   { id: 'active', label: 'Active' },
-  { id: 'returned', label: 'Returned' },
   { id: 'in_stock', label: 'In Stock' },
+  { id: 'in_transit', label: 'In Transit' },
+  { id: 'returned', label: 'Returned' },
 ];
 
 function laptopConfig(lap) {
@@ -32,9 +33,16 @@ function CurrentStatusBadge({ lifecycle }) {
   const map = {
     active: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/60',
     returned: 'bg-amber-50 text-amber-800 ring-1 ring-amber-200/60',
+    in_transit: 'bg-blue-50 text-blue-700 ring-1 ring-blue-200/60',
     in_stock: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200/60',
   };
-  const label = lifecycle === 'active' ? 'Active' : lifecycle === 'returned' ? 'Returned' : 'In Stock';
+  const label = lifecycle === 'active'
+    ? 'Active'
+    : lifecycle === 'returned'
+      ? 'Returned'
+      : lifecycle === 'in_transit'
+        ? 'In Transit'
+        : 'In Stock';
   return (
     <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${map[lifecycle] || map.in_stock}`}>
       {label}
@@ -47,6 +55,7 @@ function tabCount(tabId, counts) {
   if (tabId === 'active') return counts.active;
   if (tabId === 'returned') return counts.returned;
   if (tabId === 'in_stock') return counts.in_stock;
+  if (tabId === 'in_transit') return counts.in_transit;
   return 0;
 }
 
@@ -60,7 +69,7 @@ export default function VendorLaptopsPanel({
   onCountsLoaded,
 }) {
   const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState({ total: 0, active: 0, returned: 0, in_stock: 0 });
+  const [counts, setCounts] = useState({ total: 0, active: 0, returned: 0, in_stock: 0, in_transit: 0 });
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('all');
   const [page, setPage] = useState(1);
@@ -98,9 +107,9 @@ export default function VendorLaptopsPanel({
         lifecycle: tab,
       });
       if (!data?.success) throw new Error(data?.message || 'Failed to load laptops');
-      const c = data.counts || { total: 0, active: 0, returned: 0 };
-      const inStock = Math.max(0, (c.total || 0) - (c.active || 0) - (c.returned || 0));
-      const nextCounts = { ...c, in_stock: inStock };
+      const c = data.counts || { total: 0, active: 0, returned: 0, in_transit: 0 };
+      const inStock = c.in_stock ?? Math.max(0, (c.total || 0) - (c.active || 0) - (c.returned || 0));
+      const nextCounts = { ...c, in_stock: inStock, in_transit: c.in_transit || 0 };
       setRows(data.laptops || []);
       setCounts(nextCounts);
       setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
