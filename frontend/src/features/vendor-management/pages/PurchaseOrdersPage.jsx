@@ -27,6 +27,7 @@ import {
   fetchPurchaseOrderFormMeta,
   createPurchaseOrder,
   fetchPurchaseOrder,
+  patchPurchaseOrderLineSpecs,
   patchPurchaseOrderStatus,
   uploadPurchaseOrderBills
 } from '../vendorManagementApi';
@@ -105,6 +106,33 @@ function formatPoType(t) {
   return String(t)
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const PO_LINE_SPEC_FIELDS = ['processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size'];
+
+function emptyLineSpecDraft(item = {}) {
+  return {
+    processor: String(item.processor ?? ''),
+    generation: String(item.generation ?? ''),
+    ram: String(item.ram ?? ''),
+    storage: String(item.storage ?? ''),
+    gpu: String(item.gpu ?? ''),
+    screen_size: String(item.screen_size ?? ''),
+  };
+}
+
+function formatLineSpecsText(item) {
+  const procGen = [item.processor, item.generation].filter(Boolean).join(' · ');
+  const ramStor = [item.ram, item.storage].filter(Boolean).join(' | ');
+  const gpu = item.gpu ? ` · ${item.gpu}` : '';
+  const screen = item.screen_size ? ` · ${item.screen_size}` : '';
+  return `${procGen}${procGen && ramStor ? ' ' : ''}${ramStor}${gpu}${screen}`.trim() || '—';
+}
+
+function lineSpecDraftChanged(draft, item) {
+  return PO_LINE_SPEC_FIELDS.some(
+    (field) => String(draft[field] ?? '').trim() !== String(item[field] ?? '').trim()
+  );
 }
 
 /** Prefer API `product_details` (Laravel-compatible alias populated by CRM list/getOne). */
@@ -445,6 +473,7 @@ export default function PurchaseOrdersPage() {
   const vendorFilterId = searchParams.get('vendor_id');
   const manager = isManagerUser(user);
   const procurement = isProcurementUser(user);
+  const isSuperAdmin = user?.role === 'super_admin' || user?.is_superadmin === true;
 
   const [allRows, setAllRows] = useState([]);
   const [statusTab, setStatusTab] = useState('all');
@@ -473,6 +502,9 @@ export default function PurchaseOrdersPage() {
 
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [previewTab, setPreviewTab] = useState('details');
+  const [specEditIndex, setSpecEditIndex] = useState(null);
+  const [specEditDraft, setSpecEditDraft] = useState(emptyLineSpecDraft());
+  const [specEditSaving, setSpecEditSaving] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null, po: null });
   const [billUpload, setBillUpload] = useState({ open: false, po: null, bill_name: '' });
@@ -868,8 +900,46 @@ export default function PurchaseOrdersPage() {
     setCreatePreviewOpen(true);
   }
 
+  function startSpecEdit(idx, item) {
+    setSpecEditIndex(idx);
+    setSpecEditDraft(emptyLineSpecDraft(item));
+  }
+
+  function cancelSpecEdit() {
+    setSpecEditIndex(null);
+    setSpecEditDraft(emptyLineSpecDraft());
+  }
+
+  async function saveSpecEdit(lineIndex) {
+    if (!preview.detail?.po_id) return;
+    const lineItem = parseLineItems(preview.detail)[lineIndex];
+    if (lineItem && !lineSpecDraftChanged(specEditDraft, lineItem)) {
+      cancelSpecEdit();
+      toast('No spec changes to save');
+      return;
+    }
+    setSpecEditSaving(true);
+    try {
+      const { data } = await patchPurchaseOrderLineSpecs(preview.detail.po_id, lineIndex, specEditDraft);
+      if (!data.success) throw new Error(data.message || 'Could not update specs');
+      setPreview((prev) => ({ ...prev, detail: data.data }));
+      if (data.message !== 'No spec changes') {
+        setActivityRefreshKey((k) => k + 1);
+        toast.success('Line specs updated');
+      } else {
+        toast('No spec changes to save');
+      }
+      cancelSpecEdit();
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Could not update specs');
+    } finally {
+      setSpecEditSaving(false);
+    }
+  }
+
   async function openPreview(poId) {
     setPreviewTab('details');
+    cancelSpecEdit();
     setPreview({ open: true, loading: true, detail: null });
     try {
       const { data } = await fetchPurchaseOrder(poId);
@@ -883,6 +953,7 @@ export default function PurchaseOrdersPage() {
   }
 
   function closePreview() {
+    cancelSpecEdit();
     setPreview({ open: false, loading: false, detail: null });
   }
 
@@ -2329,17 +2400,65 @@ export default function PurchaseOrdersPage() {
                               : Number(item.vendor_locking_period) || 0;
                           const brand = item.brand_name || item.brand || '';
                           const title = `${brand}${item.model ? ` — ${item.model}` : ''}`.trim() || `Product ${idx + 1}`;
+                          const editingSpecs = specEditIndex === idx;
                           return (
                             <tr key={idx} className="border-t">
                               <td className="p-2">{idx + 1}</td>
                               <td className="p-2 min-w-[12rem]">
                                 <div className="rounded-lg border bg-slate-50/80 p-2">
-                                  <p className="font-semibold text-slate-900">{title}</p>
-                                  <p className="text-xs text-slate-600 mt-0.5">
-                                    {[item.processor, item.generation].filter(Boolean).join(' · ')}{' '}
-                                    {[item.ram, item.storage].filter(Boolean).join(' | ')}{' '}
-                                    {item.gpu ? ` · ${item.gpu}` : ''}
-                                  </p>
+                                  <div className="flex items-start justify-between gap-2">
+                                    <p className="font-semibold text-slate-900">{title}</p>
+                                    {isSuperAdmin && !editingSpecs && previewTab === 'details' ? (
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                        onClick={() => startSpecEdit(idx, item)}
+                                        title="Edit specs configuration"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                        Edit
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {editingSpecs ? (
+                                    <div className="mt-2 space-y-2">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        {PO_LINE_SPEC_FIELDS.map((field) => (
+                                          <label key={field} className="block text-[11px] text-slate-500">
+                                            {field.replace(/_/g, ' ')}
+                                            <input
+                                              type="text"
+                                              className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-900"
+                                              value={specEditDraft[field]}
+                                              onChange={(e) =>
+                                                setSpecEditDraft((d) => ({ ...d, [field]: e.target.value }))
+                                              }
+                                            />
+                                          </label>
+                                        ))}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={specEditSaving}
+                                          className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                                          onClick={() => saveSpecEdit(idx)}
+                                        >
+                                          {specEditSaving ? 'Saving…' : 'Save specs'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={specEditSaving}
+                                          className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                          onClick={cancelSpecEdit}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-slate-600 mt-0.5">{formatLineSpecsText(item)}</p>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-2 text-slate-700">{lockMonths ? `${lockMonths} mo` : '—'}</td>

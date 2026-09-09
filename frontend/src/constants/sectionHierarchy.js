@@ -48,6 +48,7 @@ export const MODULE_CHILDREN = {
     'parts_dashboard',
     'parts_inventory',
     'parts_approval',
+    'parts_approval_export',
     'parts_history',
     'parts_procurement',
     'part_vendor_repair',

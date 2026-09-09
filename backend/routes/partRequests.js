@@ -45,6 +45,11 @@ router.get('/', checkSectionPermission('parts_requests', 'view'), ctrl.listPartR
 
 // Specific routes before the generic :requestId matcher
 router.get('/warehouse-queue', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.getWarehouseQueue);
+router.get(
+  '/warehouse-queue/export.csv',
+  checkSectionPermission('parts_approval_export', 'view'),
+  ctrl.exportWarehouseQueueCsv
+);
 router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
 router.get('/instances', ctrl.listPartInstances);

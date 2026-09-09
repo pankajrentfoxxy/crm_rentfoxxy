@@ -27,7 +27,7 @@ const FULL_SELECT = `
          pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
          op.part_name AS old_part_catalog_name, op.category AS old_part_catalog_category,
          opi.prt_id AS old_part_prt_id,
-         t.ttspl_id, t.brand, t.model, t.processor, t.ram, t.storage,
+         t.ttspl_id, t.serial_number AS laptop_serial_number, t.brand, t.model, t.processor, t.ram, t.storage,
          t.vendor_serial_id, t.current_stage_id,
          st.stage_name,
          u.name AS requester_name,
@@ -1249,18 +1249,118 @@ exports.cancelPartRequest = async (req, res) => {
   }
 };
 
+const WAREHOUSE_QUEUE_STATUSES = ['pending', 'escalated', 'ordered', 'received', 'approved'];
+
+function partRequestMatchesSearch(row, search) {
+  if (!search) return true;
+  const q = search.toLowerCase();
+  const hay = [
+    row.request_number,
+    row.part_name,
+    row.ttspl_id,
+    row.requester_name,
+    row.stage_name,
+    row.status,
+  ]
+    .map((v) => String(v || '').toLowerCase())
+    .join(' ');
+  return hay.includes(q);
+}
+
+function csvEscapePartExport(value) {
+  return `"${String(value ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+}
+
+function buildWarehouseQueueCsv(rows) {
+  const header = [
+    'Request #',
+    'Status',
+    'Type',
+    'Part name',
+    'TTSPL',
+    'Laptop serial number',
+    'Requester',
+    'Stage',
+    'Brand',
+    'Model',
+    'Created at',
+    'Approved by',
+  ];
+  const body = rows.map((r) => [
+    r.request_number,
+    r.status,
+    r.request_type,
+    r.part_name,
+    r.ttspl_id,
+    r.laptop_serial_number,
+    r.requester_name,
+    r.stage_name,
+    r.brand,
+    r.model,
+    r.created_at ? new Date(r.created_at).toISOString() : '',
+    r.approver_name,
+  ]);
+  return [
+    header.join(','),
+    ...body.map((row) => row.map(csvEscapePartExport).join(',')),
+  ].join('\r\n');
+}
+
 // GET /api/part-requests/warehouse-queue
 exports.getWarehouseQueue = async (req, res) => {
   try {
     await ensurePartsSpecColumns(pool);
     const result = await pool.query(
-      `${FULL_SELECT} WHERE pr.status IN ('pending','escalated','ordered','received')
+      `${FULL_SELECT} WHERE pr.status = ANY($1::text[])
         ORDER BY CASE pr.status WHEN 'pending' THEN 0 WHEN 'received' THEN 1 WHEN 'ordered' THEN 2 ELSE 3 END,
-                 pr.created_at ASC`
+                 pr.created_at ASC`,
+      [WAREHOUSE_QUEUE_STATUSES]
     );
     res.json({ success: true, requests: result.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/part-requests/warehouse-queue/export.csv?scope=tab&statuses=...&search=...
+exports.exportWarehouseQueueCsv = async (req, res) => {
+  try {
+    await ensurePartsSpecColumns(pool);
+    const scope = String(req.query.scope || 'tab').toLowerCase();
+    const search = String(req.query.search || '').trim();
+    const statusesRaw = String(req.query.statuses || '').trim();
+
+    let statuses = WAREHOUSE_QUEUE_STATUSES;
+    if (scope === 'pending') {
+      statuses = ['pending'];
+    } else if (scope === 'tab') {
+      const parsed = statusesRaw
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      statuses = parsed.length ? parsed : ['pending'];
+    }
+
+    const result = await pool.query(
+      `${FULL_SELECT} WHERE pr.status = ANY($1::text[])
+        ORDER BY pr.created_at ASC`,
+      [statuses]
+    );
+
+    const rows = result.rows.filter((row) => partRequestMatchesSearch(row, search));
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: 'No rows to export for the selected scope' });
+    }
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const label = scope === 'tab' ? 'filtered' : scope;
+    const csv = buildWarehouseQueueCsv(rows);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="parts-approval-${label}-${stamp}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error('exportWarehouseQueueCsv:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
