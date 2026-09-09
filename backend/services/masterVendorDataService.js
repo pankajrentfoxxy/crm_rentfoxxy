@@ -5,7 +5,7 @@
  */
 const pool = require('../config/db');
 const XLSX = require('xlsx');
-const { parseCsvQuery } = require('../utils/dateRangeFilter');
+const { appendDateRangeClauses, parseCsvQuery, resolveMasterDateRange } = require('../utils/dateRangeFilter');
 const {
   FROM_SQL,
   buildMasterFilters,
@@ -62,8 +62,91 @@ function scopedQuery(query = {}) {
   };
 }
 
+/** Sale completion date — delivery preferred, else dispatch. */
+function soldDateExpr() {
+  return 'COALESCE(s.delivered_at, s.dispatched_at)';
+}
+
+function stripPurchaseDateFields(query = {}) {
+  const next = { ...query };
+  delete next.date_mode;
+  delete next.dateMode;
+  delete next.month;
+  delete next.date_from;
+  delete next.dateFrom;
+  delete next.date_to;
+  delete next.dateTo;
+  delete next.date_basis;
+  delete next.dateBasis;
+  return next;
+}
+
+function applySoldDateRangeFilter(base, query = {}) {
+  const dateRange = resolveMasterDateRange(query);
+  const hasRanges = Array.isArray(dateRange.ranges) && dateRange.ranges.length > 0;
+  if (!hasRanges && !dateRange.dateFrom && !dateRange.dateTo) return base;
+
+  const expr = soldDateExpr();
+  const appendOneRange = (range) => {
+    const parts = appendDateRangeClauses({
+      expr,
+      dateFrom: range?.dateFrom,
+      dateTo: range?.dateTo,
+      params: base.params,
+      timezone: 'Asia/Kolkata',
+    });
+    return parts.length ? `(${parts.join(' AND ')})` : null;
+  };
+
+  if (hasRanges && dateRange.ranges.length > 1) {
+    const orParts = dateRange.ranges.map(appendOneRange).filter(Boolean);
+    if (orParts.length) {
+      base.whereSql = `${base.whereSql} AND (${orParts.join(' OR ')})`;
+    }
+  } else {
+    const parts = appendDateRangeClauses({
+      expr,
+      dateFrom: dateRange.dateFrom,
+      dateTo: dateRange.dateTo,
+      params: base.params,
+      timezone: 'Asia/Kolkata',
+    });
+    if (parts.length) base.whereSql = `${base.whereSql} AND ${parts.join(' AND ')}`;
+  }
+  base.whereSql = `${base.whereSql} AND ${expr} IS NOT NULL`;
+  return base;
+}
+
+/** Sold laptops: filter by sold/delivery date (not vendor PO purchase date). */
+function buildSoldVendorFilters(query = {}, { excludeColumn } = {}) {
+  const base = buildMasterFilters({
+    ...stripPurchaseDateFields(query),
+    apply_vendor_po_exclusion: query.apply_vendor_po_exclusion == null ? '1' : query.apply_vendor_po_exclusion,
+    from_vendor: '1',
+  });
+  base.whereSql = `${base.whereSql} AND (${usageSql()}) = 'sold'`;
+  applySoldDateRangeFilter(base, query);
+  return appendColumnFilters(base, query, {
+    excludeColumn,
+    locationLabelSql: locationLabelSql(),
+  });
+}
+
+function usesSoldDateFilters(query = {}) {
+  return parseCsvQuery(query.usage_bucket).includes('sold');
+}
+
 function buildVendorMasterFilters(query = {}, { excludeColumn } = {}) {
+  if (usesSoldDateFilters(query)) {
+    return buildSoldVendorFilters(query, { excludeColumn });
+  }
   const base = buildMasterFilters(scopedQuery(query));
+  const usageBuckets = parseCsvQuery(query.usage_bucket);
+  if (usageBuckets.length) {
+    base.params.push(usageBuckets);
+    const i = base.params.length;
+    base.whereSql = `${base.whereSql} AND (${usageSql()}) = ANY($${i}::text[])`;
+  }
   const buckets = parseCsvQuery(query.warehouse_bucket);
   if (buckets.length) {
     base.params.push(buckets);
@@ -126,7 +209,8 @@ function mapVendorMasterRow(row) {
     ...base,
     purchase_date: row.purchase_order_date || null,
     purchase_rate: purchaseRate,
-    last_movement_date: row.delivered_at || row.updated_at || null,
+    sold_date: row.delivered_at || row.dispatched_at || null,
+    last_movement_date: row.delivered_at || row.dispatched_at || row.updated_at || null,
     location_label: row.location_label || base.current_location,
     warehouse_bucket: row.warehouse_bucket || null,
     usage_bucket: usage,
@@ -148,7 +232,7 @@ function mapVendorMasterRow(row) {
 const LIST_SELECT = `
   s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.inventory_status,
   s.current_customer_id, s.current_dc_number, s.current_entity, s.updated_at,
-  s.rent_monthly_rate, s.rent_start_date, s.delivered_at, s.grn_id, s.qc_status,
+  s.rent_monthly_rate, s.rent_start_date, s.delivered_at, s.dispatched_at, s.grn_id, s.qc_status,
   p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.purchase_order_date,
   COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name,
   COALESCE(c.company_name, c.name) AS customer_name,
@@ -165,19 +249,18 @@ const LIST_SELECT = `
 
 async function getOverview(query = {}) {
   const base = buildVendorMasterFilters(query);
+  const soldBase = buildSoldVendorFilters(query);
   const optionFilters = buildMasterFilters({
     ...scopedQuery(query),
     vendor_id: '',
     warehouse_bucket: '',
   });
   const usage = usageSql();
-  const [kpiRes, vendorRes, optionRes] = await Promise.all([
+  const [kpiRes, soldKpiRes, vendorRes, soldVendorRes, optionRes] = await Promise.all([
     pool.query(
       `SELECT
           COUNT(*)::int AS total_purchased,
           COALESCE(SUM(COALESCE(vpd.purchase_rate, 0)), 0)::numeric AS total_purchase_value,
-          COUNT(*) FILTER (WHERE ${usage} = 'sold')::int AS sold_count,
-          COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${usage} = 'sold'), 0)::numeric AS total_sale_value,
           COUNT(*) FILTER (WHERE ${usage} = 'rental')::int AS rental_count,
           COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
             WHERE ${usage} = 'rental'
@@ -201,12 +284,19 @@ async function getOverview(query = {}) {
     ),
     pool.query(
       `SELECT
+          COUNT(*)::int AS sold_count,
+          COALESCE(SUM(COALESCE(sos.so_rate, 0)), 0)::numeric AS total_sale_value
+       ${FROM_SQL}
+       ${soldBase.joinSql || ''}
+       ${soldBase.whereSql}`,
+      soldBase.params
+    ),
+    pool.query(
+      `SELECT
           p.vendor_id,
           COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name,
           COUNT(*)::int AS purchased_qty,
           COALESCE(SUM(COALESCE(vpd.purchase_rate, 0)), 0)::numeric AS purchase_value,
-          COUNT(*) FILTER (WHERE ${usage} = 'sold')::int AS sold_qty,
-          COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${usage} = 'sold'), 0)::numeric AS sale_value,
           COUNT(*) FILTER (WHERE ${usage} = 'rental')::int AS rental_qty,
           COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
             WHERE ${usage} = 'rental'
@@ -225,6 +315,18 @@ async function getOverview(query = {}) {
       base.params
     ),
     pool.query(
+      `SELECT
+          p.vendor_id,
+          COUNT(*)::int AS sold_qty,
+          COALESCE(SUM(COALESCE(sos.so_rate, 0)), 0)::numeric AS sale_value
+       ${FROM_SQL}
+       ${soldBase.joinSql || ''}
+       ${soldBase.whereSql}
+         AND p.vendor_id IS NOT NULL
+       GROUP BY p.vendor_id`,
+      soldBase.params
+    ),
+    pool.query(
       `SELECT DISTINCT
           p.vendor_id,
           COALESCE(v.business_name, TRIM(CONCAT(COALESCE(v.first_name,''), ' ', COALESCE(v.last_name,'')))) AS vendor_name
@@ -239,31 +341,38 @@ async function getOverview(query = {}) {
   ]);
 
   const k = kpiRes.rows[0] || {};
+  const soldK = soldKpiRes.rows[0] || {};
+  const soldByVendor = new Map(
+    (soldVendorRes.rows || []).map((row) => [row.vendor_id, row])
+  );
   const warehouse_stages = emptyWarehouseStages();
   WAREHOUSE_STAGE_KEYS.forEach((key) => {
     warehouse_stages[key] = Number(k[key] || 0);
   });
 
-  const vendors = vendorRes.rows.map((row) => ({
+  const vendors = vendorRes.rows.map((row) => {
+    const soldRow = soldByVendor.get(row.vendor_id);
+    return {
     vendor_id: row.vendor_id,
     vendor_name: row.vendor_name,
     purchased_qty: Number(row.purchased_qty || 0),
     purchase_value: Number(row.purchase_value || 0),
-    sold_qty: Number(row.sold_qty || 0),
-    sale_value: Number(row.sale_value || 0),
+    sold_qty: Number(soldRow?.sold_qty || 0),
+    sale_value: Number(soldRow?.sale_value || 0),
     rental_qty: Number(row.rental_qty || 0),
     monthly_rental_value: Number(row.monthly_rental_value || 0),
     warehouse_qty: Number(row.warehouse_qty || 0),
     repair_qty: Number(row.repair_qty || 0),
     current_total: Number(row.purchased_qty || 0),
-  }));
+  };
+  });
 
   return {
     kpis: {
       total_purchased: Number(k.total_purchased || 0),
       total_purchase_value: Number(k.total_purchase_value || 0),
-      sold_count: Number(k.sold_count || 0),
-      total_sale_value: Number(k.total_sale_value || 0),
+      sold_count: Number(soldK.sold_count || 0),
+      total_sale_value: Number(soldK.total_sale_value || 0),
       rental_count: Number(k.rental_count || 0),
       total_monthly_rental_value: Number(k.total_monthly_rental_value || 0),
       warehouse_count: Number(k.warehouse_count || 0),
@@ -297,7 +406,11 @@ async function listLaptops(query = {}) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 25, 1), 100);
   const offset = (page - 1) * limit;
+  const soldList = usesSoldDateFilters(query);
   const base = buildVendorMasterFilters(query);
+  const orderBy = soldList
+    ? `${soldDateExpr()} DESC NULLS LAST, s.serial_id DESC`
+    : 'p.purchase_order_date DESC NULLS LAST, s.serial_id DESC';
   const listParams = [...base.params, limit, offset];
   const [countRes, listRes] = await Promise.all([
     pool.query(
@@ -309,7 +422,7 @@ async function listLaptops(query = {}) {
        ${FROM_SQL}
        ${base.joinSql || ''}
        ${base.whereSql}
-       ORDER BY p.purchase_order_date DESC NULLS LAST, s.serial_id DESC
+       ORDER BY ${orderBy}
        LIMIT $${base.params.length + 1} OFFSET $${base.params.length + 2}`,
       listParams
     ),
@@ -328,13 +441,17 @@ async function listLaptops(query = {}) {
 
 async function listAllForExport(query = {}) {
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20000, 1), 20000);
+  const soldList = usesSoldDateFilters(query);
   const base = buildVendorMasterFilters(query);
+  const orderBy = soldList
+    ? `${soldDateExpr()} DESC NULLS LAST, s.serial_id DESC`
+    : 'p.purchase_order_date DESC NULLS LAST, s.serial_id DESC';
   const listRes = await pool.query(
     `SELECT ${LIST_SELECT}
      ${FROM_SQL}
      ${base.joinSql || ''}
      ${base.whereSql}
-     ORDER BY p.purchase_order_date DESC NULLS LAST, s.serial_id DESC
+     ORDER BY ${orderBy}
      LIMIT $${base.params.length + 1}`,
     [...base.params, limit]
   );
@@ -354,6 +471,7 @@ async function buildExportWorkbook(query = {}) {
     'Serial Number': r.serial_number || '',
     Vendor: r.vendor_name || '',
     'Purchase Date': r.purchase_date || '',
+    'Sold Date': r.sold_date || '',
     'Purchase Order': r.purchase_order_number || '',
     'Purchase Rate': fmtExportMoney(r.purchase_rate),
     Brand: r.brand || '',

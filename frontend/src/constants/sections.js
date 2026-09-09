@@ -48,6 +48,8 @@ export const APPLICATION_SECTIONS = [
   'inventory_vendor_master_data',
   'inventory_return_master_data',
   'inventory_asset_movement',
+  'qc_add_laptop',
+  'qc_move_to_ticket',
   'parts',
   'parts_dashboard',
   'parts_inventory',
@@ -156,6 +158,8 @@ export const SECTION_LABELS = {
   inventory_vendor_master_data: 'Master Vendor Data',
   inventory_return_master_data: 'Master Return Data',
   inventory_asset_movement: 'Inventory — Asset Movement',
+  qc_add_laptop: 'QC Process — add new laptop',
+  qc_move_to_ticket: 'Inventory — move laptop to Floor ticket',
   parts: 'Parts (Legacy)',
   parts_dashboard: 'Parts Dashboard',
   parts_inventory: 'Parts Inventory',
@@ -227,7 +231,8 @@ export const SECTION_GROUPS = {
   'Master Data': ['inventory_master_data', 'inventory_vendor_master_data', 'inventory_return_master_data'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'diagnosis_failed', 'tickets'],
   Inventory: [
-    'inventory', 'inventory_management', 'inventory_asset_movement', 'customer_inventory', 'ttspl_history',
+    'inventory', 'inventory_management', 'inventory_asset_movement', 'qc_add_laptop', 'qc_move_to_ticket',
+    'customer_inventory', 'ttspl_history',
   ],
   'Part Management': [
     'parts_dashboard',

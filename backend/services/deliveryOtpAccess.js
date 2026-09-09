@@ -20,7 +20,6 @@ function isFieldDeliveryRole(user) {
 
 async function userCanViewDeliveryRegisterOtp(user, cache) {
   if (!user?.user_id) return false;
-  if (isFieldDeliveryRole(user)) return false;
   if (user.role === 'super_admin') return true;
 
   const allowed = await hasPermission(
@@ -31,6 +30,9 @@ async function userCanViewDeliveryRegisterOtp(user, cache) {
     cache
   );
   if (allowed) return true;
+
+  // Field staff default to WhatsApp-only OTP; explicit permission above overrides.
+  if (isFieldDeliveryRole(user)) return false;
 
   return LEGACY_OTP_ROLES.has(user.role);
 }

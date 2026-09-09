@@ -729,7 +729,7 @@ export default function MasterDataDashboardPage() {
           value={kpiLoading ? '…' : (kpis.customer_sold_units ?? 0)}
           icon={IndianRupee}
           tone="red"
-          hint="With customer — sold units"
+          hint="Sale delivered/dispatched in selected month(s)"
           onClick={openCustomerSoldList}
           active={
             tab === 'laptops'

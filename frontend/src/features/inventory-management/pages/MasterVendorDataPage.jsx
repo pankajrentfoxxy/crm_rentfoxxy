@@ -71,7 +71,7 @@ const WAREHOUSE_STAGE_CARDS = [
 const URL_KEYS = [
   'page', 'q', 'status', 'location', 'stage', 'pricing_type',
   'date_mode', 'month', 'date_from', 'date_to',
-  'vendor_id', 'warehouse_bucket',
+  'vendor_id', 'usage_bucket', 'warehouse_bucket',
   ...SPEC_FILTER_KEYS,
 ];
 
@@ -110,6 +110,7 @@ const LAPTOP_TABLE_COLUMNS = [
   { key: 'serial_number', label: 'Serial', align: 'left' },
   { key: 'vendor_name', label: 'Vendor', align: 'left' },
   { key: 'purchase_date', label: 'Purchase Date', align: 'left' },
+  { key: 'sold_date', label: 'Sold Date', align: 'left' },
   { key: 'purchase_order_number', label: 'PO', align: 'left' },
   { key: 'purchase_rate', label: 'Purchase Rate', align: 'right' },
   { key: 'brand', label: 'Brand / Model', align: 'left' },
@@ -168,6 +169,7 @@ export default function MasterVendorDataPage() {
   const stage = searchParams.get('stage') || '';
   const pricingType = searchParams.get('pricing_type') || '';
   const vendorId = searchParams.get('vendor_id') || '';
+  const usageBucket = searchParams.get('usage_bucket') || '';
   const warehouseBucket = searchParams.get('warehouse_bucket') || '';
   const dateFrom = searchParams.get('date_from') || '';
   const dateTo = searchParams.get('date_to') || '';
@@ -178,6 +180,7 @@ export default function MasterVendorDataPage() {
   const stagesSelected = useMemo(() => readCsvParam(searchParams, 'stage'), [stage]);
   const pricingTypes = useMemo(() => readCsvParam(searchParams, 'pricing_type'), [pricingType]);
   const vendorIds = useMemo(() => readCsvParam(searchParams, 'vendor_id'), [vendorId]);
+  const usageBuckets = useMemo(() => readCsvParam(searchParams, 'usage_bucket'), [usageBucket]);
   const warehouseBuckets = useMemo(() => readCsvParam(searchParams, 'warehouse_bucket'), [warehouseBucket]);
   const months = useMemo(() => readCsvParam(searchParams, 'month'), [month]);
   const specFilters = useMemo(() => readSpecFilters(searchParams), [queryKey]);
@@ -218,6 +221,7 @@ export default function MasterVendorDataPage() {
     stage: stage || undefined,
     pricing_type: pricingType || undefined,
     vendor_id: vendorId || undefined,
+    usage_bucket: usageBucket || undefined,
     warehouse_bucket: warehouseBucket || undefined,
     date_mode: dateMode || undefined,
     month: dateMode === 'month' ? (month || currentMonthValue()) : undefined,
@@ -225,7 +229,7 @@ export default function MasterVendorDataPage() {
     date_to: dateMode === 'range' ? (dateTo || undefined) : undefined,
     ...specFiltersToParams(debouncedSpecs),
   }), [
-    search, status, location, stage, pricingType, vendorId, warehouseBucket,
+    search, status, location, stage, pricingType, vendorId, usageBucket, warehouseBucket,
     dateMode, month, dateFrom, dateTo, debouncedSpecs,
   ]);
 
@@ -321,9 +325,15 @@ export default function MasterVendorDataPage() {
     listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const toggleUsage = (key) => {
+    const next = usageBuckets.includes(key) ? [] : [key];
+    patchParams({ usage_bucket: next, warehouse_bucket: '' });
+    listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const toggleBucket = (key) => {
     const next = warehouseBuckets.includes(key) ? [] : [key];
-    patchParams({ warehouse_bucket: next });
+    patchParams({ warehouse_bucket: next, usage_bucket: '' });
     listAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -518,27 +528,52 @@ export default function MasterVendorDataPage() {
           onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
         />
         <p className="text-xs text-slate-500">
-          Population is laptops on vendor POs in the selected <strong>purchase date</strong> (PO date).
-          Cards then show where those same units are today. Excluded Vendor PO vendors are omitted.
+          <strong>Purchased / warehouse cards</strong> use vendor PO purchase date.
+          <strong> Sold Laptops</strong> and the sold list use <strong>delivery / dispatch date</strong> (when the sale completed).
+          Excluded Vendor PO vendors are omitted.
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Total Purchased" value={overviewLoading ? '…' : (kpis.total_purchased ?? 0)} icon={Laptop} hint="Vendor PO units in period" />
         <StatCard label="Purchase Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_purchase_value)} icon={IndianRupee} hint="Vendor PO purchase rate" />
-        <StatCard label="Sold Laptops" value={overviewLoading ? '…' : (kpis.sold_count ?? 0)} icon={HardDrive} tone="red" hint="Currently sold" />
-        <StatCard label="Sale Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_sale_value)} icon={IndianRupee} tone="red" hint="Customer sale price" />
-        <StatCard label="Rented Laptops" value={overviewLoading ? '…' : (kpis.rental_count ?? 0)} icon={Package} tone="blue" hint="Currently on rent / demo" />
+        <StatCard
+          label="Sold Laptops"
+          value={overviewLoading ? '…' : (kpis.sold_count ?? 0)}
+          icon={HardDrive}
+          tone="red"
+          hint="Sold in selected month(s) — click to filter list"
+          onClick={() => toggleUsage('sold')}
+          active={usageBuckets.length === 1 && usageBuckets[0] === 'sold'}
+        />
+        <StatCard label="Sale Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_sale_value)} icon={IndianRupee} tone="red" hint="Sold in period — customer sale price" />
+        <StatCard
+          label="Rented Laptops"
+          value={overviewLoading ? '…' : (kpis.rental_count ?? 0)}
+          icon={Package}
+          tone="blue"
+          hint="Currently on rent / demo — click to filter list"
+          onClick={() => toggleUsage('rental')}
+          active={usageBuckets.length === 1 && usageBuckets[0] === 'rental'}
+        />
         <StatCard label="Monthly Rental Value" value={overviewLoading ? '…' : fmtMoney(kpis.total_monthly_rental_value)} icon={IndianRupee} tone="blue" hint="Active monthly rent" />
-        <StatCard label="Warehouse" value={overviewLoading ? '…' : (kpis.warehouse_count ?? 0)} icon={Building2} tone="teal" hint="Not with customer / not on VRDC" />
+        <StatCard
+          label="Warehouse"
+          value={overviewLoading ? '…' : (kpis.warehouse_count ?? 0)}
+          icon={Building2}
+          tone="teal"
+          hint="Not with customer / not on VRDC — click to filter list"
+          onClick={() => toggleUsage('warehouse')}
+          active={usageBuckets.length === 1 && usageBuckets[0] === 'warehouse'}
+        />
         <StatCard
           label="Out for Repair"
           value={overviewLoading ? '…' : (kpis.out_for_repair_count ?? 0)}
           icon={Wrench}
           tone="amber"
-          hint="Vendor repair / in repair"
-          onClick={() => toggleBucket('out_for_repair')}
-          active={warehouseBuckets.length === 1 && warehouseBuckets[0] === 'out_for_repair'}
+          hint="Vendor repair / in repair — click to filter list"
+          onClick={() => toggleUsage('repair')}
+          active={usageBuckets.length === 1 && usageBuckets[0] === 'repair'}
         />
       </div>
 
@@ -656,6 +691,7 @@ export default function MasterVendorDataPage() {
                     <td className="px-3 py-2 font-mono text-xs">{r.serial_number || '—'}</td>
                     <td className="px-3 py-2">{r.vendor_name || '—'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{fmtDate(r.purchase_date)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{fmtDate(r.sold_date)}</td>
                     <td className="px-3 py-2 font-mono text-xs">{r.purchase_order_number || '—'}</td>
                     <td className="px-3 py-2 text-right">{r.purchase_rate != null ? fmtMoney(r.purchase_rate) : '—'}</td>
                     <td className="px-3 py-2">
@@ -682,7 +718,7 @@ export default function MasterVendorDataPage() {
                   </tr>
                 ))}
                 {!rows.length ? (
-                  <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-400">No purchased laptops in this period</td></tr>
+                  <tr><td colSpan={16} className="px-3 py-8 text-center text-slate-400">No laptops match filters</td></tr>
                 ) : null}
               </tbody>
             </table>
