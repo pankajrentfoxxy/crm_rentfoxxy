@@ -561,7 +561,7 @@ async function loadOutboundDc(db, dcNumber) {
     inactive_reason = 'This delivery challan is already delivered.';
   } else if (rejected) {
     active = false;
-    inactive_reason = 'This delivery challan was rejected.';
+    inactive_reason = 'This delivery challan was rejected. Switch to INWARD to receive units back at the warehouse.';
   }
 
   return {
@@ -580,6 +580,44 @@ async function loadOutboundDc(db, dcNumber) {
     inactive_reason,
     laptops,
     statuses,
+  };
+}
+
+/** Customer refused delivery — laptop(s) return via guard INWARD on the original outbound DC. */
+async function loadRefusedDeliveryReturn(db, dcNumber) {
+  const base = await loadOutboundDc(db, dcNumber);
+  if (!base) return null;
+  if (!base.statuses?.every((s) => s === 'rejected')) return null;
+
+  const headRes = await db.query(
+    `SELECT return_to_warehouse_at, warehouse_received_at, customer_name, sales_order_number
+       FROM delivery_challan_lines
+      WHERE dc_number = $1
+      LIMIT 1`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) return null;
+
+  let active = true;
+  let inactive_reason = null;
+  if (head.return_to_warehouse_at || head.warehouse_received_at) {
+    active = false;
+    inactive_reason = 'This refused delivery has already been received at the warehouse.';
+  }
+
+  return {
+    ...base,
+    direction: 'inward',
+    source_type: 'refused_delivery',
+    source_label: 'Refused Delivery',
+    reference_type: 'dc',
+    reference_number: dcNumber,
+    party_name: head.customer_name || base.party_name,
+    so_number: head.sales_order_number || base.so_number,
+    active,
+    inactive_reason,
+    allow_partial: false,
   };
 }
 
@@ -1005,7 +1043,13 @@ async function loadSalesOrder(db, soNumber) {
 }
 
 async function loadDocument(db, docType, docNumber, preferredDirection) {
-  if (docType === 'dc') return loadOutboundDc(db, docNumber);
+  if (docType === 'dc') {
+    if (preferredDirection === 'inward') {
+      const refused = await loadRefusedDeliveryReturn(db, docNumber);
+      if (refused) return refused;
+    }
+    return loadOutboundDc(db, docNumber);
+  }
   if (docType === 'so') return loadSalesOrder(db, docNumber);
   if (docType === 'rdc') return loadReturnDc(db, docNumber);
   if (docType === 'sdc') return loadServiceDc(db, docNumber);
@@ -1206,10 +1250,16 @@ async function findBySerial(db, serial, preferredDirection) {
     [serial.serial_id]
   );
   for (const row of sos.rows) {
+    if (
+      preferredDirection === 'inward'
+      && ['delivered', 'rejected'].includes(String(row.dc_status || '').toLowerCase())
+    ) {
+      continue;
+    }
     const ctx = String(row.dc_purpose || '') === 'service_return'
       ? await loadServiceDc(db, row.dc_number)
       : await loadOutboundDc(db, row.dc_number);
-    if (ctx) candidates.push(ctx);
+    if (ctx?.active !== false) candidates.push(ctx);
   }
 
   if (serial.current_dc_number) {
@@ -1262,17 +1312,28 @@ async function findBySerial(db, serial, preferredDirection) {
   }
 
   if (serial.grn_id) {
+    const grnRef = `GRN-${String(serial.grn_id).padStart(4, '0')}`;
     const alreadyInward = await confirmedAlready(db, {
       direction: 'inward',
       referenceType: 'grn',
-      referenceNumber: `GRN-${String(serial.grn_id).padStart(4, '0')}`,
+      referenceNumber: grnRef,
       serialId: serial.serial_id,
     });
+    const hadOutward = await db.query(
+      `SELECT 1 FROM gate_movements
+        WHERE serial_id = $1
+          AND direction = 'outward'
+          AND validation_result = 'valid'
+          AND confirmed_at IS NOT NULL
+        LIMIT 1`,
+      [serial.serial_id]
+    );
     const leftWarehouse = ['reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold', 'scrapped']
       .includes(String(serial.inventory_status || ''));
-    const alreadyOnShelf = String(serial.qc_status || '') === 'passed' && String(serial.inventory_status || '') === 'in_stock';
-    if (!alreadyInward && !leftWarehouse && !alreadyOnShelf) {
-      const ctx = await loadGrn(db, `GRN-${serial.grn_id}`);
+    const alreadyOnShelf = String(serial.qc_status || '') === 'passed'
+      && String(serial.inventory_status || '') === 'in_stock';
+    if (!alreadyInward && !hadOutward.rows.length && !leftWarehouse && !alreadyOnShelf) {
+      const ctx = await loadGrn(db, grnRef);
       if (ctx) candidates.push(ctx);
     }
   }
@@ -1281,6 +1342,7 @@ async function findBySerial(db, serial, preferredDirection) {
   let refusedSql = `
     SELECT dc_number FROM delivery_challan_lines
      WHERE LOWER(status) = 'rejected'
+       AND return_to_warehouse_at IS NULL
        AND warehouse_received_at IS NULL
        AND (
          serial_number::text ILIKE '%' || $1 || '%'
@@ -1293,27 +1355,53 @@ async function findBySerial(db, serial, preferredDirection) {
   refusedSql += `) LIMIT 1`;
   const refused = await db.query(refusedSql, refusedParams);
   if (refused.rows[0]) {
-    const ctx = await loadOutboundDc(db, refused.rows[0].dc_number);
-    if (ctx) {
-      ctx.direction = 'inward';
-      ctx.source_type = 'refused_delivery';
-      ctx.source_label = 'Refused Delivery';
-      ctx.active = true;
-      ctx.inactive_reason = null;
-      candidates.push(ctx);
-    }
+    const ctx = await loadRefusedDeliveryReturn(db, refused.rows[0].dc_number);
+    if (ctx) candidates.push(ctx);
   }
 
   const filtered = candidates.filter(Boolean);
   if (!filtered.length) return null;
 
-  const dirMatch = preferredDirection
-    ? filtered.filter((c) => c.direction === preferredDirection && c.active)
-    : filtered.filter((c) => c.active);
-  const poolList = dirMatch.length ? dirMatch : (preferredDirection
-    ? filtered.filter((c) => c.direction === preferredDirection)
-    : filtered);
-  return poolList[0] || filtered[0];
+  const ctx = pickBestMovementContext(filtered, preferredDirection);
+  if (!ctx || ctx.active === false) return null;
+  return scopeContextToUnit(ctx, serial);
+}
+
+function scopeContextToUnit(ctx, unit) {
+  if (!ctx?.laptops?.length || !unit) return ctx;
+  const matched = ctx.laptops.filter((l) => laptopMatches(l, unit));
+  if (!matched.length) return ctx;
+  return {
+    ...ctx,
+    laptops: matched,
+    allow_partial: false,
+  };
+}
+
+const MOVEMENT_SOURCE_PRIORITY = {
+  refused_delivery: 1,
+  customer_return: 2,
+  repair_pickup: 2,
+  vendor_repair_return: 3,
+  vendor_repair: 4,
+  replacement: 5,
+  service_return: 5,
+  customer_delivery: 6,
+  vendor: 9,
+};
+
+function pickBestMovementContext(candidates, preferredDirection) {
+  const list = (candidates || []).filter(Boolean);
+  if (!list.length) return null;
+  const score = (ctx) => {
+    let s = MOVEMENT_SOURCE_PRIORITY[ctx.source_type] ?? 7;
+    if (preferredDirection && ctx.direction === preferredDirection) s -= 3;
+    if (ctx.active === false) s += 20;
+    return s;
+  };
+  const active = list.filter((c) => c.active !== false);
+  const pool = active.length ? active : list;
+  return [...pool].sort((a, b) => score(a) - score(b))[0];
 }
 
 function laptopMatches(laptop, serial) {
@@ -1685,6 +1773,37 @@ async function resolveScan({ direction, scan, user }) {
     } else {
       ctx = await findBySerial(db, serial, requested);
       if (!ctx) {
+        const hadOutward = await db.query(
+          `SELECT 1 FROM gate_movements
+            WHERE serial_id = $1
+              AND direction = 'outward'
+              AND validation_result = 'valid'
+              AND confirmed_at IS NOT NULL
+            LIMIT 1`,
+          [serial.serial_id]
+        );
+        if (hadOutward.rows.length && String(serial.inventory_status || '') === 'in_stock') {
+          await recordMovement(db, {
+            session: null,
+            ctx: {
+              direction: requested || 'inward',
+              source_type: 'unknown',
+              reference_type: 'none',
+              reference_number: null,
+            },
+            serial,
+            result: 'invalid',
+            message: 'Laptop already returned to warehouse — no gate inward required.',
+            actor,
+          });
+          return {
+            ok: true,
+            valid: false,
+            kind: 'invalid',
+            message: 'This laptop is already in the warehouse. No gate inward is required.',
+            laptop: laptopDto(serial),
+          };
+        }
         await recordMovement(db, {
           session: null,
           ctx: {
@@ -1716,6 +1835,15 @@ async function resolveScan({ direction, scan, user }) {
       kind: 'invalid',
       message: 'This laptop is not expected for this movement.',
     };
+  }
+
+  if (
+    ctx.reference_type === 'dc'
+    && ctx.active === false
+    && ctx.statuses?.every((s) => s === 'rejected')
+  ) {
+    const refused = await loadRefusedDeliveryReturn(db, ctx.reference_number);
+    if (refused) ctx = refused;
   }
 
   const mismatch = directionMismatch(ctx, requested);
@@ -2145,6 +2273,32 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   };
 }
 
+async function applyInwardRefusedDeliveryGate(client, { session, actor }) {
+  if (session.direction !== 'inward') return;
+  if (session.source_type !== 'refused_delivery') return;
+  if (session.reference_type !== 'dc') return;
+
+  const dcNumber = session.reference_number;
+  if (!dcNumber) return;
+
+  const deliveryRejection = require('./deliveryRejectionService');
+
+  const head = await deliveryRejection.getDcHead(client, dcNumber);
+  if (!head) throw new Error('Delivery challan not found');
+  if (head.return_to_warehouse_at || head.warehouse_received_at) return { already_completed: true };
+  if (head.status !== 'rejected') throw new Error('DC is not in rejected status');
+
+  return deliveryRejection.completeRejectedReturnToWarehouse(client, {
+    dcNumber,
+    actorUserId: actor.userId,
+    actorName: actor.name,
+    warehouse: {
+      receiverName: actor.name,
+      remarks: `Guard gate inward confirmed (session ${session.session_id})`,
+    },
+  });
+}
+
 async function applyInwardReturnDcGate(client, { session, actor }) {
   if (session.direction !== 'inward' || session.reference_type !== 'rdc') return;
   const rdc = session.reference_number;
@@ -2209,6 +2363,7 @@ async function confirmSession({ sessionId, remarks, user }) {
   const actor = await getActor(db, user);
   const client = await pool.connect();
   try {
+    await require('./deliveryRejectionService').ensureDeliveryRejectionSchema();
     await client.query('BEGIN');
     const sessRes = await client.query(
       `SELECT * FROM gate_scan_sessions WHERE session_id = $1 FOR UPDATE`,
@@ -2315,6 +2470,7 @@ async function confirmSession({ sessionId, remarks, user }) {
 
     if (remaining === 0) {
       await applyInwardReturnDcGate(client, { session, actor });
+      await applyInwardRefusedDeliveryGate(client, { session, actor });
     }
 
     const vrGate = require('./vendorRepairGateService');

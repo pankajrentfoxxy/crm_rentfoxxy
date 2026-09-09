@@ -14,6 +14,45 @@ function isRepairPickupItem(item) {
   return pickupType === 'repair';
 }
 
+async function getReturnRdcDeliveredAt(client, rdcNumber) {
+  if (!rdcNumber) return null;
+  const r = await client.query(
+    `SELECT COALESCE(delivered_at, delivery_completed_at) AS delivered_at
+       FROM delivery_challan_lines
+      WHERE dc_number = $1 AND movement_type = 'return'
+      LIMIT 1`,
+    [rdcNumber]
+  );
+  return r.rows[0]?.delivered_at || null;
+}
+
+/** Outbound delivery after a return DC — same-day repair re-dispatch case. */
+async function findNewerDeliveredOutbound(client, { code, customerId, afterDate }) {
+  if (!code || !customerId || !afterDate) return null;
+  const r = await client.query(
+    `SELECT dc_number, COALESCE(delivered_at, delivery_completed_at) AS delivered_at
+       FROM delivery_challan_lines
+      WHERE COALESCE(movement_type, 'outbound') = 'outbound'
+        AND status = 'delivered'
+        AND customer_id = $2
+        AND (
+          serial_number::text ILIKE '%' || $1 || '%'
+          OR delivered_serial_numbers::text ILIKE '%' || $1 || '%'
+        )
+        AND COALESCE(delivered_at, delivery_completed_at) > $3
+      ORDER BY COALESCE(delivered_at, delivery_completed_at) DESC
+      LIMIT 1`,
+    [code, customerId, afterDate]
+  );
+  return r.rows[0] || null;
+}
+
+async function shouldSkipReturnFlipForReDelivery(client, { code, customerId, returnDcNumber }) {
+  const returnDeliveredAt = await getReturnRdcDeliveredAt(client, returnDcNumber);
+  if (!returnDeliveredAt) return null;
+  return findNewerDeliveredOutbound(client, { code, customerId, afterDate: returnDeliveredAt });
+}
+
 async function resolveSerialForItem(client, item) {
   const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
   if (!code) return null;
@@ -58,6 +97,21 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
 
   if (alreadyRemoved && serial.rent_end_date) {
     return { skipped: true, reason: 'already_removed', serialId: serial.serial_id };
+  }
+
+  const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+  const reDelivered = await shouldSkipReturnFlipForReDelivery(client, {
+    code,
+    customerId: serial.current_customer_id,
+    returnDcNumber: item.return_dc_number,
+  });
+  if (reDelivered) {
+    return {
+      skipped: true,
+      reason: 're_delivered_after_return',
+      serialId: serial.serial_id,
+      outboundDc: reDelivered.dc_number,
+    };
   }
 
   if (deployed) {
@@ -115,6 +169,9 @@ module.exports = {
   AWAITING_SDC_STATUS,
   isRepairPickupItem,
   resolveSerialForItem,
+  getReturnRdcDeliveredAt,
+  findNewerDeliveredOutbound,
+  shouldSkipReturnFlipForReDelivery,
   removeRepairPickupFromCustomer,
   ticketHasRepairAwaitingSdc,
 };

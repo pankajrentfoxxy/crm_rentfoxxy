@@ -49,6 +49,20 @@ export function fetchVendorLaptops(id, params) {
   return api.get(`${base}/vendors/${id}/laptops`, { params });
 }
 
+/** Export vendor laptops matching current lifecycle tab + search filters. */
+export async function exportVendorLaptopsExcel(vendorId, params = {}) {
+  try {
+    const response = await api.get(`${base}/vendors/${vendorId}/laptops/export.xlsx`, {
+      params,
+      responseType: 'blob',
+    });
+    const lifecycle = params.lifecycle || 'all';
+    downloadBlobResponse(response, `vendor_${vendorId}_${lifecycle}_laptops.xlsx`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
 export function createVendor(formData) {
   return api.post(`${base}/vendors`, formData);
 }

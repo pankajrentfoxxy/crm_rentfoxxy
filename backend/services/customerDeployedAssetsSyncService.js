@@ -195,7 +195,7 @@ async function syncDeployedAssets(db, { customerId = null, actorName = 'deployed
         deliveredAt: dcDeliveredAt || new Date(),
         actorUserId: null,
         actorName,
-        allowOverride: needsOverride,
+        confirmedOnDc: needsOverride,
       });
       results.push({
         serial_id: row.serial_id,
