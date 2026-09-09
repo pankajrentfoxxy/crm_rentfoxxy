@@ -536,6 +536,9 @@ export default function LaptopReportPage() {
   const configAgg = report?.configurations || [];
   const stagePerf = report?.stagePerformance || [];
   const techStageMatrix = report?.technicianStageMatrix || [];
+  const pendingStatusOnly = parseSpecMultiUrl(fStatus).filter((v) => v !== 'All').length > 0
+    && parseSpecMultiUrl(fStatus).every((v) => v === 'Pending');
+  const pendingTechTotal = techAgg.reduce((sum, t) => sum + (Number(t.pending) || 0), 0);
 
   const stagePerfByKey = useMemo(() => {
     const map = {};
@@ -854,29 +857,60 @@ export default function LaptopReportPage() {
       </section>
 
       <section style={{ marginBottom: 28 }}>
-        <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 12px' }}>Technician Summary</h2>
+        <div style={{ marginBottom: 12 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Technician Summary</h2>
+          {pendingStatusOnly && (
+            <p style={{ fontSize: 12, color: C.dim, margin: '4px 0 0' }}>
+              {dateMode === 'Today'
+                ? 'Current open pending tickets by assigned technician. Click a technician to see their tickets.'
+                : 'Pending tickets by assigned technician. Click a technician to see their tickets.'}
+            </p>
+          )}
+        </div>
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
           <table>
             <thead>
               <tr style={{ background: C.surface2 }}>
-                {['Technician', 'Total', 'In Progress', 'Done', 'Pending'].map((h, i) => (
+                {(pendingStatusOnly ? ['Technician', 'Pending Tickets'] : ['Technician', 'Total', 'In Progress', 'Done', 'Pending']).map((h, i) => (
                   <th key={h} style={{ padding: '9px 16px', fontSize: 11, color: C.dim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {techAgg.length === 0 && !loading && (
-                <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: C.dim2, fontSize: 13 }}>No technician data for this filter.</td></tr>
+                <tr><td colSpan={pendingStatusOnly ? 2 : 5} style={{ padding: 24, textAlign: 'center', color: C.dim2, fontSize: 13 }}>No technician data for this filter.</td></tr>
               )}
               {techAgg.map((t) => (
                 <tr key={t.name} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ padding: '10px 16px', fontSize: 12.5, fontWeight: 600 }}>{t.name}</td>
-                  <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.total} onClick={() => openTechPopup(t.name)} /></td>
-                  <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.inProgress} color={STATUS_COLOR['In Progress']} onClick={() => openTechPopup(t.name, 'inProgress')} /></td>
-                  <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.done} color={STATUS_COLOR.Done} onClick={() => openTechPopup(t.name, 'done')} /></td>
-                  <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.pending} color={STATUS_COLOR.Pending} onClick={() => openTechPopup(t.name, 'pending')} /></td>
+                  <td style={{ padding: '10px 16px', fontSize: 12.5, fontWeight: 600 }}>
+                    <button
+                      type="button"
+                      onClick={() => openTechPopup(t.name, pendingStatusOnly ? 'pending' : undefined)}
+                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', color: C.text, textDecoration: 'underline', textUnderlineOffset: 2 }}
+                    >
+                      {t.name}
+                    </button>
+                  </td>
+                  {pendingStatusOnly ? (
+                    <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.pending} color={STATUS_COLOR.Pending} onClick={() => openTechPopup(t.name, 'pending')} /></td>
+                  ) : (
+                    <>
+                      <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.total} onClick={() => openTechPopup(t.name)} /></td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.inProgress} color={STATUS_COLOR['In Progress']} onClick={() => openTechPopup(t.name, 'inProgress')} /></td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.done} color={STATUS_COLOR.Done} onClick={() => openTechPopup(t.name, 'done')} /></td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right' }}><CountLink value={t.pending} color={STATUS_COLOR.Pending} onClick={() => openTechPopup(t.name, 'pending')} /></td>
+                    </>
+                  )}
                 </tr>
               ))}
+              {pendingStatusOnly && techAgg.length > 0 && (
+                <tr style={{ borderTop: `1px solid ${C.border}`, background: C.surface2 }}>
+                  <td style={{ padding: '10px 16px', fontSize: 12.5, fontWeight: 700 }}>Total</td>
+                  <td style={{ padding: '10px 16px', textAlign: 'right' }}>
+                    <CountLink value={pendingTechTotal} color={STATUS_COLOR.Pending} onClick={() => openStatusPopup('Pending')} />
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

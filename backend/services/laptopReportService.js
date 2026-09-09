@@ -143,13 +143,37 @@ function appendMultiProcessor(raw, conditions, params, idx, fieldExpr = `COALESC
   return idx;
 }
 
+function pageStatusValues(query = {}) {
+  const raw = query.display_status || query.status;
+  if (!raw || raw === 'All' || raw === 'Total') return [];
+  return parseMultiSpecValues(raw).filter((v) => v !== 'All' && v !== 'Total');
+}
+
+/** Today + Status=Pending = current open pending workload, not tickets created today. */
+function isCurrentPendingWorkload(query = {}) {
+  const { period } = resolvePeriodRange(query);
+  if (period !== 'today') return false;
+  const statuses = pageStatusValues(query);
+  return statuses.length > 0 && statuses.every((s) => s === 'Pending');
+}
+
+function technicianFilterParts(techNames) {
+  const named = [];
+  let includeUnassigned = false;
+  for (const name of techNames) {
+    if (String(name).trim().toLowerCase() === 'unassigned') includeUnassigned = true;
+    else named.push(name);
+  }
+  return { named, includeUnassigned };
+}
+
 function buildTicketFilters(query) {
   const conditions = [`t.status NOT IN ('cancelled')`];
   const params = [];
   let idx = 1;
 
   const { from, to } = resolvePeriodRange(query);
-  if (from && to) {
+  if (from && to && !isCurrentPendingWorkload(query)) {
     conditions.push(`t.created_at >= $${idx}::date`);
     params.push(from);
     idx += 1;
@@ -212,9 +236,17 @@ function buildTicketFilters(query) {
   if (techName && techName !== 'All') {
     const techs = parseMultiSpecValues(techName).filter((v) => v !== 'All');
     if (techs.length) {
-      conditions.push(`u.name = ANY($${idx}::text[])`);
-      params.push(techs);
-      idx += 1;
+      const { named, includeUnassigned } = technicianFilterParts(techs);
+      const parts = [];
+      if (named.length) {
+        params.push(named);
+        parts.push(`u.name = ANY($${idx}::text[])`);
+        idx += 1;
+      }
+      if (includeUnassigned) {
+        parts.push('t.assigned_user_id IS NULL');
+      }
+      if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
     }
   } else if (query.user_id) {
     const uid = parseInt(query.user_id, 10);
