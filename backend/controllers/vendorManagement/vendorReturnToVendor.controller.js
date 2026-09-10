@@ -32,6 +32,7 @@ exports.listEligible = async (req, res) => {
       vendorId: req.query.vendor_id,
       poId: req.query.po_id,
       search: req.query.search,
+      inventoryStatus: req.query.inventory_status || req.query.status,
       page: Number(req.query.page) || 1,
       limit: Math.min(200, Number(req.query.limit) || 50),
     });
