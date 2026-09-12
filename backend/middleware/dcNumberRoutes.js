@@ -24,6 +24,8 @@ const DC_ACTION_SUFFIXES = [
   '/warehouse-receive-back',
   '/verify-serial',
   '/deliver',
+  '/notify',
+  '/items/cancel',
   '/rental-invoice/pdf',
   '/bluedart-awb/pdf',
   '/request-demo-eway',

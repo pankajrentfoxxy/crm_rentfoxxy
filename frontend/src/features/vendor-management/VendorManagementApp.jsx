@@ -18,6 +18,9 @@ import VendorRepairDcDetailPage from '../floor-pipeline/pages/VendorRepairDcDeta
 import ReturnToVendorListPage from './pages/ReturnToVendorListPage';
 import ReturnToVendorCreatePage from './pages/ReturnToVendorCreatePage';
 import ReturnToVendorDetailPage from './pages/ReturnToVendorDetailPage';
+import VendorReturnTicketListPage from './pages/VendorReturnTicketListPage';
+import VendorReturnTicketCreatePage from './pages/VendorReturnTicketCreatePage';
+import VendorReturnTicketDetailPage from './pages/VendorReturnTicketDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -79,6 +82,22 @@ export default function VendorManagementApp() {
         <Route path="return-to-vendor" element={
           <ProtectedRoute sections={['vendor_return_to_vendor', 'vendor_management']} action="view">
             <ReturnToVendorListPage />
+          </ProtectedRoute>
+        } />
+
+        <Route path="return-ticket/new" element={
+          <ProtectedRoute sections={['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management']} action="view">
+            <VendorReturnTicketCreatePage />
+          </ProtectedRoute>
+        } />
+        <Route path="return-ticket/:ticketNumber" element={
+          <ProtectedRoute sections={['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management']} action="view">
+            <VendorReturnTicketDetailPage />
+          </ProtectedRoute>
+        } />
+        <Route path="return-ticket" element={
+          <ProtectedRoute sections={['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management']} action="view">
+            <VendorReturnTicketListPage />
           </ProtectedRoute>
         } />
 

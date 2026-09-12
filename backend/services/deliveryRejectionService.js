@@ -30,15 +30,40 @@ const MIGRATIONS = [
 ];
 
 let schemaEnsured = false;
+async function rejectionColumnsExist() {
+  const { rows } = await pool.query(
+    `SELECT 1
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'delivery_challan_lines'
+        AND column_name = 'warehouse_received_at'
+      LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
 async function ensureDeliveryRejectionSchema() {
   if (schemaEnsured) return;
-  for (const file of MIGRATIONS) {
-    const migrationPath = path.join(__dirname, '../migrations', file);
-    if (fs.existsSync(migrationPath)) {
-      await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+  try {
+    if (await rejectionColumnsExist()) {
+      schemaEnsured = true;
+      return;
     }
+    for (const file of MIGRATIONS) {
+      const migrationPath = path.join(__dirname, '../migrations', file);
+      if (fs.existsSync(migrationPath)) {
+        await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+      }
+    }
+    schemaEnsured = true;
+  } catch (err) {
+    if (err.code === '42501') {
+      console.warn('ensureDeliveryRejectionSchema: skipped ALTER (not table owner)');
+      schemaEnsured = true;
+      return;
+    }
+    throw err;
   }
-  schemaEnsured = true;
 }
 
 function parseSerialEntry(entry) {

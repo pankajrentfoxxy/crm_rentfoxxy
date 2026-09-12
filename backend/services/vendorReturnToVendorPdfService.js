@@ -168,6 +168,12 @@ async function generateVendorReturnDcPdf(dcNumber) {
   const rel = `vendor-return/VRTDC_${safe}.pdf`;
   const abs = path.join(__dirname, '../uploads', rel);
 
+  let gateQrPng = null;
+  try {
+    const { ensureGateQrPng } = require('./gateQrService');
+    gateQrPng = (await ensureGateQrPng({ docType: 'vrtdc', docNumber: dc.dc_number })).png;
+  } catch (_) { /* QR is best-effort */ }
+
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(abs);
@@ -178,6 +184,7 @@ async function generateVendorReturnDcPdf(dcNumber) {
       docNumber: dc.dc_number,
       rightLabel: 'Return DC',
       rightValue: dc.dc_number,
+      qrPng: gateQrPng,
     });
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
@@ -217,7 +224,7 @@ async function generateVendorReturnDcPdf(dcNumber) {
 
     doc.font('Helvetica').fontSize(8).fillColor(C.sub)
       .text(
-        'One-way return to vendor — on dispatch the laptop is removed from warehouse stock.',
+        'One-way return to vendor — stock leaves the warehouse when Guard confirms outward at the gate.',
         40,
         Math.min(y + 8, 780),
         { width: 515 }

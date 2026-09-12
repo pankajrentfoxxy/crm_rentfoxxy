@@ -19,9 +19,27 @@ let vendorShippingSchemaEnsured = false;
 
 async function ensureVendorShippingSchema() {
   if (vendorShippingSchemaEnsured) return;
-  const migrationPath = path.join(__dirname, '../../migrations/123_vendor_shipping_address.sql');
-  if (fs.existsSync(migrationPath)) {
-    await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+  const existing = await pool.query(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'vendors'
+        AND column_name IN (
+          'shipping_same','shipping_address','shipping_city','shipping_state','shipping_pincode'
+        )`
+  );
+  if (existing.rows.length >= 5) {
+    vendorShippingSchemaEnsured = true;
+    return;
+  }
+  try {
+    const migrationPath = path.join(__dirname, '../../migrations/123_vendor_shipping_address.sql');
+    if (fs.existsSync(migrationPath)) {
+      await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+    }
+  } catch (err) {
+    if (err.code !== '42501') throw err;
+    console.warn('ensureVendorShippingSchema: skipped ALTER (not table owner)');
   }
   vendorShippingSchemaEnsured = true;
 }
@@ -179,20 +197,25 @@ function normalizeVendorRow(row) {
 const getValidators = [param('id').isInt().toInt()];
 
 async function getVendor(req, res) {
-  await ensureVendorShippingSchema();
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-  const { id } = req.params;
+  try {
+    await ensureVendorShippingSchema();
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    const { id } = req.params;
 
-  const r = await pool.query(
-    `SELECT v.*, s.shop_id, s.name AS shop_name, s.image_url AS shop_logo_url, s.banner_url AS shop_banner_url
-     FROM vendors v
-     LEFT JOIN vendor_shops s ON s.vendor_id = v.vendor_id AND s.deleted_at IS NULL
-     WHERE v.vendor_id = $1 AND v.deleted_at IS NULL`,
-    [id]
-  );
-  if (r.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
-  res.json({ success: true, data: normalizeVendorRow(r.rows[0]) });
+    const r = await pool.query(
+      `SELECT v.*, s.shop_id, s.name AS shop_name, s.image_url AS shop_logo_url, s.banner_url AS shop_banner_url
+       FROM vendors v
+       LEFT JOIN vendor_shops s ON s.vendor_id = v.vendor_id AND s.deleted_at IS NULL
+       WHERE v.vendor_id = $1 AND v.deleted_at IS NULL`,
+      [id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    res.json({ success: true, data: normalizeVendorRow(r.rows[0]) });
+  } catch (error) {
+    console.error('getVendor:', error);
+    res.status(500).json({ success: false, message: error.message || 'Server error fetching vendor' });
+  }
 }
 
 const lookupValidators = [query('vendor_id').notEmpty().isInt().toInt()];

@@ -13,6 +13,7 @@ const serials = require('../controllers/vendorManagement/serialNumbers.controlle
 const billing = require('../controllers/vendorManagement/billing.controller');
 const replaced = require('../controllers/vendorManagement/replacedProducts.controller');
 const vendorReturn = require('../controllers/vendorManagement/vendorReturnToVendor.controller');
+const vendorReturnTicket = require('../controllers/vendorManagement/vendorReturnTicket.controller');
 const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 
 const router = express.Router();
@@ -287,5 +288,26 @@ router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorRetu
 router.post('/return-to-vendor/dc/:dcNumber/dispatch', authorizeReturnToVendor, vendorReturn.dispatchDc);
 router.post('/return-to-vendor/dc/:dcNumber/complete', authorizeReturnToVendor, vendorReturn.completeDc);
 router.post('/return-to-vendor/dc/:dcNumber/cancel', authorizeReturnToVendor, vendorReturn.cancelDc);
+
+// ---------- Vendor rental return ticket (wraps VRTDC; rent stops on notify) ----------
+const authorizeReturnTicket = [
+  authMiddleware,
+  checkAnySectionPermission(['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], 'view'),
+];
+router.get('/return-ticket/eligible-vendors', authorizeReturnTicket, vendorReturnTicket.listEligibleVendors);
+router.get('/return-ticket/eligible-laptops', authorizeReturnTicket, vendorReturnTicket.listEligible);
+router.get('/return-ticket', authorizeReturnTicket, vendorReturnTicket.listTickets);
+router.post('/return-ticket', authorizeReturnTicket, vendorReturnTicket.createTicket);
+const vrtBase = '/return-ticket';
+router.post(...prefixedDcRoute(vrtBase, '/notify', ...authorizeReturnTicket, vendorReturnTicket.notifyVendor));
+router.post(...prefixedDcRoute(vrtBase, '/dc', ...authorizeReturnTicket, vendorReturnTicket.createDc));
+router.post(...prefixedDcRoute(vrtBase, '/items/cancel', ...authorizeReturnTicket, vendorReturnTicket.cancelItems));
+router.post(...prefixedDcRoute(vrtBase, '/cancel', ...authorizeReturnTicket, vendorReturnTicket.cancelTicket));
+router.get(...prefixedDcRoute(vrtBase, '', ...authorizeReturnTicket, vendorReturnTicket.getTicket));
+router.get('/return-ticket/:ticketNumber', authorizeReturnTicket, vendorReturnTicket.getTicket);
+router.post('/return-ticket/:ticketNumber/notify', authorizeReturnTicket, vendorReturnTicket.notifyVendor);
+router.post('/return-ticket/:ticketNumber/dc', authorizeReturnTicket, vendorReturnTicket.createDc);
+router.post('/return-ticket/:ticketNumber/items/cancel', authorizeReturnTicket, vendorReturnTicket.cancelItems);
+router.post('/return-ticket/:ticketNumber/cancel', authorizeReturnTicket, vendorReturnTicket.cancelTicket);
 
 module.exports = router;

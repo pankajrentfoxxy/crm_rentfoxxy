@@ -123,5 +123,6 @@ module.exports = {
   invoicePdfDownloadName,
   sanitizeCustomerFileName,
   uniqueCustomerPdfName,
+  renderHtmlToPdf,
   UPLOAD_DIR,
 };

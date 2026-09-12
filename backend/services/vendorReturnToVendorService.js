@@ -420,6 +420,8 @@ async function dispatchReturnDc(client, {
   porter_booking_url,
   delivery_person_id,
   vehicle_number,
+  vendor_pickup_person,
+  vendor_pickup_mobile,
   actorUserId,
   actorName,
 }) {
@@ -429,7 +431,7 @@ async function dispatchReturnDc(client, {
   );
   const head = headRes.rows[0];
   if (!head) throw new Error('Return DC not found');
-  if (head.status !== 'draft') throw new Error(`Cannot dispatch — DC status is ${head.status}`);
+  if (head.status !== 'draft') throw new Error(`Cannot send to gate — DC status is ${head.status}`);
 
   const dispatch = dispatchPayloadFromBody({
     ship_by: ship_by || shipBy,
@@ -442,53 +444,13 @@ async function dispatchReturnDc(client, {
     porter_booking_url,
     delivery_person_id,
     vehicle_number,
+    vendor_pickup_person,
+    vendor_pickup_mobile,
   });
-
-  const items = await client.query(
-    `SELECT * FROM vendor_return_dc_items WHERE dc_number = $1 FOR UPDATE`,
-    [dcNumber]
-  );
-
-  for (const item of items.rows) {
-    await transitionAsset(client, {
-      serialId: item.serial_id,
-      toStatus: STATUS.SCRAPPED,
-      reason: `Returned to vendor via ${dcNumber}`,
-      dcNumber,
-      actorUserId,
-      actorName,
-    });
-    await client.query(
-      `UPDATE vendor_serial_numbers SET
-          qc_status = 'returned_to_vendor',
-          current_customer_id = NULL,
-          current_dc_number = $2,
-          warehouse_carret = NULL,
-          warehouse_carret_slot = NULL,
-          updated_at = NOW()
-       WHERE serial_id = $1`,
-      [item.serial_id, dcNumber]
-    );
-    await client.query(
-      `UPDATE vendor_return_dc_items SET item_status = 'dispatched' WHERE id = $1`,
-      [item.id]
-    );
-    await logTtsplEvent({
-      db: client,
-      vendorSerialId: item.serial_id,
-      ttsplId: item.ttspl_id,
-      eventType: 'vendor_return_dispatched',
-      description: `Dispatched to vendor on ${dcNumber}`,
-      metadata: { dc_number: dcNumber },
-      actorUserId,
-      actorName,
-    });
-  }
 
   await client.query(
     `UPDATE vendor_return_delivery_challans SET
-        status = 'dispatched',
-        dispatched_at = NOW(),
+        status = 'dispatch_ready',
         ship_by = $2,
         dispatch_mode = $3,
         courier_name = $4,
@@ -515,6 +477,80 @@ async function dispatchReturnDc(client, {
       dispatch.vendor_pickup_mobile,
     ]
   );
+
+  return getReturnDc(dcNumber);
+}
+
+/** Guard outward confirm — scrap inventory and mark dispatched. */
+async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorName }) {
+  const headRes = await client.query(
+    `SELECT * FROM vendor_return_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) throw new Error('Return DC not found');
+  if (head.status === 'dispatched' || head.status === 'completed') {
+    return { already_dispatched: true, dc: await getReturnDc(dcNumber) };
+  }
+  if (head.status !== 'dispatch_ready') {
+    throw new Error(`Cannot confirm gate outward — DC status is ${head.status}`);
+  }
+
+  const items = await client.query(
+    `SELECT * FROM vendor_return_dc_items WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+
+  for (const item of items.rows) {
+    await transitionAsset(client, {
+      serialId: item.serial_id,
+      toStatus: STATUS.SCRAPPED,
+      reason: `Returned to vendor via ${dcNumber}`,
+      dcNumber,
+      actorUserId,
+      actorName,
+    });
+    await client.query(
+      `UPDATE vendor_serial_numbers SET
+          qc_status = 'returned_to_vendor',
+          current_customer_id = NULL,
+          current_dc_number = $2,
+          warehouse_carret = NULL,
+          warehouse_carret_slot = NULL,
+          vendor_rent_end_date = COALESCE(vendor_rent_end_date, CURRENT_DATE),
+          updated_at = NOW()
+       WHERE serial_id = $1`,
+      [item.serial_id, dcNumber]
+    );
+    await client.query(
+      `UPDATE vendor_return_dc_items SET item_status = 'dispatched' WHERE id = $1`,
+      [item.id]
+    );
+    await logTtsplEvent({
+      db: client,
+      vendorSerialId: item.serial_id,
+      ttsplId: item.ttspl_id,
+      eventType: 'vendor_return_dispatched',
+      description: `Dispatched to vendor on ${dcNumber} (guard outward)`,
+      metadata: { dc_number: dcNumber },
+      actorUserId,
+      actorName,
+    });
+  }
+
+  await client.query(
+    `UPDATE vendor_return_delivery_challans SET
+        status = 'dispatched',
+        dispatched_at = NOW(),
+        updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber]
+  );
+
+  if (head.return_ticket_number) {
+    const ticketSvc = require('./vendorReturnTicketService');
+    await ticketSvc.syncFromDc(client, { dcNumber, phase: 'dispatched' });
+  }
 
   return getReturnDc(dcNumber);
 }
@@ -565,6 +601,11 @@ async function completeVendorReturn(client, { dcNumber, actorUserId, actorName }
     });
   }
 
+  if (head.return_ticket_number) {
+    const ticketSvc = require('./vendorReturnTicketService');
+    await ticketSvc.syncFromDc(client, { dcNumber, phase: 'completed' });
+  }
+
   return getReturnDc(dcNumber);
 }
 
@@ -575,7 +616,9 @@ async function cancelReturnDc(client, { dcNumber, actorUserId, actorName }) {
   );
   const head = headRes.rows[0];
   if (!head) throw new Error('Return DC not found');
-  if (head.status !== 'draft') throw new Error('Only draft return DCs can be cancelled');
+  if (!['draft', 'dispatch_ready'].includes(head.status)) {
+    throw new Error('Only draft or dispatch-ready return DCs can be cancelled');
+  }
 
   const items = await client.query(
     `SELECT serial_id, ttspl_id FROM vendor_return_dc_items WHERE dc_number = $1`,
@@ -593,6 +636,10 @@ async function cancelReturnDc(client, { dcNumber, actorUserId, actorName }) {
      WHERE dc_number = $1`,
     [dcNumber]
   );
+  if (head.return_ticket_number) {
+    const ticketSvc = require('./vendorReturnTicketService');
+    await ticketSvc.syncFromDc(client, { dcNumber, phase: 'cancelled' });
+  }
   return getReturnDc(dcNumber);
 }
 
@@ -607,6 +654,7 @@ module.exports = {
   getReturnDc,
   createReturnDc,
   dispatchReturnDc,
+  confirmGateOutwardVrtdc,
   completeVendorReturn,
   cancelReturnDc,
 };

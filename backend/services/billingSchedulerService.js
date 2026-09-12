@@ -3168,7 +3168,7 @@ async function generateVendorBill(vendorId, month, year) {
               vsn.serial_number,
               vsn.inventory_status,
               COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
-              (vsn.extra->>'returned_at')::date AS returned_at,
+              vsn.vendor_rent_end_date AS returned_at,
               COALESCE(
                 NULLIF((vpo.line_items->0->>'rate')::numeric, 0),
                 NULLIF((vpo.line_items->0->>'monthly_rental_amount')::numeric, 0),
@@ -3179,9 +3179,12 @@ async function generateVendorBill(vendorId, month, year) {
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
        WHERE vpo.vendor_id = $1
          AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+         AND vsn.deleted_at IS NULL
+         AND vpo.deleted_at IS NULL
          AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
-         AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date`,
-      [vendorId, toLocalYmd(monthEnd)]
+         AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date
+         AND (vsn.vendor_rent_end_date IS NULL OR vsn.vendor_rent_end_date >= $3::date)`,
+      [vendorId, toLocalYmd(monthEnd), toLocalYmd(monthStart)]
     );
 
     if (!serialsRes.rows.length) {
@@ -3209,6 +3212,9 @@ async function generateVendorBill(vendorId, month, year) {
         serial_number: row.serial_number,
         received_date: toLocalYmd(new Date(row.received_at)),
         return_date: row.returned_at ? toLocalYmd(new Date(row.returned_at)) : null,
+        rent_start: toLocalYmd(calc.effectiveStart),
+        rent_end: toLocalYmd(calc.effectiveEnd),
+        is_returned: Boolean(row.returned_at),
         days_in_month: calc.days,
         monthly_rate: calc.monthlyRate,
         daily_rate: calc.dailyRate,

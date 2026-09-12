@@ -7,6 +7,7 @@ import { downloadReturnToVendorDcPdf, fetchReturnToVendorDcs } from '../vendorMa
 
 const STATUS_CLASS = {
   draft: 'bg-slate-100 text-slate-700',
+  dispatch_ready: 'bg-sky-100 text-sky-800',
   dispatched: 'bg-blue-100 text-blue-800',
   completed: 'bg-emerald-100 text-emerald-800',
   cancelled: 'bg-red-100 text-red-700',
@@ -127,6 +128,7 @@ export default function ReturnToVendorListPage() {
           >
             <option value="">All statuses</option>
             <option value="draft">Draft</option>
+            <option value="dispatch_ready">Dispatch ready</option>
             <option value="dispatched">Dispatched</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
