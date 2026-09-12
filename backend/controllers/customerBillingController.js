@@ -66,15 +66,27 @@ const THIS_MONTH_RENTAL_SQL = `(
 const LINE_AMOUNT_SQL = `COALESCE(NULLIF(elem->>'amount', ''), '0')::numeric`;
 const LINE_LAPTOP_KEY_SQL = `COALESCE(NULLIF(elem->>'serial_id', ''), NULLIF(elem->>'ttspl_id', ''), elem->>'serial_number')`;
 
+function parseMonthList(raw) {
+  if (raw == null || raw === '') return [];
+  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  return [...new Set(
+    list.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 12)
+  )];
+}
+
 function invoiceListFilters(query, { includeStatus = true } = {}) {
-  const { customer_id, month, year, status, search } = query;
+  const { customer_id, month, months, year, status, search } = query;
   const params = [];
   const where = ['1=1'];
   if (customer_id) {
     params.push(customer_id);
     where.push(`ci.customer_id = $${params.length}`);
   }
-  if (month) {
+  const monthList = parseMonthList(months);
+  if (monthList.length) {
+    params.push(monthList);
+    where.push(`ci.invoice_month = ANY($${params.length}::int[])`);
+  } else if (month) {
     params.push(month);
     where.push(`ci.invoice_month = $${params.length}`);
   }

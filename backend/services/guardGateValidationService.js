@@ -214,6 +214,7 @@ function classifyDocumentNumber(raw) {
   const original = String(raw || '').trim();
   if (!original) return null;
   const n = original.toUpperCase();
+  if (/^VRTDC/i.test(n)) return { docType: 'vrtdc', docNumber: original };
   if (/^VRDC\/.+-(R|REP)\d+$/i.test(n)) {
     return { docType: 'vrdc_receive', docNumber: original };
   }
@@ -622,15 +623,40 @@ async function loadRefusedDeliveryReturn(db, dcNumber) {
 }
 
 let pickupGateColsReady = false;
+async function pickupGateColumnsExist(db) {
+  const { rows } = await db.query(
+    `SELECT 1
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'support_ticket_items'
+        AND column_name = 'gate_inward_at'
+      LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
 async function ensurePickupGateInwardColumns(db) {
   if (pickupGateColsReady) return;
-  await db.query(`
-    ALTER TABLE support_ticket_items
-      ADD COLUMN IF NOT EXISTS gate_inward_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS gate_inward_by INTEGER REFERENCES users (user_id),
-      ADD COLUMN IF NOT EXISTS gate_inward_session_id UUID
-  `);
-  pickupGateColsReady = true;
+  try {
+    if (await pickupGateColumnsExist(db)) {
+      pickupGateColsReady = true;
+      return;
+    }
+    await db.query(`
+      ALTER TABLE support_ticket_items
+        ADD COLUMN IF NOT EXISTS gate_inward_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS gate_inward_by INTEGER REFERENCES users (user_id),
+        ADD COLUMN IF NOT EXISTS gate_inward_session_id UUID
+    `);
+    pickupGateColsReady = true;
+  } catch (err) {
+    if (err.code === '42501') {
+      console.warn('ensurePickupGateInwardColumns: skipped ALTER (not table owner)');
+      pickupGateColsReady = true;
+      return;
+    }
+    throw err;
+  }
 }
 
 function isCourierOrPorterPickup(item) {
@@ -886,6 +912,71 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   };
 }
 
+async function loadVendorReturnToVendorDc(db, dcNumber) {
+  const headRes = await db.query(
+    `SELECT dc_number, vendor_id, vendor_name, status, awb_number, porter_tracking_id,
+            ship_by, dispatch_mode
+       FROM vendor_return_delivery_challans
+      WHERE dc_number = $1
+      LIMIT 1`,
+    [dcNumber]
+  );
+  if (!headRes.rows.length) return null;
+  const head = headRes.rows[0];
+  const items = await db.query(
+    `SELECT i.serial_id, i.ttspl_id, i.serial_number, i.configuration, i.item_status
+       FROM vendor_return_dc_items i
+      WHERE i.dc_number = $1
+      ORDER BY i.id`,
+    [head.dc_number]
+  );
+  const units = items.rows
+    .filter((i) => String(i.item_status || '').toLowerCase() !== 'vendor_received')
+    .map((row) => ({
+      serial_id: row.serial_id,
+      ttspl: row.ttspl_id,
+      serial_number: row.serial_number,
+      configuration: row.configuration,
+    }));
+  const laptops = uniqueLaptops(await enrichLaptops(db, units));
+  const dcStatus = String(head.status || '').toLowerCase();
+  let active = true;
+  let inactive_reason = null;
+  if (dcStatus === 'draft') {
+    active = false;
+    inactive_reason = 'Warehouse has not dispatched this return DC to the gate yet.';
+  } else if (dcStatus === 'dispatched' || dcStatus === 'completed') {
+    active = false;
+    inactive_reason = 'This vendor return has already gone out through the gate.';
+  } else if (dcStatus === 'cancelled') {
+    active = false;
+    inactive_reason = 'This vendor return DC is cancelled.';
+  } else if (dcStatus !== 'dispatch_ready') {
+    active = false;
+    inactive_reason = 'This vendor return DC is not waiting for outward.';
+  } else if (!laptops.length) {
+    active = false;
+    inactive_reason = 'No laptops on this return DC are waiting for guard outward.';
+  }
+
+  return {
+    direction: 'outward',
+    source_type: 'vendor_return',
+    source_label: 'Vendor Return',
+    reference_type: 'vrtdc',
+    reference_number: head.dc_number,
+    party_name: head.vendor_name || null,
+    so_number: null,
+    awb_number: head.awb_number || head.porter_tracking_id || null,
+    movement_mode: movementModeLabel(head.ship_by, head.dispatch_mode),
+    allow_partial: false,
+    active,
+    inactive_reason,
+    laptops,
+    dc_number: head.dc_number,
+  };
+}
+
 async function loadVendorRepairReceiveDc(db, receiveDcNumber) {
   let headRes;
   try {
@@ -1055,6 +1146,7 @@ async function loadDocument(db, docType, docNumber, preferredDirection) {
   if (docType === 'sdc') return loadServiceDc(db, docNumber);
   if (docType === 'vrdc') return loadVendorRepairDc(db, docNumber, preferredDirection);
   if (docType === 'vrdc_receive') return loadVendorRepairReceiveDc(db, docNumber);
+  if (docType === 'vrtdc') return loadVendorReturnToVendorDc(db, docNumber);
   if (docType === 'grn') return loadGrn(db, docNumber);
   if (docType === 'pout') return loadPhysicalOutward(db, docNumber);
   return null;
@@ -1209,6 +1301,25 @@ async function findByAwb(db, awb, preferredDirection) {
     }
   }
 
+  const vrtdc = await db.query(
+    `SELECT dc_number, awb_number, porter_tracking_id, status
+       FROM vendor_return_delivery_challans
+      WHERE awb_number ILIKE '%' || $1 || '%'
+         OR porter_tracking_id ILIKE '%' || $1 || '%'
+      ORDER BY id DESC LIMIT 1`,
+    [token]
+  );
+  if (vrtdc.rows[0]) {
+    const ctx = await loadVendorReturnToVendorDc(db, vrtdc.rows[0].dc_number);
+    if (ctx) {
+      ctx.awb_number = ctx.awb_number || token;
+      if (preferredDirection && ctx.direction !== preferredDirection) {
+        return invalidCtx(`This AWB is expected as ${ctx.direction.toUpperCase()}, not ${preferredDirection.toUpperCase()}.`);
+      }
+      return ctx;
+    }
+  }
+
   const pickup = await db.query(
     `SELECT return_dc_number, pickup_awb, pickup_type, ticket_id
        FROM support_ticket_items
@@ -1267,7 +1378,8 @@ async function findBySerial(db, serial, preferredDirection) {
     if (!already) {
       const ctx = await loadOutboundDc(db, serial.current_dc_number)
         || await loadReturnDc(db, serial.current_dc_number)
-        || await loadServiceDc(db, serial.current_dc_number);
+        || await loadServiceDc(db, serial.current_dc_number)
+        || await loadVendorReturnToVendorDc(db, serial.current_dc_number);
       if (ctx) candidates.push(ctx);
     }
   }
@@ -1308,6 +1420,21 @@ async function findBySerial(db, serial, preferredDirection) {
       ? null
       : (itemStatus === 'dispatched' ? 'inward' : 'outward');
     const ctx = await loadVendorRepairDc(db, row.dc_number, preferredDirection || pref);
+    if (ctx) candidates.push(ctx);
+  }
+
+  const vrtdcRows = await db.query(
+    `SELECT i.dc_number, d.status
+       FROM vendor_return_dc_items i
+       JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
+      WHERE (i.serial_id = $1 OR i.ttspl_id = $2 OR i.serial_number = $3)
+        AND d.status NOT IN ('cancelled')
+      ORDER BY i.id DESC
+      LIMIT 3`,
+    [serial.serial_id, serial.ttspl, serial.serial_number]
+  );
+  for (const row of vrtdcRows.rows) {
+    const ctx = await loadVendorReturnToVendorDc(db, row.dc_number);
     if (ctx) candidates.push(ctx);
   }
 
@@ -1384,6 +1511,7 @@ const MOVEMENT_SOURCE_PRIORITY = {
   repair_pickup: 2,
   vendor_repair_return: 3,
   vendor_repair: 4,
+  vendor_return: 4,
   replacement: 5,
   service_return: 5,
   customer_delivery: 6,
@@ -2363,7 +2491,11 @@ async function confirmSession({ sessionId, remarks, user }) {
   const actor = await getActor(db, user);
   const client = await pool.connect();
   try {
-    await require('./deliveryRejectionService').ensureDeliveryRejectionSchema();
+    try {
+      await require('./deliveryRejectionService').ensureDeliveryRejectionSchema();
+    } catch (ensureErr) {
+      console.warn('guardGate.confirm schema ensure skipped:', ensureErr.message);
+    }
     await client.query('BEGIN');
     const sessRes = await client.query(
       `SELECT * FROM gate_scan_sessions WHERE session_id = $1 FOR UPDATE`,
@@ -2416,7 +2548,7 @@ async function confirmSession({ sessionId, remarks, user }) {
     const stamped = await client.query(
       `UPDATE gate_movements
           SET confirmed_at = NOW(),
-              remarks = COALESCE($2, remarks)
+              remarks = COALESCE($2::text, remarks)
         WHERE session_id = $1
           AND validation_result = 'valid'
           AND confirmed_at IS NULL
@@ -2428,14 +2560,14 @@ async function confirmSession({ sessionId, remarks, user }) {
         `UPDATE gate_scan_sessions
             SET status = 'confirmed',
                 confirmed_at = NOW(),
-                remarks = COALESCE($2, remarks)
+                remarks = COALESCE($2::text, remarks)
           WHERE session_id = $1`,
         [session.session_id, remarks || null]
       );
     } else {
       await client.query(
         `UPDATE gate_scan_sessions
-            SET remarks = COALESCE($2, remarks)
+            SET remarks = COALESCE($2::text, remarks)
           WHERE session_id = $1`,
         [session.session_id, remarks || null]
       );
@@ -2480,6 +2612,14 @@ async function confirmSession({ sessionId, remarks, user }) {
         dcNumber: session.reference_number,
         serialIds,
         sessionId: session.session_id,
+        actorUserId: actor.userId,
+        actorName: actor.name,
+      });
+    }
+    if (session.reference_type === 'vrtdc' && session.direction === 'outward' && remaining === 0) {
+      const { confirmGateOutwardVrtdc } = require('./vendorReturnToVendorService');
+      await confirmGateOutwardVrtdc(client, {
+        dcNumber: session.reference_number,
         actorUserId: actor.userId,
         actorName: actor.name,
       });

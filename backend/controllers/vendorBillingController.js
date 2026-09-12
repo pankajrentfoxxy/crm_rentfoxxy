@@ -1,5 +1,7 @@
+const path = require('path');
 const pool = require('../config/db');
 const { generateVendorBill } = require('../services/billingSchedulerService');
+const { generateVendorBillPdf, vendorBillPdfDownloadName } = require('../services/vendorBillPdfService');
 const {
   recordPayment,
   recordFullPayment,
@@ -167,7 +169,11 @@ exports.getVendorBill = async (req, res) => {
   try {
     const { billId } = req.params;
     const result = await pool.query(
-      `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name, v.gst_number
+      `SELECT vb.*,
+              COALESCE(v.business_name, v.first_name) AS vendor_name,
+              v.gst_number,
+              v.email AS vendor_email,
+              v.address AS vendor_address
        FROM vendor_monthly_bills vb
        LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
        WHERE vb.bill_id = $1`,
@@ -418,6 +424,34 @@ exports.createDebitNote = async (req, res) => {
       ]
     );
     res.status(201).json({ success: true, debit_note: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.downloadVendorBillPdf = async (req, res) => {
+  try {
+    const id = req.params.billId || req.params.id;
+    const result = await pool.query(
+      `SELECT vb.*,
+              COALESCE(v.business_name, v.first_name) AS vendor_name,
+              v.gst_number,
+              v.email AS vendor_email,
+              v.address AS vendor_address
+         FROM vendor_monthly_bills vb
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+        WHERE vb.bill_id = $1`,
+      [id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+    const bill = result.rows[0];
+    const pdfPath = await generateVendorBillPdf(bill);
+    res.download(
+      path.join(__dirname, '..', pdfPath),
+      vendorBillPdfDownloadName(bill.bill_number),
+    );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

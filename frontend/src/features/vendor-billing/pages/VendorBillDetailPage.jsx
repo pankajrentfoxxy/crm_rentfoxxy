@@ -4,10 +4,25 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import VendorBillStatusBadge from '../components/VendorBillStatusBadge';
 import { Button } from '../../../components/ui/primitives';
-import { approveVendorBill, getVendorBill, markVendorBillPaid } from '../vendorBillingApi';
+import { approveVendorBill, downloadVendorBillPdf, getVendorBill, markVendorBillPaid } from '../vendorBillingApi';
 
 function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function formatBillDate(d) {
+  if (!d) return '—';
+  const s = String(d);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) {
+    const [y, mo, day] = m[1].split('-').map(Number);
+    return new Date(y, mo - 1, day).toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+  }
+  const parsed = new Date(d);
+  if (Number.isNaN(parsed.getTime())) return s;
+  return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 export default function VendorBillDetailPage() {
@@ -30,6 +45,20 @@ export default function VendorBillDetailPage() {
   const lineItems = typeof bill.line_items === 'string'
     ? JSON.parse(bill.line_items)
     : (bill.line_items || []);
+
+  const handlePdf = async () => {
+    try {
+      const res = await downloadVendorBillPdf(billId);
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${bill.bill_number}.pdf`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      toast.error('PDF download failed');
+    }
+  };
 
   const handleApprove = async () => {
     try {
@@ -58,10 +87,11 @@ export default function VendorBillDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-4 mt-4 mb-6">
         <div>
           <h1 className="text-2xl font-semibold">{bill.bill_number}</h1>
-          <p className="text-sm text-gray-500">{bill.vendor_name} · {bill.from_date} – {bill.to_date}</p>
+          <p className="text-sm text-gray-500">{bill.vendor_name} · {formatBillDate(bill.from_date)} – {formatBillDate(bill.to_date)}</p>
           <div className="mt-2"><VendorBillStatusBadge status={bill.status} /></div>
         </div>
         <div className="flex gap-2">
+          <Button variant="secondary" onClick={handlePdf}>Download PDF</Button>
           {bill.status === 'generated' && (
             <PermissionGate section="vendor_billing_mgmt" action="edit">
               <Button onClick={handleApprove}>Approve</Button>
@@ -85,8 +115,8 @@ export default function VendorBillDetailPage() {
             </div>
             {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              <span>Recv {line.received_date || '—'}</span>
-              <span>Ret {line.return_date || '—'}</span>
+              <span>Recv {formatBillDate(line.received_date)}</span>
+              <span>Ret {formatBillDate(line.return_date)}</span>
               <span>{line.days_in_month} days</span>
               <span>{fmt(line.monthly_rate)}/mo</span>
             </div>
@@ -112,8 +142,8 @@ export default function VendorBillDetailPage() {
               <tr key={idx}>
                 <td className="px-4 py-3">{line.ttspl_id || '—'}</td>
                 <td className="px-4 py-3">{line.serial_number}</td>
-                <td className="px-4 py-3">{line.received_date}</td>
-                <td className="px-4 py-3">{line.return_date || '—'}</td>
+                <td className="px-4 py-3">{formatBillDate(line.received_date)}</td>
+                <td className="px-4 py-3">{formatBillDate(line.return_date)}</td>
                 <td className="px-4 py-3 text-right">{line.days_in_month}</td>
                 <td className="px-4 py-3 text-right">{fmt(line.monthly_rate)}</td>
                 <td className="px-4 py-3 text-right">{fmt(line.amount)}</td>

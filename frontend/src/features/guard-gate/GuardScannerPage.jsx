@@ -23,6 +23,7 @@ const SOURCE_LABELS = {
   service_return: 'Service Return',
   refused_delivery: 'Refused Delivery',
   physical_outward: 'Physical Part Outward',
+  vendor_return: 'Vendor Return',
 };
 
 const CHECKS = [
@@ -64,7 +65,7 @@ function looksLikeDocumentScan(value) {
   const s = String(value || '').trim();
   if (!s) return false;
   if (/RFXG1\|/i.test(s)) return true;
-  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO|POUT)[\/-]/i.test(s)) return true;
+  if (/^(G?DC|RDC|SDC|VRTDC|VRDC|GRN|SO|POUT)[\/-]/i.test(s)) return true;
   return false;
 }
 

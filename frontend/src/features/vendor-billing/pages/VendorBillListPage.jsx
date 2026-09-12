@@ -6,7 +6,7 @@ import PermissionGate from '../../../components/PermissionGate';
 import VendorBillStatusBadge from '../components/VendorBillStatusBadge';
 import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
 import MultiSelectFilter from '../../lead-crm/components/MultiSelectFilter';
-import { approveVendorBill, generateVendorBill, listBillableVendors, listVendorBills, markVendorBillPaid } from '../vendorBillingApi';
+import { approveVendorBill, downloadVendorBillPdf, generateVendorBill, listBillableVendors, listVendorBills, markVendorBillPaid } from '../vendorBillingApi';
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_OPTIONS = MONTHS.slice(1).map((label, i) => ({ value: String(i + 1), label }));
@@ -106,6 +106,20 @@ export default function VendorBillListPage() {
       toast.error(err.response?.data?.message || 'Generate failed');
     } finally {
       setGenLoading(false);
+    }
+  };
+
+  const handlePdf = async (id, num) => {
+    try {
+      const res = await downloadVendorBillPdf(id);
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${num || 'vendor-bill'}.pdf`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      toast.error('PDF download failed');
     }
   };
 
@@ -244,6 +258,7 @@ export default function VendorBillListPage() {
               <span className="text-base font-bold text-slate-900">{fmt(r.total_payable)}</span>
               <div className="flex flex-wrap items-center gap-3">
                 <Link to={`/vendor-billing/bills/${r.bill_id}`} className="text-sm text-blue-600 font-semibold">View</Link>
+                <button type="button" onClick={() => handlePdf(r.bill_id, r.bill_number)} className="text-sm text-gray-600 font-semibold">PDF</button>
                 {r.status === 'generated' && (
                   <PermissionGate section="vendor_billing_mgmt" action="edit">
                     <button type="button" onClick={() => handleApprove(r.bill_id)} className="text-sm text-blue-600 font-semibold">Approve</button>
@@ -295,6 +310,7 @@ export default function VendorBillListPage() {
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
                     <Link to={`/vendor-billing/bills/${r.bill_id}`} className="text-xs text-blue-600">View</Link>
+                    <button type="button" onClick={() => handlePdf(r.bill_id, r.bill_number)} className="text-xs text-gray-600">PDF</button>
                     {r.status === 'generated' && (
                       <PermissionGate section="vendor_billing_mgmt" action="edit">
                         <button type="button" onClick={() => handleApprove(r.bill_id)} className="text-xs text-blue-600">Approve</button>

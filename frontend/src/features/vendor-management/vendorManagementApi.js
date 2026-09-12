@@ -373,6 +373,42 @@ function downloadBlobResponse(response, fallbackName) {
   window.URL.revokeObjectURL(url);
 }
 
+export function fetchVendorReturnTicketEligibleVendors() {
+  return api.get(`${base}/return-ticket/eligible-vendors`);
+}
+
+export function fetchVendorReturnTicketEligible(params) {
+  return api.get(`${base}/return-ticket/eligible-laptops`, { params });
+}
+
+export function fetchVendorReturnTickets(params) {
+  return api.get(`${base}/return-ticket`, { params });
+}
+
+export function fetchVendorReturnTicket(ticketNumber) {
+  return api.get(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}`);
+}
+
+export function createVendorReturnTicket(payload) {
+  return api.post(`${base}/return-ticket`, payload);
+}
+
+export function notifyVendorReturnTicket(ticketNumber) {
+  return api.post(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/notify`);
+}
+
+export function createVendorReturnTicketDc(ticketNumber, payload) {
+  return api.post(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/dc`, payload);
+}
+
+export function cancelVendorReturnTicketItems(ticketNumber, payload) {
+  return api.post(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/items/cancel`, payload);
+}
+
+export function cancelVendorReturnTicket(ticketNumber, payload) {
+  return api.post(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/cancel`, payload);
+}
+
 export async function downloadReturnToVendorDcPdf(dcNumber) {
   try {
     const response = await api.get(

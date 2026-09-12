@@ -39,8 +39,9 @@ async function insertVendorBillLines(client, billId, lineItems) {
   for (const line of lineItems) {
     await client.query(
       `INSERT INTO vendor_bill_lines
-        (bill_id, serial_id, ttspl_id, days_in_month, monthly_rate, daily_rate, amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        (bill_id, serial_id, ttspl_id, days_in_month, monthly_rate, daily_rate, amount,
+         rent_start, rent_end, is_returned)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         billId,
         line.serial_id ?? null,
@@ -49,6 +50,9 @@ async function insertVendorBillLines(client, billId, lineItems) {
         line.monthly_rate ?? null,
         line.daily_rate ?? null,
         line.amount ?? null,
+        line.rent_start || null,
+        line.rent_end || null,
+        !!line.is_returned,
       ]
     );
   }

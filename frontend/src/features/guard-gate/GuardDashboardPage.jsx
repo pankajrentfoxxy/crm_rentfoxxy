@@ -69,14 +69,14 @@ function looksLikeDocumentScan(value) {
   const s = String(value || '').trim();
   if (!s) return false;
   if (/RFXG1\|/i.test(s)) return true;
-  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO|TTSPL)/i.test(s)) return true;
+  if (/^(G?DC|RDC|SDC|VRTDC|VRDC|GRN|SO|TTSPL)/i.test(s)) return true;
   return false;
 }
 
 function guessScannerDirection(query) {
   const s = String(query || '').trim().toUpperCase();
   if (/^RDC|^VRDC.*-R|^VRDC.*-REP|^GRN/i.test(s)) return 'inward';
-  if (/^DC|^SO|^SDC/i.test(s)) return 'outward';
+  if (/^VRTDC|^DC|^SO|^SDC|^VRDC/i.test(s)) return 'outward';
   return 'inward';
 }
 

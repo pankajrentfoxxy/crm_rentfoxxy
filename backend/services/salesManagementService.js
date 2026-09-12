@@ -225,6 +225,7 @@ const FY_DOC_TYPES = {
   service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_return_dc: { docType: 'part_rpdc_rentfoxxy', prefix: 'RPDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  vendor_return_ticket: { docType: 'vendor_return_ticket', prefix: 'VRT', table: 'vendor_return_tickets', column: 'ticket_number' },
 };
 const FY_SEQ_PAD = 4;
 
@@ -2161,6 +2162,12 @@ async function searchAvailableInventory({
           WHERE sos_att.serial_id = vsn.serial_id
             AND sos_att.status = 'attached'
        )`;
+  const notOnOpenReturnTicketSql = `
+       AND NOT EXISTS (
+         SELECT 1 FROM vendor_return_ticket_items vrti
+          WHERE vrti.serial_id = vsn.serial_id
+            AND vrti.item_status NOT IN ('cancelled','vendor_received')
+       )`;
 
   const result = await pool.query(
     `SELECT
@@ -2188,6 +2195,7 @@ async function searchAvailableInventory({
        AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
        AND COALESCE(vsn.inventory_status, 'in_stock') NOT IN (${offShelfList})
        ${notAlreadyAttachedSql}
+       ${notOnOpenReturnTicketSql}
        ${searchSql}
      ORDER BY vsn.serial_id DESC
      LIMIT ${candidateLimit}`,
@@ -2237,6 +2245,11 @@ async function searchAvailableInventory({
            SELECT 1 FROM sales_order_serials sos_att
             WHERE sos_att.serial_id = vsn.serial_id
               AND sos_att.status = 'attached'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM vendor_return_ticket_items vrti
+            WHERE vrti.serial_id = vsn.serial_id
+              AND vrti.item_status NOT IN ('cancelled','vendor_received')
          )
        ORDER BY vsn.serial_id DESC
        LIMIT ${candidateLimit}`

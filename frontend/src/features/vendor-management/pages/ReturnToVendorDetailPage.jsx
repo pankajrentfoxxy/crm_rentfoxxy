@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, CheckCircle, Download, Truck, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Download, ShieldCheck, Truck, XCircle } from 'lucide-react';
 import { PageHeader, Button } from '../../../components/ui/primitives';
+import usePermission from '../../../hooks/usePermission';
 import { getBackendOrigin } from '../../../utils/api';
 import {
   cancelReturnToVendorDc,
@@ -30,6 +31,7 @@ function uploadUrl(p) {
 
 export default function ReturnToVendorDetailPage() {
   const { dcNumber } = useParams();
+  const { canView } = usePermission();
   const [dc, setDc] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -229,7 +231,7 @@ export default function ReturnToVendorDetailPage() {
 
       {dc.status === 'draft' && (
         <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3">
-          <h3 className="font-semibold flex items-center gap-2"><Truck className="w-4 h-4" /> Dispatch to vendor</h3>
+          <h3 className="font-semibold flex items-center gap-2"><Truck className="w-4 h-4" /> Send to gate</h3>
           <div className="max-w-xl">
             <VrdcDispatchFields
               shipBy={shipBy}
@@ -245,7 +247,7 @@ export default function ReturnToVendorDetailPage() {
               loading={busy === 'dispatch'}
               onClick={handleDispatch}
             >
-              <Truck className="w-4 h-4" /> Dispatch
+              <Truck className="w-4 h-4" /> Send to gate
             </Button>
             <Button
               variant="secondary"
@@ -256,10 +258,37 @@ export default function ReturnToVendorDetailPage() {
             </Button>
           </div>
           <p className="text-xs text-slate-500">
-            On dispatch, inventory is updated (laptop removed from warehouse stock).
-            By hand assigns the technician — they see it in My Deliveries / Technician Bucket,
-            then mark Reached → vendor e-sign (no TTSPL scan, no customer OTP).
+            This only stages the DC at the gate. Stock leaves the warehouse when Guard
+            confirms outward. By hand assigns the technician after gate outward —
+            they see it in My Deliveries / Technician Bucket, then mark Reached → vendor e-sign
+            (no TTSPL scan, no customer OTP).
           </p>
+        </div>
+      )}
+
+      {dc.status === 'dispatch_ready' && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 space-y-3">
+          <p className="text-sm text-sky-900">
+            Dispatch ready at the warehouse. Status stays here until Guard scans this DC QR on{' '}
+            <strong>OUTWARD</strong> and submits. That submit removes the laptops from warehouse stock.
+          </p>
+          {canView('guard_gate_checking') ? (
+            <Link
+              to={`/guard/scanner?dir=outward&q=${encodeURIComponent(dc.dc_number)}`}
+              className="inline-flex items-center gap-1 px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700"
+            >
+              <ShieldCheck className="w-4 h-4" /> Open outward gate scanner
+            </Link>
+          ) : null}
+          <div>
+            <Button
+              variant="secondary"
+              loading={busy === 'cancel'}
+              onClick={() => run('cancel', () => cancelReturnToVendorDc(dcNumber))}
+            >
+              <XCircle className="w-4 h-4" /> Cancel DC
+            </Button>
+          </div>
         </div>
       )}
 
