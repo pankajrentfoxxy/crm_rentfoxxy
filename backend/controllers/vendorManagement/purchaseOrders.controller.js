@@ -2013,6 +2013,178 @@ const updateValidators = [
   body('is_same_state').optional().isBoolean()
 ];
 
+const PO_LINE_SPEC_FIELDS = ['processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size'];
+
+function isSuperAdminUser(user) {
+  if (!user) return false;
+  if (user.is_superadmin === true) return true;
+  return String(user.role || '').toLowerCase() === 'super_admin';
+}
+
+function trimSpecValue(value) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed === '' ? '' : trimmed;
+}
+
+function normLineSpecValue(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
+function collectLineSpecChanges(prevLine, specPatch) {
+  const changes = [];
+  for (const field of Object.keys(specPatch)) {
+    const before = normLineSpecValue(prevLine[field]);
+    const after = normLineSpecValue(specPatch[field]);
+    if (before !== after) {
+      changes.push({ field, before, after });
+    }
+  }
+  return changes;
+}
+
+function formatLineSpecChangeSummary(changes) {
+  return changes
+    .map(({ field, before, after }) => {
+      const label = field.replace(/_/g, ' ');
+      const from = before || '—';
+      const to = after || '—';
+      return `${label}: ${from} → ${to}`;
+    })
+    .join('; ');
+}
+
+const updateLineItemSpecsValidators = [
+  param('id').isInt().toInt(),
+  param('lineIndex').isInt({ min: 0 }).toInt(),
+  ...PO_LINE_SPEC_FIELDS.map((field) => body(field).optional().isString().trim()),
+];
+
+async function updateLineItemSpecs(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  if (!isSuperAdminUser(req.user)) {
+    return res.status(403).json({ success: false, message: 'Only super admin can edit PO line specs' });
+  }
+
+  const poId = Number(req.params.id);
+  const lineIndex = Number(req.params.lineIndex);
+  const specPatch = {};
+  for (const field of PO_LINE_SPEC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+      specPatch[field] = trimSpecValue(req.body[field]) ?? '';
+    }
+  }
+  if (!Object.keys(specPatch).length) {
+    return res.status(400).json({ success: false, message: 'Provide at least one spec field to update' });
+  }
+
+  const cur = await pool.query(
+    `SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    [poId]
+  );
+  if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+
+  const po = cur.rows[0];
+  const lineItems = parseLineItemsJson(po.line_items);
+  if (lineIndex >= lineItems.length) {
+    return res.status(400).json({ success: false, message: 'Invalid line index' });
+  }
+
+  const prevLine = { ...lineItems[lineIndex] };
+  const specChanges = collectLineSpecChanges(prevLine, specPatch);
+  if (!specChanges.length) {
+    const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
+    const enriched = await attachProductDetailsWithGrn(pool, po, qtyMaps);
+    return res.json({ success: true, message: 'No spec changes', data: enriched });
+  }
+
+  const changedPatch = Object.fromEntries(specChanges.map(({ field, after }) => [field, after]));
+  lineItems[lineIndex] = { ...lineItems[lineIndex], ...changedPatch };
+  const nextLine = lineItems[lineIndex];
+  const assets_details = buildAssetsDetailsFromLines(lineItems);
+  const lineLabel = [nextLine.brand_name || nextLine.brand, nextLine.model].filter(Boolean).join(' ') || `Line ${lineIndex + 1}`;
+  const pdId = nextLine.product_detail_id ?? nextLine.product_id ?? nextLine.pro_id ?? nextLine.id;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(
+      `UPDATE vendor_purchase_orders
+       SET line_items = $1::jsonb,
+           assets_details = $2::jsonb,
+           updated_at = NOW()
+       WHERE po_id = $3 AND deleted_at IS NULL`,
+      [JSON.stringify(lineItems), JSON.stringify(assets_details), poId]
+    );
+
+    if (pdId != null && String(pdId).trim() !== '') {
+      const vpdSets = [];
+      const vpdParams = [];
+      let vp = 1;
+      for (const field of PO_LINE_SPEC_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(changedPatch, field)) {
+          vpdSets.push(`${field} = $${vp}`);
+          vpdParams.push(changedPatch[field]);
+          vp += 1;
+        }
+      }
+      if (vpdSets.length) {
+        vpdSets.push('updated_at = NOW()');
+        vpdParams.push(Number(pdId));
+        await client.query(
+          `UPDATE vendor_product_details
+           SET ${vpdSets.join(', ')}
+           WHERE product_detail_id = $${vp}
+             AND config_locked_at IS NULL`,
+          vpdParams
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('updateLineItemSpecs:', e);
+    return res.status(500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+
+  const changeSummary = formatLineSpecChangeSummary(specChanges);
+
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: po.vendor_id,
+    entityType: 'purchase_order',
+    entityId: poId,
+    action: 'line_specs_updated',
+    payload: { line_index: lineIndex, changes: specChanges, before: prevLine, after: nextLine },
+  });
+
+  await safeLogPurchaseOrderActivity({
+    poId,
+    activityType: ACTIVITY_TYPES.ITEM,
+    action: 'line_specs_updated',
+    description: `${req.user?.name || 'Super Admin'} updated specs on line ${lineIndex + 1} (${lineLabel}) of ${po.purchase_order_number}: ${changeSummary}.`,
+    metadata: {
+      line_index: lineIndex,
+      line_label: lineLabel,
+      purchase_order_number: po.purchase_order_number,
+      product_detail_id: pdId ?? null,
+      changes: specChanges,
+    },
+    user: req.user,
+  });
+
+  const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
+  const enriched = await attachProductDetailsWithGrn(pool, { ...po, line_items: lineItems, assets_details }, qtyMaps);
+  res.json({ success: true, data: enriched });
+}
+
 async function remove(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
@@ -2068,6 +2240,85 @@ function normalizeBillFilesJson(raw) {
     }
   }
   return [];
+}
+
+function billFileEntryPath(entry) {
+  if (!entry) return '';
+  if (typeof entry === 'string') return entry;
+  return String(entry.path || entry.url || entry.file || '');
+}
+
+function resolveBillUploadAbsPath(webPath) {
+  const p = String(webPath || '').trim();
+  if (!p.startsWith('/uploads/')) return null;
+  return path.join(__dirname, '..', '..', p.replace(/^\//, ''));
+}
+
+function unlinkBillFileQuietly(webPath) {
+  const abs = resolveBillUploadAbsPath(webPath);
+  if (!abs) return;
+  try {
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  } catch (err) {
+    console.warn('unlinkBillFileQuietly:', abs, err.message);
+  }
+}
+
+async function assertBillNumberUnique(billName, { excludePoId = null, excludeGrnId = null, excludeSpoId = null } = {}) {
+  const norm = String(billName || '').trim().toLowerCase();
+  if (!norm) return;
+
+  const [poRes, grnRes, spoRes] = await Promise.all([
+    pool.query(
+      `SELECT po_id, purchase_order_number
+         FROM vendor_purchase_orders
+        WHERE deleted_at IS NULL
+          AND bill_name IS NOT NULL
+          AND LOWER(TRIM(bill_name)) = $1
+          AND ($2::int IS NULL OR po_id <> $2)
+        LIMIT 1`,
+      [norm, excludePoId]
+    ),
+    pool.query(
+      `SELECT grn_id, po_id
+         FROM vendor_goods_received_notes
+        WHERE deleted_at IS NULL
+          AND bill_name IS NOT NULL
+          AND LOWER(TRIM(bill_name)) = $1
+          AND ($2::int IS NULL OR grn_id <> $2)
+        LIMIT 1`,
+      [norm, excludeGrnId]
+    ),
+    pool.query(
+      `SELECT spo_id, purchase_order_number
+         FROM vendor_spare_parts_purchase_orders
+        WHERE deleted_at IS NULL
+          AND bill_name IS NOT NULL
+          AND LOWER(TRIM(bill_name)) = $1
+          AND ($2::int IS NULL OR spo_id <> $2)
+        LIMIT 1`,
+      [norm, excludeSpoId]
+    ),
+  ]);
+
+  if (poRes.rows.length) {
+    const hit = poRes.rows[0];
+    const err = new Error(`Bill number "${billName}" is already used on PO ${hit.purchase_order_number}.`);
+    err.status = 409;
+    throw err;
+  }
+  if (grnRes.rows.length) {
+    const hit = grnRes.rows[0];
+    const err = new Error(`Bill number "${billName}" is already used on GRN #${hit.grn_id} (PO ${hit.po_id}).`);
+    err.status = 409;
+    throw err;
+  }
+  if (spoRes.rows.length) {
+    const hit = spoRes.rows[0];
+    const err = new Error(`Bill number "${billName}" is already used on spare PO ${hit.purchase_order_number}.`);
+    err.status = 409;
+    throw err;
+  }
 }
 
 async function updateStatus(req, res) {
@@ -2244,6 +2495,8 @@ async function uploadGrnBill(req, res) {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ success: false, message: 'At least one file is required' });
 
+    await assertBillNumberUnique(bill_name, { excludePoId: poId, excludeGrnId: grnId });
+
     const cur = await pool.query(
       `SELECT grn_id, bill_files FROM vendor_goods_received_notes
        WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
@@ -2282,7 +2535,7 @@ async function uploadGrnBill(req, res) {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ success: false, message: e.message || 'Upload failed' });
+    res.status(e.status || 500).json({ success: false, message: e.message || 'Upload failed' });
   }
 }
 
@@ -2312,10 +2565,15 @@ async function uploadBills(req, res) {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ success: false, message: 'At least one file is required' });
 
-    const cur = await pool.query(`SELECT bill_files FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
-      id
-    ]);
+    const cur = await pool.query(
+      `SELECT bill_name, bill_files, purchase_order_number, vendor_id
+         FROM vendor_purchase_orders
+        WHERE po_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
     if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+
+    await assertBillNumberUnique(bill_name, { excludePoId: id });
 
     let existing = cur.rows[0].bill_files;
     if (existing != null && typeof existing === 'string') {
@@ -2338,7 +2596,7 @@ async function uploadBills(req, res) {
 
     await logVendorAudit({
       actorUserId: req.user?.user_id,
-      vendorId: null,
+      vendorId: cur.rows[0].vendor_id || null,
       entityType: 'purchase_order',
       entityId: id,
       action: 'bill_upload',
@@ -2362,7 +2620,140 @@ async function uploadBills(req, res) {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ success: false, message: e.message || 'Upload failed' });
+    res.status(e.status || 500).json({ success: false, message: e.message || 'Upload failed' });
+  }
+}
+
+const deletePoBillFileValidators = [
+  param('id').isInt().toInt(),
+  param('fileIndex').isInt({ min: 0 }).toInt(),
+];
+
+async function deletePoBillFile(req, res) {
+  try {
+    if (!isSuperAdminUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only super admin can remove bill files' });
+    }
+
+    const id = Number(req.params.id);
+    const fileIndex = Number(req.params.fileIndex);
+
+    const cur = await pool.query(
+      `SELECT po_id, purchase_order_number, vendor_id, bill_name, bill_files
+         FROM vendor_purchase_orders
+        WHERE po_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+
+    const po = cur.rows[0];
+    const files = normalizeBillFilesJson(po.bill_files);
+    if (fileIndex >= files.length) {
+      return res.status(400).json({ success: false, message: 'Invalid bill file index' });
+    }
+
+    const removed = files[fileIndex];
+    const remaining = files.filter((_, idx) => idx !== fileIndex);
+    unlinkBillFileQuietly(billFileEntryPath(removed));
+
+    const nextBillName = remaining.length ? po.bill_name : null;
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+          SET bill_name = $1,
+              bill_files = $2::jsonb,
+              updated_at = NOW()
+        WHERE po_id = $3 AND deleted_at IS NULL`,
+      [nextBillName, JSON.stringify(remaining), id]
+    );
+
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: po.vendor_id || null,
+      entityType: 'purchase_order',
+      entityId: id,
+      action: 'bill_file_removed',
+      payload: { bill_name: po.bill_name, file_index: fileIndex, file: billFileEntryPath(removed) },
+    });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.ATTACHMENT,
+      action: 'attachment_deleted',
+      description: `${req.user?.name || 'Super Admin'} removed bill file from ${po.purchase_order_number}${po.bill_name ? ` (${po.bill_name})` : ''}.`,
+      metadata: { bill_name: po.bill_name, file_index: fileIndex, remaining_files: remaining.length },
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: remaining.length ? 'Bill file removed' : 'Bill file removed — bill cleared',
+      bill_name: nextBillName,
+      bill_files: remaining,
+    });
+  } catch (e) {
+    console.error('deletePoBillFile:', e);
+    res.status(500).json({ success: false, message: e.message || 'Remove failed' });
+  }
+}
+
+const removePoBillValidators = [param('id').isInt().toInt()];
+
+async function removePoBill(req, res) {
+  try {
+    if (!isSuperAdminUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only super admin can remove bills' });
+    }
+
+    const id = Number(req.params.id);
+    const cur = await pool.query(
+      `SELECT po_id, purchase_order_number, vendor_id, bill_name, bill_files
+         FROM vendor_purchase_orders
+        WHERE po_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+
+    const po = cur.rows[0];
+    const files = normalizeBillFilesJson(po.bill_files);
+    if (!po.bill_name && !files.length) {
+      return res.status(400).json({ success: false, message: 'No bill on this purchase order' });
+    }
+
+    for (const entry of files) {
+      unlinkBillFileQuietly(billFileEntryPath(entry));
+    }
+
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+          SET bill_name = NULL,
+              bill_files = '[]'::jsonb,
+              updated_at = NOW()
+        WHERE po_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: po.vendor_id || null,
+      entityType: 'purchase_order',
+      entityId: id,
+      action: 'bill_removed',
+      payload: { bill_name: po.bill_name, files_count: files.length },
+    });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.ATTACHMENT,
+      action: 'attachment_deleted',
+      description: `${req.user?.name || 'Super Admin'} removed bill ${po.bill_name || ''} from ${po.purchase_order_number}.`,
+      metadata: { bill_name: po.bill_name, files_count: files.length },
+      user: req.user,
+    });
+
+    res.json({ success: true, message: 'Bill removed from purchase order' });
+  } catch (e) {
+    console.error('removePoBill:', e);
+    res.status(500).json({ success: false, message: e.message || 'Remove failed' });
   }
 }
 
@@ -2390,11 +2781,17 @@ module.exports = {
   create,
   updateValidators,
   update,
+  updateLineItemSpecsValidators,
+  updateLineItemSpecs,
   remove,
   statusValidators,
   updateStatus,
   createBillsUpload,
   uploadBills,
+  deletePoBillFileValidators,
+  deletePoBillFile,
+  removePoBillValidators,
+  removePoBill,
   grnBillParamValidators,
   createGrnBillsUpload,
   uploadGrnBill,

@@ -30,10 +30,15 @@ const invAdmin = [
   checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_management', 'edit')
 ];
-/** Create Production ticket / move QC Pending or Dead laptop to QC Process + floor ticket */
+/** Move QC Pending or Dead laptop to QC Process + floor ticket */
 const qcMoveToTicketAccess = [
   authMiddleware,
   checkSectionPermission('qc_move_to_ticket', 'edit'),
+];
+/** Create Production ticket on QC Process list */
+const qcCreateProductionTicketAccess = [
+  authMiddleware,
+  checkAnySectionPermission(['qc_create_production_ticket', 'qc_move_to_ticket'], 'edit'),
 ];
 const invSpecEdit = [
   authMiddleware,
@@ -101,7 +106,7 @@ router.post(
 );
 router.post(
   '/qc-process/create-production-ticket',
-  qcMoveToTicketAccess,
+  qcCreateProductionTicketAccess,
   qcProcess.createProductionTicketValidators,
   qcProcess.createProductionTicket
 );

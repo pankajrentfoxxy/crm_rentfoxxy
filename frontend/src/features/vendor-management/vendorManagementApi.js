@@ -176,6 +176,11 @@ export function patchPurchaseOrderStatus(id, status, extra = {}) {
   return api.patch(`${base}/purchase-orders/${id}/status`, { status, ...extra });
 }
 
+/** Super admin only — update PO line specs (processor, ram, storage, etc.) */
+export function patchPurchaseOrderLineSpecs(poId, lineIndex, specs) {
+  return api.patch(`${base}/purchase-orders/${poId}/line-items/${lineIndex}/specs`, specs);
+}
+
 export function uploadGrnBill(poId, grnId, formData) {
   return api.post(`${base}/purchase-orders/${poId}/grns/${grnId}/bills`, formData);
 }
@@ -186,6 +191,14 @@ export function updateVendorPortalAccess(id, body) {
 
 export function uploadPurchaseOrderBills(id, formData) {
   return api.post(`${base}/purchase-orders/${id}/bills`, formData);
+}
+
+export function deletePurchaseOrderBillFile(poId, fileIndex) {
+  return api.delete(`${base}/purchase-orders/${poId}/bills/${fileIndex}`);
+}
+
+export function removePurchaseOrderBill(poId) {
+  return api.delete(`${base}/purchase-orders/${poId}/bills`);
 }
 
 export function fetchSpareOrders(params) {

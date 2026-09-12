@@ -27,8 +27,11 @@ import {
   fetchPurchaseOrderFormMeta,
   createPurchaseOrder,
   fetchPurchaseOrder,
+  patchPurchaseOrderLineSpecs,
   patchPurchaseOrderStatus,
-  uploadPurchaseOrderBills
+  uploadPurchaseOrderBills,
+  deletePurchaseOrderBillFile,
+  removePurchaseOrderBill,
 } from '../vendorManagementApi';
 import PoActivityPanel from '../components/PoActivityPanel';
 import PoReplacementsPanel from '../components/PoReplacementsPanel';
@@ -107,6 +110,33 @@ function formatPoType(t) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const PO_LINE_SPEC_FIELDS = ['processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size'];
+
+function emptyLineSpecDraft(item = {}) {
+  return {
+    processor: String(item.processor ?? ''),
+    generation: String(item.generation ?? ''),
+    ram: String(item.ram ?? ''),
+    storage: String(item.storage ?? ''),
+    gpu: String(item.gpu ?? ''),
+    screen_size: String(item.screen_size ?? ''),
+  };
+}
+
+function formatLineSpecsText(item) {
+  const procGen = [item.processor, item.generation].filter(Boolean).join(' · ');
+  const ramStor = [item.ram, item.storage].filter(Boolean).join(' | ');
+  const gpu = item.gpu ? ` · ${item.gpu}` : '';
+  const screen = item.screen_size ? ` · ${item.screen_size}` : '';
+  return `${procGen}${procGen && ramStor ? ' ' : ''}${ramStor}${gpu}${screen}`.trim() || '—';
+}
+
+function lineSpecDraftChanged(draft, item) {
+  return PO_LINE_SPEC_FIELDS.some(
+    (field) => String(draft[field] ?? '').trim() !== String(item[field] ?? '').trim()
+  );
+}
+
 /** Prefer API `product_details` (Laravel-compatible alias populated by CRM list/getOne). */
 function parseLineItems(po) {
   const raw = po?.product_details ?? po?.line_items;
@@ -180,6 +210,86 @@ function filePublicUrl(p) {
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
   const origin = getBackendOrigin().replace(/\/$/, '');
   return `${origin}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function BillFilesTable({
+  files,
+  billName,
+  compact = false,
+  canRemove = false,
+  removingIndex = null,
+  onPreviewImage,
+  onRemoveFile,
+}) {
+  if (!billName && !files?.length) {
+    return <span className="text-slate-400 text-xs">N/A</span>;
+  }
+  return (
+    <div className="space-y-1.5 min-w-[12rem]">
+      {billName ? (
+        <p className="text-xs font-semibold text-orange-700">{billName}</p>
+      ) : null}
+      {files?.length ? (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-[11px]">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="px-2 py-1 text-left font-semibold">Preview</th>
+                <th className="px-2 py-1 text-left font-semibold">File name</th>
+                {canRemove ? <th className="px-2 py-1 text-right font-semibold">Remove</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {files.map((f, idx) => {
+                const href = filePublicUrl(f);
+                const name = billFileName(f);
+                const image = isImageBillFile(f);
+                const pdf = isPdfBillFile(f);
+                const imageIndex = files.slice(0, idx + 1).filter((x) => isImageBillFile(x)).length - 1;
+                return (
+                  <tr key={`${href}-${idx}`} className="border-t border-slate-100">
+                    <td className="px-2 py-1">
+                      {image ? (
+                        <button
+                          type="button"
+                          className={`${compact ? 'h-8 w-8' : 'h-10 w-10'} rounded border overflow-hidden`}
+                          onClick={() => onPreviewImage?.(files, imageIndex)}
+                        >
+                          <img src={href} alt={name} className="h-full w-full object-cover" />
+                        </button>
+                      ) : (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex text-slate-500 hover:text-orange-600">
+                          {pdf ? <FileText className="w-4 h-4" /> : <ImageIcon className="w-4 h-4" />}
+                        </a>
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-slate-700 max-w-[10rem] truncate" title={name}>
+                      {name}
+                    </td>
+                    {canRemove ? (
+                      <td className="px-2 py-1 text-right">
+                        <button
+                          type="button"
+                          disabled={removingIndex === idx}
+                          className="inline-flex items-center gap-1 text-red-600 hover:text-red-700 disabled:opacity-50"
+                          onClick={() => onRemoveFile?.(idx)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {removingIndex === idx ? '…' : 'Remove'}
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <span className="text-slate-400 text-xs">No files</span>
+      )}
+    </div>
+  );
 }
 
 function PendingBillFileCard({ file, onRemove, onPreview }) {
@@ -269,6 +379,36 @@ function getPoBillInfo(row) {
 function hasPoBill(row) {
   const info = getPoBillInfo(row);
   return !!(info.billName || info.files.length);
+}
+
+function canSuperAdminManageCrmBill(row) {
+  if (!row) return false;
+  const crmFiles = parseBillFiles(row);
+  return !!(row.bill_name || crmFiles.length);
+}
+
+function BillListSummary({ billInfo, onView }) {
+  if (!billInfo.billName && !billInfo.files.length) {
+    return <span className="text-slate-400">N/A</span>;
+  }
+  const count = billInfo.files.length;
+  return (
+    <button
+      type="button"
+      className="text-left text-orange-600 font-medium hover:underline"
+      onClick={onView}
+    >
+      {billInfo.billName || 'Bill'}
+      {count > 0 ? (
+        <span className="block text-[10px] text-slate-500 font-normal">
+          {count} file{count === 1 ? '' : 's'}
+        </span>
+      ) : null}
+      {billInfo.source === 'vendor' ? (
+        <span className="block text-[10px] text-slate-500 font-normal">via vendor portal</span>
+      ) : null}
+    </button>
+  );
 }
 
 function canSubmitForApproval(status) {
@@ -445,6 +585,7 @@ export default function PurchaseOrdersPage() {
   const vendorFilterId = searchParams.get('vendor_id');
   const manager = isManagerUser(user);
   const procurement = isProcurementUser(user);
+  const isSuperAdmin = user?.role === 'super_admin' || user?.is_superadmin === true;
 
   const [allRows, setAllRows] = useState([]);
   const [statusTab, setStatusTab] = useState('all');
@@ -473,11 +614,16 @@ export default function PurchaseOrdersPage() {
 
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [previewTab, setPreviewTab] = useState('details');
+  const [specEditIndex, setSpecEditIndex] = useState(null);
+  const [specEditDraft, setSpecEditDraft] = useState(emptyLineSpecDraft());
+  const [specEditSaving, setSpecEditSaving] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
-  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null, po: null });
+  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null, po: null, source: null });
   const [billUpload, setBillUpload] = useState({ open: false, po: null, bill_name: '' });
   const [pendingBillFiles, setPendingBillFiles] = useState([]);
   const [billLightbox, setBillLightbox] = useState({ open: false, items: [], index: 0 });
+  const [billRemovingIndex, setBillRemovingIndex] = useState(null);
+  const [billRemovingAll, setBillRemovingAll] = useState(false);
   /** Read-only summary of the create-PO modal before Save (no API call). */
   const [createPreviewOpen, setCreatePreviewOpen] = useState(false);
 
@@ -868,8 +1014,46 @@ export default function PurchaseOrdersPage() {
     setCreatePreviewOpen(true);
   }
 
+  function startSpecEdit(idx, item) {
+    setSpecEditIndex(idx);
+    setSpecEditDraft(emptyLineSpecDraft(item));
+  }
+
+  function cancelSpecEdit() {
+    setSpecEditIndex(null);
+    setSpecEditDraft(emptyLineSpecDraft());
+  }
+
+  async function saveSpecEdit(lineIndex) {
+    if (!preview.detail?.po_id) return;
+    const lineItem = parseLineItems(preview.detail)[lineIndex];
+    if (lineItem && !lineSpecDraftChanged(specEditDraft, lineItem)) {
+      cancelSpecEdit();
+      toast('No spec changes to save');
+      return;
+    }
+    setSpecEditSaving(true);
+    try {
+      const { data } = await patchPurchaseOrderLineSpecs(preview.detail.po_id, lineIndex, specEditDraft);
+      if (!data.success) throw new Error(data.message || 'Could not update specs');
+      setPreview((prev) => ({ ...prev, detail: data.data }));
+      if (data.message !== 'No spec changes') {
+        setActivityRefreshKey((k) => k + 1);
+        toast.success('Line specs updated');
+      } else {
+        toast('No spec changes to save');
+      }
+      cancelSpecEdit();
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Could not update specs');
+    } finally {
+      setSpecEditSaving(false);
+    }
+  }
+
   async function openPreview(poId) {
     setPreviewTab('details');
+    cancelSpecEdit();
     setPreview({ open: true, loading: true, detail: null });
     try {
       const { data } = await fetchPurchaseOrder(poId);
@@ -883,6 +1067,7 @@ export default function PurchaseOrdersPage() {
   }
 
   function closePreview() {
+    cancelSpecEdit();
     setPreview({ open: false, loading: false, detail: null });
   }
 
@@ -924,6 +1109,7 @@ export default function PurchaseOrdersPage() {
       files: info.files,
       poId: po.po_id,
       po,
+      source: info.source,
     });
   }
 
@@ -990,7 +1176,67 @@ export default function PurchaseOrdersPage() {
     }
   }
 
-  const billUploadExisting = billUpload.open && billUpload.po ? getPoBillInfo(billUpload.po) : { files: [] };
+  async function handleRemoveBillFile(poId, fileIndex) {
+    if (!isSuperAdmin) return;
+    if (!window.confirm('Remove this bill file?')) return;
+    setBillRemovingIndex(fileIndex);
+    try {
+      const { data } = await deletePurchaseOrderBillFile(poId, fileIndex);
+      if (!data.success) throw new Error(data.message);
+      toast.success(data.message || 'Bill file removed');
+      const nextFiles = data.bill_files || [];
+      const nextName = data.bill_name || null;
+      if (billView.open && billView.poId === poId) {
+        if (!nextName && !nextFiles.length) {
+          setBillView({ open: false, bill_name: '', files: [], poId: null, po: null });
+        } else {
+          setBillView((v) => ({
+            ...v,
+            bill_name: nextName || v.bill_name,
+            files: nextFiles,
+            po: v.po ? { ...v.po, bill_name: nextName, bill_files: nextFiles } : v.po,
+          }));
+        }
+      }
+      if (billUpload.open && billUpload.po?.po_id === poId) {
+        if (!nextName && !nextFiles.length) {
+          closeBillUpload();
+        } else {
+          setBillUpload((b) => ({
+            ...b,
+            bill_name: nextName || b.bill_name,
+            po: { ...b.po, bill_name: nextName, bill_files: nextFiles },
+          }));
+        }
+      }
+      await loadList();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Remove failed');
+    } finally {
+      setBillRemovingIndex(null);
+    }
+  }
+
+  async function handleRemoveEntireBill(poId) {
+    if (!isSuperAdmin) return;
+    if (!window.confirm('Remove the entire bill (number + all files) from this PO?')) return;
+    setBillRemovingAll(true);
+    try {
+      const { data } = await removePurchaseOrderBill(poId);
+      if (!data.success) throw new Error(data.message);
+      toast.success(data.message || 'Bill removed');
+      setBillView({ open: false, bill_name: '', files: [], poId: null, po: null });
+      closeBillUpload();
+      await loadList();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Remove failed');
+    } finally {
+      setBillRemovingAll(false);
+    }
+  }
+
+  const billUploadExistingFiles = billUpload.open && billUpload.po ? parseBillFiles(billUpload.po) : [];
+  const billUploadHasExistingBill = billUpload.open && billUpload.po && !!billUpload.po.bill_name;
   const previewLines = useMemo(() => parseLineItems(preview.detail), [preview.detail]);
   const lockingHeader =
     preview.detail?.purchase_order_type === 'direct_purchase' ? 'Warranty period' : 'Locking period';
@@ -1241,6 +1487,10 @@ export default function PurchaseOrdersPage() {
                   <p className="text-xs text-red-600">Rejected: {r.rejection_reason}</p>
                 ) : null}
 
+                {(billInfo.billName || billInfo.files.length) ? (
+                  <BillListSummary billInfo={billInfo} onView={() => openBillView(r)} />
+                ) : null}
+
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   {billInfo.billName || billInfo.files.length ? (
                     <button
@@ -1248,7 +1498,7 @@ export default function PurchaseOrdersPage() {
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
                       onClick={() => openBillView(r)}
                     >
-                      View bill{billInfo.files.length > 1 ? ` (${billInfo.files.length})` : ''}
+                      View bill{billInfo.files.length ? ` (${billInfo.files.length})` : ''}
                     </button>
                   ) : null}
                   {showEye ? (
@@ -1319,7 +1569,7 @@ export default function PurchaseOrdersPage() {
                 <th className="p-3 text-right">Received</th>
                 <th className="p-3 text-right">Pending</th>
                 <th className="p-3">Remark</th>
-                <th className="p-3">Bill number</th>
+                <th className="p-3">Bill</th>
                 <th className="p-3">Upload / view</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Action</th>
@@ -1364,23 +1614,7 @@ export default function PurchaseOrdersPage() {
                       <RemarkCell text={r.remarks} />
                     </td>
                     <td className="p-3">
-                      {billInfo.billName ? (
-                        <button
-                          type="button"
-                          className="text-orange-600 font-medium hover:underline text-left"
-                          onClick={() => openBillView(r)}
-                        >
-                          {billInfo.billName}
-                          {billInfo.files.length > 1 ? (
-                            <span className="block text-[10px] text-slate-500 font-normal">{billInfo.files.length} files</span>
-                          ) : null}
-                          {billInfo.source === 'vendor' ? (
-                            <span className="block text-[10px] text-slate-500 font-normal">via vendor portal</span>
-                          ) : null}
-                        </button>
-                      ) : (
-                        <span className="text-slate-400">N/A</span>
-                      )}
+                      <BillListSummary billInfo={billInfo} onView={() => openBillView(r)} />
                     </td>
                     <td className="p-3">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -2329,17 +2563,65 @@ export default function PurchaseOrdersPage() {
                               : Number(item.vendor_locking_period) || 0;
                           const brand = item.brand_name || item.brand || '';
                           const title = `${brand}${item.model ? ` — ${item.model}` : ''}`.trim() || `Product ${idx + 1}`;
+                          const editingSpecs = specEditIndex === idx;
                           return (
                             <tr key={idx} className="border-t">
                               <td className="p-2">{idx + 1}</td>
                               <td className="p-2 min-w-[12rem]">
                                 <div className="rounded-lg border bg-slate-50/80 p-2">
-                                  <p className="font-semibold text-slate-900">{title}</p>
-                                  <p className="text-xs text-slate-600 mt-0.5">
-                                    {[item.processor, item.generation].filter(Boolean).join(' · ')}{' '}
-                                    {[item.ram, item.storage].filter(Boolean).join(' | ')}{' '}
-                                    {item.gpu ? ` · ${item.gpu}` : ''}
-                                  </p>
+                                  <div className="flex items-start justify-between gap-2">
+                                    <p className="font-semibold text-slate-900">{title}</p>
+                                    {isSuperAdmin && !editingSpecs && previewTab === 'details' ? (
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                        onClick={() => startSpecEdit(idx, item)}
+                                        title="Edit specs configuration"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                        Edit
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {editingSpecs ? (
+                                    <div className="mt-2 space-y-2">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        {PO_LINE_SPEC_FIELDS.map((field) => (
+                                          <label key={field} className="block text-[11px] text-slate-500">
+                                            {field.replace(/_/g, ' ')}
+                                            <input
+                                              type="text"
+                                              className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-900"
+                                              value={specEditDraft[field]}
+                                              onChange={(e) =>
+                                                setSpecEditDraft((d) => ({ ...d, [field]: e.target.value }))
+                                              }
+                                            />
+                                          </label>
+                                        ))}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={specEditSaving}
+                                          className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                                          onClick={() => saveSpecEdit(idx)}
+                                        >
+                                          {specEditSaving ? 'Saving…' : 'Save specs'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={specEditSaving}
+                                          className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                          onClick={cancelSpecEdit}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-slate-600 mt-0.5">{formatLineSpecsText(item)}</p>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-2 text-slate-700">{lockMonths ? `${lockMonths} mo` : '—'}</td>
@@ -2431,6 +2713,7 @@ export default function PurchaseOrdersPage() {
                 <h3 className="font-bold text-slate-900">Bill #{billView.bill_name}</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {billView.files.length} file{billView.files.length === 1 ? '' : 's'}
+                  {billView.source === 'vendor' ? ' · via vendor portal' : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2446,64 +2729,41 @@ export default function PurchaseOrdersPage() {
                     Add files
                   </button>
                 ) : null}
+                {isSuperAdmin && billView.poId && canSuperAdminManageCrmBill(billView.po) ? (
+                  <button
+                    type="button"
+                    disabled={billRemovingAll}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50 disabled:opacity-50"
+                    onClick={() => handleRemoveEntireBill(billView.poId)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {billRemovingAll ? 'Removing…' : 'Remove bill'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="p-1 rounded hover:bg-slate-100"
                   aria-label="Close"
-                  onClick={() => setBillView({ ...billView, open: false })}
+                  onClick={() => setBillView({ open: false, bill_name: '', files: [], poId: null, po: null })}
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
-            {billView.files.length === 0 ? (
-              <p className="mt-4 text-sm text-slate-500">No files on record.</p>
-            ) : (
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {billView.files.map((f, idx) => {
-                  const href = filePublicUrl(f);
-                  const name = billFileName(f);
-                  const image = isImageBillFile(f);
-                  const pdf = isPdfBillFile(f);
-                  const imageIndex = billView.files.slice(0, idx + 1).filter((x) => isImageBillFile(x)).length - 1;
-                  return (
-                    <div key={`${href}-${idx}`} className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
-                      {image ? (
-                        <button
-                          type="button"
-                          className="block w-full aspect-square bg-slate-100"
-                          onClick={() => openBillLightbox(billView.files, imageIndex)}
-                        >
-                          <img src={href} alt={name} className="w-full h-full object-cover" />
-                        </button>
-                      ) : (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="aspect-square flex flex-col items-center justify-center gap-1 p-3 text-slate-600 hover:bg-slate-100"
-                        >
-                          {pdf ? <FileText className="w-8 h-8 text-slate-400" /> : <ImageIcon className="w-8 h-8 text-slate-400" />}
-                          <span className="text-[11px] text-center break-all line-clamp-3">{name}</span>
-                        </a>
-                      )}
-                      <div className="flex items-center justify-between gap-1 px-2 py-1.5 border-t border-slate-200 bg-white">
-                        <span className="text-[11px] text-slate-600 truncate" title={name}>{name}</span>
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="shrink-0 text-orange-600 hover:text-orange-700"
-                          title="Open in new tab"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <div className="mt-4">
+              <BillFilesTable
+                billName={null}
+                files={
+                  isSuperAdmin && canSuperAdminManageCrmBill(billView.po)
+                    ? parseBillFiles(billView.po)
+                    : billView.files
+                }
+                canRemove={isSuperAdmin && billView.poId && canSuperAdminManageCrmBill(billView.po)}
+                removingIndex={billRemovingIndex}
+                onPreviewImage={openBillLightbox}
+                onRemoveFile={(idx) => handleRemoveBillFile(billView.poId, idx)}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -2523,48 +2783,47 @@ export default function PurchaseOrdersPage() {
               {hasPoBill(billUpload.po) ? 'Add bill files' : 'Upload bill / invoice'}
             </h3>
             <p className="text-xs text-slate-500 mt-1">PO {billUpload.po.purchase_order_number} — images and PDFs, multiple allowed</p>
-            {billUploadExisting.files.length > 0 ? (
+            {billUploadExistingFiles.length > 0 ? (
               <div className="mt-3">
                 <p className="text-xs font-semibold text-slate-600 mb-2">Already uploaded</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {billUploadExisting.files.map((f, idx) => {
-                    const href = filePublicUrl(f);
-                    const name = billFileName(f);
-                    const image = isImageBillFile(f);
-                    const imageIndex = billUploadExisting.files.slice(0, idx + 1).filter((x) => isImageBillFile(x)).length - 1;
-                    return image ? (
-                      <button
-                        key={`${href}-${idx}`}
-                        type="button"
-                        className="rounded-lg border overflow-hidden aspect-square"
-                        onClick={() => openBillLightbox(billUploadExisting.files, imageIndex)}
-                      >
-                        <img src={href} alt={name} className="w-full h-full object-cover" />
-                      </button>
-                    ) : (
-                      <a
-                        key={`${href}-${idx}`}
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded-lg border bg-slate-50 aspect-square flex items-center justify-center p-1 text-[10px] text-center text-slate-600"
-                      >
-                        {name}
-                      </a>
-                    );
-                  })}
-                </div>
+                <BillFilesTable
+                  billName={billUpload.po.bill_name}
+                  files={billUploadExistingFiles}
+                  compact
+                  canRemove={isSuperAdmin && canSuperAdminManageCrmBill(billUpload.po)}
+                  removingIndex={billRemovingIndex}
+                  onPreviewImage={openBillLightbox}
+                  onRemoveFile={(idx) => handleRemoveBillFile(billUpload.po.po_id, idx)}
+                />
+                {isSuperAdmin && canSuperAdminManageCrmBill(billUpload.po) ? (
+                  <button
+                    type="button"
+                    disabled={billRemovingAll}
+                    className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                    onClick={() => handleRemoveEntireBill(billUpload.po.po_id)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {billRemovingAll ? 'Removing bill…' : 'Remove entire bill'}
+                  </button>
+                ) : null}
               </div>
             ) : null}
             <form onSubmit={submitBillUpload} className="mt-4 space-y-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Bill number</label>
                 <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-600"
                   value={billUpload.bill_name}
                   onChange={(e) => setBillUpload((b) => ({ ...b, bill_name: e.target.value }))}
                   required
+                  readOnly={billUploadHasExistingBill}
+                  title={billUploadHasExistingBill ? 'Bill number is fixed for this PO. Remove the bill to change it.' : undefined}
                 />
+                {billUploadHasExistingBill ? (
+                  <p className="mt-1 text-[11px] text-slate-500">Bill number is locked while files exist. Super admin can remove the bill to change it.</p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-slate-500">Bill numbers must be unique across all POs, GRNs, and spare POs.</p>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Add files (multiple images or PDF)</label>

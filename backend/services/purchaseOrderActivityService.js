@@ -28,6 +28,7 @@ const ACTION_TITLES = {
   item_removed: 'Item Removed',
   item_updated: 'Item Updated',
   configuration_changed: 'Configuration Changed',
+  line_specs_updated: 'Line Specs Updated',
   quantity_changed: 'Quantity Changed',
   price_changed: 'Price Changed',
   discount_updated: 'Discount Updated',

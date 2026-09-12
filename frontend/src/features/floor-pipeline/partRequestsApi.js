@@ -13,6 +13,8 @@ export const listPartRequests = (params) => api.get(base, { params });
 export const getTicketPartRequests = (ticketId) => api.get(`${base}/ticket/${ticketId}`);
 export const getPartRequest = (id) => api.get(`${base}/${id}`);
 export const getWarehouseQueue = () => api.get(`${base}/warehouse-queue`);
+export const exportWarehouseQueueCsv = (params) =>
+  api.get(`${base}/warehouse-queue/export.csv`, { params, responseType: 'blob' });
 export const getProcurementQueue = () => api.get(`${base}/procurement-queue`);
 export const getPartCostSummary = (ttsplId) => api.get(`${base}/cost-summary/${ttsplId}`);
 export const listPartInstances = (params) => api.get(`${base}/instances`, { params });

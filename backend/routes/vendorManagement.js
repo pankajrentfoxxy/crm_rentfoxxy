@@ -3,7 +3,7 @@
  * Base path: /api/vendor-management (mounted from server.js)
  */
 const express = require('express');
-const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole } = require('../middleware/auth');
 const { wrapMulter } = require('../config/uploadLimits');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
@@ -143,6 +143,18 @@ router.post(
   wrapMulter(poBillsUpload.array('files', 25)),
   purchaseOrders.uploadBills
 );
+router.delete(
+  '/purchase-orders/:id/bills/:fileIndex',
+  authMiddleware,
+  purchaseOrders.deletePoBillFileValidators,
+  purchaseOrders.deletePoBillFile
+);
+router.delete(
+  '/purchase-orders/:id/bills',
+  authMiddleware,
+  purchaseOrders.removePoBillValidators,
+  purchaseOrders.removePoBill
+);
 const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
 router.post(
   '/purchase-orders/:poId/grns/:grnId/bills',
@@ -157,6 +169,13 @@ router.post('/purchase-orders/:poId/activities', authorize, purchaseOrders.logPu
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);
 router.post('/purchase-orders', authorize, ...purchaseOrders.createValidators(), purchaseOrders.create);
 router.put('/purchase-orders/:id', authorize, purchaseOrders.updateValidators, purchaseOrders.update);
+router.patch(
+  '/purchase-orders/:id/line-items/:lineIndex/specs',
+  authMiddleware,
+  checkRole('super_admin'),
+  purchaseOrders.updateLineItemSpecsValidators,
+  purchaseOrders.updateLineItemSpecs
+);
 router.delete('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.remove);
 
 // GRN + serial numbers (Laravel PurchaseOrderController + serial_numbers table)

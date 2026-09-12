@@ -19,6 +19,7 @@ const ACTION_ICONS = {
   item_removed: '➖',
   item_updated: '✏️',
   configuration_changed: '⚙️',
+  line_specs_updated: '⚙️',
   quantity_changed: '🔢',
   price_changed: '💰',
   discount_updated: '🏷️',

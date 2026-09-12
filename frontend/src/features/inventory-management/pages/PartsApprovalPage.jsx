@@ -1,14 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, ArrowUpRight, ShoppingCart, RefreshCw, Package, Search, QrCode } from 'lucide-react';
+import { X, ArrowUpRight, ShoppingCart, RefreshCw, Package, Search, QrCode, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   getWarehouseQueue,
+  exportWarehouseQueueCsv,
   approvePartRequest,
   rejectPartRequest,
   escalatePartRequest,
 } from '../../floor-pipeline/partRequestsApi';
 import ApprovePartRequestModal from '../components/ApprovePartRequestModal';
+import usePermission from '../../../hooks/usePermission';
 
 const TABS = [
   { id: 'pending', label: 'Pending Approval', statuses: ['pending'] },
@@ -32,8 +34,22 @@ const REJECT_REASONS = [
   'Other',
 ];
 
+function matchesPartRequestSearch(r, q) {
+  if (!q) return true;
+  return (
+    String(r.request_number || '').toLowerCase().includes(q) ||
+    String(r.part_name || '').toLowerCase().includes(q) ||
+    String(r.ttspl_id || '').toLowerCase().includes(q) ||
+    String(r.requester_name || '').toLowerCase().includes(q) ||
+    String(r.stage_name || '').toLowerCase().includes(q) ||
+    String(r.status || '').toLowerCase().includes(q)
+  );
+}
+
 export default function PartsApprovalPage() {
   const navigate = useNavigate();
+  const { canView } = usePermission();
+  const canExportPartsApproval = canView('parts_approval_export');
   const [tab, setTab] = useState('pending');
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -41,6 +57,7 @@ export default function PartsApprovalPage() {
   const [rejectModal, setRejectModal] = useState(null);
   const [serialModal, setSerialModal] = useState(null);
   const [search, setSearch] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -63,16 +80,41 @@ export default function PartsApprovalPage() {
     const q = search.trim().toLowerCase();
     return requests.filter((r) => {
       if (!statuses.includes(r.status)) return false;
-      if (!q) return true;
-      return (
-        String(r.request_number || '').toLowerCase().includes(q) ||
-        String(r.part_name || '').toLowerCase().includes(q) ||
-        String(r.ttspl_id || '').toLowerCase().includes(q) ||
-        String(r.requester_name || '').toLowerCase().includes(q) ||
-        String(r.stage_name || '').toLowerCase().includes(q)
-      );
+      return matchesPartRequestSearch(r, q);
     });
   }, [requests, tab, search]);
+
+  const runExport = async () => {
+    const tabStatuses = TABS.find((t) => t.id === tab)?.statuses || [];
+    if (!visibleRequests.length) {
+      toast.error('No rows to export on this tab');
+      return;
+    }
+    setExporting(true);
+    try {
+      const { data, headers } = await exportWarehouseQueueCsv({
+        scope: 'tab',
+        search: search.trim() || undefined,
+        statuses: tabStatuses.join(','),
+      });
+      const blob = data instanceof Blob ? data : new Blob([data], { type: 'text/csv;charset=utf-8' });
+      const stamp = new Date().toISOString().slice(0, 10);
+      const disposition = headers?.['content-disposition'] || '';
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      const filename = match?.[1] || `parts-approval-${tab}-${stamp}.csv`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded');
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const tabCount = (id) =>
     requests.filter((r) => TABS.find((t) => t.id === id)?.statuses.includes(r.status)).length;
@@ -151,12 +193,25 @@ export default function PartsApprovalPage() {
             Approve, reject, or escalate floor part requests to procurement
           </p>
         </div>
-        <button
-          onClick={load}
-          className="flex items-center gap-2 px-3 py-2 border rounded-lg text-sm hover:bg-gray-50"
-        >
-          <RefreshCw className="w-4 h-4" /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {canExportPartsApproval ? (
+            <button
+              type="button"
+              onClick={runExport}
+              disabled={exporting || loading}
+              className="flex items-center gap-2 px-3 py-2 border rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" /> {exporting ? 'Exporting…' : 'Export'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={load}
+            className="flex items-center gap-2 px-3 py-2 border rounded-lg text-sm hover:bg-gray-50"
+          >
+            <RefreshCw className="w-4 h-4" /> Refresh
+          </button>
+        </div>
       </div>
 
       <div className="relative mb-4 max-w-md">
@@ -391,6 +446,7 @@ export default function PartsApprovalPage() {
         onClose={() => setSerialModal(null)}
         onConfirm={confirmApprove}
       />
+
     </div>
   );
 }
