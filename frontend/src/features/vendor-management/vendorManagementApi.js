@@ -193,6 +193,14 @@ export function uploadPurchaseOrderBills(id, formData) {
   return api.post(`${base}/purchase-orders/${id}/bills`, formData);
 }
 
+export function deletePurchaseOrderBillFile(poId, fileIndex) {
+  return api.delete(`${base}/purchase-orders/${poId}/bills/${fileIndex}`);
+}
+
+export function removePurchaseOrderBill(poId) {
+  return api.delete(`${base}/purchase-orders/${poId}/bills`);
+}
+
 export function fetchSpareOrders(params) {
   return api.get(`${base}/spare-parts-orders`, { params });
 }

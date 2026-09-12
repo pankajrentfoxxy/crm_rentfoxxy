@@ -18,6 +18,7 @@ router.use(authMiddleware);
 const partsCatalogView = checkAnySectionPermission(
   [
     'parts_inventory',
+    'parts_approval',
     'parts',
     'floor_tickets',
     'floor_pipeline',

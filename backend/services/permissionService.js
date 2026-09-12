@@ -172,6 +172,22 @@ async function listUserPermissionOverrides(userId) {
   return result.rows;
 }
 
+async function collectPermissionSectionKeys(userId, role) {
+  const catalog = await getPermissionSections();
+  const keys = new Set(catalog);
+  const rolePermissions = await listRolePermissions(role);
+  rolePermissions.forEach((row) => {
+    if (row?.section) keys.add(row.section);
+  });
+  if (userId) {
+    const userPermissions = await listUserPermissionOverrides(userId);
+    userPermissions.forEach((row) => {
+      if (row?.section) keys.add(row.section);
+    });
+  }
+  return [...keys].sort();
+}
+
 async function buildUserPermissionsPayload(userId) {
   const userResult = await pool.query(
     `SELECT user_id, name, email, role FROM users WHERE user_id = $1`,
@@ -180,9 +196,9 @@ async function buildUserPermissionsPayload(userId) {
   if (userResult.rows.length === 0) return null;
 
   const user = userResult.rows[0];
-  const sections = await getPermissionSections();
   const rolePermissions = await listRolePermissions(user.role);
   const userPermissions = await listUserPermissionOverrides(userId);
+  const sections = await collectPermissionSectionKeys(userId, user.role);
 
   const roleMap = rolePermissions.reduce((acc, row) => {
     acc[row.section] = row;

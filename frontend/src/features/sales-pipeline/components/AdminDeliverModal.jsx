@@ -49,7 +49,9 @@ export default function AdminDeliverModal({ dc, onClose, onDelivered }) {
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
         <h3 className="font-semibold text-gray-900 mb-1">Mark as Delivered — {dc?.dc_number}</h3>
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-4">
-          Admin override. A POD photo is required.
+          {dc?.dispatch_mode === 'courier' || dc?.ship_by === 'by_courier' || dc?.dispatch_mode === 'porter'
+            ? 'Courier / porter delivery. Upload the POD photo to confirm. Customer WhatsApp OTP is not used for this mode.'
+            : 'Admin override. A POD photo is required.'}
         </p>
 
         <label className="block mb-3">
@@ -68,7 +70,9 @@ export default function AdminDeliverModal({ dc, onClose, onDelivered }) {
           <span className="text-sm font-medium text-gray-700 block mb-1">Reason</span>
           <input className="w-full border rounded-lg px-3 py-2 text-sm"
             value={reason} onChange={(e) => setReason(e.target.value)}
-            placeholder="Why marking without OTP?" />
+            placeholder={dc?.dispatch_mode === 'courier' || dc?.ship_by === 'by_courier'
+              ? 'e.g. Delivered by DTDC'
+              : 'Why marking without OTP?'} />
         </label>
 
         <label className="block mb-4">

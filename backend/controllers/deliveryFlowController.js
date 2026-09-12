@@ -688,15 +688,30 @@ exports.submitDeliveryWithPod = async (req, res) => {
 exports.adminDeliverOverride = async (req, res) => {
   const client = await pool.connect();
   try {
+    const dcNumber = req.params.dcNumber;
+    const body = req.body || {};
     const { isFieldDeliveryRole } = require('../services/deliveryOtpAccess');
-    if (isFieldDeliveryRole(req.user)) {
+    const dcHead = await client.query(
+      `SELECT dispatch_mode, ship_by
+         FROM delivery_challan_lines
+        WHERE dc_number = $1
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!dcHead.rows.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const mode = String(dcHead.rows[0].dispatch_mode || '').toLowerCase();
+    const shipBy = String(dcHead.rows[0].ship_by || '').toLowerCase();
+    const isInPerson = mode === 'inhouse' || shipBy === 'by_hand';
+    // OTP is only for in-person / in-house delivery. Courier and porter
+    // confirm with a POD photo — field/dispatch roles must be able to do that.
+    if (isInPerson && isFieldDeliveryRole(req.user)) {
       return res.status(403).json({
         success: false,
         message: 'In-person delivery requires the customer OTP. Use Confirm delivery after asking the customer for the WhatsApp code.',
       });
     }
-    const dcNumber = req.params.dcNumber;
-    const body = req.body || {};
     if (!req.file) {
       return res.status(400).json({
         success: false,

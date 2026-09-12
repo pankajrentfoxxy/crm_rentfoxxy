@@ -28,10 +28,20 @@ const photoUpload = multer({
 
 router.use(authMiddleware);
 
+/** Parts Approval screen — list queue, approve, reject, escalate, mark received */
+const requirePartsApprovalView = checkSectionPermission('parts_approval', 'view');
+const requirePartsApprovalEdit = checkSectionPermission('parts_approval', 'edit');
+
 const allowPartInstanceWrite = (req, res, next) => {
   if (req.user?.role === 'super_admin') return next();
   if (['warehouse', 'admin', 'manager'].includes(req.user?.role)) return next();
   return checkAnySectionPermission(['parts_inventory', 'parts_approval'], 'edit')(req, res, next);
+};
+
+const allowPartInstanceRead = (req, res, next) => {
+  if (req.user?.role === 'super_admin') return next();
+  if (['warehouse', 'admin', 'manager'].includes(req.user?.role)) return next();
+  return checkAnySectionPermission(['parts_inventory', 'parts_approval'], 'view')(req, res, next);
 };
 
 router.post('/', checkSectionPermission('parts_requests', 'create'), ctrl.createPartRequest);
@@ -44,17 +54,17 @@ router.post(
 router.get('/', checkSectionPermission('parts_requests', 'view'), ctrl.listPartRequests);
 
 // Specific routes before the generic :requestId matcher
-router.get('/warehouse-queue', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.getWarehouseQueue);
+router.get('/warehouse-queue', requirePartsApprovalView, ctrl.getWarehouseQueue);
 router.get(
   '/warehouse-queue/export.csv',
-  checkSectionPermission('parts_approval_export', 'view'),
+  checkAnySectionPermission(['parts_approval_export', 'parts_approval'], 'view'),
   ctrl.exportWarehouseQueueCsv
 );
 router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
-router.get('/instances', ctrl.listPartInstances);
+router.get('/instances', allowPartInstanceRead, ctrl.listPartInstances);
 router.post('/instances', allowPartInstanceWrite, ctrl.addPartInstances);
-router.patch('/instances/:instanceId', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.updatePartInstance);
+router.patch('/instances/:instanceId', allowPartInstanceWrite, ctrl.updatePartInstance);
 const allowTtsplPartDetach = (req, res, next) => {
   if (req.user?.role === 'super_admin') return next();
   return checkSectionPermission('parts_detach', 'edit')(req, res, next);
@@ -63,11 +73,11 @@ router.post('/instances/:instanceId/detach-from-ttspl', allowTtsplPartDetach, ct
 router.get('/ticket/:ticketId', ctrl.getTicketPartRequests);
 
 router.get('/:requestId', ctrl.getPartRequest);
-router.patch('/:requestId/approve', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.approvePartRequest);
-router.patch('/:requestId/reject', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.rejectPartRequest);
-router.patch('/:requestId/escalate', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.escalateToProcurement);
+router.patch('/:requestId/approve', requirePartsApprovalEdit, ctrl.approvePartRequest);
+router.patch('/:requestId/reject', requirePartsApprovalEdit, ctrl.rejectPartRequest);
+router.patch('/:requestId/escalate', requirePartsApprovalEdit, ctrl.escalateToProcurement);
 router.patch('/:requestId/link-spo', checkRole('procurement', 'admin', 'super_admin'), ctrl.linkRequestToSpo);
-router.patch('/:requestId/received', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.markPartReceived);
+router.patch('/:requestId/received', requirePartsApprovalEdit, ctrl.markPartReceived);
 router.post('/:requestId/attach', checkSectionPermission('parts_requests', 'create'), ctrl.attachPartAndReturnOld);
 const allowPartDetach = (req, res, next) => {
   if (req.body?.return_to_inventory === true) {

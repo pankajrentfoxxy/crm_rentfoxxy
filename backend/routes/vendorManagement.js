@@ -143,6 +143,18 @@ router.post(
   wrapMulter(poBillsUpload.array('files', 25)),
   purchaseOrders.uploadBills
 );
+router.delete(
+  '/purchase-orders/:id/bills/:fileIndex',
+  authMiddleware,
+  purchaseOrders.deletePoBillFileValidators,
+  purchaseOrders.deletePoBillFile
+);
+router.delete(
+  '/purchase-orders/:id/bills',
+  authMiddleware,
+  purchaseOrders.removePoBillValidators,
+  purchaseOrders.removePoBill
+);
 const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
 router.post(
   '/purchase-orders/:poId/grns/:grnId/bills',
