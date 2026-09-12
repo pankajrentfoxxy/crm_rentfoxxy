@@ -52,6 +52,7 @@ const {
 const {
   isSaleDc,
   isNewCustomerFirstOrder,
+  isNewCustomerFirstDc,
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
   buildDemoEwayCompliance,
@@ -2607,7 +2608,8 @@ exports.getDeliveryChallan = async (req, res) => {
       headLine.customer_id,
       son || headLine.sales_order_number
     );
-    const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType, firstCustomerOrder);
+    const firstCustomerDc = await isNewCustomerFirstDc(pool, headLine.customer_id, dcNumber);
+    const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType);
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
     const productValue = Number(totals?.subtotal ?? 0);
     const needsDemoEway = requiresDemoEwayCompliance(soQuotationType, firstCustomerOrder, productValue);
@@ -2624,7 +2626,7 @@ exports.getDeliveryChallan = async (req, res) => {
         {
           canUpload: canDispatchAction,
           canSendMail: canDispatchAction,
-          isFirstCustomerOrder: firstCustomerOrder,
+          isFirstCustomerOrder: firstCustomerDc,
         }
       );
       can_download_pdf = sale_compliance.can_download_pdf;
@@ -2690,7 +2692,8 @@ exports.getDeliveryChallan = async (req, res) => {
       assignment_editable: assignmentEditable,
       assignment_history: assignmentHistory,
       is_sale: isSale,
-      is_first_customer_order: firstCustomerOrder,
+      is_first_customer_order: firstCustomerDc,
+      is_first_customer_dc: firstCustomerDc,
       requires_invoice_compliance: needsInvoice,
       requires_demo_eway: needsDemoEway,
       sale_compliance,
@@ -3331,30 +3334,6 @@ exports.createDcsByAddress = async (req, res) => {
           dispatchMode, dcRemarks, req.user?.user_id, dcHsn,
         ]
       );
-
-      // Per-laptop courier / AWB mapping
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS dc_shipment_units (
-          id SERIAL PRIMARY KEY,
-          dc_number TEXT NOT NULL,
-          allocation_id INTEGER,
-          serial_id INTEGER,
-          serial_number TEXT,
-          ttspl_id TEXT,
-          courier_name TEXT DEFAULT 'BlueDart',
-          awb_number TEXT,
-          weight NUMERIC(10, 2),
-          remarks TEXT,
-          tracking_status TEXT,
-          tracking_status_type TEXT,
-          tracking_synced_at TIMESTAMPTZ,
-          received_by TEXT,
-          delivered_at TIMESTAMPTZ,
-          status TEXT NOT NULL DEFAULT 'in_transit',
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `).catch(() => {});
 
       const shipmentByAlloc = new Map(
         laptopShipments.map((s) => [Number(s.allocation_id), s])

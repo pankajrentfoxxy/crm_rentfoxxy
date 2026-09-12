@@ -88,6 +88,8 @@ export default function ReturnToVendorDetailPage() {
       porter_booking_url: dispatchFields.porter_booking_url,
       delivery_person_id: dispatchFields.delivery_person_id || undefined,
       vehicle_number: dispatchFields.vehicle_number || undefined,
+      vendor_pickup_person: dispatchFields.vendor_pickup_person || undefined,
+      vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile || undefined,
     }));
   };
 
@@ -166,6 +168,15 @@ export default function ReturnToVendorDetailPage() {
           ) : null}
           {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && technicianName ? (
             <p><span className="text-slate-500">Delivery person:</span> {technicianName}</p>
+          ) : null}
+          {(dc.ship_by === 'by_vendor_pickup' || dc.dispatch_mode === 'vendor_pickup')
+            && (dc.vendor_pickup_person || dc.vendor_pickup_mobile || dc.vehicle_number) ? (
+            <p>
+              <span className="text-slate-500">Vendor pickup:</span>{' '}
+              {dc.vendor_pickup_person || '—'}
+              {dc.vendor_pickup_mobile ? ` · ${dc.vendor_pickup_mobile}` : ''}
+              {dc.vehicle_number ? ` · ${dc.vehicle_number}` : ''}
+            </p>
           ) : null}
           {uploadUrl(dc.delivery_pod_path) ? (
             <div className="pt-2 border-t space-y-1">

@@ -1,7 +1,7 @@
 /**
  * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> threshold).
  * New-customer Demo DCs use a separate e-way-only lock (see requiresDemoEwayCompliance).
- * Existing-customer demo and normal rental DCs are unaffected.
+ * Existing-customer demo and rental DCs (including a first rental DC) are unaffected.
  */
 const fs = require('fs');
 const path = require('path');
@@ -106,7 +106,7 @@ function isDemoDc(quotationType) {
 
 /**
  * First live sales order for this customer (new-customer 1st order).
- * Cancelled SOs are ignored.
+ * Cancelled SOs are ignored. Used only for demo e-way, not e-invoice.
  */
 async function isNewCustomerFirstOrder(db, customerId, salesOrderNumber) {
   if (!customerId || !salesOrderNumber) return false;
@@ -122,10 +122,36 @@ async function isNewCustomerFirstOrder(db, customerId, salesOrderNumber) {
   return first.rows[0]?.sales_order_number === salesOrderNumber;
 }
 
-function requiresInvoiceCompliance(entityCode, quotationType, isFirstOrder = false) {
-  // Demo first orders use the e-way-only path, not e-invoice lock.
+/**
+ * Customer's first-ever outbound DC (cancelled / return / service DCs ignored).
+ */
+async function isNewCustomerFirstDc(db, customerId, dcNumber) {
+  if (!customerId || !dcNumber) return false;
+  const first = await db.query(
+    `SELECT dc_number
+       FROM delivery_challan_lines
+      WHERE customer_id = $1
+        AND COALESCE(movement_type, 'outbound') = 'outbound'
+        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+        AND (
+          dc_number ILIKE 'DC/%'
+          OR dc_number ILIKE 'DC-%'
+          OR dc_number ILIKE 'GDC%'
+        )
+      GROUP BY dc_number
+      ORDER BY MIN(created_at) ASC NULLS LAST, dc_number ASC
+      LIMIT 1`,
+    [customerId]
+  );
+  return first.rows[0]?.dc_number === dcNumber;
+}
+
+function requiresInvoiceCompliance(entityCode, quotationType, _isFirstOrder = false) {
+  // E-invoice / Accounts mail is sale DCs only.
+  // A customer's first rental DC must not inherit this from their first SO.
+  // Demo first orders use the e-way-only path.
   if (isDemoDc(quotationType)) return false;
-  return isSaleDc(entityCode, quotationType) || Boolean(isFirstOrder);
+  return isSaleDc(entityCode, quotationType);
 }
 
 function requiresDemoEwayCompliance(quotationType, isFirstOrder, productValue) {
@@ -553,6 +579,7 @@ module.exports = {
   isSaleDc,
   isDemoDc,
   isNewCustomerFirstOrder,
+  isNewCustomerFirstDc,
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
   requiresEwayBill,

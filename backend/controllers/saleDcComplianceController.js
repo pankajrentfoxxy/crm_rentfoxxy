@@ -135,7 +135,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
     if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Invoice upload applies to Sale DCs and new-customer first orders only',
+        message: 'E-Invoice upload applies to Sale DCs only',
       });
     }
 
@@ -270,7 +270,7 @@ exports.sendAccountsNotification = async (req, res) => {
     if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
       return res.status(400).json({
         success: false,
-        message: 'Accounts notification applies to Sale DCs and new-customer first orders only',
+        message: 'Accounts notification applies to Sale DCs only',
       });
     }
 

@@ -11,6 +11,14 @@ import {
 
 const STEPS = ['Select Vendor', 'Select Laptops', 'Confirm'];
 
+const STATUS_FILTERS = [
+  { value: 'hide_returned', label: 'Hide already returned' },
+  { value: 'all', label: 'All warehouse' },
+  { value: 'in_stock', label: 'In stock' },
+  { value: 'returned', label: 'Returned only' },
+  { value: 'qc_failed', label: 'QC failed' },
+];
+
 function vendorLabel(v) {
   return [v.business_name, v.first_name].filter(Boolean).join(' · ') || `Vendor ${v.vendor_id}`;
 }
@@ -35,6 +43,7 @@ export default function ReturnToVendorCreatePage() {
   const [selected, setSelected] = useState(new Set());
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('hide_returned');
   const [returnReason, setReturnReason] = useState('');
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
@@ -73,6 +82,7 @@ export default function ReturnToVendorCreatePage() {
       const res = await fetchReturnToVendorEligible({
         vendor_id: Number(vendorId),
         search: search || undefined,
+        inventory_status: statusFilter,
         page: 1,
         limit: 200,
       });
@@ -85,7 +95,7 @@ export default function ReturnToVendorCreatePage() {
     } finally {
       setLoading(false);
     }
-  }, [vendorId, search]);
+  }, [vendorId, search, statusFilter]);
 
   useEffect(() => {
     if (step >= 1 && vendorId) loadLaptops();
@@ -213,11 +223,28 @@ export default function ReturnToVendorCreatePage() {
                 {' — '}
                 {laptopTotal} listed, <strong>{selected.size}</strong> selected
               </p>
-              <SearchField
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search TTSPL / serial…"
-              />
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <span className="whitespace-nowrap">Status</span>
+                  <select
+                    className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
+                    value={statusFilter}
+                    onChange={(e) => {
+                      setStatusFilter(e.target.value);
+                      setSelected(new Set());
+                    }}
+                  >
+                    {STATUS_FILTERS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <SearchField
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Search TTSPL / serial…"
+                />
+              </div>
             </div>
             <div className="overflow-x-auto border rounded-lg max-h-[28rem] overflow-y-auto">
               <table className="min-w-full text-sm">
@@ -238,7 +265,13 @@ export default function ReturnToVendorCreatePage() {
                   {loading ? (
                     <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">Loading…</td></tr>
                   ) : laptops.length === 0 ? (
-                    <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">No inward laptops for this vendor</td></tr>
+                    <tr>
+                      <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                        {statusFilter === 'hide_returned'
+                          ? 'No inward laptops to return. Already-returned units are hidden — switch Status to All warehouse if needed.'
+                          : 'No inward laptops for this vendor and filter'}
+                      </td>
+                    </tr>
                   ) : laptops.map((row) => (
                     <tr key={row.serial_id} className="border-t hover:bg-slate-50/80">
                       <td className="px-3 py-2">

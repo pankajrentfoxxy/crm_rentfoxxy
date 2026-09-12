@@ -521,30 +521,6 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     ]
   );
 
-  try {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS dc_shipment_units (
-        id SERIAL PRIMARY KEY,
-        dc_number TEXT NOT NULL,
-        allocation_id INTEGER,
-        serial_id INTEGER,
-        serial_number TEXT,
-        ttspl_id TEXT,
-        courier_name TEXT DEFAULT 'BlueDart',
-        awb_number TEXT,
-        weight NUMERIC(10, 2),
-        remarks TEXT,
-        tracking_status TEXT,
-        tracking_status_type TEXT,
-        tracking_synced_at TIMESTAMPTZ,
-        received_by TEXT,
-        delivered_at TIMESTAMPTZ,
-        status TEXT NOT NULL DEFAULT 'in_transit',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-  } catch (_) { /* already exists */ }
 
   const itemIdsStamped = [];
   for (const row of selected) {

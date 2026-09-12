@@ -14,6 +14,33 @@ const {
 const WAREHOUSE_STATUSES = new Set(['in_stock', 'returned', 'qc_failed']);
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'procurement']);
 
+const INVENTORY_STATUS_FILTERS = {
+  hide_returned: ['in_stock', 'qc_failed'],
+  all: ['in_stock', 'returned', 'qc_failed'],
+  in_stock: ['in_stock'],
+  returned: ['returned'],
+  qc_failed: ['qc_failed'],
+};
+
+function resolveInventoryStatuses(filter) {
+  const key = String(filter || 'hide_returned').trim().toLowerCase();
+  return INVENTORY_STATUS_FILTERS[key] || INVENTORY_STATUS_FILTERS.hide_returned;
+}
+
+/** Already sent back to vendor (any open or completed VRTDC). Cancelled DCs do not block. */
+const ALREADY_RETURNED_TO_VENDOR_SQL = `
+  (
+    vsn.vendor_return_dc_number IS NOT NULL
+    OR COALESCE(vsn.qc_status, '') = 'returned_to_vendor'
+    OR EXISTS (
+      SELECT 1 FROM vendor_return_dc_items i
+      JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
+      WHERE i.serial_id = vsn.serial_id
+        AND d.status <> 'cancelled'
+    )
+  )
+`;
+
 function actorFromReq(req) {
   return {
     actorUserId: req.user?.user_id || req.user?.id || null,
@@ -85,30 +112,31 @@ async function assertSerialEligible(client, serialId, { vendorId, poId } = {}) {
        FROM vendor_return_dc_items i
        JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
       WHERE i.serial_id = $1
-        AND d.status NOT IN ('cancelled', 'completed')
+        AND d.status <> 'cancelled'
       LIMIT 1`,
     [serialId]
   );
   if (block.rows.length) {
     throw new Error(
-      `${row.inventory_asset_code || row.serial_number}: already on return DC ${block.rows[0].dc_number}`
+      `${row.inventory_asset_code || row.serial_number}: already returned on DC ${block.rows[0].dc_number}`
+    );
+  }
+  if (row.vendor_return_dc_number || String(row.qc_status || '') === 'returned_to_vendor') {
+    throw new Error(
+      `${row.inventory_asset_code || row.serial_number}: already returned to vendor`
     );
   }
   return row;
 }
 
-async function listEligibleLaptops({ vendorId, poId, search, page = 1, limit = 50 }) {
+async function listEligibleLaptops({ vendorId, poId, search, inventoryStatus, page = 1, limit = 50 }) {
+  const statuses = resolveInventoryStatuses(inventoryStatus);
   const params = [];
   const where = [
     'vsn.deleted_at IS NULL',
     'vsn.po_id IS NOT NULL',
-    `vsn.inventory_status IN ('in_stock', 'returned', 'qc_failed')`,
-    `NOT EXISTS (
-      SELECT 1 FROM vendor_return_dc_items i
-      JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
-      WHERE i.serial_id = vsn.serial_id
-        AND d.status NOT IN ('cancelled', 'completed')
-    )`,
+    `vsn.inventory_status = ANY($${params.push(statuses)}::text[])`,
+    `NOT ${ALREADY_RETURNED_TO_VENDOR_SQL}`,
   ];
   if (vendorId) {
     params.push(Number(vendorId));
@@ -189,13 +217,8 @@ async function listEligibleVendors() {
        JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL
       WHERE vsn.deleted_at IS NULL
         AND vsn.po_id IS NOT NULL
-        AND vsn.inventory_status IN ('in_stock', 'returned', 'qc_failed')
-        AND NOT EXISTS (
-          SELECT 1 FROM vendor_return_dc_items i
-          JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
-          WHERE i.serial_id = vsn.serial_id
-            AND d.status NOT IN ('cancelled', 'completed')
-        )
+        AND vsn.inventory_status IN ('in_stock', 'qc_failed')
+        AND NOT ${ALREADY_RETURNED_TO_VENDOR_SQL}
       GROUP BY v.vendor_id, v.business_name, v.first_name
       ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`
   );
@@ -473,6 +496,9 @@ async function dispatchReturnDc(client, {
         courier_tracking_url = $6,
         porter_tracking_id = $7,
         delivery_person_id = $8,
+        vehicle_number = $9,
+        vendor_pickup_person = $10,
+        vendor_pickup_mobile = $11,
         updated_at = NOW()
       WHERE dc_number = $1`,
     [
@@ -484,6 +510,9 @@ async function dispatchReturnDc(client, {
       dispatch.courier_tracking_url,
       dispatch.porter_tracking_id,
       dispatch.delivery_person_id,
+      dispatch.vehicle_number,
+      dispatch.vendor_pickup_person,
+      dispatch.vendor_pickup_mobile,
     ]
   );
 
@@ -569,6 +598,7 @@ async function cancelReturnDc(client, { dcNumber, actorUserId, actorName }) {
 
 module.exports = {
   WAREHOUSE_ROLES,
+  INVENTORY_STATUS_FILTERS,
   actorFromReq,
   requireWarehouseRole,
   listEligibleLaptops,
