@@ -15,8 +15,29 @@ const CANDIDATE_PASSWORDS = [
   'Rentfoxxy@123',
 ];
 
+async function rememberPassColumnExists() {
+  const { rows } = await pool.query(
+    `SELECT 1
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'users'
+        AND column_name = 'remember_pass_plain'
+      LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
 async function ensureRememberPassColumn() {
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS remember_pass_plain TEXT');
+  if (await rememberPassColumnExists()) return;
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS remember_pass_plain TEXT');
+  } catch (err) {
+    if (err.code === '42501') {
+      console.warn('ensureRememberPassColumn: skipped ALTER (not table owner)');
+      return;
+    }
+    throw err;
+  }
 }
 
 async function backfillRememberPassPlain({ userIds = null, limit = 1000 } = {}) {
@@ -72,6 +93,7 @@ async function backfillRememberPassPlain({ userIds = null, limit = 1000 } = {}) 
 }
 
 module.exports = {
+  rememberPassColumnExists,
   ensureRememberPassColumn,
   backfillRememberPassPlain,
   CANDIDATE_PASSWORDS,

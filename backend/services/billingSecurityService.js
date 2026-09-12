@@ -68,10 +68,13 @@ function deliveryInInvoiceMonth(deliveryYmd, month, year) {
  * includeCurrentMonth: true so security sits on the same invoice as
  * the pro-rata first rent.
  */
-async function collectUnbilledSecurityLines(client, { customerId, month, year, includeCurrentMonth = false }) {
+async function collectUnbilledSecurityLines(client, {
+  customerId, month, year, includeCurrentMonth = false, serialIds = [],
+}) {
   const { prevStart, prevEnd } = previousMonthRange(month, year);
   const windowStart = includeCurrentMonth ? new Date(year, month - 1, 1) : prevStart;
   const windowEnd = includeCurrentMonth ? new Date(year, month, 0) : prevEnd;
+  const scopedIds = [...new Set((serialIds || []).map((id) => Number(id)).filter((n) => n > 0))];
   const result = await client.query(
     `SELECT DISTINCT ON (vsn.serial_id)
             vsn.serial_id,
@@ -107,6 +110,7 @@ async function collectUnbilledSecurityLines(client, { customerId, month, year, i
         AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) IS NOT NULL
         AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) >= $2::date
         AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) <= $3::date
+        AND ($4::int[] IS NULL OR vsn.serial_id = ANY($4::int[]))
         AND NOT EXISTS (
           SELECT 1 FROM customer_security_deposits sd
            WHERE sd.serial_id = vsn.serial_id
@@ -133,7 +137,7 @@ async function collectUnbilledSecurityLines(client, { customerId, month, year, i
              )
         )
       ORDER BY vsn.serial_id, sos.allocation_id DESC`,
-    [customerId, toLocalYmd(windowStart), toLocalYmd(windowEnd)]
+    [customerId, toLocalYmd(windowStart), toLocalYmd(windowEnd), scopedIds.length ? scopedIds : null]
   );
 
   const lines = [];

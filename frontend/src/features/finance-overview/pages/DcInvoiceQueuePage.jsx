@@ -301,7 +301,7 @@ export default function DcInvoiceQueuePage() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">DC Invoice</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Sale DCs and new-customer first orders waiting for Zoho e-invoice
+          Sale DCs waiting for Zoho e-invoice
           {rows.some((r) => r.requires_eway_bill) ? ' / e-way bill' : ''} upload.
           After upload, the DC PDF unlocks for warehouse.
         </p>

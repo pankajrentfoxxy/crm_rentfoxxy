@@ -545,7 +545,11 @@ exports.getAllUsers = async (req, res) => {
 
     if (['admin', 'super_admin'].includes(req.user.role)) {
       const { ensureRememberPassColumn } = require('../services/userPasswordRememberService');
-      await ensureRememberPassColumn();
+      try {
+        await ensureRememberPassColumn();
+      } catch (ensureErr) {
+        console.warn('ensureRememberPassColumn:', ensureErr.message);
+      }
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -632,8 +636,12 @@ exports.exportUsersCsv = async (req, res) => {
     const canSeePasswords = ['admin', 'super_admin'].includes(req.user.role);
     if (canSeePasswords) {
       const { ensureRememberPassColumn, backfillRememberPassPlain } = require('../services/userPasswordRememberService');
-      await ensureRememberPassColumn();
-      await backfillRememberPassPlain({ limit: 5000 });
+      try {
+        await ensureRememberPassColumn();
+        await backfillRememberPassPlain({ limit: 5000 });
+      } catch (ensureErr) {
+        console.warn('exportUsersCsv remember_pass:', ensureErr.message);
+      }
     }
 
     const { whereClause, params } = buildUserListFilter(req);

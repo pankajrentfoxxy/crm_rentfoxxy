@@ -7,18 +7,6 @@ const PENDING_DC_INVOICE_WHERE = `
   AND (
     LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
     OR LOWER(COALESCE(dcl.entity_code, '')) = 'gorefurbo'
-    OR (
-      dcl.customer_id IS NOT NULL
-      AND LOWER(COALESCE(sol.quotation_type, '')) <> 'demo'
-      AND LOWER(COALESCE(dcl.status, '')) IN ('pending', 'processing', 'in_transit', 'reached', 'shipped')
-      AND NOT EXISTS (
-        SELECT 1 FROM sales_order_lines prior
-         WHERE prior.customer_id = dcl.customer_id
-           AND prior.sales_order_number IS DISTINCT FROM dcl.sales_order_number
-           AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
-           AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
-      )
-    )
   )
   AND (
     COALESCE(NULLIF(TRIM(dcl.einvoice_number), ''), NULLIF(TRIM(dcl.irn), '')) IS NULL

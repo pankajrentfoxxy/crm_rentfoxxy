@@ -96,7 +96,7 @@ export default function SaleDcCompliancePanel({
       <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-950">
         <p className="font-semibold">
           {compliance.is_first_customer_order && !compliance.is_sale_dc
-            ? 'New-customer first order — E-Invoice required'
+            ? 'New-customer first DC — E-Invoice required'
             : 'Sale DC — E-Invoice required'}
         </p>
         <p className="mt-1">

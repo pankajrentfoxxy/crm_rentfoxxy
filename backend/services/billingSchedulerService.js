@@ -31,6 +31,75 @@ const { loadZohoBillingAcks } = require('./billingZohoService');
 
 const billingLog = logger.child ? logger.child({ module: 'billing' }) : logger;
 
+function normalizeSerialIds(raw) {
+  return [...new Set((Array.isArray(raw) ? raw : []).map((id) => Number(id)).filter((n) => n > 0))];
+}
+
+/** Rental/sales outbound DCs only — not service, parts, or return challans. */
+function isRentalOutboundDcNumber(dcNumber) {
+  const n = String(dcNumber || '').trim().toUpperCase();
+  if (!n) return false;
+  if (n.startsWith('SDC') || n.startsWith('PDC') || n.startsWith('RDC') || n.startsWith('RPDC')) {
+    return false;
+  }
+  return n.startsWith('DC') || n.startsWith('GDC');
+}
+
+async function lookupSoNumberForDc(db, dcNumber) {
+  const r = await db.query(
+    `SELECT sales_order_number
+       FROM delivery_challan_lines
+      WHERE dc_number = $1
+        AND COALESCE(sales_order_number, '') <> ''
+      LIMIT 1`,
+    [dcNumber]
+  );
+  return r.rows[0]?.sales_order_number || null;
+}
+
+/**
+ * First outbound DC for an SO = earliest created_at among non-cancelled
+ * rental DCs (DC / GDC). Partial DCs still count as the first document.
+ */
+async function findFirstOutboundDcNumberForSo(db, salesOrderNumber) {
+  if (!salesOrderNumber) return null;
+  const r = await db.query(
+    `SELECT dc_number
+       FROM delivery_challan_lines
+      WHERE sales_order_number = $1
+        AND COALESCE(movement_type, 'outbound') = 'outbound'
+        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+        AND (
+          dc_number ILIKE 'DC/%'
+          OR dc_number ILIKE 'DC-%'
+          OR dc_number ILIKE 'GDC%'
+        )
+      GROUP BY dc_number
+      ORDER BY MIN(created_at) ASC NULLS LAST, dc_number ASC
+      LIMIT 1`,
+    [salesOrderNumber]
+  );
+  return r.rows[0]?.dc_number || null;
+}
+
+async function isFirstOutboundDcForSo(db, dcNumber) {
+  if (!isRentalOutboundDcNumber(dcNumber)) {
+    return { ok: false, reason: 'not a rental outbound DC', soNumber: null, firstDc: null };
+  }
+  const soNumber = await lookupSoNumberForDc(db, dcNumber);
+  if (!soNumber) {
+    return { ok: false, reason: 'DC has no sales order', soNumber: null, firstDc: null };
+  }
+  const firstDc = await findFirstOutboundDcNumberForSo(db, soNumber);
+  if (!firstDc) {
+    return { ok: false, reason: 'no outbound DC on SO', soNumber, firstDc: null };
+  }
+  if (String(firstDc) !== String(dcNumber)) {
+    return { ok: false, reason: 'not first DC of SO', soNumber, firstDc };
+  }
+  return { ok: true, soNumber, firstDc };
+}
+
 async function nextInvoiceNumber(entity = 'rentfoxxy') {
   const docType = entity === 'gorefurbo' ? 'invoice_gorefurbo' : 'invoice_rentfoxxy';
   const res = await pool.query(
@@ -471,11 +540,19 @@ async function loadOutboundForLines(client, customerId, lines) {
  */
 async function buildCustomerInvoiceLines(client, {
   customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts = false,
+  serialIds = [],
 }) {
   // Deliveries in the invoice month wait for the NEXT month as catch-up
   // (sent 10 Aug or 1 Sep → next invoice bills that start span + the new month).
   // includeCurrentMonthStarts is only for rare same-month backfills.
   const startCutoff = includeCurrentMonthStarts ? monthEnd : addDays(monthStart, -1);
+  const scopedIds = normalizeSerialIds(serialIds);
+  const params = [customerId, toLocalYmd(startCutoff), toLocalYmd(monthEnd)];
+  let serialFilter = '';
+  if (scopedIds.length) {
+    params.push(scopedIds);
+    serialFilter = ` AND vsn.serial_id = ANY($${params.length}::int[])`;
+  }
   const serialsRes = await client.query(
     `SELECT vsn.serial_id,
             COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -506,8 +583,9 @@ async function buildCustomerInvoiceLines(client, {
         AND vsn.rent_start_date IS NOT NULL
         AND vsn.rent_start_date <= $2::date
         AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
+        ${serialFilter}
       FOR UPDATE`,
-    [customerId, toLocalYmd(startCutoff), toLocalYmd(monthEnd)]
+    params
   );
 
   const lineItems = [];
@@ -617,9 +695,13 @@ async function buildCustomerInvoiceLines(client, {
   const occupancy = await buildCompletedOccupancyLines(client, {
     customerId, month, year, includeCurrentMonthStarts,
   });
-  if (occupancy.lineItems.length) {
-    lineItems.push(...occupancy.lineItems);
-    subtotal = parseFloat((subtotal + occupancy.subtotal).toFixed(2));
+  const occupancyLines = scopedIds.length
+    ? occupancy.lineItems.filter((line) => scopedIds.includes(Number(line.serial_id)))
+    : occupancy.lineItems;
+  if (occupancyLines.length) {
+    const occupancySubtotal = occupancyLines.reduce((sum, line) => sum + Number(line.amount || 0), 0);
+    lineItems.push(...occupancyLines);
+    subtotal = parseFloat((subtotal + occupancySubtotal).toFixed(2));
     if (occupancy.periodStart && (!periodStart || occupancy.periodStart < periodStart)) {
       periodStart = occupancy.periodStart;
     }
@@ -1345,7 +1427,7 @@ async function reconcileDraftRentalWindow(client, inv, month, year) {
 
 async function ensureInvoiceSecurityLines(client, {
   customerId, invoiceId, month, year, actorUserId = null,
-  includeCurrentMonth = false,
+  includeCurrentMonth = false, serialIds = [],
 }) {
   const invRes = await client.query(
     `SELECT invoice_id, invoice_number, status, line_items, subtotal,
@@ -1463,6 +1545,7 @@ async function ensureInvoiceSecurityLines(client, {
     month: invMonth,
     year: invYear,
     includeCurrentMonth,
+    serialIds,
   });
   const fresh = collected.filter((line) => !already.has(String(line.serial_id || line.ttspl_id || '')));
   if (!fresh.length && !removeSecurityLines.length) {
@@ -2314,6 +2397,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
   const includeCurrentMonthStarts = Boolean(options.includeCurrentMonthStarts);
   const includeCurrentMonthSecurity = Boolean(options.includeCurrentMonthSecurity);
   const appendToDraft = Boolean(options.appendToDraft);
+  const serialIds = normalizeSerialIds(options.serialIds);
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
 
@@ -2346,7 +2430,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       const isDraft = String(inv.status || '').toLowerCase() === 'draft';
       let catchupAdded = 0;
       let strippedCount = 0;
-      if (isDraft) {
+      if (isDraft && !serialIds.length) {
         let draftInv = inv;
         if (movedCatchup.length) {
           draftInv = await mergeCatchupOntoDraft(client, draftInv, movedCatchup);
@@ -2373,6 +2457,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
           month,
           year,
           includeCurrentMonth: includeCurrentMonthSecurity,
+          serialIds,
         })
         : { added: 0, removed: 0 };
       await client.query('COMMIT');
@@ -2395,6 +2480,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
 
     const built = await buildCustomerInvoiceLines(client, {
       customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts,
+      serialIds,
     });
     const outboundForMerge = await loadOutboundForLines(
       client,
@@ -2431,6 +2517,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
           month,
           year,
           includeCurrentMonth: includeCurrentMonthSecurity,
+          serialIds,
         });
         await client.query('COMMIT');
         const changed = security.added > 0 || (security.removed || 0) > 0 || stripped.stripped > 0;
@@ -2502,6 +2589,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         month,
         year,
         includeCurrentMonth: includeCurrentMonthSecurity,
+        serialIds,
       });
       await client.query('COMMIT');
       billingLog.info(
@@ -2562,6 +2650,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       month,
       year,
       includeCurrentMonth: includeCurrentMonthSecurity,
+      serialIds,
     });
 
     await client.query('COMMIT');
@@ -2608,7 +2697,8 @@ function monthYearFromRentStart(value) {
 }
 
 /**
- * Shared first-period invoice path (DC generate or delivery / demo→keep).
+ * Shared first-period invoice path (first DC of an SO, or demo→keep).
+ * Bills ONLY the supplied DC/serials. Later DCs on the same SO stay for monthly.
  * Never throws to callers — failures are logged; the 1st-of-month cron is the safety net.
  */
 async function maybeInvoiceFirstRentalPeriod({
@@ -2677,10 +2767,12 @@ async function maybeInvoiceFirstRentalPeriod({
     }
 
     const result = await generateCustomerInvoice(customerId, anchor.month, anchor.year, {
-      // First order: pro-rata from dispatch/start through month-end + security.
+      // First DC of the SO only: pro-rata from dispatch/start through month-end + security.
+      // Append is only for a retry / remaining units of THIS first DC (serialIds scoped).
       includeCurrentMonthStarts: true,
       includeCurrentMonthSecurity: true,
       appendToDraft: true,
+      serialIds: candidates.rows.map((row) => row.serial_id),
     });
 
     if (result.skipped) {
@@ -2781,6 +2873,15 @@ async function maybeInvoiceOnRentalDcCreate({
       );
     }
 
+    const firstDc = await isFirstOutboundDcForSo(pool, dcNumber);
+    if (!firstDc.ok) {
+      billingLog.info(
+        { customerId, dcNumber, ...firstDc },
+        'On-DC-create invoice skipped — only the first DC of the SO creates an invoice'
+      );
+      return { skipped: true, reason: firstDc.reason, so_number: firstDc.soNumber, first_dc: firstDc.firstDc };
+    }
+
     return maybeInvoiceFirstRentalPeriod({
       customerId,
       dcNumber,
@@ -2802,6 +2903,16 @@ async function maybeInvoiceOnRentalDcCreate({
  * Gates: rented, rent_billed_until IS NULL, rent_start_date + rent_monthly_rate set.
  */
 async function maybeInvoiceOnRentalDelivery(opts = {}) {
+  if (opts.dcNumber) {
+    const firstDc = await isFirstOutboundDcForSo(pool, opts.dcNumber);
+    if (!firstDc.ok) {
+      billingLog.info(
+        { customerId: opts.customerId, dcNumber: opts.dcNumber, ...firstDc },
+        'On-delivery invoice skipped — only the first DC of the SO creates an invoice'
+      );
+      return { skipped: true, reason: firstDc.reason, so_number: firstDc.soNumber, first_dc: firstDc.firstDc };
+    }
+  }
   return maybeInvoiceFirstRentalPeriod({
     ...opts,
     statuses: ['rented'],
@@ -3236,6 +3347,7 @@ module.exports = {
   runBillingBatch,
   maybeInvoiceOnRentalDelivery,
   maybeInvoiceOnRentalDcCreate,
+  isFirstOutboundDcForSo,
   sendGeneratedCustomerInvoice,
   stripSameMonthStartRentalsFromDraft,
   stripEarlyDeliveryCatchupFromDraft,

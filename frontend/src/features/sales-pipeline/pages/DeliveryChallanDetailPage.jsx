@@ -532,19 +532,15 @@ export default function DeliveryChallanDetailPage() {
           </button>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : 'text-black'}`}>{dcNumber}</h1>
           <p className="text-gray-600">
-            {head.customer_name || '—'} · SO:{' '}
-            <Link
-              className="text-blue-600"
-              to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}
-              state={{ tab: location.state?.returnTab || readDcBackContext(dcNumber)?.returnTab || 'dcs' }}
-            >
-              {head.sales_order_number}
-            </Link>
             {head.customer_name || '—'}
             {head.sales_order_number ? (
               <>
                 {' · SO: '}
-                <Link className="text-blue-600 hover:underline" to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}>
+                <Link
+                  className="text-blue-600 hover:underline"
+                  to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}
+                  state={{ tab: location.state?.returnTab || readDcBackContext(dcNumber)?.returnTab || 'dcs' }}
+                >
                   {head.sales_order_number}
                 </Link>
               </>
@@ -734,7 +730,7 @@ export default function DeliveryChallanDetailPage() {
                 <p>
                   Warehouse cannot download this DC until Accounts creates the e-invoice in Zoho and uploads it
                   {saleCompliance?.requires_eway_bill ? ' (e-way bill is also mandatory — value above ₹50,000)' : ''}.
-                  {saleCompliance?.is_first_customer_order && !isSale ? ' This is the customer’s first order.' : ''}
+                  {saleCompliance?.is_first_customer_order && !isSale ? ' This is the customer’s first DC.' : ''}
                 </p>
                 {saleCompliance?.can_send_accounts_mail && (
                   <button
