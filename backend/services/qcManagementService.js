@@ -476,6 +476,7 @@ function enrichSerialRow(row, specContext = null) {
     warehouse_location: row.warehouse_carret && row.warehouse_carret_slot
       ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
       : null,
+    warehouse_location_change: ex.warehouse_location_change || null,
     ticket_id: row.ticket_id ?? null,
     active_floor_ticket_id: row.active_floor_ticket_id ?? null,
     ticket_stage_name: row.ticket_stage_name ?? null,

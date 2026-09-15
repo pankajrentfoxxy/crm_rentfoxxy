@@ -3362,6 +3362,21 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     if (!it.pod_image_path && !it.proof_of_completion_path) {
         return res.status(400).json({ success: false, message: 'Upload the pickup photo before verifying the OTP' });
     }
+    try {
+        const chargerSvc = require('../services/dispatchChargerService');
+        const chargerState = await chargerSvc.getPickupChargerState(pool, itemId);
+        if (chargerState.required && !chargerState.scanned) {
+            return res.status(409).json({
+                success: false,
+                message: 'Scan the laptop TTSPL ID and the charger we sent before verifying OTP',
+            });
+        }
+    } catch (chargerErr) {
+        if (chargerErr.status && chargerErr.status < 500) {
+            return res.status(chargerErr.status).json({ success: false, message: chargerErr.message });
+        }
+        console.error('pickup charger gate:', chargerErr);
+    }
     const stored = it.customer_otp_code || it.otp_code;
     if (!stored || String(otp || '').trim() !== String(stored)) {
         return res.status(400).json({ success: false, message: 'Invalid OTP. Ask the customer for the correct OTP.' });
@@ -3725,6 +3740,15 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
     for (const s of siblings) {
         const { floorTicketId } = await warehouseReceiveSinglePickupItem(client, s, userId, esignUrl, signerName);
         if (floorTicketId) floorTicketIds.push(floorTicketId);
+        try {
+            await require('../services/dispatchChargerService').restockReturnedForPickup(
+                client,
+                s,
+                { user_id: userId }
+            );
+        } catch (chargerErr) {
+            console.error('[support] dispatch charger restock:', chargerErr.message);
+        }
     }
 
     if (triggerItem.return_dc_number) {
@@ -4542,6 +4566,13 @@ async function cancelReplacementSalesOrder(client, soNumber, actor) {
                 `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
                   WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
                 [alloc.qc_ticket_id]
+            );
+            const chargerSvc = require('../services/dispatchChargerService');
+            await chargerSvc.cancelRequestsForTicket(
+                client,
+                alloc.qc_ticket_id,
+                actor,
+                `Released because floor ticket ${alloc.qc_ticket_id} was cancelled with SO ${soNumber}`
             );
         }
         await client.query(

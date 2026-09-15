@@ -18,6 +18,7 @@ const {
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
+  listSalesOrdersExportRows,
   listCustomersForOrderScope,
   getSalesOrderLines,
   getSalesOrderSupportMeta,
@@ -55,8 +56,13 @@ const {
   isNewCustomerFirstDc,
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
+  requiresOutboundEway,
   buildDemoEwayCompliance,
-  canManageDcEwayBill,
+  canUploadDcValueEway,
+  canViewEwayLockedDc,
+  flagDcValueEwayIfNeeded,
+  markDcEwayRequired,
+  computeDcAssetValue,
   buildSaleCompliance,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,
@@ -765,6 +771,121 @@ exports.listSalesOrders = async (req, res) => {
   }
 };
 
+exports.exportSalesOrders = async (req, res) => {
+  try {
+    const q = req.query || {};
+    const entityScope = String(q.entity_scope || '').trim().toLowerCase() || 'rental';
+    const scopeSection = salesOrderScopeSection(entityScope);
+    const assignedOnly = await isRestrictedToAssigned(req, scopeSection);
+    const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
+    const restrictDispatchWorkflow = req.user?.role === 'dispatch' && assignedOnly;
+    if (!req.permissionCache) req.permissionCache = {};
+    const orderType = await resolveSalesOrderListOrderType(
+      req.user,
+      q.order_type || '',
+      req.permissionCache
+    );
+    const rows = await listSalesOrdersExportRows({
+      search: q.search || '',
+      assignedUserId,
+      dateFrom: q.date_from,
+      dateTo: q.date_to,
+      customerId: q.customer_id || null,
+      status: q.status || '',
+      entityScope,
+      orderType,
+      viewerRole: req.user?.role || null,
+      viewerUserId: req.user?.user_id || null,
+      restrictDispatchWorkflow,
+    });
+
+    const isSale = entityScope === 'sale';
+    const priceLabel = isSale ? 'Sale Price' : 'Rental Price';
+    const totalPriceLabel = isSale ? 'Total Sale Price' : 'Total Rental Price';
+    const statusLabel = (status) => {
+      const s = String(status || '').toLowerCase();
+      if (s === 'cancelled') return 'Cancelled';
+      if (s === 'delivered') return 'Delivered';
+      if (s === 'dispatched') return 'Dispatched / In transit';
+      return 'Pending';
+    };
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${dd}-${mm}-${dt.getFullYear()}`;
+    };
+    const fmtMoney = (n) => {
+      const v = Number(n || 0);
+      if (!Number.isFinite(v)) return 0;
+      return Math.round(v * 100) / 100;
+    };
+
+    const includeSecurity = !isSale && rows.some((r) => Number(r.security_total || 0) > 0);
+    const includeShipping = rows.some((r) => Number(r.shipping_charges || 0) > 0);
+
+    const columnOrder = [
+      'SO Number',
+      'Created',
+      'Customer',
+      'Model',
+      'Quantity',
+      'DC',
+      'Status',
+      priceLabel,
+      totalPriceLabel,
+    ];
+    if (includeSecurity) columnOrder.push('Security');
+    if (includeShipping) columnOrder.push('Shipping Charges');
+
+    const orderedRows = rows.map((r) => {
+      const qty = Number(r.quantity || 0);
+      const rate = Number(r.rate || 0);
+      const row = {
+        'SO Number': r.sales_order_number || '',
+        Created: fmtDate(r.created_at),
+        Customer: r.customer_name || '',
+        Model: r.model || '',
+        Quantity: qty,
+        DC: r.dc_numbers || '',
+        Status: statusLabel(r.status),
+        [priceLabel]: fmtMoney(rate),
+        [totalPriceLabel]: fmtMoney(rate * qty),
+      };
+      if (includeSecurity) row.Security = fmtMoney(r.security_total);
+      if (includeShipping) row['Shipping Charges'] = fmtMoney(r.shipping_charges);
+      return row;
+    });
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
+    ws['!cols'] = columnOrder.map((h) => ({
+      wch: h === 'Model' ? 48
+        : h === 'Customer' ? 28
+          : h === 'DC' ? 28
+            : h === 'SO Number' ? 18
+              : 14,
+    }));
+    const sheetName = isSale ? 'Sale Orders' : 'Rental Orders';
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const scopeSlug = isSale ? 'sale' : 'rental';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="sales_orders_${scopeSlug}_${stamp}.xlsx"`
+    );
+    res.send(buf);
+  } catch (error) {
+    console.error('exportSalesOrders:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
+  }
+};
+
 exports.getSalesOrder = async (req, res) => {
   try {
     if (!req.dispatchSoAccess) {
@@ -1436,6 +1557,7 @@ exports.listDeliveryChallans = async (req, res) => {
     const assignedOnly = await isRestrictedToAssigned(req, 'dispatch')
       || await isRestrictedToAssigned(req, 'delivery_challans');
     const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
+    const canSeeLockedEway = await canViewEwayLockedDc(req.user, req.permissionCache || {});
     const data = await listDeliveryChallansGrouped({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
@@ -1446,6 +1568,7 @@ exports.listDeliveryChallans = async (req, res) => {
       assignedUserId,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      hidePendingEway: !canSeeLockedEway,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -2611,11 +2734,35 @@ exports.getDeliveryChallan = async (req, res) => {
     const firstCustomerDc = await isNewCustomerFirstDc(pool, headLine.customer_id, dcNumber);
     const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType);
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
-    const productValue = Number(totals?.subtotal ?? 0);
-    const needsDemoEway = requiresDemoEwayCompliance(soQuotationType, firstCustomerOrder, productValue);
+    const billedValue = Number(totals?.subtotal ?? 0);
+    const asset = await computeDcAssetValue(dcNumber, lines);
+    const productValue = asset.total;
+    const needsValueEway = requiresOutboundEway(
+      { ...headLine, quotation_type: soQuotationType },
+      productValue
+    ) || requiresDemoEwayCompliance(soQuotationType, firstCustomerOrder, productValue);
+    const needsDemoEway = needsValueEway;
     let sale_compliance = null;
     let demo_eway_compliance = null;
     let can_download_pdf = true;
+    if (needsValueEway) {
+      await markDcEwayRequired(dcNumber, true, productValue).catch(() => {});
+      const canUploadEway = await canUploadDcValueEway(req.user, req.permissionCache || {});
+      demo_eway_compliance = buildDemoEwayCompliance(
+        { ...headLine, quotation_type: soQuotationType },
+        totals,
+        req.user?.role,
+        {
+          canUpload: canUploadEway,
+          canRequest: true,
+          isFirstCustomerOrder: firstCustomerOrder,
+          assetValue: productValue,
+          billedValue,
+          assetUnits: asset.units,
+        }
+      );
+      can_download_pdf = demo_eway_compliance.can_download_pdf;
+    }
     if (needsInvoice) {
       const canDispatchAction = req.user?.role === 'super_admin'
         || await canUploadSaleDcCompliance(req.user, req.permissionCache);
@@ -2627,32 +2774,17 @@ exports.getDeliveryChallan = async (req, res) => {
           canUpload: canDispatchAction,
           canSendMail: canDispatchAction,
           isFirstCustomerOrder: firstCustomerDc,
+          assetValue: productValue,
         }
       );
-      can_download_pdf = sale_compliance.can_download_pdf;
-      if (!can_download_pdf) {
-        for (const line of lines) {
-          line.pdf_path = null;
-        }
+      // Accounts may download the DC for GST portal while e-way is still pending.
+      if (!(needsValueEway && !demo_eway_compliance?.eway_complete && demo_eway_compliance?.can_upload_eway)) {
+        can_download_pdf = can_download_pdf && sale_compliance.can_download_pdf;
       }
-    } else if (needsDemoEway) {
-      const canUploadEway = req.user?.role === 'super_admin'
-        || await canManageDcEwayBill(req.user, req.permissionCache);
-      demo_eway_compliance = buildDemoEwayCompliance(
-        { ...headLine, quotation_type: soQuotationType },
-        totals,
-        req.user?.role,
-        {
-          canUpload: canUploadEway,
-          canRequest: true,
-          isFirstCustomerOrder: firstCustomerOrder,
-        }
-      );
-      can_download_pdf = demo_eway_compliance.can_download_pdf;
-      if (!can_download_pdf) {
-        for (const line of lines) {
-          line.pdf_path = null;
-        }
+    }
+    if (!can_download_pdf) {
+      for (const line of lines) {
+        line.pdf_path = null;
       }
     }
 
@@ -3026,6 +3158,12 @@ exports.storeDeliveryChallan = async (req, res) => {
       await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
     } catch (pdfErr) {
       console.error('DC PDF generation failed:', pdfErr.message);
+    }
+
+    try {
+      await flagDcValueEwayIfNeeded(dcNumber);
+    } catch (ewayErr) {
+      console.error(`storeDeliveryChallan e-way flag (${dcNumber}):`, ewayErr.message);
     }
 
     // Post-commit: first rental invoice starts when the laptop actually leaves
@@ -3443,6 +3581,11 @@ exports.createDcsByAddress = async (req, res) => {
         await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
       } catch (pdfErr) {
         console.error(`DC PDF generation failed (${dcNumber}):`, pdfErr.message);
+      }
+      try {
+        await flagDcValueEwayIfNeeded(dcNumber);
+      } catch (ewayErr) {
+        console.error(`createDcsByAddress e-way notify (${dcNumber}):`, ewayErr.message);
       }
     }
 
@@ -4543,6 +4686,13 @@ exports.cancelSalesOrder = async (req, res) => {
               AND COALESCE(ticket_type, '') <> 'return_qc'`,
           [alloc.qc_ticket_id]
         );
+        const chargerSvc = require('../services/dispatchChargerService');
+        await chargerSvc.cancelRequestsForTicket(
+          client,
+          alloc.qc_ticket_id,
+          req.user,
+          `Released because floor ticket ${alloc.qc_ticket_id} was cancelled with SO ${soNumber}`
+        );
       }
       await client.query(
         `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW() WHERE allocation_id = $1`,
@@ -5162,6 +5312,26 @@ exports.updateDcDispatch = async (req, res) => {
       });
     }
 
+    try {
+      const ewayLines = await getDeliveryChallanLines(dcNumber);
+      const ewayHead = ewayLines[0];
+      if (ewayHead) {
+        const { computeDcAssetValue, isEwayComplete } = require('../services/saleDcComplianceService');
+        const ewayValue = (await computeDcAssetValue(dcNumber, ewayLines)).total;
+        if (requiresOutboundEway(ewayHead, ewayValue) && !isEwayComplete(ewayHead, true)) {
+          const mayBypass = await canUploadDcValueEway(req.user, req.permissionCache || {});
+          if (!mayBypass) {
+            return res.status(403).json({
+              success: false,
+              message: `E-Way Bill must be uploaded before dispatch (value ₹${Number(ewayValue).toLocaleString('en-IN')}).`,
+            });
+          }
+        }
+      }
+    } catch (ewayLock) {
+      console.warn('updateDcDispatch e-way gate:', ewayLock.message);
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -5242,6 +5412,12 @@ exports.updateDcDispatch = async (req, res) => {
           )`,
         [dcNumber]
       ).catch(() => {});
+
+      try {
+        await require('../services/dispatchChargerService').markDispatchedForDc(client, dcNumber, req.user);
+      } catch (chargerErr) {
+        console.error('[dispatch] charger mark dispatched:', chargerErr.message);
+      }
 
       await client.query('COMMIT');
       if (newStatus === 'in_transit' || newStatus === 'shipped') {

@@ -9,19 +9,21 @@ const {
 } = require('../services/salesManagementService');
 const {
   isSaleDc,
-  isDemoDc,
   isNewCustomerFirstOrder,
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
+  requiresOutboundEway,
   requiresEwayBill,
   buildSaleCompliance,
   buildDemoEwayCompliance,
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
-  canManageDcEwayBill,
+  canUploadDcValueEway,
   computeDcGrandTotal,
+  computeDcAssetValue,
   sendAccountsSaleDcEmail,
   sendAccountsDemoEwayEmail,
+  markDcEwayRequired,
   ACCOUNTS_EMAIL,
 } = require('../services/saleDcComplianceService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
@@ -54,7 +56,7 @@ exports.checkDemoEwayUpload = async (req, res, next) => {
     }
     if (req.user.role === 'super_admin') return next();
     if (!req.permissionCache) req.permissionCache = {};
-    const allowed = await canManageDcEwayBill(req.user, req.permissionCache);
+    const allowed = await canUploadDcValueEway(req.user, req.permissionCache);
     if (allowed) return next();
     return res.status(403).json({
       success: false,
@@ -146,7 +148,8 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       security: head.security_amount,
       supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
     });
-    const needsEway = requiresEwayBill(subtotal);
+    const asset = await computeDcAssetValue(dcNumber, lines);
+    const needsEway = requiresEwayBill(asset.total);
 
     const files = req.files || {};
     const einvoiceFile = files.einvoice_pdf?.[0] || files.einvoice_pdf;
@@ -165,7 +168,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       if (!ewayBillNumber && !head.eway_bill_number) {
         return res.status(400).json({
           success: false,
-          message: `E-Way Bill number is required — DC laptop value exceeds ₹50,000 (₹${Number(subtotal).toLocaleString('en-IN')})`,
+          message: `E-Way Bill number is required — DC asset value exceeds ₹50,000 (₹${Number(asset.total).toLocaleString('en-IN')})`,
         });
       }
       if (!ewayFile && !hasExistingEwbPdf) {
@@ -205,7 +208,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       { ...updated[0], quotation_type: quotationType },
       totals,
       req.user?.role,
-      { canUpload, canSendMail: canUpload, isFirstCustomerOrder: firstOrder },
+      { canUpload, canSendMail: canUpload, isFirstCustomerOrder: firstOrder, assetValue: asset.total },
     );
 
     if (head.sales_order_number) {
@@ -355,7 +358,12 @@ exports.sendAccountsNotification = async (req, res) => {
   }
 };
 
-/** POST — one-time E-Way Bill request to Accounts (new-customer demo only). */
+function dcNeedsValueEway(head, quotationType, firstOrder, productValue) {
+  return requiresOutboundEway({ ...head, quotation_type: quotationType }, productValue)
+    || requiresDemoEwayCompliance(quotationType, firstOrder, productValue);
+}
+
+/** POST — one-time E-Way Bill request to Accounts (outbound DC value > threshold). */
 exports.requestDemoEway = async (req, res) => {
   const dcNumber = req.params.dcNumber;
   try {
@@ -379,29 +387,25 @@ exports.requestDemoEway = async (req, res) => {
     }
 
     const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
-    const productValue = await computeDcGrandTotal(dcNumber);
-    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)) {
+    const asset = await computeDcAssetValue(dcNumber, lines);
+    const productValue = asset.total;
+    if (!dcNeedsValueEway(head, quotationType, firstOrder, productValue)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Way Bill request applies only to new-customer demo DCs at or above the configured threshold',
+        message: 'E-Way Bill request applies only to outbound DCs above the configured value threshold',
       });
     }
+    await markDcEwayRequired(dcNumber, true, productValue);
 
-    if (head.accounts_notified_at) {
-      return res.status(409).json({
-        success: false,
-        message: 'E-Way Bill Request Sent',
-        already_sent: true,
-        accounts_notified_at: head.accounts_notified_at,
-      });
-    }
-
+    const { subtotal: billedSubtotal } = await resolveDcBilling(dcNumber, lines);
     const mailResult = await sendAccountsDemoEwayEmail({
       dcNumber,
       salesOrderNumber: head.sales_order_number,
       customerName: head.customer_name,
       productValue,
-      laptops: laptopRowsFromLines(lines),
+      billedValue: billedSubtotal,
+      laptops: asset.units.length ? asset.units : laptopRowsFromLines(lines),
+      pdfPath: head.pdf_path || null,
     });
 
     await pool.query(
@@ -418,7 +422,7 @@ exports.requestDemoEway = async (req, res) => {
         salesOrderNumber: head.sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'eway_accounts_requested',
-        description: `E-Way Bill request emailed to ${ACCOUNTS_EMAIL} for demo DC ${dcNumber}.`,
+        description: `E-Way Bill request emailed to ${ACCOUNTS_EMAIL} for ${dcNumber}${head.accounts_notified_at ? ' (resend)' : ''}.`,
         metadata: { dc_number: dcNumber, to: mailResult.to, from: mailResult.from },
         user: req.user,
       }).catch(() => {});
@@ -432,17 +436,26 @@ exports.requestDemoEway = async (req, res) => {
       security: updated[0].security_amount,
       supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
     });
-    const canUpload = await canManageDcEwayBill(req.user, req.permissionCache);
+    const canUpload = await canUploadDcValueEway(req.user, req.permissionCache);
     const demoEway = buildDemoEwayCompliance(
       { ...updated[0], quotation_type: quotationType },
       totals,
       req.user?.role,
-      { canUpload, canRequest: true, isFirstCustomerOrder: firstOrder },
+      {
+        canUpload,
+        canRequest: true,
+        isFirstCustomerOrder: firstOrder,
+        assetValue: productValue,
+        billedValue: totals.subtotal,
+        assetUnits: asset.units,
+      },
     );
 
     return res.json({
       success: true,
-      message: 'E-Way Bill Request Sent',
+      message: head.accounts_notified_at
+        ? `Mail resent to ${ACCOUNTS_EMAIL}`
+        : `Mail sent to ${ACCOUNTS_EMAIL}`,
       from: mailResult.from,
       to: mailResult.to,
       demo_eway_compliance: demoEway,
@@ -478,18 +491,12 @@ exports.uploadDemoEway = async (req, res) => {
     }
 
     const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
-    const productValue = await computeDcGrandTotal(dcNumber);
-    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)
-      && !isDemoDc(quotationType)) {
+    const asset = await computeDcAssetValue(dcNumber, lines);
+    const productValue = asset.total;
+    if (!dcNeedsValueEway(head, quotationType, firstOrder, productValue)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Way Bill upload on this endpoint is for new-customer demo DCs only',
-      });
-    }
-    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)) {
-      return res.status(400).json({
-        success: false,
-        message: 'E-Way Bill is not required for this demo DC value',
+        message: 'E-Way Bill upload applies only to outbound DCs above the configured value threshold',
       });
     }
 
@@ -523,7 +530,7 @@ exports.uploadDemoEway = async (req, res) => {
         salesOrderNumber: head.sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'eway_uploaded',
-        description: `E-Way Bill ${finalNum} uploaded for demo DC ${dcNumber}. DC download enabled.`,
+        description: `E-Way Bill ${finalNum} uploaded for ${dcNumber}. DC download enabled.`,
         metadata: {
           dc_number: dcNumber,
           eway_bill_number: finalNum,
@@ -549,12 +556,19 @@ exports.uploadDemoEway = async (req, res) => {
       security: updated[0].security_amount,
       supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
     });
-    const canUpload = await canManageDcEwayBill(req.user, req.permissionCache);
+    const canUpload = await canUploadDcValueEway(req.user, req.permissionCache);
     const demoEway = buildDemoEwayCompliance(
       { ...updated[0], quotation_type: quotationType },
       totals,
       req.user?.role,
-      { canUpload, canRequest: true, isFirstCustomerOrder: firstOrder },
+      {
+        canUpload,
+        canRequest: true,
+        isFirstCustomerOrder: firstOrder,
+        assetValue: productValue,
+        billedValue: totals.subtotal,
+        assetUnits: asset.units,
+      },
     );
 
     return res.json({

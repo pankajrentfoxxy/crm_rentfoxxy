@@ -57,7 +57,7 @@ const DEFAULT_PURCHASE_TYPE_OPTIONS = [
 ];
 
 const DATE_MODE_OPTIONS = [
-  { value: '', label: 'All time' },
+  { value: 'all', label: 'All time' },
   { value: 'month', label: 'By month' },
   { value: 'range', label: 'Custom date range' },
 ];
@@ -192,14 +192,19 @@ export default function MasterVendorDataPage() {
   const legacyMonth = searchParams.get('month') || '';
   const purchaseDateFrom = searchParams.get('purchase_date_from') || legacyDateFrom || '';
   const purchaseDateTo = searchParams.get('purchase_date_to') || legacyDateTo || '';
-  const purchaseDateMode = searchParams.get('purchase_date_mode')
-    || legacyDateMode
-    || (purchaseDateFrom || purchaseDateTo ? 'range' : 'month');
+  const rawPurchaseDateMode = searchParams.get('purchase_date_mode') || legacyDateMode || '';
+  const purchaseDateMode = rawPurchaseDateMode === 'all'
+    ? 'all'
+    : (rawPurchaseDateMode === 'month' || rawPurchaseDateMode === 'range'
+      ? rawPurchaseDateMode
+      : (purchaseDateFrom || purchaseDateTo ? 'range' : 'month'));
   const purchaseMonth = searchParams.get('purchase_month') || legacyMonth || '';
   const activityDateFrom = searchParams.get('activity_date_from') || '';
   const activityDateTo = searchParams.get('activity_date_to') || '';
-  const activityDateMode = searchParams.get('activity_date_mode')
-    || (activityDateFrom || activityDateTo ? 'range' : '');
+  const rawActivityDateMode = searchParams.get('activity_date_mode') || '';
+  const activityDateMode = rawActivityDateMode === 'month' || rawActivityDateMode === 'range' || rawActivityDateMode === 'all'
+    ? rawActivityDateMode
+    : (activityDateFrom || activityDateTo ? 'range' : 'all');
   const activityMonth = searchParams.get('activity_month') || '';
   const statuses = useMemo(() => readCsvParam(searchParams, 'status'), [status]);
   const locations = useMemo(() => readCsvParam(searchParams, 'location'), [location]);
@@ -257,11 +262,11 @@ export default function MasterVendorDataPage() {
     vendor_id: vendorId || undefined,
     usage_bucket: usageBucket || undefined,
     warehouse_bucket: warehouseBucket || undefined,
-    purchase_date_mode: purchaseDateMode || undefined,
+    purchase_date_mode: purchaseDateMode === 'all' ? 'all' : (purchaseDateMode || undefined),
     purchase_month: purchaseDateMode === 'month' ? (purchaseMonths.join(',') || currentMonthValue()) : undefined,
     purchase_date_from: purchaseDateMode === 'range' ? (purchaseDateFrom || undefined) : undefined,
     purchase_date_to: purchaseDateMode === 'range' ? (purchaseDateTo || undefined) : undefined,
-    activity_date_mode: activityDateMode || undefined,
+    activity_date_mode: activityDateMode === 'all' ? undefined : (activityDateMode || undefined),
     activity_month: activityDateMode === 'month' ? (activityMonths.join(',') || undefined) : undefined,
     activity_date_from: activityDateMode === 'range' ? (activityDateFrom || undefined) : undefined,
     activity_date_to: activityDateMode === 'range' ? (activityDateTo || undefined) : undefined,
@@ -600,7 +605,7 @@ export default function MasterVendorDataPage() {
                   });
                 } else {
                   patchParams({
-                    purchase_date_mode: '',
+                    purchase_date_mode: 'all',
                     purchase_month: '',
                     purchase_date_from: '',
                     purchase_date_to: '',
@@ -693,7 +698,7 @@ export default function MasterVendorDataPage() {
                   patchParams({ activity_date_mode: 'range', activity_month: '' });
                 } else {
                   patchParams({
-                    activity_date_mode: '',
+                    activity_date_mode: 'all',
                     activity_month: '',
                     activity_date_from: '',
                     activity_date_to: '',

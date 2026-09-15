@@ -1587,6 +1587,23 @@ async function receiveItemsFromVendor(client, {
       ]
     );
 
+    if (isReplacement) {
+      try {
+        const productionAssetService = require('./productionAssetService');
+        const pa = await productionAssetService.getByTicket(client, item.ticket_id);
+        if (pa?.production_asset_id) {
+          await productionAssetService.retargetProductionAssetFromTicket(client, pa.production_asset_id, {
+            ticket_id: item.ticket_id,
+            vendor_serial_id: replacementRow.serial_id,
+            serial_number: replacementRow.serial_number,
+            ttspl_id: replacementRow.inventory_asset_code,
+          });
+        }
+      } catch (paErr) {
+        console.error('vendor replacement PA retarget:', paErr.message);
+      }
+    }
+
     if (isReplacement && (item.vendor_serial_id || item.serial_id)) {
       await transitionRepairSerial(client, {
         serialId: item.vendor_serial_id || item.serial_id,

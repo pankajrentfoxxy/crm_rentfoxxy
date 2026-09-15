@@ -9,6 +9,7 @@ import {
 } from '../salesPipelineApi';
 import SignaturePadComponent from '../components/SignaturePad';
 import { deliveryAddressPhone, formatDeliveryAddressLine, formatDateTime, parseDeliveryAddress } from '../salesPipelineUtils';
+import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
 
 function StatusBadge({ status }) {
   const map = {
@@ -246,6 +247,9 @@ function DeliveryCard({ dc, onChanged }) {
         {/* STATE: reached — vendor return e-sign, or customer OTP + POD */}
         {dc.status === 'reached' && (isVendorReturn || dc.otp_pending) && (
           <div className="border-t pt-3 space-y-3">
+            {!isVendorReturn && dc.movement_type === 'return' && dc.dc_purpose !== 'vendor_return' ? (
+              <PickupChargerScanPanel rdcNumber={dc.dc_number} />
+            ) : null}
             {!isVendorReturn && (
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Step 2 · Ask the customer for their WhatsApp OTP</p>

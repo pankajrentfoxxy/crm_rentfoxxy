@@ -19,6 +19,7 @@ const LANDING_ORDER = [
   ['parts_dashboard', '/inventory-management/parts-dashboard'],
   ['parts_inventory', '/inventory-management/parts'],
   ['parts_approval', '/inventory-management/parts-approval'],
+  ['dispatch_charger_warehouse', '/inventory-management/dispatch-chargers'],
   ['parts_procurement', '/vendor-management/spare-parts-po'],
   ['vendor_repair_dc', '/vendor-management/vendor-repair-dc'],
   ['vendor_repair_dc_dispatch', '/vendor-management/vendor-repair-dc'],

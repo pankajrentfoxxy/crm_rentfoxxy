@@ -162,6 +162,26 @@ function sizeNum(s) {
   return Math.round(n);
 }
 
+/**
+ * SSD compare in GB with ±10%. Mac system_profiler lines look like
+ * "Capacity: 1 TB (1,000,277,216,896 bytes)" and older capture scripts
+ * sent only the first number ("1"). A bare 1–16 that fails as GB is TB.
+ * Does not loosen 256/512 vs 1TB — those already compare as GB.
+ */
+function ssdSizesMatch(expected, actual) {
+  const e = sizeNum(expected);
+  const a = sizeNum(actual);
+  if (e == null) return true;
+  if (a == null) return false;
+  if (Math.abs(a - e) <= e * 0.1) return true;
+  const raw = String(actual == null ? '' : actual).trim();
+  if (/^\d+(?:\.\d+)?$/.test(raw) && a > 0 && a <= 16) {
+    const asTb = a * 1024;
+    return Math.abs(asTb - e) <= e * 0.1;
+  }
+  return false;
+}
+
 /** Normalize GPU names for tolerant contains-match (Intel(R) UHD Graphics 630 ≈ Intel UHD Graphics). */
 function normGpu(s) {
   return norm(String(s || '').replace(/\(r\)/gi, ''))
@@ -417,17 +437,17 @@ function compareConfig(expected, actual) {
 
   // SSD — required, ±10% tolerance.
   {
-    const e = sizeNum(expected.ssd);
-    const a = sizeNum(actual.ssd);
-    const matched = e == null || (a != null && Math.abs(a - e) <= e * 0.1);
+    const matched = ssdSizesMatch(expected.ssd, actual.ssd);
     checks.push({ field: 'ssd', label: FIELD_LABELS.ssd, required: true, matched, expected: expected.ssd, actual: actual.ssd ?? '' });
   }
 
   // GPU — informational only (never blocks).
+  // Apple Silicon has no discrete adapter; the Mac script sends gpu:"".
   {
     const e = normGpu(expected.gpu);
     const a = normGpu(actual.gpu);
-    const matched = !e || bothContain(a, e);
+    const appleIntegrated = isAppleConfig(expected, actual) && !a;
+    const matched = !e || appleIntegrated || bothContain(a, e);
     checks.push({ field: 'gpu', label: FIELD_LABELS.gpu, required: false, matched, expected: expected.gpu, actual: actual.gpu ?? '' });
   }
 
@@ -505,6 +525,7 @@ module.exports = {
   genNum,
   genFromActual,
   sizeNum,
+  ssdSizesMatch,
   processorsMatch,
   modelsMatch,
   modelTokens,

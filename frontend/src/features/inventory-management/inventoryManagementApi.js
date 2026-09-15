@@ -177,6 +177,16 @@ export function updateInventorySerialRemark(serialId, remark) {
   return api.patch(`${base}/${serialId}/remark`, { remark });
 }
 
+export function fetchCarretAvailability(carret) {
+  return api.get(`${base}/carret-availability`, {
+    params: carret != null ? { carret } : {},
+  });
+}
+
+export function updateInventoryWarehouseLocation(serialId, body) {
+  return api.patch(`${base}/${serialId}/location`, body);
+}
+
 /** Asset movement — search laptops by serial or TTSPL */
 export function searchInventoryAssetsForMovement(q) {
   return api.get(`${base}/asset-movement/search`, { params: { q } });

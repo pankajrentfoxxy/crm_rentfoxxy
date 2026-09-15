@@ -53,16 +53,21 @@ const DC_INVOICE_FROM = `
 const DEMO_EWAY_WHERE = `
   COALESCE(dcl.movement_type, 'outbound') = 'outbound'
   AND LOWER(COALESCE(dcl.status, '')) NOT IN ('cancelled')
-  AND LOWER(COALESCE(sol.quotation_type, '')) = 'demo'
-  AND dcl.customer_id IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM sales_order_lines prior
-     WHERE prior.customer_id = dcl.customer_id
-       AND prior.sales_order_number IS DISTINCT FROM dcl.sales_order_number
-       AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
-       AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
+  AND (
+    COALESCE(dcl.eway_required, FALSE) = TRUE
+    OR (
+      LOWER(COALESCE(sol.quotation_type, '')) = 'demo'
+      AND dcl.customer_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM sales_order_lines prior
+         WHERE prior.customer_id = dcl.customer_id
+           AND prior.sales_order_number IS DISTINCT FROM dcl.sales_order_number
+           AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
+           AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
+      )
+      AND COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
+    )
   )
-  AND COALESCE(dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
 `;
 
 const DEMO_EWAY_PENDING_WHERE = `
@@ -286,8 +291,11 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.eway_bill_pdf_path,
            dcl.accounts_notified_at,
            COALESCE(dcq.dc_qty, 0) AS quantity,
-           COALESCE(dcl_amt.amount, 0) AS amount,
-           (COALESCE(dcl_amt.amount, 0) > $1) AS requires_eway_bill
+           COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
+           (
+             COALESCE(dcl.eway_required, FALSE) = TRUE
+             OR COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) > $1
+           ) AS requires_eway_bill
          ${DC_INVOICE_FROM}
          WHERE ${PENDING_DC_INVOICE_WHERE}
          ORDER BY dcl.dc_number, dcl.created_at DESC
@@ -311,7 +319,7 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.eway_bill_pdf_path,
            dcl.accounts_notified_at,
            COALESCE(dcq.dc_qty, 0) AS quantity,
-           COALESCE(dcl_amt.amount, 0) AS amount,
+           COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            CASE
              WHEN NULLIF(TRIM(COALESCE(dcl.eway_bill_number, '')), '') IS NOT NULL
               AND NULLIF(TRIM(COALESCE(dcl.eway_bill_pdf_path, '')), '') IS NOT NULL

@@ -6,6 +6,7 @@ function looksCompleteScan(raw) {
   const s = String(raw || '').trim();
   if (!s) return false;
   if (/^TTSPL\d{3,}$/i.test(s)) return true;
+  if (/^PRT[-_]/i.test(s) && s.length >= 8) return true;
   if (/^(G?DC|RDC|SDC|VRDC|GRN|SO)\/.+/i.test(s)) return true;
   if (/RFXG1\|/i.test(s)) return true;
   if (/^[A-Z0-9]{10,32}$/i.test(s) && !/\s/.test(s) && !/^TTSPL/i.test(s)) return true;

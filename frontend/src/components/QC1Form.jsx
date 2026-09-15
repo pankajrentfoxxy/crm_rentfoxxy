@@ -6,6 +6,9 @@ import Qc1SpecChecklist from '../features/floor-pipeline/components/Qc1SpecCheck
 import Qc2SpecVerifyPanel from '../features/floor-pipeline/components/Qc2SpecVerifyPanel';
 import DispatchQcSpecVerifyPanel from '../features/floor-pipeline/components/DispatchQcSpecVerifyPanel';
 import Qc2InventoryTagModal from '../features/floor-pipeline/components/Qc2InventoryTagModal';
+import DispatchQcChargerPanel from '../features/dispatch-charger/DispatchQcChargerPanel';
+import DispatchQcSubmitScanModal from '../features/dispatch-charger/DispatchQcSubmitScanModal';
+import { fetchTicketCharger } from '../features/dispatch-charger/dispatchChargerApi';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -105,6 +108,9 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [specChecklistReady, setSpecChecklistReady] = useState(qcStage !== 'QC1');
     const [qc2Verified, setQc2Verified] = useState(qcStage !== 'QC2');
     const [dispatchQcVerified, setDispatchQcVerified] = useState(qcStage !== 'Dispatch QC');
+    const [chargerReady, setChargerReady] = useState(qcStage !== 'Dispatch QC');
+    const [chargerScanOpen, setChargerScanOpen] = useState(false);
+    const [chargerInfo, setChargerInfo] = useState(null);
     const [assigneeModal, setAssigneeModal] = useState(false);
     const [qc2Assignees, setQc2Assignees] = useState([]);
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
@@ -273,6 +279,9 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         if (qcStage === 'QC2' && !qc2Verified) {
             return alert('Complete QC2 spec verification before testing');
         }
+        if (qcStage === 'Dispatch QC' && !chargerReady) {
+            return alert('Complete charger attach or mark charger already with customer before Dispatch QC');
+        }
         if (qcStage === 'Dispatch QC' && !dispatchQcVerified) {
             return alert('Complete Dispatch QC spec verification before testing');
         }
@@ -296,6 +305,20 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         // Validate part replacement details
         if (partReplacement.parts_replaced && partReplacement.replaced_parts.length === 0) {
             return alert('Please add part replacement details or uncheck "Any Part Replaced"');
+        }
+
+        if (qcStage === 'Dispatch QC') {
+            try {
+                const { data } = await fetchTicketCharger(ticket.ticket_id);
+                const ch = data.data?.charger || null;
+                setChargerInfo(ch);
+                if (!ch?.qc_scan_matched) {
+                    setChargerScanOpen(true);
+                    return;
+                }
+            } catch (e) {
+                return alert(e.response?.data?.message || 'Could not verify charger scan');
+            }
         }
 
         // Show Bitlocker reminder before submitting
@@ -412,11 +435,20 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     onHeaderSync={syncHeaderFromSpec}
                 />
             ) : qcStage === 'Dispatch QC' ? (
-                <DispatchQcSpecVerifyPanel
-                    ticket={ticket}
-                    onVerified={handleDispatchQcVerified}
-                    onHeaderSync={syncHeaderFromSpec}
-                />
+                <div className="space-y-4">
+                    <DispatchQcChargerPanel ticket={ticket} onReadyChange={setChargerReady} />
+                    {chargerReady ? (
+                        <DispatchQcSpecVerifyPanel
+                            ticket={ticket}
+                            onVerified={handleDispatchQcVerified}
+                            onHeaderSync={syncHeaderFromSpec}
+                        />
+                    ) : (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                            Attach a charger (warehouse handover) or mark charger already with customer before starting Dispatch QC.
+                        </div>
+                    )}
+                </div>
             ) : (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
@@ -489,6 +521,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             {qcStage === 'QC2' && !qc2Verified ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
                     Specs must match first. When they do, review them above and click <strong>Continue to QC2 Testing</strong>.
+                </div>
+            ) : qcStage === 'Dispatch QC' && !chargerReady ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Finish the charger step above before the Dispatch QC checklist.
                 </div>
             ) : qcStage === 'Dispatch QC' && !dispatchQcVerified ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
@@ -843,6 +879,17 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 onConfirm={handleQc2TagConfirm}
                 saving={processing}
                 purchaseOrderType={ticket.purchase_order_type}
+            />
+
+            <DispatchQcSubmitScanModal
+                open={chargerScanOpen}
+                ticket={ticket}
+                charger={chargerInfo}
+                onClose={() => setChargerScanOpen(false)}
+                onMatched={() => {
+                    setChargerScanOpen(false);
+                    setBitlockerModal(true);
+                }}
             />
 
             {/* Bitlocker Reminder Modal */}

@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, ClipboardList, Eye, Banknote, Truck, Ban } from 'lucide-react';
+import { Plus, ClipboardList, Eye, Banknote, Truck, Ban, FileSpreadsheet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
-import { cancelSalesOrder, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
-import { formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, salesOrderStatusStyle } from '../salesPipelineUtils';
+import { cancelSalesOrder, exportSalesOrders, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
+import { downloadBlob, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, salesOrderStatusStyle } from '../salesPipelineUtils';
 import {
   getSoScopeConfig,
   salesOrderDetailPath,
@@ -121,6 +121,7 @@ export default function SalesOrderListPage({ scope }) {
   const [paymentSo, setPaymentSo] = useState(null);
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     getSalesOrderMeta(scope ? { entity_scope: scope } : undefined)
@@ -159,6 +160,51 @@ export default function SalesOrderListPage({ scope }) {
 
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const res = await exportSalesOrders({
+        search: search || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        customer_id: customerId || undefined,
+        status: statusFilter || undefined,
+        entity_scope: scope || undefined,
+        order_type: scope === 'replacement'
+          ? 'replacement'
+          : (scope === 'rental' && orderTypeFilter ? orderTypeFilter : undefined),
+      });
+      const type = res.headers['content-type'] || '';
+      if (type.includes('application/json')) {
+        const text = await res.data.text?.() || '';
+        let message = 'Export failed';
+        try { message = JSON.parse(text).message || message; } catch { /* keep */ }
+        throw new Error(message);
+      }
+      const disposition = res.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const stamp = new Date().toISOString().slice(0, 10);
+      const scopeSlug = scope === 'sale' ? 'sale' : 'rental';
+      downloadBlob(
+        res.data,
+        match?.[1] || `sales_orders_${scopeSlug}_${stamp}.xlsx`
+      );
+      toast.success('Sales order export downloaded');
+    } catch (e) {
+      let message = e.message || 'Failed to export sales orders';
+      const data = e.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await data.text());
+          message = parsed.message || message;
+        } catch { /* keep */ }
+      }
+      toast.error(message);
+    } finally {
+      setExporting(false);
+    }
+  }, [search, dateFrom, dateTo, customerId, statusFilter, orderTypeFilter, scope]);
 
   const handleSoSaved = useCallback(() => {
     if (page !== 1) setFilters({ page: 1 });
@@ -324,6 +370,17 @@ export default function SalesOrderListPage({ scope }) {
                 {scopeConfig.brandName}
               </span>
             )}
+            <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="view">
+              <Button
+                variant="secondary"
+                icon={FileSpreadsheet}
+                loading={exporting}
+                disabled={loading}
+                onClick={handleExport}
+              >
+                Export
+              </Button>
+            </PermissionGate>
             <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="create">
               {scope !== 'replacement' && (
                 <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>

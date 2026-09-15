@@ -486,6 +486,13 @@ export default function GuardScannerPage() {
                     {laptop.configuration ? (
                       <p className="text-[11px] text-slate-400 truncate">{laptop.configuration}</p>
                     ) : null}
+                    {laptop.charger?.prt_id || laptop.charger?.asset_code ? (
+                      <p className="text-[11px] font-medium text-amber-700 truncate">
+                        Charger: {laptop.charger.prt_id || laptop.charger.asset_code}
+                        {laptop.charger.part_name ? ` · ${laptop.charger.part_name}` : ''}
+                        {laptop.charger.cable_prt_id ? ` · Cable ${laptop.charger.cable_prt_id}` : ''}
+                      </p>
+                    ) : null}
                   </div>
                   <span className={`text-xs font-bold shrink-0 ${
                     green ? 'text-emerald-600' : failed ? 'text-red-600' : 'text-slate-400'

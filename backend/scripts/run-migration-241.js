@@ -1,5 +1,5 @@
 /**
- * Run migration 241 — VRTDC dispatch_ready for guard outward.
+ * Run migration 241 — Ready to Rent/Sell warehouse location permission.
  * Usage: node scripts/run-migration-241.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
-const MIGRATION_NAME = '241_vrtdc_dispatch_ready_gate.sql';
+const MIGRATION_NAME = '241_ready_to_rent_location_permission.sql';
 
 async function main() {
   const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);

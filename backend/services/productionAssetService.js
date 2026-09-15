@@ -326,6 +326,44 @@ async function getByVendorSerial(db, vendorSerialId) {
 }
 
 /**
+ * Keep PA identity in sync when a ticket is remapped to a replacement unit
+ * (vendor repair replacement, serial swap). Receive validates against PA serial.
+ */
+async function retargetProductionAssetFromTicket(db, productionAssetId, ticket) {
+  if (!productionAssetId || !ticket) return null;
+  const nextSerialId = ticket.vendor_serial_id || null;
+  const nextSerial = String(ticket.serial_number || '').trim() || null;
+  const nextTtspl = String(ticket.ttspl_id || ticket.machine_number || '').trim() || null;
+  if (!nextSerialId && !nextSerial) return getById(db, productionAssetId);
+
+  const current = await getById(db, productionAssetId);
+  if (!current) return null;
+  const sameSerialId = nextSerialId && Number(current.vendor_serial_id) === Number(nextSerialId);
+  const sameSerial = nextSerial
+    && normalizeSerialToken(current.serial_number) === normalizeSerialToken(nextSerial);
+  if (sameSerialId && sameSerial) return current;
+
+  const r = await db.query(
+    `UPDATE production_assets
+        SET vendor_serial_id = COALESCE($2, vendor_serial_id),
+            serial_number = COALESCE($3, serial_number),
+            ttspl_id = COALESCE($4, ttspl_id),
+            ticket_id = COALESCE($5, ticket_id),
+            updated_at = NOW()
+      WHERE production_asset_id = $1
+      RETURNING *`,
+    [
+      productionAssetId,
+      nextSerialId,
+      nextSerial,
+      nextTtspl,
+      ticket.ticket_id || null,
+    ]
+  );
+  return r.rows[0] || current;
+}
+
+/**
  * Resolve config for display: Production Asset → ticket/VSN/GRN fallback.
  */
 async function getConfigForTicket(db, ticket) {
@@ -706,12 +744,17 @@ async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
 
   const explicitTicketId = meta.ticketId || meta.ticket_id || null;
   if (explicitTicketId) {
-    await db.query(
-      `UPDATE production_assets SET ticket_id = $2, updated_at = NOW()
-        WHERE production_asset_id = $1`,
-      [productionAssetId, explicitTicketId]
-    );
-    pa = await getById(db, productionAssetId);
+    const ticketRes = await db.query(`SELECT * FROM tickets WHERE ticket_id = $1`, [explicitTicketId]);
+    if (ticketRes.rows[0]) {
+      pa = await retargetProductionAssetFromTicket(db, productionAssetId, ticketRes.rows[0]);
+    } else {
+      await db.query(
+        `UPDATE production_assets SET ticket_id = $2, updated_at = NOW()
+          WHERE production_asset_id = $1`,
+        [productionAssetId, explicitTicketId]
+      );
+      pa = await getById(db, productionAssetId);
+    }
   } else if (!pa.ticket_id) {
     await resolveTicketForProductionAsset(db, pa);
     pa = await getById(db, productionAssetId);
@@ -814,6 +857,12 @@ async function receiveIntoInventory(db, productionAssetId, {
     }
   }
 
+  const liveTicket = await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true });
+  if (liveTicket) {
+    pa = await retargetProductionAssetFromTicket(db, pa.production_asset_id, liveTicket)
+      || pa;
+  }
+
   let linkedSerial = '';
   if (pa.vendor_serial_id) {
     const linked = await db.query(
@@ -823,8 +872,13 @@ async function receiveIntoInventory(db, productionAssetId, {
     );
     linkedSerial = linked.rows[0]?.serial_number || '';
   }
+  const ticketSerial = liveTicket?.serial_number || '';
   const entered = normalizeSerialToken(serialNumber);
-  if (!serialMatchesProductionAsset(pa.serial_number, serialNumber, linkedSerial)) {
+  if (!serialMatchesProductionAsset(
+    pa.serial_number,
+    serialNumber,
+    [linkedSerial, ticketSerial].filter(Boolean).join('/')
+  )) {
     const err = new Error('Serial number does not match Production Asset');
     err.status = 400;
     throw err;
@@ -1193,6 +1247,7 @@ module.exports = {
   getById,
   getByTicket,
   getByVendorSerial,
+  retargetProductionAssetFromTicket,
   getConfigForTicket,
   updateConfig,
   mirrorWorkingConfigToTicket,

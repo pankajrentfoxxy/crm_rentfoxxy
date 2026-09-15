@@ -476,6 +476,13 @@ exports.detachSerial = async (req, res) => {
           WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')`,
         [alloc.qc_ticket_id]
       );
+      const chargerSvc = require('../services/dispatchChargerService');
+      await chargerSvc.cancelRequestsForTicket(
+        client,
+        alloc.qc_ticket_id,
+        req.user,
+        `Released because floor ticket ${alloc.qc_ticket_id} was cancelled`
+      );
     }
     await client.query(
       `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW() WHERE allocation_id = $1`,
