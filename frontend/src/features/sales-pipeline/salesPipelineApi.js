@@ -28,6 +28,9 @@ export const partialCancelSoLine = (lineId, d) =>
   api.patch(`${base}/so-lines/${lineId}/partial-cancel`, d);
 export const updateSoShippingAddress = (n, d) =>
   api.patch(`${base}/sales-orders/${encSo(n)}/shipping-address`, d);
+/** Charge and/or address, propagated to the linked DCs. Works after a DC exists. */
+export const updateSoShipping = (n, d) =>
+  api.patch(`${base}/sales-orders/${encSo(n)}/shipping`, d);
 export const getSalesOrderMeta = (p) => api.get(`${base}/sales-orders/meta/add`, { params: p });
 export const listPayments = (n) => api.get(`${base}/sales-orders/${encSo(n)}/payments`);
 export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/payments`, d);

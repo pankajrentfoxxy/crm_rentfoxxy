@@ -132,6 +132,10 @@ router.get(...soRoute('/serials', checkSoViewOrAssignedDispatch, sosCtrl.listSer
 router.post(...soRoute('/serials', checkSoSerialOrAssignedDispatch, sosCtrl.attachSerial));
 
 // --- Sale in place (PHASE 21): fulfilled with no DC and no e-way bill ---------
+// Shipping charge / address can be corrected after creation, and after a DC exists.
+// The main SO edit screen locks once a challan is raised; this stays open.
+router.patch(...soRoute('/shipping', soEdit, ctrl.updateSoShipping));
+
 router.post(...soRoute('/confirm-in-place-sale', soEdit, ctrl.confirmInPlaceSale));
 // Accounts raise the invoice in Zoho, then attach number + PDF against the SO.
 // Same gate as the DC e-invoice upload so the two accounts flows match.

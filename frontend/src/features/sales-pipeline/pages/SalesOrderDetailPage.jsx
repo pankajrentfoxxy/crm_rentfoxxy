@@ -346,14 +346,17 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             <div className="pt-1">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-gray-500 shrink-0">Shipping Address:</span>
-                {isSuperAdmin && !isCancelled && !hasDcCreated ? (
-                  <button
-                    type="button"
-                    onClick={() => setEditShippingOpen(true)}
-                    className="text-xs text-amber-700 hover:underline shrink-0"
-                  >
-                    Edit
-                  </button>
+                {!isCancelled && !isInPlaceSale ? (
+                  <PermissionGate section="sales_orders_doc" action="edit">
+                    <button
+                      type="button"
+                      onClick={() => setEditShippingOpen(true)}
+                      className="text-xs text-amber-700 hover:underline shrink-0"
+                      title="Edit shipping charge and address \u2014 also updates the delivery challans"
+                    >
+                      Edit shipping
+                    </button>
+                  </PermissionGate>
                 ) : null}
               </div>
               {shippingAddr ? (
@@ -382,8 +385,24 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                 <div className="flex justify-between"><span className="text-gray-500">SGST ({halfGst}%)</span><strong>{formatCurrency(totals.sgst)}</strong></div>
               </>
             )}
-            {Number(totals.shipping) > 0 && (
-              <div className="flex justify-between"><span className="text-gray-500">Shipping Charges</span><strong>{formatCurrency(totals.shipping)}</strong></div>
+            {(Number(totals.shipping) > 0 || (!isCancelled && !isInPlaceSale)) && (
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">
+                  Shipping Charges
+                  {!isCancelled && !isInPlaceSale && (
+                    <PermissionGate section="sales_orders_doc" action="edit">
+                      <button
+                        type="button"
+                        onClick={() => setEditShippingOpen(true)}
+                        className="ml-2 text-xs text-amber-700 hover:underline"
+                      >
+                        Edit
+                      </button>
+                    </PermissionGate>
+                  )}
+                </span>
+                <strong>{formatCurrency(totals.shipping)}</strong>
+              </div>
             )}
             <div className="flex justify-between"><span className="text-gray-500">Security Deposit</span><strong>{formatCurrency(totals.security ?? summary.security_amount)}</strong></div>
             <div className="flex justify-between border-t pt-1.5 mt-1"><span className="font-semibold text-gray-900">Grand Total</span><strong>{formatCurrency(totals.grand_total)}</strong></div>
@@ -578,6 +597,8 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         open={editShippingOpen}
         soNumber={soNumber}
         shippingRaw={head.customer_shipping_address}
+        shippingCharge={totals.shipping ?? head.shiping_charges ?? 0}
+        hasDc={hasDcCreated}
         onClose={() => setEditShippingOpen(false)}
         onSaved={load}
       />

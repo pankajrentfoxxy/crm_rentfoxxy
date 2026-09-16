@@ -7063,3 +7063,213 @@ exports.downloadSaleInvoicePdf = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+/**
+ * PATCH /sales-orders/:soNumber/shipping
+ *
+ * Edit the shipping charge and/or shipping address after the sales order exists —
+ * including after a delivery challan has been raised. The main SO edit screen locks
+ * once a challan exists, but shipping is routinely agreed late (courier quotes once
+ * dispatch is arranged), so it gets its own narrow endpoint.
+ *
+ * The charge is a header value that storeSalesOrder repeats on every line and the
+ * totals read back with MAX(), so it is written to every line.
+ *
+ * Propagation to delivery challans:
+ *  - CHARGE goes to every non-cancelled DC, delivered ones included (reported back
+ *    so the caller can warn that an issued PDF was rewritten).
+ *  - ADDRESS goes only to DCs that are still open AND still carry the SO's previous
+ *    address. A DC given its own address by the Phase-15 per-address grouping keeps
+ *    it — overwriting would route laptops to the wrong site.
+ */
+exports.updateSoShipping = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const soNumber = req.params.salesOrderNumber || req.params.soNumber;
+    const b = req.body || {};
+
+    const hasCharge = b.shiping_charges != null && b.shiping_charges !== '';
+    const hasAddress = b.customer_shipping_address != null && b.customer_shipping_address !== '';
+    if (!hasCharge && !hasAddress) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide shiping_charges, customer_shipping_address, or both',
+      });
+    }
+
+    let charge = null;
+    if (hasCharge) {
+      charge = Number(b.shiping_charges);
+      if (!Number.isFinite(charge) || charge < 0) {
+        return res.status(400).json({ success: false, message: 'Shipping charge must be zero or more' });
+      }
+      charge = +charge.toFixed(2);
+    }
+
+    let shipping = null;
+    let supplyState = null;
+    if (hasAddress) {
+      shipping = sanitizeCustomerShippingAddress(b.customer_shipping_address);
+      if (!shipping) {
+        return res.status(400).json({
+          success: false,
+          message: 'name, phone, address, city, state, and zip_code are required',
+        });
+      }
+      supplyState = resolveSupplyStateFromAddress(shipping, b.supply_state);
+    }
+
+    await client.query('BEGIN');
+
+    const soRes = await client.query(
+      `SELECT id, status, shiping_charges, customer_shipping_address,
+              COALESCE(fulfillment_mode, 'dispatch') AS fulfillment_mode
+         FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC FOR UPDATE`,
+      [soNumber]
+    );
+    if (!soRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    const head = soRes.rows[0];
+    if (!soRes.rows.some((r) => String(r.status || '').toLowerCase() !== 'cancelled')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'This sales order is cancelled' });
+    }
+    if (head.fulfillment_mode === 'in_place' && charge > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'A sale-in-place order ships nothing, so it cannot carry a shipping charge.',
+      });
+    }
+
+    await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
+
+    const oldCharge = Number(head.shiping_charges || 0);
+    // Snapshot the address the challans were built from, so an untouched DC can be
+    // told apart from one that was given its own.
+    const oldAddressJson = head.customer_shipping_address == null
+      ? null : JSON.stringify(head.customer_shipping_address);
+    const shippingJson = shipping ? JSON.stringify(shipping) : null;
+
+    await client.query(
+      `UPDATE sales_order_lines
+          SET shiping_charges = COALESCE($2, shiping_charges),
+              customer_shipping_address = COALESCE($3::jsonb, customer_shipping_address),
+              supply_state = COALESCE($4, supply_state),
+              updated_at = NOW()
+        WHERE sales_order_number = $1`,
+      [soNumber, charge, shippingJson, supplyState]
+    );
+
+    const dcRows = await client.query(
+      `SELECT dc_number, MIN(COALESCE(status, 'pending')) AS status
+         FROM delivery_challan_lines
+        WHERE sales_order_number = $1 AND COALESCE(movement_type, 'outbound') = 'outbound'
+        GROUP BY dc_number`,
+      [soNumber]
+    );
+
+    const chargeUpdated = [];
+    const addressUpdated = [];
+    const addressSkipped = [];
+    const deliveredTouched = [];
+
+    for (const dc of dcRows.rows) {
+      const status = String(dc.status || '').toLowerCase();
+      if (status === 'cancelled') continue;
+
+      if (hasCharge) {
+        await client.query(
+          `UPDATE delivery_challan_lines SET shiping_charges = $2, updated_at = NOW()
+            WHERE dc_number = $1`,
+          [dc.dc_number, charge]
+        );
+        chargeUpdated.push(dc.dc_number);
+        if (status === 'delivered') deliveredTouched.push(dc.dc_number);
+      }
+
+      if (hasAddress) {
+        if (['delivered', 'rejected'].includes(status)) {
+          addressSkipped.push(dc.dc_number);
+        } else {
+          // jsonb equality in SQL — a text compare would trip over key order.
+          const r = await client.query(
+            `UPDATE delivery_challan_lines
+                SET customer_shipping_address = $2::jsonb,
+                    supply_state = COALESCE($3, supply_state),
+                    updated_at = NOW()
+              WHERE dc_number = $1
+                AND customer_shipping_address IS NOT DISTINCT FROM $4::jsonb`,
+            [dc.dc_number, shippingJson, supplyState, oldAddressJson]
+          );
+          if (r.rowCount > 0) addressUpdated.push(dc.dc_number);
+          else addressSkipped.push(dc.dc_number);
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+
+    let regen = { so_pdf_path: null, dc_pdfs: [] };
+    try {
+      regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after shipping update:', pdfErr.message);
+    }
+
+    const bits = [];
+    if (hasCharge) bits.push(`Shipping charge set to ₹${charge}`);
+    if (hasAddress) bits.push('Shipping address updated');
+    if (chargeUpdated.length) bits.push(`${chargeUpdated.length} DC updated`);
+    if (addressSkipped.length) {
+      bits.push(`${addressSkipped.length} DC kept its own address (${addressSkipped.join(', ')})`);
+    }
+
+    res.json({
+      success: true,
+      message: bits.join(' — '),
+      data: {
+        sales_order_number: soNumber,
+        shiping_charges: hasCharge ? charge : oldCharge,
+        customer_shipping_address: shipping,
+        supply_state: supplyState,
+        dc_charge_updated: chargeUpdated,
+        dc_address_updated: addressUpdated,
+        dc_address_skipped: addressSkipped,
+        delivered_dcs_touched: deliveredTouched,
+        pdf_path: regen.so_pdf_path,
+        dc_pdfs: regen.dc_pdfs,
+      },
+    });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: soNumber,
+      activityType: ACTIVITY_TYPES.PRICING,
+      action: 'shipping_updated',
+      description: [
+        hasCharge ? `Shipping charge changed from ₹${oldCharge} to ₹${charge}` : null,
+        hasAddress ? 'Shipping address updated' : null,
+        chargeUpdated.length ? `pushed to ${chargeUpdated.length} delivery challan(s)` : null,
+        deliveredTouched.length ? `including delivered DC ${deliveredTouched.join(', ')}` : null,
+      ].filter(Boolean).join(', ') + ` by ${req.user?.name || 'User'}.`,
+      metadata: {
+        old_charge: oldCharge,
+        new_charge: hasCharge ? charge : null,
+        address_changed: hasAddress,
+        supply_state: supplyState,
+        dc_charge_updated: chargeUpdated,
+        dc_address_updated: addressUpdated,
+        dc_address_skipped: addressSkipped,
+      },
+      user: req.user,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateSoShipping:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
