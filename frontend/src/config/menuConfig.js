@@ -154,6 +154,8 @@ export const financeMenuItems = [
   { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
   { icon: FileStack, label: 'DC Invoice', path: '/finance/dc-invoice', section: 'einvoice_ewb', countKey: 'dc_invoice_queue' },
   { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
+  // Sale in place (lost / damaged / buyout): no DC, so the Zoho invoice is attached to the SO.
+  { icon: FileText, label: 'Sale Invoice Queue', path: '/finance/sale-invoice-queue', section: 'einvoice_ewb' },
 ];
 
 export const leadCrmAccordionChildren = [

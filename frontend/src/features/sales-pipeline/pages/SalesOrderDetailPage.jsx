@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { confirmInPlaceSale } from '../../../utils/saleInPlaceApi';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
@@ -80,6 +81,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [quote, setQuote] = useState(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [dcOpen, setDcOpen] = useState(false);
+  const [confirmingInPlace, setConfirmingInPlace] = useState(false);
   const [editRateLine, setEditRateLine] = useState(null);
   const [editHsnLine, setEditHsnLine] = useState(null);
   const [editShippingOpen, setEditShippingOpen] = useState(false);
@@ -155,6 +157,12 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     resolveSupplyStateFromShipping(shippingAddr, head.supply_state)
   );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
+  // Sale in place: the customer keeps laptops they already hold on rent (lost,
+  // damaged or bought out). Fulfilled with no movement, so there is no DC and no
+  // e-way bill. See docs/PHASE21_LOST_LAPTOP_SALE.md.
+  const isInPlaceSale = String(head.fulfillment_mode || '') === 'in_place';
+  const isDelivered = String(data?.status || head.status || '').toLowerCase() === 'delivered'
+    || (laptopQty > 0 && deliveredCount >= laptopQty);
   const resolvedScope = scopeProp
     || (data?.is_replacement_order ? 'replacement' : null)
     || (orderMatchesScope(head, 'sale') ? 'sale' : orderMatchesScope(head, 'rental') ? 'rental' : null);
@@ -182,6 +190,26 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     }),
     [soNumber, resolvedScope, tab]
   );
+
+  const handleConfirmInPlaceSale = async () => {
+    const ok = window.confirm(
+      `Confirm the sale of ${attachedCount} laptop(s) to this customer?\n\n`
+      + 'They keep the units they already hold. No delivery challan and no e-way bill '
+      + 'will be produced, and the laptops become Sold against this order. '
+      + 'This cannot be undone from the CRM.'
+    );
+    if (!ok) return;
+    setConfirmingInPlace(true);
+    try {
+      const res = await confirmInPlaceSale(soNumber);
+      toast.success(res.message || 'Sold in place');
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not confirm the sale');
+    } finally {
+      setConfirmingInPlace(false);
+    }
+  };
 
   const handleCancel = useCallback(async () => {
     const prompt = cancelAfterRefusal
@@ -267,9 +295,16 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
               } else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
           }}>Download PDF</Button>
-          {!isCancelled && hasAttachedLaptops && (
+          {!isCancelled && hasAttachedLaptops && !isInPlaceSale && (
             <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
+            </PermissionGate>
+          )}
+          {!isCancelled && hasAttachedLaptops && isInPlaceSale && !isDelivered && (
+            <PermissionGate section="sales_orders_doc" action="edit">
+              <Button onClick={handleConfirmInPlaceSale} disabled={confirmingInPlace}>
+                {confirmingInPlace ? 'Confirming\u2026' : 'Confirm Sale (no DC)'}
+              </Button>
             </PermissionGate>
           )}
           <PermissionGate section="payment_records" action="create">
@@ -311,14 +346,17 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             <div className="pt-1">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-gray-500 shrink-0">Shipping Address:</span>
-                {isSuperAdmin && !isCancelled && !hasDcCreated ? (
-                  <button
-                    type="button"
-                    onClick={() => setEditShippingOpen(true)}
-                    className="text-xs text-amber-700 hover:underline shrink-0"
-                  >
-                    Edit
-                  </button>
+                {!isCancelled && !isInPlaceSale ? (
+                  <PermissionGate section="sales_orders_doc" action="edit">
+                    <button
+                      type="button"
+                      onClick={() => setEditShippingOpen(true)}
+                      className="text-xs text-amber-700 hover:underline shrink-0"
+                      title="Edit shipping charge and address \u2014 also updates the delivery challans"
+                    >
+                      Edit shipping
+                    </button>
+                  </PermissionGate>
                 ) : null}
               </div>
               {shippingAddr ? (
@@ -347,8 +385,24 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                 <div className="flex justify-between"><span className="text-gray-500">SGST ({halfGst}%)</span><strong>{formatCurrency(totals.sgst)}</strong></div>
               </>
             )}
-            {Number(totals.shipping) > 0 && (
-              <div className="flex justify-between"><span className="text-gray-500">Shipping Charges</span><strong>{formatCurrency(totals.shipping)}</strong></div>
+            {(Number(totals.shipping) > 0 || (!isCancelled && !isInPlaceSale)) && (
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">
+                  Shipping Charges
+                  {!isCancelled && !isInPlaceSale && (
+                    <PermissionGate section="sales_orders_doc" action="edit">
+                      <button
+                        type="button"
+                        onClick={() => setEditShippingOpen(true)}
+                        className="ml-2 text-xs text-amber-700 hover:underline"
+                      >
+                        Edit
+                      </button>
+                    </PermissionGate>
+                  )}
+                </span>
+                <strong>{formatCurrency(totals.shipping)}</strong>
+              </div>
             )}
             <div className="flex justify-between"><span className="text-gray-500">Security Deposit</span><strong>{formatCurrency(totals.security ?? summary.security_amount)}</strong></div>
             <div className="flex justify-between border-t pt-1.5 mt-1"><span className="font-semibold text-gray-900">Grand Total</span><strong>{formatCurrency(totals.grand_total)}</strong></div>
@@ -467,6 +521,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             <p className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
               This sales order is cancelled. New delivery challans cannot be created.
             </p>
+          ) : isInPlaceSale ? (
+            <p className="mb-4 rounded-lg bg-indigo-50 border border-indigo-200 px-4 py-2 text-sm text-indigo-800">
+              Sale in place \u2014 the customer already holds these laptops, so nothing is shipped.
+              No delivery challan and no e-way bill are produced for this order.
+            </p>
           ) : hasAttachedLaptops ? (
             <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <button type="button" onClick={() => setDcOpen(true)} className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ Create DC</button>
@@ -538,6 +597,8 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         open={editShippingOpen}
         soNumber={soNumber}
         shippingRaw={head.customer_shipping_address}
+        shippingCharge={totals.shipping ?? head.shiping_charges ?? 0}
+        hasDc={hasDcCreated}
         onClose={() => setEditShippingOpen(false)}
         onSaved={load}
       />

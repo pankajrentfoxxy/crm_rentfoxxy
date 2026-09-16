@@ -15,3 +15,6 @@ backend/uploads/
 migration/logs/
 migration/.env
 migration/migration-validation-baseline.json
+
+# Sale-in-place invoices: private by design, never served statically
+backend/private-uploads/

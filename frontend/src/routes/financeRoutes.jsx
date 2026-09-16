@@ -6,6 +6,7 @@ import VendorBillingApp from '../features/vendor-billing/VendorBillingApp';
 import FinanceOverviewApp from '../features/finance-overview/FinanceOverviewApp';
 import EInvoiceQueuePage from '../features/finance-overview/pages/EInvoiceQueuePage';
 import DcInvoiceQueuePage from '../features/finance-overview/pages/DcInvoiceQueuePage';
+import SaleInvoiceQueuePage from '../features/finance-overview/pages/SaleInvoiceQueuePage';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -35,6 +36,15 @@ export const financeRoutes = [
     element: (
       <ProtectedRoute section="einvoice_ewb" action="view">
         {withLayout(<DcInvoiceQueuePage />)}
+      </ProtectedRoute>
+    ),
+  },
+  {
+    // Sale-in-place orders have no DC, so they need their own accounts queue.
+    path: '/finance/sale-invoice-queue',
+    element: (
+      <ProtectedRoute section="einvoice_ewb" action="view">
+        {withLayout(<SaleInvoiceQueuePage />)}
       </ProtectedRoute>
     ),
   },

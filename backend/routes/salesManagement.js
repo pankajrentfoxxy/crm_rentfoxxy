@@ -45,6 +45,34 @@ const saleComplianceStorage = multer.diskStorage({
     cb(null, `${prefix}_${Date.now()}${ext}`);
   },
 });
+/**
+ * Sale-in-place invoices (PHASE 21).
+ * Written to backend/private-uploads/, NOT backend/uploads/ — the latter is served
+ * by express.static with no auth (server.js), and these are customer invoices.
+ * They are streamed back through an authenticated download route instead.
+ */
+const saleInvoiceStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const safeSo = String(req.params.soNumber || 'so').replace(/[^\w-]+/g, '_');
+    const dir = path.join(__dirname, '../private-uploads/sale-order-invoices', safeSo);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.pdf';
+    cb(null, `invoice_${Date.now()}${ext}`);
+  },
+});
+const uploadSaleInvoice = multer({
+  storage: saleInvoiceStorage,
+  limits: multerLimits({ files: 1 }),
+  fileFilter: (req, file, cb) => {
+    const ok = /^(image\/(jpeg|jpg|png|webp)|application\/pdf)$/i.test(file.mimetype);
+    if (!ok) return cb(new Error('Only PDF or image files allowed'));
+    cb(null, true);
+  },
+});
+
 const uploadSaleCompliance = multer({
   storage: saleComplianceStorage,
   limits: multerLimits({ files: 2 }),
@@ -102,6 +130,22 @@ router.use(require('../middleware/customerScope')); // Customer Access scope -> 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
 router.get(...soRoute('/serials', checkSoViewOrAssignedDispatch, sosCtrl.listSerials));
 router.post(...soRoute('/serials', checkSoSerialOrAssignedDispatch, sosCtrl.attachSerial));
+
+// --- Sale in place (PHASE 21): fulfilled with no DC and no e-way bill ---------
+// Shipping charge / address can be corrected after creation, and after a DC exists.
+// The main SO edit screen locks once a challan is raised; this stays open.
+router.patch(...soRoute('/shipping', soEdit, ctrl.updateSoShipping));
+
+router.post(...soRoute('/confirm-in-place-sale', soEdit, ctrl.confirmInPlaceSale));
+// Accounts raise the invoice in Zoho, then attach number + PDF against the SO.
+// Same gate as the DC e-invoice upload so the two accounts flows match.
+router.post(...soRoute(
+  '/sale-invoice',
+  saleComplianceCtrl.checkSaleDcComplianceUpload,
+  wrapMulter(uploadSaleInvoice.single('sale_invoice_pdf')),
+  ctrl.uploadSaleInvoice
+));
+router.get(...soRoute('/sale-invoice/pdf', soView, ctrl.downloadSaleInvoicePdf));
 router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, checkSoSerialOrAssignedDispatch, sosCtrl.detachSerial);
 
 // Phase 13 — per-serial delivery addresses on the SO

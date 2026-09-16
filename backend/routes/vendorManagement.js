@@ -191,6 +191,16 @@ router.get(
 router.post('/serial-numbers', authorize, serials.createSerial);
 router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, serials.checkAndUpdate);
 
+// Vendor buyout of a rented unit sold in place (PHASE 21). Per-serial only:
+// the PO is shared with hundreds of serials and must never be retyped.
+router.post(
+  '/serials/:serialId/buyout',
+  authMiddleware,
+  checkSectionPermission('vendor_management', 'edit'),
+  serials.buyoutValidators,
+  serials.recordVendorBuyout
+);
+
 // ---------- Spare parts PO ---------------------------------------------------------
 router.get('/spare-parts-orders/next-number', authorizeSpareParts, sparePo.nextNumber);
 router.get('/spare-parts-orders/form-meta', authorizeSpareParts, sparePo.formMeta);
