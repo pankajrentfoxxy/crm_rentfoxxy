@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Download, Loader2, PenLine } from 'lucide-react';
+import { ArrowLeft, Download, Loader2, PenLine, ShieldCheck } from 'lucide-react';
 import { PageHeader, Button } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { partCategoryLabel } from '../../../constants/laptopConditions';
 import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
@@ -129,6 +130,7 @@ export default function PhysicalPartOutwardDetailPage() {
   const decoded = decodeURIComponent(outwardNumber || '');
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { canView } = usePermission();
   const canMutate = WAREHOUSE_ROLES.has(user?.role);
 
   const [data, setData] = useState(null);
@@ -196,7 +198,7 @@ export default function PhysicalPartOutwardDetailPage() {
         warehouse_esign: pendingWhEsign || undefined,
         warehouse_signer_name: whSignerName.trim(),
       });
-      toast.success('Outward e-signed — print PDF and send through the gate');
+      toast.success('Warehouse approved — Part DC generated. Print the PDF and send through the gate.');
       setPendingWhEsign(null);
       load();
     } catch (e) {
@@ -207,7 +209,7 @@ export default function PhysicalPartOutwardDetailPage() {
   };
 
   const handleCancel = async () => {
-    if (!window.confirm('Cancel this draft outward? Parts return to Available.')) return;
+    if (!window.confirm('Cancel this part outward request? Parts return to Available.')) return;
     setBusy(true);
     try {
       await cancelDraftPhysicalOutward(decoded);
@@ -265,7 +267,7 @@ export default function PhysicalPartOutwardDetailPage() {
             ) : null}
             {isDraft && canMutate ? (
               <Button type="button" variant="danger" disabled={busy} onClick={handleCancel}>
-                Cancel draft
+                Cancel request
               </Button>
             ) : null}
           </div>
@@ -281,16 +283,33 @@ export default function PhysicalPartOutwardDetailPage() {
             </span>
           </p>
           <p><span className="text-slate-500">Date:</span> {fmtDate(outward.outward_date)}</p>
+          <p><span className="text-slate-500">Warehouse:</span> {outward.warehouse || parts[0]?.warehouse || '—'}</p>
+          <p><span className="text-slate-500">Quantity:</span> {parts.length} part(s)</p>
           <p><span className="text-slate-500">Receiver:</span> {outward.receiver_name} ({outward.receiver_type})</p>
           {outward.receiver_contact ? <p><span className="text-slate-500">Contact:</span> {outward.receiver_contact}</p> : null}
           <p><span className="text-slate-500">Purpose:</span> {outward.purpose}</p>
           {outward.reference_number ? <p><span className="text-slate-500">Reference:</span> {outward.reference_number}</p> : null}
           <p><span className="text-slate-500">By:</span> {outward.created_by_name || '—'}</p>
           {outward.remarks ? <p><span className="text-slate-500">Remarks:</span> {outward.remarks}</p> : null}
-          {isReady ? (
-            <p className="text-blue-800 bg-blue-50 rounded-lg px-3 py-2 mt-2">
-              Waiting for outward guard. Print the PDF and scan the gate QR.
+          {isDraft ? (
+            <p className="text-amber-900 bg-amber-50 rounded-lg px-3 py-2 mt-2">
+              Awaiting warehouse approval. The Part DC and gate QR are created only after approval.
             </p>
+          ) : null}
+          {isReady ? (
+            <div className="text-blue-800 bg-blue-50 rounded-lg px-3 py-2 mt-2 space-y-2">
+              <p className="m-0">
+                Part DC is ready. Guard scans the QR on <strong>OUTWARD</strong> to verify details and confirm. Stock leaves only after that.
+              </p>
+              {canView('guard_gate_checking') ? (
+                <Link
+                  to={`/guard/scanner?dir=outward&q=${encodeURIComponent(outward.outward_number)}`}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700"
+                >
+                  <ShieldCheck className="w-4 h-4" /> Open outward gate scanner
+                </Link>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -343,11 +362,28 @@ export default function PhysicalPartOutwardDetailPage() {
         </table>
       </div>
 
+      {(data.movements || []).length ? (
+        <div className="rounded-xl border bg-white p-4">
+          <h3 className="font-semibold text-slate-900 mb-2">Part movement history</h3>
+          <ul className="space-y-1.5 text-sm">
+            {data.movements.map((m) => (
+              <li key={m.id} className="flex flex-wrap gap-x-3 text-slate-700">
+                <span className="text-xs text-slate-500">{fmtDateTime(m.created_at)}</span>
+                <span className="font-medium capitalize">{String(m.event_type || '').replace(/_/g, ' ')}</span>
+                {m.dp_number ? <span className="font-mono text-xs">{m.dp_number}</span> : null}
+                <span className="text-xs text-slate-500">{m.remarks || ''}</span>
+                {m.actor_name ? <span className="text-xs text-slate-400">{m.actor_name}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {isDraft && canMutate ? (
         <div className="border rounded-xl bg-white p-4 space-y-4">
-          <h3 className="font-semibold text-slate-900">Warehouse dispatch</h3>
+          <h3 className="font-semibold text-slate-900">Warehouse approval</h3>
           <p className="text-xs text-slate-500 m-0">
-            Choose send mode, sign, then print the PDF. The outward guard scans the QR and each DP before the parts leave.
+            Approve this request to generate the Part DC and gate QR. Guard then scans that QR — they do not pick parts themselves.
           </p>
           <VrdcDispatchFields
             shipBy={shipBy}
@@ -370,7 +406,7 @@ export default function PhysicalPartOutwardDetailPage() {
           </div>
           <Button type="button" disabled={busy} onClick={handleDispatch}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            Dispatch outward
+            Approve & generate Part DC
           </Button>
         </div>
       ) : null}

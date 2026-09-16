@@ -136,8 +136,50 @@ function wrapOutward(row) {
     ...row,
     photo_path: photos[0] || row.photo_path || null,
     photos,
-    status_label: String(row.status || 'draft').replace(/_/g, ' ').toUpperCase(),
+    status_label: outwardStatusLabel(row.status),
   };
+}
+
+function outwardStatusLabel(status) {
+  const s = String(status || 'draft').toLowerCase();
+  if (s === 'draft') return 'AWAITING APPROVAL';
+  if (s === 'dispatch_ready') return 'PART DC READY';
+  if (s === 'dispatched') return 'OUTWARD COMPLETED';
+  if (s === 'cancelled') return 'CANCELLED';
+  return s.replace(/_/g, ' ').toUpperCase();
+}
+
+async function logPartMovement(client, {
+  outwardId,
+  partId = null,
+  dpNumber = null,
+  eventType,
+  fromStatus = null,
+  toStatus = null,
+  remarks = null,
+  actor,
+}) {
+  try {
+    await client.query(
+      `INSERT INTO physical_part_movements
+         (outward_id, part_id, dp_number, event_type, from_status, to_status, remarks, actor_user_id, actor_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        outwardId,
+        partId,
+        dpNumber,
+        eventType,
+        fromStatus,
+        toStatus,
+        remarks,
+        actor?.userId || null,
+        actor?.name || null,
+      ]
+    );
+  } catch (err) {
+    if (err.code === '42P01' || err.code === '42703') return;
+    throw err;
+  }
 }
 
 async function createInward(client, { warehouse, inwardDate, inwardReason, remarks, units, actor }) {
@@ -341,20 +383,45 @@ async function createOutward(client, {
     );
   }
 
+  const warehouse = locked.rows[0]
+    ? (await client.query(
+      `SELECT MIN(warehouse) AS warehouse FROM physical_dead_parts WHERE part_id = ANY($1::int[])`,
+      [ids]
+    )).rows[0]?.warehouse || null
+    : null;
+
   const outwardNumber = await nextOutwardNumber(client);
-  const outRes = await client.query(
-    `INSERT INTO physical_part_outwards
-       (outward_number, receiver_type, receiver_name, receiver_contact, outward_date,
-        purpose, photo_path, photo_paths, remarks, reference_number, status,
-        created_by, created_by_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12)
-     RETURNING *`,
-    [
-      outwardNumber, type, name, mobile, date,
-      reason, photo, JSON.stringify(photos), String(remarks || '').trim() || null,
-      String(referenceNumber || '').trim() || null, actor.userId, actor.name,
-    ]
-  );
+  let outRes;
+  try {
+    outRes = await client.query(
+      `INSERT INTO physical_part_outwards
+         (outward_number, receiver_type, receiver_name, receiver_contact, outward_date,
+          purpose, photo_path, photo_paths, remarks, reference_number, status, warehouse,
+          created_by, created_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13)
+       RETURNING *`,
+      [
+        outwardNumber, type, name, mobile, date,
+        reason, photo, JSON.stringify(photos), String(remarks || '').trim() || null,
+        String(referenceNumber || '').trim() || null, warehouse, actor.userId, actor.name,
+      ]
+    );
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    outRes = await client.query(
+      `INSERT INTO physical_part_outwards
+         (outward_number, receiver_type, receiver_name, receiver_contact, outward_date,
+          purpose, photo_path, photo_paths, remarks, reference_number, status,
+          created_by, created_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12)
+       RETURNING *`,
+      [
+        outwardNumber, type, name, mobile, date,
+        reason, photo, JSON.stringify(photos), String(remarks || '').trim() || null,
+        String(referenceNumber || '').trim() || null, actor.userId, actor.name,
+      ]
+    );
+  }
   const outward = outRes.rows[0];
 
   for (const row of locked.rows) {
@@ -373,6 +440,16 @@ async function createOutward(client, {
        VALUES ($1,$2,$3)`,
       [outward.outward_id, row.part_id, row.dp_number]
     );
+    await logPartMovement(client, {
+      outwardId: outward.outward_id,
+      partId: row.part_id,
+      dpNumber: row.dp_number,
+      eventType: 'requested',
+      fromStatus: 'available',
+      toStatus: 'pending',
+      remarks: `Part outward request ${outwardNumber}`,
+      actor,
+    });
   }
 
   const items = await client.query(
@@ -393,7 +470,7 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
     return { already_dispatched: head.status === 'dispatched', outward_number: outwardNumber };
   }
   if (head.status !== 'draft') {
-    throw Object.assign(new Error('Outward must be in draft to dispatch'), { status: 409 });
+    throw Object.assign(new Error('Only an awaiting-approval request can generate a Part DC'), { status: 409 });
   }
 
   const body = dispatchBody || {};
@@ -427,45 +504,92 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
   const whSignerName = (body.warehouse_signer_name || body.warehouseSignerName || '').trim() || null;
   const recipientSignerName = (body.recipient_signer_name || body.recipientSignerName || '').trim() || null;
 
-  await client.query(
-    `UPDATE physical_part_outwards SET
-        warehouse_dispatch_esign_url = $2,
-        recipient_esign_url = COALESCE($3, recipient_esign_url),
-        warehouse_dispatch_signer_name = COALESCE($4, warehouse_dispatch_signer_name),
-        recipient_signer_name = COALESCE($5, recipient_signer_name),
-        ship_by = $6,
-        dispatch_mode = $7,
-        courier_name = $8,
-        awb_number = $9,
-        courier_tracking_url = $10,
-        porter_tracking_id = $11,
-        porter_order_id = $12,
-        porter_booking_url = $13,
-        delivery_person_id = $14,
-        status = 'dispatch_ready',
-        updated_at = NOW()
-      WHERE outward_number = $1`,
-    [
-      outwardNumber,
-      whUrl,
-      recipientUrl,
-      whSignerName,
-      recipientSignerName,
-      dispatch.ship_by,
-      dispatch.dispatch_mode,
-      dispatch.courier_name,
-      dispatch.awb_number,
-      dispatch.courier_tracking_url,
-      dispatch.porter_tracking_id,
-      dispatch.porter_order_id,
-      dispatch.porter_booking_url,
-      dispatch.delivery_person_id,
-    ]
+  const dispatchParams = [
+    outwardNumber,
+    whUrl,
+    recipientUrl,
+    whSignerName,
+    recipientSignerName,
+    dispatch.ship_by,
+    dispatch.dispatch_mode,
+    dispatch.courier_name,
+    dispatch.awb_number,
+    dispatch.courier_tracking_url,
+    dispatch.porter_tracking_id,
+    dispatch.porter_order_id,
+    dispatch.porter_booking_url,
+    dispatch.delivery_person_id,
+    actor?.userId || null,
+    actor?.name || whSignerName || null,
+  ];
+  try {
+    await client.query(
+      `UPDATE physical_part_outwards SET
+          warehouse_dispatch_esign_url = $2,
+          recipient_esign_url = COALESCE($3, recipient_esign_url),
+          warehouse_dispatch_signer_name = COALESCE($4, warehouse_dispatch_signer_name),
+          recipient_signer_name = COALESCE($5, recipient_signer_name),
+          ship_by = $6,
+          dispatch_mode = $7,
+          courier_name = $8,
+          awb_number = $9,
+          courier_tracking_url = $10,
+          porter_tracking_id = $11,
+          porter_order_id = $12,
+          porter_booking_url = $13,
+          delivery_person_id = $14,
+          status = 'dispatch_ready',
+          approved_at = COALESCE(approved_at, NOW()),
+          approved_by = COALESCE(approved_by, $15),
+          approved_by_name = COALESCE(approved_by_name, $16),
+          updated_at = NOW()
+        WHERE outward_number = $1`,
+      dispatchParams
+    );
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    await client.query(
+      `UPDATE physical_part_outwards SET
+          warehouse_dispatch_esign_url = $2,
+          recipient_esign_url = COALESCE($3, recipient_esign_url),
+          warehouse_dispatch_signer_name = COALESCE($4, warehouse_dispatch_signer_name),
+          recipient_signer_name = COALESCE($5, recipient_signer_name),
+          ship_by = $6,
+          dispatch_mode = $7,
+          courier_name = $8,
+          awb_number = $9,
+          courier_tracking_url = $10,
+          porter_tracking_id = $11,
+          porter_order_id = $12,
+          porter_booking_url = $13,
+          delivery_person_id = $14,
+          status = 'dispatch_ready',
+          updated_at = NOW()
+        WHERE outward_number = $1`,
+      dispatchParams.slice(0, 15)
+    );
+  }
+
+  const parts = await client.query(
+    `SELECT part_id, dp_number FROM physical_dead_parts WHERE outward_id = $1`,
+    [head.outward_id]
   );
+  for (const row of parts.rows) {
+    await logPartMovement(client, {
+      outwardId: head.outward_id,
+      partId: row.part_id,
+      dpNumber: row.dp_number,
+      eventType: 'dc_generated',
+      fromStatus: 'draft',
+      toStatus: 'dispatch_ready',
+      remarks: `Warehouse approved and generated Part DC ${outwardNumber}`,
+      actor,
+    });
+  }
   return { outward_number: outwardNumber, status: 'dispatch_ready' };
 }
 
-async function cancelDraftOutward(client, { outwardNumber }) {
+async function cancelDraftOutward(client, { outwardNumber, actor }) {
   const headRes = await client.query(
     `SELECT * FROM physical_part_outwards WHERE outward_number = $1 FOR UPDATE`,
     [outwardNumber]
@@ -492,10 +616,18 @@ async function cancelDraftOutward(client, { outwardNumber }) {
       WHERE outward_id = $1`,
     [head.outward_id]
   );
+  await logPartMovement(client, {
+    outwardId: head.outward_id,
+    eventType: 'cancelled',
+    fromStatus: head.status,
+    toStatus: 'cancelled',
+    remarks: `Part outward request ${outwardNumber} cancelled`,
+    actor,
+  });
   return { outward_number: outwardNumber, status: 'cancelled' };
 }
 
-async function confirmGateOutward(client, { outwardNumber }) {
+async function confirmGateOutward(client, { outwardNumber, actor }) {
   const headRes = await client.query(
     `SELECT * FROM physical_part_outwards WHERE outward_number = $1 FOR UPDATE`,
     [outwardNumber]
@@ -504,7 +636,7 @@ async function confirmGateOutward(client, { outwardNumber }) {
   if (!head) throw Object.assign(new Error('Physical outward not found'), { status: 404 });
   if (head.status === 'dispatched') return { already: true, outward_number: outwardNumber };
   if (head.status !== 'dispatch_ready') {
-    throw Object.assign(new Error('This outward is not waiting at the gate'), { status: 409 });
+    throw Object.assign(new Error('This Part DC is not waiting for guard outward'), { status: 409 });
   }
 
   await client.query(
@@ -516,18 +648,35 @@ async function confirmGateOutward(client, { outwardNumber }) {
       WHERE outward_id = $1`,
     [head.outward_id]
   );
-  await client.query(
+  const left = await client.query(
     `UPDATE physical_dead_parts
         SET status = 'out', updated_at = NOW()
-      WHERE outward_id = $1 AND status = 'pending'`,
+      WHERE outward_id = $1 AND status = 'pending'
+      RETURNING part_id, dp_number`,
     [head.outward_id]
   );
+  for (const row of left.rows) {
+    await logPartMovement(client, {
+      outwardId: head.outward_id,
+      partId: row.part_id,
+      dpNumber: row.dp_number,
+      eventType: 'outward_completed',
+      fromStatus: 'pending',
+      toStatus: 'out',
+      remarks: `Guard outward confirmed on Part DC ${outwardNumber}`,
+      actor,
+    });
+  }
   return { already: false, outward_number: outwardNumber };
 }
 
-async function listOutwards({ search, page = 1, limit = 25 } = {}) {
+async function listOutwards({ search, status, page = 1, limit = 25 } = {}) {
   const params = [];
   const where = [];
+  if (status && OUTWARD_STATUSES.has(status)) {
+    params.push(status);
+    where.push(`o.status = $${params.length}`);
+  }
   if (search) {
     params.push(`%${search}%`);
     where.push(`(
@@ -572,9 +721,25 @@ async function getOutward(outwardNumber) {
       ORDER BY p.dp_number`,
     [head.rows[0].outward_id]
   );
+  let movements = [];
+  try {
+    const hist = await pool.query(
+      `SELECT * FROM physical_part_movements
+        WHERE outward_id = $1
+        ORDER BY created_at ASC, id ASC`,
+      [head.rows[0].outward_id]
+    );
+    movements = hist.rows;
+  } catch (_) { /* table may not exist yet */ }
+
+  const warehouse = head.rows[0].warehouse
+    || items.rows.map((p) => p.warehouse).filter(Boolean)[0]
+    || null;
+
   return {
-    outward: wrapOutward(head.rows[0]),
+    outward: wrapOutward({ ...head.rows[0], warehouse }),
     parts: items.rows.map(partRow),
+    movements,
   };
 }
 
@@ -587,7 +752,14 @@ async function getCounts() {
         COUNT(*)::int AS total
        FROM physical_dead_parts`
   );
-  return r.rows[0];
+  let pendingApproval = 0;
+  try {
+    const q = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM physical_part_outwards WHERE status = 'draft'`
+    );
+    pendingApproval = q.rows[0]?.n || 0;
+  } catch (_) { /* ignore */ }
+  return { ...r.rows[0], pending_approval: pendingApproval };
 }
 
 module.exports = {

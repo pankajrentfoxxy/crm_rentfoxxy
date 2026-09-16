@@ -22,7 +22,7 @@ const SOURCE_LABELS = {
   replacement: 'Replacement',
   service_return: 'Service Return',
   refused_delivery: 'Refused Delivery',
-  physical_outward: 'Physical Part Outward',
+  physical_outward: 'Part DC',
   vendor_return: 'Vendor Return',
 };
 
@@ -340,7 +340,7 @@ export default function GuardScannerPage() {
           <p className="text-sm text-slate-500">
             {verifying
               ? (skipUnitVerify
-                ? 'Physical part outward — no unit verify. Submit to record this movement in history.'
+                ? 'Part DC loaded. Verify the details below, then submit OUTWARD. Do not pick parts yourself.'
                 : submitEnabled
                   ? 'Document units matched. Submit to process this movement.'
                   : 'Confirm laptop details. Submit stays locked until every check is green.')
@@ -436,25 +436,49 @@ export default function GuardScannerPage() {
                 : movement.awb_number)}
             />
             <DetailRow
-              label={skipUnitVerify ? 'Parts' : 'Laptops'}
+              label={skipUnitVerify ? 'Quantity' : 'Laptops'}
               value={skipUnitVerify
-                ? `${session.expected_count || laptops.length} going out`
+                ? `${movement.quantity || session.expected_count || laptops.length} part(s)`
                 : `${session.scanned_count || 0} / ${session.expected_count || laptops.length} verified`}
             />
+            {movement.document_details ? (
+              <>
+                <DetailRow label="DC status" value={movement.dc_status_label || movement.document_details.dc_status_label} />
+                <DetailRow label="Warehouse" value={movement.warehouse || movement.document_details.warehouse} />
+                <DetailRow
+                  label="Receiver"
+                  value={[
+                    movement.document_details.receiver_name || movement.party_name,
+                    movement.document_details.receiver_type,
+                    movement.document_details.receiver_contact,
+                  ].filter(Boolean).join(' · ')}
+                />
+                <DetailRow label="Purpose" value={movement.purpose || movement.document_details.purpose} />
+              </>
+            ) : null}
           </dl>
         </div>
       ) : null}
 
       {laptops.length && skipUnitVerify ? (
         <ul className="space-y-2">
-          {laptops.map((laptop) => (
+          {(movement?.document_details?.parts || laptops).map((row) => (
             <li
-              key={laptop.ttspl || laptop.serial_number}
+              key={row.dp_number || row.ttspl || row.serial_number}
               className="bg-white rounded-2xl border border-slate-200 p-3 flex items-center justify-between gap-3"
             >
               <div className="min-w-0">
-                <p className="text-sm font-mono font-semibold text-slate-900 truncate">{laptop.ttspl || '—'}</p>
-                <p className="text-xs text-slate-500 truncate">{laptop.configuration || laptop.serial_number || 'Physical part'}</p>
+                <p className="text-sm font-mono font-semibold text-slate-900 truncate">
+                  {row.dp_number || row.ttspl || '—'}
+                </p>
+                <p className="text-xs text-slate-500 truncate">
+                  {row.part_name || row.configuration || 'Physical part'}
+                  {row.serial_number ? ` · ${row.serial_number}` : ''}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Qty {row.quantity || 1}
+                  {row.warehouse ? ` · ${row.warehouse}` : ''}
+                </p>
               </div>
               <span className="text-xs font-bold text-slate-500 shrink-0">OUT</span>
             </li>

@@ -16,7 +16,8 @@ import PhysicalPartDetailDrawer from '../components/PhysicalPartDetailDrawer';
 
 const TABS = [
   { id: 'available', label: 'Available / Dead' },
-  { id: 'pending', label: 'Pending dispatch' },
+  { id: 'pending_approval', label: 'Pending approval' },
+  { id: 'pending', label: 'Part DC ready' },
   { id: 'out', label: 'Out' },
   { id: 'inwards', label: 'Inward history' },
   { id: 'outwards', label: 'Outward history' },
@@ -42,6 +43,15 @@ export default function PhysicalDeadPartsPage() {
       if (tab === 'inwards') {
         const { data } = await fetchPhysicalInwards({ search: debouncedSearch || undefined, page, limit: 25 });
         setInwards(data.inwards || []);
+        setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: 25 });
+      } else if (tab === 'pending_approval') {
+        const { data } = await fetchPhysicalOutwards({
+          status: 'draft',
+          search: debouncedSearch || undefined,
+          page,
+          limit: 25,
+        });
+        setOutwards(data.outwards || []);
         setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: 25 });
       } else if (tab === 'outwards') {
         const { data } = await fetchPhysicalOutwards({ search: debouncedSearch || undefined, page, limit: 25 });
@@ -89,7 +99,7 @@ export default function PhysicalDeadPartsPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
       <PageHeader
         title="Dead / Physical Parts"
-        subtitle="Warehouse-found parts that did not exist in CRM — inward creates the record, outward ships them out"
+        subtitle="Request → warehouse approval → Part DC + QR → guard outward. Parts leave only after the gate scan."
         icon={PackagePlus}
         actions={(
           <Link
@@ -175,7 +185,7 @@ export default function PhysicalDeadPartsPage() {
               ))}
             </tbody>
           </table>
-        ) : tab === 'outwards' ? (
+        ) : (tab === 'outwards' || tab === 'pending_approval') ? (
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
               <tr>

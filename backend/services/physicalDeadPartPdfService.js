@@ -41,7 +41,8 @@ async function loadPhysicalOutwardPdfData(outwardNumber) {
       ORDER BY p.dp_number`,
     [head.outward_id]
   );
-  return { ...head, items: itemsRes.rows };
+  const warehouse = head.warehouse || itemsRes.rows.map((r) => r.warehouse).filter(Boolean)[0] || null;
+  return { ...head, warehouse, items: itemsRes.rows, quantity: itemsRes.rows.length };
 }
 
 function writePhysicalItemsTable(doc, y, items) {
@@ -138,6 +139,15 @@ function drawPhysicalDispatchSignatures(doc, y, outward) {
 async function generatePhysicalOutwardPdf(outwardNumber) {
   const outward = await loadPhysicalOutwardPdfData(outwardNumber);
   if (!outward) return null;
+  const st = String(outward.status || '').toLowerCase();
+  if (st === 'draft' || st === 'cancelled') {
+    throw Object.assign(
+      new Error(st === 'draft'
+        ? 'Warehouse must approve this request before the Part DC is generated.'
+        : 'Cancelled Part DCs cannot be printed.'),
+      { status: 409 }
+    );
+  }
 
   const company = await loadCompany();
   const dir = path.join(__dirname, '../uploads/physical-parts');
@@ -168,9 +178,9 @@ async function generatePhysicalOutwardPdf(outwardNumber) {
     doc.pipe(stream);
 
     let y = drawCompanyHeader(doc, company, {
-      docTitle: 'Physical Part Outward',
+      docTitle: 'Part Delivery Challan',
       docNumber: outward.outward_number,
-      rightLabel: 'Outward',
+      rightLabel: 'Part DC',
       rightValue: outward.outward_number,
       qrPng: gateQrPng,
     });
@@ -185,6 +195,10 @@ async function generatePhysicalOutwardPdf(outwardNumber) {
     y = drawDispatchTags(doc, y, dispatchTagsForDc(tagDc));
 
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    doc.text(`Warehouse: ${outward.warehouse || '—'}`, 40, y);
+    y += 12;
+    doc.text(`Quantity: ${outward.quantity || (outward.items || []).length} part(s)`, 40, y);
+    y += 12;
     doc.text(`Receiver: ${outward.receiver_name || '—'} (${outward.receiver_type || '—'})`, 40, y);
     y += 12;
     doc.text(`Contact: ${outward.receiver_contact || '—'}`, 40, y);
@@ -210,7 +224,7 @@ async function generatePhysicalOutwardPdf(outwardNumber) {
 
     doc.font('Helvetica').fontSize(8).fillColor(C.sub)
       .text(
-        'Scan the gate QR at outward and submit. No per-part verify — the movement is recorded in guard history.',
+        'Guard scans this QR on OUTWARD to verify the Part DC and confirm. Stock leaves only after guard outward.',
         40,
         Math.min(y + 8, 780),
         { width: 515 }

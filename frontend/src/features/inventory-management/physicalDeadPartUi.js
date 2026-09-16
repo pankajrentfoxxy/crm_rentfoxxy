@@ -27,7 +27,12 @@ export function statusChip(status) {
 }
 
 export function outwardStatusLabel(status) {
-  return String(status || 'draft').replace(/_/g, ' ').toUpperCase();
+  const s = String(status || 'draft').toLowerCase();
+  if (s === 'draft') return 'AWAITING APPROVAL';
+  if (s === 'dispatch_ready') return 'PART DC READY';
+  if (s === 'dispatched') return 'OUTWARD COMPLETED';
+  if (s === 'cancelled') return 'CANCELLED';
+  return s.replace(/_/g, ' ').toUpperCase();
 }
 
 export function todayIso() {

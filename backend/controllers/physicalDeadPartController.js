@@ -95,6 +95,7 @@ exports.listOutwards = async (req, res) => {
   try {
     const data = await svc.listOutwards({
       search: req.query.search,
+      status: req.query.status,
       page: req.query.page,
       limit: req.query.limit,
     });
@@ -176,7 +177,7 @@ exports.cancelDraftOutward = async (req, res) => {
   try {
     await client.query('BEGIN');
     const number = req.params.dcNumber || req.params.outwardNumber;
-    const result = await svc.cancelDraftOutward(client, { outwardNumber: number });
+    const result = await svc.cancelDraftOutward(client, { outwardNumber: number, actor: actor(req) });
     await client.query('COMMIT');
     res.json({ success: true, ...result });
   } catch (err) {
@@ -192,6 +193,17 @@ exports.downloadPdf = async (req, res) => {
     const path = require('path');
     const fs = require('fs');
     const number = req.params.dcNumber || req.params.outwardNumber;
+    const existing = await svc.getOutward(number);
+    if (!existing) return res.status(404).json({ success: false, message: 'Outward not found' });
+    const st = String(existing.outward?.status || '');
+    if (st === 'draft' || st === 'cancelled') {
+      return res.status(409).json({
+        success: false,
+        message: st === 'draft'
+          ? 'Warehouse must approve this request before the Part DC PDF is generated.'
+          : 'Cancelled Part DCs cannot be downloaded.',
+      });
+    }
     const { generatePhysicalOutwardPdf } = require('../services/physicalDeadPartPdfService');
     const rel = await generatePhysicalOutwardPdf(number);
     if (!rel) return res.status(404).json({ success: false, message: 'Outward not found' });

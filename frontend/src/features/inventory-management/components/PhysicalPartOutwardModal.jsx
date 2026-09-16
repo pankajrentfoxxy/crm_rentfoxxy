@@ -66,7 +66,7 @@ export default function PhysicalPartOutwardModal({ parts, onClose }) {
         remarks: remarks.trim() || undefined,
         reference_number: referenceNumber.trim() || undefined,
       });
-      toast.success(`Draft outward ${data.outward.outward_number} created — e-sign and dispatch next`);
+      toast.success(`Request ${data.outward.outward_number} sent for warehouse approval`);
       onClose?.();
       navigate(`/inventory-management/physical-parts/outward/${encodeURIComponent(data.outward.outward_number)}`);
     } catch (err) {
@@ -82,8 +82,10 @@ export default function PhysicalPartOutwardModal({ parts, onClose }) {
       <form onSubmit={submit} className="relative bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-start justify-between gap-3 p-4 border-b">
           <div>
-            <h3 className="font-semibold text-gray-900">Part Outward</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{parts.length} selected · creates a draft, then warehouse e-sign + gate</p>
+            <h3 className="font-semibold text-gray-900">Part Outward Request</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {parts.length} selected · goes to warehouse approval, then a Part DC with gate QR is generated
+            </p>
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
             <X className="w-4 h-4" />

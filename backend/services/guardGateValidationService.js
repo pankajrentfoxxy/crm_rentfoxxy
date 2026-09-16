@@ -379,6 +379,14 @@ function publicMovement(ctx) {
     skip_unit_verify: Boolean(ctx.skip_unit_verify),
     active: ctx.active !== false,
     inactive_reason: ctx.inactive_reason || null,
+    warehouse: ctx.warehouse || null,
+    receiver_type: ctx.receiver_type || null,
+    receiver_contact: ctx.receiver_contact || null,
+    dc_status: ctx.dc_status || null,
+    dc_status_label: ctx.dc_status_label || null,
+    quantity: ctx.quantity || ctx.laptops?.length || 0,
+    purpose: ctx.purpose || null,
+    document_details: ctx.document_details || null,
   };
 }
 
@@ -1161,7 +1169,7 @@ async function loadPhysicalOutward(db, outwardNumber) {
   if (!head) return null;
 
   const items = await db.query(
-    `SELECT p.dp_number, p.serial_number, p.part_name, p.category, p.status
+    `SELECT p.dp_number, p.serial_number, p.part_name, p.category, p.status, p.warehouse
        FROM physical_dead_parts p
       WHERE p.outward_id = $1
       ORDER BY p.dp_number`,
@@ -1177,29 +1185,58 @@ async function loadPhysicalOutward(db, outwardNumber) {
   const laptops = uniqueLaptops(await enrichLaptops(db, units));
 
   const status = String(head.status || '').toLowerCase();
+  const warehouse = head.warehouse || items.rows.map((r) => r.warehouse).filter(Boolean)[0] || null;
+  const statusLabel = status === 'draft'
+    ? 'Awaiting approval'
+    : status === 'dispatch_ready'
+      ? 'Part DC ready'
+      : status === 'dispatched'
+        ? 'Outward completed'
+        : status.replace(/_/g, ' ');
   let active = true;
   let inactive_reason = null;
   if (status === 'draft') {
     active = false;
-    inactive_reason = 'Warehouse has not e-signed this outward for dispatch yet.';
+    inactive_reason = 'This Part DC is not approved yet. Warehouse must approve the request first.';
   } else if (status === 'dispatched') {
     active = false;
-    inactive_reason = 'This physical outward has already gone out through the gate.';
+    inactive_reason = 'This Part DC is already outward completed. Duplicate outward is not allowed.';
   } else if (status === 'cancelled') {
     active = false;
-    inactive_reason = 'This physical outward is cancelled.';
+    inactive_reason = 'This Part DC is cancelled.';
   } else if (status !== 'dispatch_ready') {
     active = false;
-    inactive_reason = 'This physical outward is not waiting at the gate.';
+    inactive_reason = 'This Part DC is not waiting for guard outward.';
   } else if (!laptops.length) {
     active = false;
-    inactive_reason = 'No parts on this outward are waiting for guard outward.';
+    inactive_reason = 'No parts on this Part DC are waiting for guard outward.';
   }
+
+  const document_details = {
+    dc_number: head.outward_number,
+    receiver_name: head.receiver_name || null,
+    receiver_type: head.receiver_type || null,
+    receiver_contact: head.receiver_contact || null,
+    warehouse,
+    purpose: head.purpose || null,
+    quantity: items.rows.length,
+    dc_status: status,
+    dc_status_label: statusLabel,
+    parts: items.rows.map((row) => ({
+      dp_number: row.dp_number,
+      part_name: row.part_name,
+      serial_number: row.serial_number || null,
+      category: row.category,
+      warehouse: row.warehouse || warehouse,
+      quantity: 1,
+      status: row.status,
+    })),
+  };
 
   return {
     direction: 'outward',
     source_type: 'physical_outward',
-    source_label: 'Physical Part Outward',
+    source_label: 'Part DC',
     reference_type: 'pout',
     reference_number: head.outward_number,
     party_name: head.receiver_name || null,
@@ -1209,6 +1246,14 @@ async function loadPhysicalOutward(db, outwardNumber) {
     allow_partial: false,
     skip_unit_verify: true,
     document_confirm: true,
+    warehouse,
+    receiver_type: head.receiver_type || null,
+    receiver_contact: head.receiver_contact || null,
+    dc_status: status,
+    dc_status_label: statusLabel,
+    quantity: items.rows.length,
+    purpose: head.purpose || null,
+    document_details,
     active,
     inactive_reason,
     laptops,
