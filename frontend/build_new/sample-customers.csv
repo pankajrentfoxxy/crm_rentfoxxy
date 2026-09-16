@@ -1,0 +1,5 @@
+name,company_name,email,phone,gst_no,type,concern_person,mobile_no,address,pincode,address_type
+John Doe,ABC Technologies,john@abctech.com,9876543210,29AABCU9603R1ZM,Existing,Rajesh Kumar,9876543210,JMD Megapolis Sector 48 Gurugram,122018,Billing
+John Doe,ABC Technologies,john@abctech.com,9876543210,29AABCU9603R1ZM,Existing,Suresh Singh,9876543211,Plot 12 Sector 58 Noida Warehouse,201301,Shipping
+Jane Smith,XYZ Solutions,jane@xyzsol.com,9123456789,,Existing,Priya Mehta,9123456789,Plot 5 Sector 18 Noida,201301,Billing
+Amit Patel,Tech Corp India,techcorp@example.com,8765432109,07AAACT1234N1Z5,Existing,Kavita Sharma,8765432109,Building A MG Road Bangalore,560001,Shipping
