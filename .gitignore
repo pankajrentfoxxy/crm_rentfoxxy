@@ -5,6 +5,8 @@ node_modules/
 *.log
 coverage/
 build/
+build_new/
+build_old_*/
 dist/
 
 # /migration
