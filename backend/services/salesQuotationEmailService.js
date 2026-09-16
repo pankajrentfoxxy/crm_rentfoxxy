@@ -6,8 +6,8 @@ const path = require('path');
 const pool = require('../config/db');
 const { generateToken } = require('./salesManagementService');
 const { generateDocumentPdf } = require('./salesManagementPdfService');
+const mailTransport = require('./mailTransport');
 const {
-  getTransporter,
   getDefaultQuotationCc,
   parseCcList,
   buildQuotationEmailHtml,
@@ -122,9 +122,12 @@ async function sendSalesQuotationEmail({
     throw new Error('A valid customer email is required to send the quotation');
   }
 
-  const transporter = getTransporter();
-  if (!transporter) {
-    throw new Error('Email is not configured (SMTP_HOST / SMTP_USER / SMTP_PASS)');
+  // Quotations go out from the no-reply mailbox (QUOTATION_SMTP_* -> DISPATCH_SMTP_*
+  // -> SMTP_*), not the general CRM mailer.
+  const transporter = mailTransport.getTransport('quotation');
+  const fromAddress = mailTransport.getFromAddress('quotation');
+  if (!transporter || !fromAddress) {
+    throw new Error('Quotation email is not configured (QUOTATION_SMTP_* / DISPATCH_SMTP_* / SMTP_*)');
   }
 
   let token = String(lines[0]?.token || '').trim();
@@ -156,7 +159,6 @@ async function sendSalesQuotationEmail({
   const { config1, config2 } = configsFromQuotationLines(lines);
   const sentAtLine = formatSentAtLine(new Date());
   const acceptUrl = buildAcceptUrl(token);
-  const fromAddress = process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
   const ccList = uniqueEmails([
     ...getDefaultQuotationCc(),
     senderEmail,
