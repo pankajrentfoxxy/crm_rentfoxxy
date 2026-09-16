@@ -5,6 +5,7 @@
  */
 const pool = require('../config/db');
 const inventorySM = require('../services/inventoryStateMachine');
+const saleInPlace = require('../services/saleInPlaceService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { entityForQuotationType, healStaleReturnedPassedSerials } = require('../services/salesManagementService');
 const {
@@ -17,6 +18,7 @@ const { invalidateInventoryListCachesFireAndForget } = require('../services/inve
 // Resolve a serial's full specs from the authoritative source.
 const SPEC_SELECT = `
   SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.qc_status, vsn.inventory_status,
+         vsn.current_customer_id,
          COALESCE(
            NULLIF(TRIM(vsn.extra->>'brand'), ''),
            NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
@@ -66,7 +68,8 @@ const SPEC_SELECT = `
 
 async function getSoHeader(soNumber) {
   const r = await pool.query(
-    `SELECT sales_order_number, customer_id, quotation_type, entity_code
+    `SELECT sales_order_number, customer_id, quotation_type, entity_code,
+            COALESCE(fulfillment_mode, 'dispatch') AS fulfillment_mode
        FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC LIMIT 1`,
     [soNumber]
   );
@@ -192,7 +195,25 @@ exports.attachSerial = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Serial has not passed GRN QC yet' });
     }
     const shelfStatus = String(freshSerial.inventory_status || 'in_stock').toLowerCase();
-    if (!['in_stock', 'passed'].includes(shelfStatus)) {
+
+    // Sale in place: the customer keeps a unit they already hold on rent, so it is
+    // legitimately NOT on the shelf. Narrowly gated - the order must be in-place,
+    // the unit must be rented to this very customer, and an open sale-in-place case
+    // must exist. Without all three this falls through to the normal check.
+    const inPlace = String(header.fulfillment_mode || 'dispatch') === 'in_place';
+    const saleInPlaceOk = inPlace
+      && shelfStatus === 'rented'
+      && Number(freshSerial.current_customer_id) === Number(header.customer_id)
+      && await saleInPlace.hasOpenSaleInPlaceEvent(client, freshSerial.serial_id);
+
+    if (inPlace && !saleInPlaceOk) {
+      return res.status(400).json({
+        success: false,
+        message: 'Sale-in-place orders only accept units currently on rent with this customer '
+          + 'that have an open lost / damaged / buyout case.',
+      });
+    }
+    if (!saleInPlaceOk && !['in_stock', 'passed'].includes(shelfStatus)) {
       return res.status(400).json({
         success: false,
         message: `Serial is not available (status: ${freshSerial.inventory_status}). Complete production QC or release from return first.`,
@@ -251,19 +272,23 @@ exports.attachSerial = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Reserve the unit (in_stock -> reserved).
-    await inventorySM.transitionAsset(client, {
-      serialId: serialForAttach.serial_id,
-      toStatus: inventorySM.STATUS.RESERVED,
-      customerId: header.customer_id || null,
-      entityCode,
-      reason: `Attached to ${soNumber}`,
-      actorUserId: req.user.user_id,
-      actorName: req.user.name,
-    });
+    // Reserve the unit (in_stock -> reserved). Skipped for a sale in place: the unit
+    // is already with the customer and stays 'rented' until the sale is confirmed.
+    if (!saleInPlaceOk) {
+      await inventorySM.transitionAsset(client, {
+        serialId: serialForAttach.serial_id,
+        toStatus: inventorySM.STATUS.RESERVED,
+        customerId: header.customer_id || null,
+        entityCode,
+        reason: `Attached to ${soNumber}`,
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+      });
+    }
 
-    // One pre-dispatch QC ticket for this serial.
-    const ticket = await createSalesOrderQcTicket(client, {
+    // One pre-dispatch QC ticket for this serial. There is nothing to inspect on a
+    // sale in place - the unit never comes back to us.
+    const ticket = saleInPlaceOk ? { ok: false } : await createSalesOrderQcTicket(client, {
       serialId: serialForAttach.serial_id,
       ttsplId: serialForAttach.inventory_asset_code,
       serialNumber: serialForAttach.serial_number,
@@ -282,10 +307,11 @@ exports.attachSerial = async (req, res) => {
       `INSERT INTO sales_order_serials
          (sales_order_number, line_id, serial_id, ttspl_id, serial_number,
           qc_ticket_id, qc_status, status, entity_code, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'pending','attached',$7,$8)
+       VALUES ($1,$2,$3,$4,$5,$6,$9,'attached',$7,$8)
        RETURNING allocation_id`,
       [soNumber, line.line_id, serialForAttach.serial_id, serialForAttach.inventory_asset_code, serialForAttach.serial_number,
-       ticket.ok ? ticket.ticket_id : null, entityCode, req.user.user_id]
+       ticket.ok ? ticket.ticket_id : null, entityCode, req.user.user_id,
+       saleInPlaceOk ? 'passed' : 'pending']
     );
 
     // Phase 14: inherit the delivery address planned on the parent SO line (if any).

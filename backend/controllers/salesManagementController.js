@@ -934,8 +934,18 @@ exports.storeSalesOrder = async (req, res) => {
     const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
     const customerId = toNullableInt(body.customer_id);
     const isWfh = body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1;
-    const shippingCharge = Number(body.shiping_charges || 0) || 0;
-    if (isWfh && shippingCharge <= 0) {
+    // Sale in place: the customer keeps a unit they already hold on rent. Fulfilled
+    // without any movement, so no DC, no e-way bill, no dispatch workflow and no
+    // shipping. See docs/PHASE21_LOST_LAPTOP_SALE.md.
+    const isInPlace = String(body.fulfillment_mode || 'dispatch') === 'in_place';
+    const shippingCharge = isInPlace ? 0 : (Number(body.shiping_charges || 0) || 0);
+    if (isInPlace && isWfh) {
+      return res.status(400).json({
+        success: false,
+        message: 'A sale-in-place order cannot be marked work-from-home \u2014 nothing is shipped.',
+      });
+    }
+    if (!isInPlace && isWfh && shippingCharge <= 0) {
       return res.status(400).json({
         success: false,
         message: 'WFH sales orders require shipping charges greater than zero (GST applies on shipping).',
@@ -1064,13 +1074,15 @@ exports.storeSalesOrder = async (req, res) => {
     }
     // Tag the owning entity (Sales -> gorefurbo, Rental/Demo -> rentfoxxy).
     await client.query(
-      `UPDATE sales_order_lines SET entity_code = $1 WHERE sales_order_number = $2`,
-      [entityForQuotationType(body.quotation_type || 'rental', body.branch), salesOrderNumber]
+      `UPDATE sales_order_lines SET entity_code = $1, fulfillment_mode = $3 WHERE sales_order_number = $2`,
+      [entityForQuotationType(body.quotation_type || 'rental', body.branch), salesOrderNumber,
+        isInPlace ? 'in_place' : 'dispatch']
     );
 
     // Security: 'one_month_rental' auto-computes from the sum of each line's
     // monthly rate x qty (server-authoritative). 'none' = 0.
-    const securityType = String(body.security_type || 'none').toLowerCase();
+    // No deposit on a sale in place — the unit is being bought, not rented.
+    const securityType = isInPlace ? 'none' : String(body.security_type || 'none').toLowerCase();
     if (securityType === 'one_month_rental') {
       await client.query(
         `UPDATE sales_order_lines
@@ -1086,8 +1098,10 @@ exports.storeSalesOrder = async (req, res) => {
       );
     }
 
+    // In-place orders never enter dispatch: opening a workflow here would leave a
+    // waiting_acceptance row that the dispatch SLA worker chases forever.
     const dispatchWf = require('../services/dispatchWorkflowService');
-    const wfStart = await dispatchWf.startWorkflow(client, {
+    const wfStart = isInPlace ? null : await dispatchWf.startWorkflow(client, {
       salesOrderNumber,
       quotationType: body.quotation_type || 'rental',
       user: req.user,
@@ -6921,5 +6935,131 @@ exports.logSalesOrderDocumentActivity = async (req, res) => {
   } catch (error) {
     console.error('logSalesOrderDocumentActivity:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Sale in place (PHASE 21) — lost / damaged / buyout rental laptops.
+// Fulfilled without any movement: no DC, no e-way bill. See
+// docs/PHASE21_LOST_LAPTOP_SALE.md.
+// ---------------------------------------------------------------------------
+
+const saleInPlaceSvc = require('../services/saleInPlaceService');
+
+/** POST /sales-orders/:soNumber/confirm-in-place-sale */
+exports.confirmInPlaceSale = async (req, res) => {
+  try {
+    const result = await saleInPlaceSvc.confirmSale({
+      salesOrderNumber: req.params.soNumber,
+      actorUserId: req.user?.user_id || null,
+      actorName: req.user?.name || null,
+    });
+
+    // Best-effort, post-commit: refresh the SO PDF so the customer copy is current.
+    regenerateSoAndLinkedDcPdfs(req.params.soNumber)
+      .catch((e) => console.error('[saleInPlace] SO pdf regen:', e.message));
+
+    res.json({
+      success: true,
+      message: `${result.sold_count} laptop(s) sold in place. No delivery challan or e-way bill is required.`,
+      data: result,
+    });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    if (code >= 500) console.error('confirmInPlaceSale:', err);
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /sales-orders/:soNumber/sale-invoice   (multipart: sale_invoice_pdf)
+ * Accounts raise the invoice in Zoho and attach the number + PDF here.
+ */
+exports.uploadSaleInvoice = async (req, res) => {
+  try {
+    const soNumber = String(req.params.soNumber || '').trim();
+    const invoiceNumber = String(req.body?.sale_invoice_number || '').trim();
+    if (!invoiceNumber) {
+      return res.status(400).json({ success: false, message: 'sale_invoice_number is required' });
+    }
+
+    const head = await pool.query(
+      `SELECT COALESCE(fulfillment_mode, 'dispatch') AS fulfillment_mode
+         FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC LIMIT 1`,
+      [soNumber]
+    );
+    if (!head.rows.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    if (head.rows[0].fulfillment_mode !== 'in_place') {
+      return res.status(409).json({
+        success: false,
+        message: 'This order is dispatched normally — attach its e-invoice against the delivery challan instead.',
+      });
+    }
+
+    const file = req.file || (Array.isArray(req.files) ? req.files[0] : null);
+    const pdfPath = file ? `private-uploads/sale-order-invoices/${path.basename(path.dirname(file.path))}/${file.filename}` : null;
+
+    const upd = await pool.query(
+      `UPDATE sales_order_lines
+          SET sale_invoice_number = $2,
+              sale_invoice_pdf_path = COALESCE($3, sale_invoice_pdf_path),
+              sale_invoice_uploaded_at = NOW(),
+              sale_invoice_uploaded_by = $4,
+              updated_at = NOW()
+        WHERE sales_order_number = $1
+        RETURNING id`,
+      [soNumber, invoiceNumber, pdfPath, req.user?.user_id || null]
+    );
+
+    res.json({
+      success: true,
+      message: 'Sale invoice attached to the sales order',
+      data: {
+        sales_order_number: soNumber,
+        sale_invoice_number: invoiceNumber,
+        sale_invoice_pdf_path: pdfPath,
+        lines_updated: upd.rowCount,
+      },
+    });
+  } catch (err) {
+    console.error('uploadSaleInvoice:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /sales-orders/:soNumber/sale-invoice/pdf
+ * The PDF lives outside the statically served uploads tree on purpose — customer
+ * invoices must not be world-readable — so it is streamed through this
+ * authenticated route instead.
+ */
+exports.downloadSaleInvoicePdf = async (req, res) => {
+  try {
+    const soNumber = String(req.params.soNumber || '').trim();
+    const r = await pool.query(
+      `SELECT sale_invoice_pdf_path, sale_invoice_number
+         FROM sales_order_lines
+        WHERE sales_order_number = $1 AND sale_invoice_pdf_path IS NOT NULL
+        ORDER BY id ASC LIMIT 1`,
+      [soNumber]
+    );
+    const rel = r.rows[0]?.sale_invoice_pdf_path;
+    if (!rel) return res.status(404).json({ success: false, message: 'No sale invoice attached' });
+
+    const root = path.join(__dirname, '..', 'private-uploads', 'sale-order-invoices');
+    const abs = path.resolve(path.join(__dirname, '..', rel));
+    // Defence in depth: never serve anything outside the invoice root.
+    if (!abs.startsWith(root + path.sep)) {
+      return res.status(400).json({ success: false, message: 'Invalid document path' });
+    }
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ success: false, message: 'Document file is missing on disk' });
+    }
+    res.download(abs, `${r.rows[0].sale_invoice_number || soNumber}.pdf`);
+  } catch (err) {
+    console.error('downloadSaleInvoicePdf:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };

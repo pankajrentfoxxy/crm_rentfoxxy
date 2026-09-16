@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Download, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Copy, Download, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button, SearchField, ListPagination } from '../../../components/ui/primitives';
@@ -17,6 +17,7 @@ import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import CustomerAddressesTab from '../components/CustomerAddressesTab';
 import CustomerAddressModal from '../components/CustomerAddressModal';
 import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
+import SaleInPlaceModal from '../components/SaleInPlaceModal';
 import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
 import MultiSelectFilter from '../components/MultiSelectFilter';
 import usePermission from '../../../hooks/usePermission';
@@ -242,6 +243,7 @@ export default function CustomerDetailPage() {
   const [ticketPagination, setTicketPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: TICKET_PAGE_SIZE });
   const [rentalSummary, setRentalSummary] = useState({ total_monthly_rent: 0, active_asset_count: 0 });
   const { canEdit: canEditCustomerAssets, user } = usePermission();
+  const [saleInPlaceOpen, setSaleInPlaceOpen] = useState(false);
   const isSuperAdmin = user?.role === 'super_admin';
   const [portalPreviewBusy, setPortalPreviewBusy] = useState(false);
 
@@ -621,6 +623,17 @@ export default function CustomerDetailPage() {
               className="max-w-md flex-1 min-w-[220px]"
             />
             <div className="flex flex-wrap items-center gap-2">
+              {assetView === 'active' && canEditCustomerAssets('customer_assets') && (
+                <button
+                  type="button"
+                  onClick={() => setSaleInPlaceOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-red-200 text-red-700 rounded-lg hover:bg-red-50"
+                  title="Customer keeps the laptop \u2014 stop rent and sell it in place"
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                  Report Lost / Buyout
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleExportAssets('active')}
@@ -1182,6 +1195,14 @@ export default function CustomerDetailPage() {
         onClose={() => setAddressModal(null)}
         onSaved={load}
       />
+      <SaleInPlaceModal
+        open={saleInPlaceOpen}
+        customerId={id}
+        assets={assetRows}
+        onClose={() => setSaleInPlaceOpen(false)}
+        onDone={() => { refreshAssetsTab(); loadCustomer(); }}
+      />
+
       <CustomerAssetEditModal
         open={Boolean(assetEdit)}
         customerId={customer.customer_id}

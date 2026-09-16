@@ -3174,11 +3174,16 @@ async function generateVendorBill(vendorId, month, year) {
                 NULLIF((vpo.line_items->0->>'monthly_rental_amount')::numeric, 0),
                 NULLIF((vpo.line_items->0->>'monthly_rate')::numeric, 0)
               ) AS rental_monthly_rate,
-              vpo.purchase_order_type AS po_type
+              COALESCE(vsn.acquisition_type, vpo.purchase_order_type) AS po_type
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
        WHERE vpo.vendor_id = $1
-         AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+         -- Per-serial acquisition_type shadows the PO. A vendor-rented unit that we
+         -- later bought out (sale in place) is flipped to direct_purchase on the
+         -- SERIAL, never on the PO -- a PO carries hundreds of other serials and
+         -- changing its type would drop every one of them out of this bill.
+         AND COALESCE(vsn.acquisition_type, vpo.purchase_order_type)
+               IN ('rental_purchase','rent_to_own')
          AND vsn.deleted_at IS NULL
          AND vpo.deleted_at IS NULL
          AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL

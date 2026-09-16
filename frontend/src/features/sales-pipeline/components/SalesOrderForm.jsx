@@ -134,6 +134,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     branch: defaultBranch,
     security_type: 'none', security_amount: '', shiping_charges: '', remarks: '',
     advance_amount: '', advance_due_date: '', GST_number: '',
+    fulfillment_mode: 'dispatch',
   });
 
   const resolveBranch = (quotationType) => {
@@ -183,6 +184,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
         quotation_type: head.quotation_type || defaultType,
         branch: head.branch || defaultBranch,
         security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
+        fulfillment_mode: head.fulfillment_mode || 'dispatch',
         security_amount: head.security_amount ?? '',
         shiping_charges: head.shiping_charges ?? '',
         remarks: '',
@@ -305,6 +307,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
         quotation_type: head.quotation_type || 'rental',
         branch: head.branch || branchForQuotationType(head.quotation_type),
         security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
+        fulfillment_mode: head.fulfillment_mode || 'dispatch',
         security_amount: head.security_amount || '',
         shiping_charges: head.shiping_charges || '',
         GST_number: head.gst_number || f.GST_number,
@@ -529,6 +532,30 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             requiredFields={SO_ASSET_REQUIRED_FIELDS}
             useCascadeApi
           />
+          {isSaleType && (
+            <div className="border rounded-lg p-3 space-y-2 bg-indigo-50/40 border-indigo-200">
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={form.fulfillment_mode === 'in_place'}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    fulfillment_mode: e.target.checked ? 'in_place' : 'dispatch',
+                    ...(e.target.checked ? { security_type: 'none', shiping_charges: '' } : {}),
+                  }))}
+                />
+                <span>
+                  <span className="font-medium text-indigo-900">Sale in place</span>
+                  <span className="block text-[11px] text-indigo-700 mt-0.5">
+                    The customer already holds these laptops (lost, damaged or a buyout), so nothing
+                    is shipped. No delivery challan and no e-way bill will be created. Only laptops
+                    already on rent with this customer, with an open case, can be attached.
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
           {!isSaleType && (
             <div className="border rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-gray-600">Security Deposit</p>

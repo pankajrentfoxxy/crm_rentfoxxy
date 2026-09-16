@@ -46,7 +46,7 @@ const ALLOWED = {
   dispatch_ready:  ['in_transit', 'in_stock'],
   in_transit:      ['rented', 'on_demo', 'sold', 'in_stock'],
   on_demo:         ['rented', 'returned'],
-  rented:          ['returned'],
+  rented:          ['returned', 'sold'],   // 'sold' = sale in place (see markSoldInPlace)
   sold:            ['returned'],
   returned:        ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
   in_repair:       ['in_stock', 'qc_failed', 'scrapped'],
@@ -143,7 +143,9 @@ async function transitionAsset(db, {
       if (rentStartDate !== null) add('rent_start_date', rentStartDate);
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       add('returned_at', null);
-      add('rent_end_date', null);
+      // Sale-in-place passes the date rent actually stopped so the anchor survives.
+      // Every other caller passes nothing, which clears it exactly as before.
+      add('rent_end_date', rentEndDate);
       break;
     case STATUS.ON_DEMO:
       if (customerId !== null) add('current_customer_id', customerId);
@@ -342,6 +344,30 @@ const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorNam
   transitionAsset(db, { serialId, toStatus: STATUS.RETURNED, rentEndDate: toDateStr(rentEndDate),
     reason: reason || 'Returned by customer', actorUserId, actorName });
 
+/**
+ * Sale in place — the customer keeps a unit they hold on rent (lost, damaged, or
+ * an outright buyout). Title transfers where the asset already is, so there is no
+ * DC, no dispatch and no e-way bill.
+ *
+ * Deliberately does NOT set current_dc_number: no movement document exists. The
+ * customer holding context is retained so the unit stays in their bucket as Sold
+ * (see DEPLOYED_WITH_CUSTOMER_STATUSES).
+ */
+const markSoldInPlace = (db, serialId, {
+  salesOrderNumber, customerId, entityCode = null, reason = 'lost',
+  rentEndDate = null, actorUserId = null, actorName = null,
+}) =>
+  transitionAsset(db, {
+    serialId,
+    toStatus: STATUS.SOLD,
+    customerId,
+    entityCode,
+    rentEndDate: toDateStr(rentEndDate),
+    reason: `Sold in place on ${salesOrderNumber} \u2014 ${reason} at customer (no DC / no movement)`,
+    actorUserId,
+    actorName,
+  });
+
 const backToStock = (db, serialId, { reason, actorUserId, actorName }) =>
   transitionAsset(db, { serialId, toStatus: STATUS.IN_STOCK,
     reason: reason || 'Returned to available stock', actorUserId, actorName });
@@ -422,6 +448,7 @@ module.exports = {
   markDispatched,
   markDelivered,
   markReturned,
+  markSoldInPlace,
   convertDemoToRental,
   backToStock,
   findSerialByCode,

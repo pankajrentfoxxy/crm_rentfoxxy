@@ -329,13 +329,24 @@ async function getQuotationRemainingQty(quotationNumber) {
   return result.rows[0]?.qty || 0;
 }
 
+/**
+ * A unit counts as delivered when its DC is delivered, OR - for a sale in place -
+ * when the asset itself is sold. In-place orders fulfil without a movement, so they
+ * have no DC number to look through; without this branch they would sit at
+ * 'pending' forever.
+ */
 const SO_FULFILLMENT_DELIVERED_SQL = `(SELECT COUNT(*)::int FROM sales_order_serials sos
   WHERE sos.sales_order_number = %SO%
     AND sos.status = 'dispatched'
-    AND sos.dc_number IS NOT NULL
-    AND EXISTS (
-      SELECT 1 FROM delivery_challan_lines dcl
-      WHERE dcl.dc_number = sos.dc_number AND dcl.status = 'delivered'
+    AND (
+      (sos.dc_number IS NOT NULL AND EXISTS (
+        SELECT 1 FROM delivery_challan_lines dcl
+        WHERE dcl.dc_number = sos.dc_number AND dcl.status = 'delivered'
+      ))
+      OR (sos.dc_number IS NULL AND EXISTS (
+        SELECT 1 FROM vendor_serial_numbers vsn
+        WHERE vsn.serial_id = sos.serial_id AND vsn.inventory_status = 'sold'
+      ))
     ))`;
 
 const SO_FULFILLMENT_DISPATCHED_SQL = `(SELECT COUNT(*)::int FROM sales_order_serials sos

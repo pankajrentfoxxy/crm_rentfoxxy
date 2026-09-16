@@ -176,6 +176,43 @@ async function createSerial(req, res) {
   }
 }
 
+/**
+ * POST /serials/:serialId/buyout  (PHASE 21)
+ * Record that we have bought a vendor-rented laptop out after a customer lost /
+ * damaged / opted to buy it. Sets the PER-SERIAL ownership override only: the
+ * purchase order is shared with hundreds of other serials and must never be
+ * retyped to convert one unit.
+ */
+const saleInPlaceService = require('../../services/saleInPlaceService');
+
+const buyoutValidators = [
+  param('serialId').isInt().toInt(),
+  body('vendor_bill_no').trim().notEmpty().withMessage('vendor_bill_no is required'),
+  body('amount').isFloat({ gt: 0 }).withMessage('amount must be greater than zero'),
+];
+
+async function recordVendorBuyout(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+  try {
+    const data = await saleInPlaceService.recordVendorBuyout({
+      serialId: req.params.serialId,
+      vendorBillNo: req.body.vendor_bill_no,
+      amount: req.body.amount,
+      actorUserId: req.user?.user_id || null,
+    });
+    res.json({
+      success: true,
+      message: 'Vendor buyout recorded. This unit is now owned and can be sold in place.',
+      data,
+    });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    if (code >= 500) console.error('recordVendorBuyout:', err);
+    res.status(code).json({ success: false, message: err.message });
+  }
+}
+
 module.exports = {
   grnPoParam: [param('poId').isInt().toInt()],
   serialParams: [param('grnId').isInt().toInt(), param('poId').isInt().toInt()],
@@ -185,5 +222,7 @@ module.exports = {
   listSerials,
   serialUpdateValidators,
   checkAndUpdate,
-  createSerial
+  createSerial,
+  buyoutValidators,
+  recordVendorBuyout,
 };

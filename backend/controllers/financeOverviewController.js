@@ -354,3 +354,47 @@ exports.getDcInvoiceQueue = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Sale-in-place invoice queue (PHASE 21).
+// In-place sales produce no DC, so they never reach the DC e-invoice queue.
+// Accounts raise the invoice in Zoho and attach it against the sales order.
+// ---------------------------------------------------------------------------
+
+/** GET /api/finance-overview/sale-invoice-queue?status=pending|attached */
+exports.getSaleInvoiceQueue = async (req, res) => {
+  try {
+    const status = String(req.query.status || 'pending').toLowerCase();
+    const wantPending = status !== 'attached';
+
+    const { rows } = await pool.query(
+      `SELECT sol.sales_order_number,
+              MIN(sol.customer_id)                     AS customer_id,
+              MIN(sol.customer_name)                   AS customer_name,
+              MIN(sol.entity_code)                     AS entity_code,
+              MIN(sol.gst_number)                      AS gst_number,
+              MIN(sol.created_at)                      AS created_at,
+              SUM(COALESCE(sol.main_qty, sol.quantity, 0))::int                     AS qty,
+              SUM(COALESCE(sol.rate, 0) * COALESCE(sol.main_qty, sol.quantity, 0))  AS order_value,
+              MAX(sol.sale_invoice_number)             AS sale_invoice_number,
+              MAX(sol.sale_invoice_uploaded_at)        AS sale_invoice_uploaded_at,
+              BOOL_OR(sol.sale_invoice_pdf_path IS NOT NULL) AS has_pdf,
+              (SELECT COUNT(*)::int FROM sale_in_place_events e
+                WHERE e.sales_order_number = sol.sales_order_number)  AS asset_count,
+              (SELECT STRING_AGG(DISTINCT e.reason, ', ') FROM sale_in_place_events e
+                WHERE e.sales_order_number = sol.sales_order_number)  AS reasons
+         FROM sales_order_lines sol
+        WHERE sol.fulfillment_mode = 'in_place'
+          AND LOWER(COALESCE(sol.status, 'pending')) <> 'cancelled'
+          AND ${wantPending ? 'sol.sale_invoice_number IS NULL' : 'sol.sale_invoice_number IS NOT NULL'}
+        GROUP BY sol.sales_order_number
+        ORDER BY MIN(sol.created_at) DESC
+        LIMIT 200`
+    );
+
+    res.json({ success: true, status: wantPending ? 'pending' : 'attached', count: rows.length, data: rows });
+  } catch (err) {
+    console.error('getSaleInvoiceQueue:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

@@ -3423,3 +3423,71 @@ exports.loginAsCustomerPortal = async (req, res) => {
 
 exports.validateFinanceSpockContactFields = validateFinanceSpockContactFields;
 exports.applyFinanceSpockDetails = applyFinanceSpockDetails;
+
+// ---------------------------------------------------------------------------
+// Sale in place (PHASE 21) — report a rented laptop as lost / damaged / bought out.
+// Stops customer rent and (for vendor-rented units) vendor rent, and raises the
+// credit note for the unused prepaid days. See docs/PHASE21_LOST_LAPTOP_SALE.md.
+// ---------------------------------------------------------------------------
+const saleInPlaceService = require('../services/saleInPlaceService');
+
+/** POST /customers/:customerId/sale-in-place */
+exports.reportSaleInPlace = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isInteger(customerId)) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const body = req.body || {};
+    const result = await saleInPlaceService.report({
+      customerId,
+      serialIds: Array.isArray(body.serial_ids) ? body.serial_ids : [],
+      reason: body.reason,
+      reportedOn: body.reported_on,
+      notes: body.notes || null,
+      actorUserId: req.user?.user_id || null,
+    });
+
+    const credited = result.items.filter((i) => i.credit_note_number).length;
+    const chase = result.items.filter((i) => i.vendor_settlement_required).length;
+    res.status(201).json({
+      success: true,
+      message: `${result.reported} laptop(s) reported ${result.reason}. Rent stopped ${result.rent_stopped_on}.`
+        + (credited ? ` Credit note raised for ${credited}.` : '')
+        + (chase ? ` ${chase} unit(s) are vendor-rented — record the vendor buyout before selling.` : ''),
+      data: result,
+    });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    if (code >= 500) console.error('reportSaleInPlace:', err);
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+/** GET /customers/:customerId/sale-in-place — open + historical cases. */
+exports.listSaleInPlaceCases = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isInteger(customerId)) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const { rows } = await pool.query(
+      `SELECT e.*, COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+              vsn.serial_number, vsn.inventory_status, vsn.rent_monthly_rate,
+              cn.credit_note_number,
+              COALESCE(v.business_name, NULLIF(TRIM(CONCAT_WS(' ', v.first_name, v.last_name)), '')) AS vendor_name
+         FROM sale_in_place_events e
+         JOIN vendor_serial_numbers vsn ON vsn.serial_id = e.serial_id
+         LEFT JOIN customer_credit_notes cn ON cn.credit_note_id = e.credit_note_id
+         LEFT JOIN vendors v ON v.vendor_id = e.vendor_id
+        WHERE e.customer_id = $1
+        ORDER BY e.created_at DESC
+        LIMIT 200`,
+      [customerId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('listSaleInPlaceCases:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
