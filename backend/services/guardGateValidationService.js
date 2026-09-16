@@ -720,7 +720,10 @@ async function loadReturnDc(db, rdcNumber) {
   if (!units.length) {
     units = r.rows.flatMap((row) => unitsFromSerialJson(row.serial_number));
   }
-  const laptops = uniqueLaptops(await enrichLaptops(db, units));
+  const laptops = await require('./dispatchChargerService').attachChargersToLaptops(
+    db,
+    uniqueLaptops(await enrichLaptops(db, units))
+  );
   const warehouseReceived = items.rows.length
     ? items.rows.every((i) => i.warehouse_received_at)
     : r.rows.every((row) => row.warehouse_received_at);

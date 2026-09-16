@@ -105,6 +105,13 @@ async function releaseAttachedAllocation(client, alloc, { soNumber, actorUserId,
         WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
       [alloc.qc_ticket_id]
     );
+    const chargerSvc = require('./dispatchChargerService');
+    await chargerSvc.cancelRequestsForTicket(
+      client,
+      alloc.qc_ticket_id,
+      { user_id: actorUserId, name: actorName },
+      reason || `Released because floor ticket ${alloc.qc_ticket_id} was cancelled`
+    );
   }
   await client.query(
     `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW()

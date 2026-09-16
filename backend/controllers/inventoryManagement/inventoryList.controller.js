@@ -14,7 +14,8 @@ const {
   effectiveSpareStatusSql,
   fetchSparePartTabCounts,
   attachSoAttachmentIndicators,
-  SPARE_STATUS_VALUES
+  SPARE_STATUS_VALUES,
+  readyToRentOrSellMatchSql,
 } = require('../../services/inventoryManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
 const { appendDateRangeClauses } = require('../../utils/dateRangeFilter');
@@ -29,6 +30,7 @@ const {
 } = require('../../utils/inventoryListQuery');
 const { getInventoryTagAccess } = require('../../services/inventoryTagAccessScope');
 const { hasPermission } = require('../../services/permissionService');
+const warehouseLocationService = require('../../services/warehouseLocationService');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -886,6 +888,132 @@ async function updateSerialRemark(req, res) {
   }
 }
 
+const carretAvailabilityValidators = [
+  query('carret').optional({ nullable: true }).isInt({ min: 1, max: 30 }).toInt(),
+];
+
+async function getCarretAvailability(req, res) {
+  try {
+    const carret = req.query.carret != null ? parseInt(req.query.carret, 10) : null;
+    if (carret != null && !warehouseLocationService.isValidCarret(carret)) {
+      return res.status(400).json({ success: false, message: 'Invalid carret number' });
+    }
+    const data = await warehouseLocationService.getCarretOccupancy(pool, carret);
+    const payload = carret != null
+      ? {
+          ...data,
+          next_available_slot: warehouseLocationService.findNextAvailableSlot(data),
+        }
+      : data;
+    res.json({ success: true, data: payload });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message || 'Failed to load carret availability' });
+  }
+}
+
+const locationValidators = [
+  param('id').isInt({ min: 1 }).toInt(),
+  body('warehouse_carret').isInt({ min: 1, max: 30 }).toInt(),
+  body('warehouse_carret_slot').isInt({ min: 1, max: 17 }).toInt(),
+];
+
+async function updateWarehouseLocation(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.params.id;
+  const carret = req.body.warehouse_carret;
+  const slot = req.body.warehouse_carret_slot;
+  const actorUserId = req.user?.user_id || req.user?.userId || null;
+  const actorName = req.user?.name || req.user?.full_name || req.user?.email || 'Unknown';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const eligible = await client.query(
+      `SELECT s.serial_id, s.inventory_asset_code
+         FROM vendor_serial_numbers s
+        WHERE s.serial_id = $1
+          AND s.deleted_at IS NULL
+          AND ${readyToRentOrSellMatchSql('s')}`,
+      [serialId]
+    );
+    if (!eligible.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Location can only be changed for Ready to Rent/Sell laptops',
+      });
+    }
+
+    const result = await warehouseLocationService.changeSerialLocation(client, serialId, carret, slot);
+    if (result.unchanged) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Already at ${result.to.label}`,
+      });
+    }
+
+    const changedAt = new Date().toISOString();
+    const changeMeta = {
+      from: result.from.label,
+      to: result.to.label,
+      from_carret: result.from.carret,
+      from_slot: result.from.slot,
+      to_carret: result.to.carret,
+      to_slot: result.to.slot,
+      changed_by_id: actorUserId,
+      changed_by_name: actorName,
+      changed_at: changedAt,
+    };
+
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+              updated_at = NOW()
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [serialId, JSON.stringify({ warehouse_location_change: changeMeta })]
+    );
+
+    const ttsplId = result.ttspl_id || eligible.rows[0].inventory_asset_code || result.serial_number;
+    await logTtsplEvent({
+      ttsplId,
+      vendorSerialId: serialId,
+      eventType: 'warehouse_location_changed',
+      description: result.from.label
+        ? `Warehouse location changed from ${result.from.label} to ${result.to.label}`
+        : `Warehouse location set to ${result.to.label}`,
+      metadata: changeMeta,
+      actorUserId,
+      actorName,
+      db: client,
+    });
+
+    await client.query('COMMIT');
+    invalidateInventoryListCachesFireAndForget();
+    res.json({
+      success: true,
+      message: `Location updated to ${result.to.label}`,
+      data: {
+        serial_id: serialId,
+        warehouse_carret: result.to.carret,
+        warehouse_carret_slot: result.to.slot,
+        warehouse_location: result.to.label,
+        warehouse_location_change: changeMeta,
+      },
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    const status = e.status || 500;
+    console.error('updateWarehouseLocation', e);
+    res.status(status).json({ success: false, message: e.message || 'Failed to update location' });
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   listValidators,
   listInventory,
@@ -893,6 +1021,10 @@ module.exports = {
   getListCounts,
   readyToRentActionValidators,
   updateReadyToRentAction,
+  carretAvailabilityValidators,
+  getCarretAvailability,
+  locationValidators,
+  updateWarehouseLocation,
   changeSparePartStatusValidators,
   changeSparePartStatus,
   tagInventoryValidators,

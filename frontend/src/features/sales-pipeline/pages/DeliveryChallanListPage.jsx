@@ -97,7 +97,8 @@ export default function DeliveryChallanListPage() {
 
   const dispatchCell = (row) => {
     const qc = row.qc_status;
-    const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
+    const ewayLocked = row.eway_required && !row.eway_bill_number;
+    const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed && !ewayLocked;
     return (
       <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(deliveryChallanDetailPath(row.dc_number), { state: listReturnState(location) })}>View</button>
@@ -121,6 +122,9 @@ export default function DeliveryChallanListPage() {
           <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
         )}
         <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${dcOrderTypeStyle(r)}`}>{dcOrderTypeLabel(r)}</span>
+        {r.eway_required && !r.eway_bill_number && (
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-900">E-Way pending</span>
+        )}
       </span>
     ) },
     { key: 'date', header: 'Created', render: (r) => formatDate(r.created_at) },
@@ -163,6 +167,9 @@ export default function DeliveryChallanListPage() {
               <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
             )}
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${dcOrderTypeStyle(r)}`}>{dcOrderTypeLabel(r)}</span>
+            {r.eway_required && !r.eway_bill_number && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-900">E-Way pending</span>
+            )}
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
           </div>
         </div>

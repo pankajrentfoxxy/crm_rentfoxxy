@@ -17,6 +17,8 @@ const ROLE_ROW_DEFAULTS = {
     ['floor_pipeline', true, true, false], ['floor_tickets', false, true, false], ['floor_ticket_config_edit', false, true, false], ['chip_level_repair', false, true, false],
     ['diagnosis_failed', true, true, false],
     ['qc_management', false, true, false], ['inventory', false, true, false], ['inventory_management', false, true, false],
+    ['ready_to_rent_location', false, true, false],
+    ['dispatch_charger', true, true, false], ['dispatch_charger_warehouse', false, true, false],
     ['parts_inventory', true, true, false], ['parts_dashboard', false, false, false], ['parts_approval', false, true, false],
     ['parts_history', false, false, false], ['parts_procurement', true, true, false], ['parts_discarded', false, true, false],
     ['scrap_challans', false, true, false], ['parts_detach', false, true, false], ['part_vendor_repair', true, true, false], ['ttspl_history', false, false, false],
@@ -55,7 +57,10 @@ const ROLE_ROW_DEFAULTS = {
     ['dashboard', false, false, false], ['floor_pipeline', true, true, false], ['floor_tickets', true, true, false],
     ['floor_ticket_config_edit', false, true, false],
     ['chip_level_repair', true, true, false], ['qc_management', false, true, false],
-    ['inventory', false, true, false], ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
+    ['inventory', false, true, false], ['inventory_management', false, true, false],
+    ['ready_to_rent_location', false, true, false],
+    ['dispatch_charger', true, true, false], ['dispatch_charger_warehouse', false, true, false],
+    ['parts_inventory', true, true, false],
     ['parts_dashboard', false, false, false], ['parts_approval', false, true, false],
     ['parts_detach', false, true, false],
     ['part_vendor_repair', true, true, false],
@@ -91,6 +96,7 @@ const ROLE_ROW_DEFAULTS = {
   dispatch_qc: [
     ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
     ['qc_management', false, true, false], ['dispatch_ops', false, true, false],
+    ['dispatch_charger', true, true, false],
     ['ttspl_history', false, false, false], ['inventory_management', false, false, false],
   ],
   procurement: [
@@ -106,7 +112,10 @@ const ROLE_ROW_DEFAULTS = {
   ],
   warehouse: [
     ['dashboard', false, false, false], ['warehouse', true, true, false], ['guard_gate_checking', true, true, false], ['gate_dashboard', true, true, false], ['inventory', false, true, false],
-    ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
+    ['inventory_management', false, true, false],
+    ['ready_to_rent_location', false, true, false],
+    ['dispatch_charger', false, false, false], ['dispatch_charger_warehouse', false, true, false],
+    ['parts_inventory', true, true, false],
     ['parts_dashboard', false, false, false], ['parts_approval', false, true, false], ['parts_history', false, false, false],
     ['parts_discarded', true, true, false], ['scrap_challans', true, true, false],
     ['parts_detach', false, true, false],
@@ -124,6 +133,7 @@ const ROLE_ROW_DEFAULTS = {
     ['guard_gate_checking', true, true, false],
     ['gate_dashboard', true, true, false],
     ['einvoice_ewb', true, true, false], ['customers', false, false, false],
+    ['dispatch_charger', true, true, false],
   ],
   accounts: [
     ['dashboard', false, false, false], ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
@@ -148,12 +158,14 @@ const ROLE_ROW_DEFAULTS = {
     ['diagnosis_failed', true, true, false],
     ['vendor_repair_dc_dispatch', true, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false], ['ttspl_history', false, false, false],
+    ['dispatch_charger', false, true, false],
   ],
   support_tech: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false],
     ['support_technician', false, true, false], ['technician_bucket', false, true, false],
     ['support_part_requests', true, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false],
+    ['dispatch_charger', false, true, false],
   ],
 };
 

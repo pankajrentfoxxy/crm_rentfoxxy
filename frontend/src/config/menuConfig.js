@@ -75,6 +75,7 @@ export const partsManagementAccordionChildren = [
   { label: 'Parts Dashboard', path: '/inventory-management/parts-dashboard', section: 'parts_dashboard' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_approval' },
+  { label: 'Dispatch Chargers', path: '/inventory-management/dispatch-chargers', section: 'dispatch_charger_warehouse' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_history' },
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po', section: 'parts_procurement' },
   { label: 'Part Vendor Repair DC', path: '/inventory-management/part-vendor-repair', section: 'part_vendor_repair' },
@@ -96,6 +97,7 @@ export function isPartsManagementRoute(pathname) {
   if (pathname.startsWith('/inventory-management/scrap-challans')) return true;
   // parts, parts-dashboard, parts-history, parts-approval
   if (pathname.startsWith('/inventory-management/parts')) return true;
+  if (pathname.startsWith('/inventory-management/dispatch-chargers')) return true;
   return false;
 }
 

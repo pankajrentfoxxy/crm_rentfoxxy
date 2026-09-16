@@ -18,6 +18,7 @@ import { INDIAN_STATES } from '../../../constants/indianStates';
 import PickupSetupForm from './PickupSetupForm';
 import AssignmentHistoryList from './AssignmentHistoryList';
 import ReturnDcNumberLink from './ReturnDcNumberLink';
+import PickupChargerScanPanel from '../../../features/dispatch-charger/PickupChargerScanPanel';
 
 /**
  * PickupItemCard — Phase 20 step-by-step pickup flow.
@@ -728,6 +729,11 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
                 )}
               </div>
             </div>
+          )}
+
+          {/* Return pickup: scan the charger we sent (technician only, not repair) */}
+          {podDone && !otpVerified && canActTech && item.pickup_type !== 'repair' && (
+            <PickupChargerScanPanel pickupItemId={item.id} />
           )}
 
           {/* Customer OTP entry */}

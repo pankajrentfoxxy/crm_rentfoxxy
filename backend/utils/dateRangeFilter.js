@@ -117,6 +117,9 @@ function parseCsvQuery(raw) {
  */
 function resolveMasterDateRange(query = {}) {
   const mode = String(query.date_mode || query.dateMode || '').trim().toLowerCase();
+  if (mode === 'all' || mode === 'all_time') {
+    return { dateFrom: null, dateTo: null, dateMode: 'all', month: null, months: [], ranges: [] };
+  }
   const months = parseCsvQuery(query.month);
   if (mode === 'month' && months.length) {
     const ranges = months.map(resolveMonthRange).filter((r) => r.dateFrom);

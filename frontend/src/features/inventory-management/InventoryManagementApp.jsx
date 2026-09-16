@@ -35,6 +35,7 @@ import PhysicalDeadPartsPage from './pages/PhysicalDeadPartsPage';
 import PhysicalPartInwardPage from './pages/PhysicalPartInwardPage';
 import PhysicalPartInwardDetailPage from './pages/PhysicalPartInwardDetailPage';
 import PhysicalPartOutwardDetailPage from './pages/PhysicalPartOutwardDetailPage';
+import DispatchChargerQueuePage from './pages/DispatchChargerQueuePage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -50,6 +51,7 @@ function InventoryIndexRedirect() {
   if (canView('parts_dashboard')) return <Navigate to="parts-dashboard" replace />;
   if (canView('parts_inventory')) return <Navigate to="parts" replace />;
   if (canView('parts_approval')) return <Navigate to="parts-approval" replace />;
+  if (canView('dispatch_charger_warehouse')) return <Navigate to="dispatch-chargers" replace />;
   if (canView('parts_history')) return <Navigate to="parts-history" replace />;
   if (canView('part_vendor_repair')) return <Navigate to="part-vendor-repair" replace />;
   if (canView('parts_discarded')) return <Navigate to="discarded-parts" replace />;
@@ -85,6 +87,7 @@ export default function InventoryManagementApp() {
         <Route path="parts-dashboard" element={g('parts_dashboard', <PartsDashboardPage />)} />
         <Route path="parts" element={g('parts_inventory', <PartsPage />)} />
         <Route path="parts-approval" element={g('parts_approval', <PartsApprovalPage />)} />
+        <Route path="dispatch-chargers" element={g('dispatch_charger_warehouse', <DispatchChargerQueuePage />)} />
         <Route path="parts-history" element={g('parts_history', <PartsMovementHistoryPage />)} />
         <Route path="part-vendor-repair" element={g('part_vendor_repair', <PartVendorRepairDcListPage />)} />
         <Route path="part-vendor-repair/:dcNumber" element={g('part_vendor_repair', <PartVendorRepairDcDetailPage />)} />

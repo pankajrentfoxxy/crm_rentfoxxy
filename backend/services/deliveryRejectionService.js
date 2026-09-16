@@ -206,6 +206,13 @@ async function resetSoSerialForReject(client, { serialId, salesOrderNumber, newQ
         WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
       [alloc.qc_ticket_id]
     );
+    const chargerSvc = require('./dispatchChargerService');
+    await chargerSvc.cancelRequestsForTicket(
+      client,
+      alloc.qc_ticket_id,
+      null,
+      `Released because floor ticket ${alloc.qc_ticket_id} was remade after delivery reject`
+    );
   }
 
   // Keep the SO allocation alive so the same line can get a new DC after QC re-pass.

@@ -140,6 +140,41 @@ async function assignWarehouseLocation(db, serialId, carret, slot) {
   return { carret: Number(carret), slot: Number(slot), label: formatLocation(carret, slot) };
 }
 
+async function loadSerialLocation(db, serialId) {
+  const r = await db.query(
+    `SELECT serial_id, serial_number, inventory_asset_code, extra,
+            warehouse_carret, warehouse_carret_slot
+       FROM vendor_serial_numbers
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [serialId]
+  );
+  return r.rows[0] || null;
+}
+
+async function changeSerialLocation(db, serialId, carret, slot) {
+  const current = await loadSerialLocation(db, serialId);
+  if (!current) {
+    const err = new Error('Laptop not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const fromCarret = current.warehouse_carret != null ? Number(current.warehouse_carret) : null;
+  const fromSlot = current.warehouse_carret_slot != null ? Number(current.warehouse_carret_slot) : null;
+  const fromLabel = formatLocation(fromCarret, fromSlot);
+  const assigned = await assignWarehouseLocation(db, serialId, carret, slot);
+
+  return {
+    serial_id: current.serial_id,
+    serial_number: current.serial_number,
+    ttspl_id: current.inventory_asset_code || null,
+    extra: current.extra,
+    from: { carret: fromCarret, slot: fromSlot, label: fromLabel },
+    to: { carret: assigned.carret, slot: assigned.slot, label: assigned.label },
+    unchanged: fromCarret === assigned.carret && fromSlot === assigned.slot,
+  };
+}
+
 async function vacateWarehouseLocation(db, serialId) {
   if (!serialId) return { vacated: false };
   const r = await db.query(
@@ -168,5 +203,7 @@ module.exports = {
   findNextAvailableSlot,
   assertSlotAvailable,
   assignWarehouseLocation,
+  changeSerialLocation,
+  loadSerialLocation,
   vacateWarehouseLocation,
 };

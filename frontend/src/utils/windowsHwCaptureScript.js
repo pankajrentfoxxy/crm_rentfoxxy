@@ -4,9 +4,13 @@ import { getCaptureApiBase } from './api';
 export const PS_ERR =
   "$e=$_.ErrorDetails.Message;if(-not $e){if($_.Exception.Response){try{$rs=$_.Exception.Response.GetResponseStream();$rd=New-Object System.IO.StreamReader($rs);$e=$rd.ReadToEnd();$rd.Close();if($e -match '\"message\"\\s*:\\s*\"([^\"]+)\"'){$e=$matches[1]}}catch{$e=$_.Exception.Message}}else{$e=$_.Exception.Message}};if(-not $e){$e='Unknown error'}";
 
+/** Largest system disk (matches tools/hw-capture/Program.cs — not first physical disk). */
+const PS_SSD =
+  "$diskBytes=0;Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue|ForEach-Object{$s=[int64]$_.Size;if($s -gt $diskBytes){$diskBytes=$s}};if(-not $diskBytes){$pd=Get-PhysicalDisk -ErrorAction SilentlyContinue|Sort-Object Size -Descending|Select-Object -First 1;if($pd){$diskBytes=$pd.Size}};if(-not $diskBytes){Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" -ErrorAction SilentlyContinue|ForEach-Object{$s=[int64]$_.Size;if($s -gt $diskBytes){$diskBytes=$s}}};$ssd=if($diskBytes){[math]::Round($diskBytes/1000000000)}else{0}";
+
 /** Null-safe helpers embedded in capture scripts. */
 const PS_HW =
-  "$csp=Get-CimInstance Win32_ComputerSystemProduct;$modelVer=if($csp){$csp.Version}else{''};$pd=Get-PhysicalDisk -ErrorAction SilentlyContinue|Select-Object -First 1;if(-not $pd){$ld=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" -ErrorAction SilentlyContinue|Select-Object -First 1;if($ld){$ssd=[math]::Round($ld.Size/1000000000)}else{$ssd=0}}else{$ssd=[math]::Round($pd.Size/1000000000)};$gpuObj=Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue|Select-Object -First 1;$gpu=if($gpuObj){$gpuObj.Name}else{''}";
+  `$csp=Get-CimInstance Win32_ComputerSystemProduct;$modelVer=if($csp){$csp.Version}else{''};${PS_SSD};$gpuObj=Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue|Select-Object -First 1;$gpu=if($gpuObj){$gpuObj.Name}else{''}`;
 
 const PS_TLS = '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12';
 
@@ -23,13 +27,22 @@ $gpuObj = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | 
 $gpu = if ($gpuObj) { $gpuObj.Name } else { '' }
 $ram = [math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB)
 if (-not $ram -or $ram -eq 0) { $ram = [math]::Round($cs.TotalPhysicalMemory / 1GB) }
-$pd = Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($pd) {
-  $ssd = [math]::Round($pd.Size / 1000000000)
-} else {
-  $ld = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue | Select-Object -First 1
-  $ssd = if ($ld) { [math]::Round($ld.Size / 1000000000) } else { 0 }
+$diskBytes = 0
+Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | ForEach-Object {
+  $s = [int64]$_.Size
+  if ($s -gt $diskBytes) { $diskBytes = $s }
 }
+if (-not $diskBytes) {
+  $pd = Get-PhysicalDisk -ErrorAction SilentlyContinue | Sort-Object Size -Descending | Select-Object -First 1
+  if ($pd) { $diskBytes = $pd.Size }
+}
+if (-not $diskBytes) {
+  Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue | ForEach-Object {
+    $s = [int64]$_.Size
+    if ($s -gt $diskBytes) { $diskBytes = $s }
+  }
+}
+$ssd = if ($diskBytes) { [math]::Round($diskBytes / 1000000000) } else { 0 }
 $gen = ''
 if ($cpu -match '(\\d{1,2})(?:st|nd|rd|th)\\s*Gen') {
   $gen = $matches[1]

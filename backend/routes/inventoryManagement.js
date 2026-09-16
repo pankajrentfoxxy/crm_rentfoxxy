@@ -25,6 +25,10 @@ const returnMasterDataView = [
   checkSectionPermission('inventory_return_master_data', 'view'),
 ];
 const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];
+const readyToRentLocationAccess = [
+  authMiddleware,
+  checkSectionPermission('ready_to_rent_location', 'edit'),
+];
 const invAdmin = [
   authMiddleware,
   checkRole('admin', 'super_admin'),
@@ -69,6 +73,8 @@ router.get('/', moduleEntry, (req, res) =>
       '/universal-search',
       '/spare-parts',
       '/ready-to-rent-action',
+      '/carret-availability',
+      '/:id/location',
       '/qc-process/add-laptop',
       '/qc-process/move-from-passed',
       '/qc-process/move-from-qc-pending',
@@ -161,6 +167,18 @@ router.get('/spare-parts', invView, (req, res) => {
   return inventoryList.listInventory(req, res);
 });
 
+router.get(
+  '/carret-availability',
+  readyToRentLocationAccess,
+  inventoryList.carretAvailabilityValidators,
+  inventoryList.getCarretAvailability
+);
+router.patch(
+  '/:id/location',
+  readyToRentLocationAccess,
+  inventoryList.locationValidators,
+  inventoryList.updateWarehouseLocation
+);
 router.patch(
   '/:id/remark',
   invAdmin,

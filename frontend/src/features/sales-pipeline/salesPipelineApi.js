@@ -13,6 +13,8 @@ export const sendQuotationEmail = (n, d) => api.post(`${base}/quotations/${encod
 export const getQuotationMeta = (p) => api.get(`${base}/quotations/meta/add`, { params: p });
 
 export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: p });
+export const exportSalesOrders = (p) =>
+  api.get(`${base}/sales-orders/export.xlsx`, { params: p, responseType: 'blob' });
 export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${encSo(n)}`);
 export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${encSo(n)}/full`);
 export const listSoActivities = (n, p) => api.get(`${base}/sales-orders/${encSo(n)}/activities`, { params: p });

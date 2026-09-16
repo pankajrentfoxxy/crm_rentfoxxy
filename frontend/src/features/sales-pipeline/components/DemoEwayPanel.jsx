@@ -29,23 +29,20 @@ export default function DemoEwayPanel({
   const [requesting, setRequesting] = useState(false);
 
   const handleRequest = async () => {
-    if (c.request_sent) {
-      toast.success('E-Way Bill Request Sent');
+    if (c.dispatch_mail_configured === false) {
+      toast.error('Dispatch mail is not configured on the server (DISPATCH_SMTP_*)');
       return;
     }
-    if (!window.confirm(`Request E-Way Bill from ${c.accounts_email || 'Accounts'}?`)) return;
+    const accountsEmail = c.accounts_email || 'Accounts';
+    const label = c.request_sent ? 'Resend' : 'Send';
+    if (!window.confirm(`${label} E-Way Bill request to ${accountsEmail}${c.dispatch_mail_from ? ` from ${c.dispatch_mail_from}` : ''}?`)) return;
     setRequesting(true);
     try {
       const res = await requestDemoEway(dcNumber);
-      toast.success(res.data?.message || 'E-Way Bill Request Sent');
+      toast.success(res.data?.message || 'Mail sent to Accounts');
       onReload?.();
     } catch (err) {
-      if (err.response?.status === 409) {
-        toast.success(err.response?.data?.message || 'E-Way Bill Request Sent');
-        onReload?.();
-      } else {
-        toast.error(err.response?.data?.message || 'Could not send request');
-      }
+      toast.error(err.response?.data?.message || 'Could not send mail');
     } finally {
       setRequesting(false);
     }
@@ -82,34 +79,72 @@ export default function DemoEwayPanel({
       <div className={`p-4 border rounded-xl text-sm ${uploaded ? 'bg-emerald-50 border-emerald-200 text-emerald-950' : 'bg-amber-50 border-amber-200 text-amber-950'}`}>
         <p className="font-semibold">{uploaded ? 'E-Way Bill Uploaded' : 'E-Way Bill Required'}</p>
         <p className="mt-1">
-          New-customer demo DC · value <strong>{formatCurrency(c.product_value)}</strong>
-          {' '}(exclusive of GST) is above ₹{Number(threshold).toLocaleString('en-IN')}.
+          Asset value <strong>{formatCurrency(c.asset_value ?? c.product_value)}</strong>
+          {' '}(processor + generation matrix) is above ₹{Number(threshold).toLocaleString('en-IN')}.
         </p>
+        {c.billed_value != null && Number(c.billed_value) !== Number(c.asset_value ?? c.product_value) && (
+          <p className="mt-1 text-xs">
+            Rental / billed amount {formatCurrency(c.billed_value)} is not used for the E-Way Bill.
+          </p>
+        )}
+        {Array.isArray(c.asset_units) && c.asset_units.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs bg-white/70 rounded-lg">
+              <thead>
+                <tr className="text-left text-amber-900/70">
+                  <th className="px-2 py-1">TTSPL</th>
+                  <th className="px-2 py-1">Serial</th>
+                  <th className="px-2 py-1">Processor</th>
+                  <th className="px-2 py-1">Generation</th>
+                  <th className="px-2 py-1 text-right">Asset value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {c.asset_units.map((u, i) => (
+                  <tr key={`${u.ttspl || u.serial || i}`}>
+                    <td className="px-2 py-1 font-mono">{u.ttspl || '—'}</td>
+                    <td className="px-2 py-1 font-mono">{u.serial || '—'}</td>
+                    <td className="px-2 py-1">{u.processor || '—'}</td>
+                    <td className="px-2 py-1">{u.generation || '—'}</td>
+                    <td className="px-2 py-1 text-right font-semibold">
+                      {u.asset_value != null ? formatCurrency(u.asset_value) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         <p className="mt-1">
-          DC Download: <strong>{uploaded || isSuperAdmin ? 'Enabled' : 'Locked'}</strong>
+          DC Download: <strong>{uploaded || canUpload ? 'Enabled' : 'Locked'}</strong>
         </p>
+        {c.lock_message && !uploaded && (
+          <p className="mt-1">{c.lock_message}</p>
+        )}
       </div>
 
-      {canRequest && !uploaded && (
+      {canRequest && (
         <section className="bg-white border rounded-xl p-5 space-y-3">
-          {c.request_sent ? (
-            <p className="text-sm font-semibold text-emerald-800">E-Way Bill Request Sent</p>
-          ) : (
-            <button
-              type="button"
-              disabled={requesting || c.dispatch_mail_configured === false}
-              onClick={handleRequest}
-              className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
-            >
-              {requesting ? 'Sending…' : 'Request E-Way Bill from Accounts'}
-            </button>
-          )}
+          <h3 className="font-semibold text-gray-900">Notify Accounts</h3>
+          <p className="text-sm text-gray-600">
+            Send E-Way Bill request to <strong>{c.accounts_email || 'accounts@truetechservices.in'}</strong>
+            {c.dispatch_mail_from ? <> from <strong>{c.dispatch_mail_from}</strong> (dispatch mail)</> : ' using the dispatch mail account.'}
+            {' '}DC PDF will be attached. Mail is <strong>not</strong> sent automatically when the DC is created.
+          </p>
           {c.accounts_notified_at && (
-            <p className="text-xs text-emerald-700">Requested {formatDateTime(c.accounts_notified_at)}</p>
+            <p className="text-xs text-emerald-700">Last sent: {formatDateTime(c.accounts_notified_at)}</p>
           )}
           {c.dispatch_mail_configured === false && (
-            <p className="text-xs text-amber-700">Dispatch SMTP is not configured — ask admin to set DISPATCH_SMTP_*.</p>
+            <p className="text-xs text-amber-700">Dispatch SMTP is not configured — ask admin to set DISPATCH_SMTP_* in server .env.</p>
           )}
+          <button
+            type="button"
+            disabled={requesting || c.dispatch_mail_configured === false}
+            onClick={handleRequest}
+            className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
+          >
+            {requesting ? 'Sending…' : c.request_sent ? 'Resend mail to Accounts' : 'Send mail to Accounts'}
+          </button>
         </section>
       )}
 

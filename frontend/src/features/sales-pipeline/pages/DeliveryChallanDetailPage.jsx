@@ -648,14 +648,25 @@ export default function DeliveryChallanDetailPage() {
               {invoicePdfLoading ? 'Preparing…' : 'Download Invoice PDF'}
             </button>
           )}
-          {needsInvoice && !canDownloadPdf && !isSuperAdmin && (
-            <span className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl">
-              DC PDF is locked until Accounts uploads the e-invoice
+          {needsDemoEway && demoEwayCompliance?.eway_complete && demoEwayCompliance?.eway_bill_pdf_path && (
+            <a
+              href={uploadUrl(demoEwayCompliance.eway_bill_pdf_path)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-amber-300 rounded-xl text-amber-900 bg-amber-50 hover:bg-amber-100"
+            >
+              Download E-Way Bill
+            </a>
+          )}
+          {needsDemoEway && !demoEwayCompliance?.eway_complete && !canDownloadPdf && !isSuperAdmin && (
+            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+              DC Download → Locked until E-Way Bill
             </span>
           )}
-          {needsDemoEway && !canDownloadPdf && !isSuperAdmin && (
-            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
-              DC Download → Locked
+          {needsInvoice && !saleCompliance?.einvoice_complete && !canDownloadPdf && !isSuperAdmin
+            && (!needsDemoEway || demoEwayCompliance?.eway_complete) && (
+            <span className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl">
+              DC PDF is locked until Accounts uploads the e-invoice
             </span>
           )}
           {isSuperAdmin && (
@@ -690,38 +701,42 @@ export default function DeliveryChallanDetailPage() {
               <div className="p-4 mb-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-950 space-y-2">
                 <p className="font-semibold">E-Way Bill Required</p>
                 <p>
-                  New-customer demo value is above ₹{Number(demoEwayCompliance?.eway_threshold || 50000).toLocaleString('en-IN')}.
-                  DC download stays locked until Accounts uploads the E-Way Bill.
+                  Asset value {formatCurrency(demoEwayCompliance?.asset_value ?? demoEwayCompliance?.product_value)}
+                  {' '}(processor + generation) is above ₹{Number(demoEwayCompliance?.eway_threshold || 50000).toLocaleString('en-IN')}.
+                  Accounts must upload the E-Way Bill using this value — not the rental amount.
                 </p>
-                {demoEwayCompliance?.request_sent ? (
-                  <p className="text-xs font-semibold text-emerald-800">E-Way Bill Request Sent</p>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={sendingAccountsMail || demoEwayCompliance?.dispatch_mail_configured === false}
-                    onClick={async () => {
-                      if (!window.confirm(`Request E-Way Bill from ${demoEwayCompliance?.accounts_email || 'Accounts'}?`)) return;
-                      setSendingAccountsMail(true);
-                      try {
-                        const res = await requestDemoEway(dcNumber);
-                        toast.success(res.data?.message || 'E-Way Bill Request Sent');
-                        load();
-                      } catch (err) {
-                        if (err.response?.status === 409) {
-                          toast.success(err.response?.data?.message || 'E-Way Bill Request Sent');
-                          load();
-                        } else {
-                          toast.error(err.response?.data?.message || 'Could not send request');
-                        }
-                      } finally {
-                        setSendingAccountsMail(false);
-                      }
-                    }}
-                    className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
-                  >
-                    {sendingAccountsMail ? 'Sending…' : 'Request E-Way Bill from Accounts'}
-                  </button>
+                <p className="text-sm text-amber-900">
+                  Mail is <strong>not</strong> sent automatically. Dispatch must click Send / Resend to notify Accounts.
+                </p>
+                {demoEwayCompliance?.accounts_notified_at && (
+                  <p className="text-xs text-emerald-800">Last sent: {formatDateTime(demoEwayCompliance.accounts_notified_at)}</p>
                 )}
+                <button
+                  type="button"
+                  disabled={sendingAccountsMail || demoEwayCompliance?.dispatch_mail_configured === false}
+                  onClick={async () => {
+                    const accountsEmail = demoEwayCompliance?.accounts_email || 'Accounts';
+                    const label = demoEwayCompliance?.request_sent ? 'Resend' : 'Send';
+                    if (!window.confirm(`${label} E-Way Bill request to ${accountsEmail}?`)) return;
+                    setSendingAccountsMail(true);
+                    try {
+                      const res = await requestDemoEway(dcNumber);
+                      toast.success(res.data?.message || 'Mail sent to Accounts');
+                      load();
+                    } catch (err) {
+                      toast.error(err.response?.data?.message || 'Could not send mail');
+                    } finally {
+                      setSendingAccountsMail(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
+                >
+                  {sendingAccountsMail
+                    ? 'Sending…'
+                    : demoEwayCompliance?.request_sent
+                      ? 'Resend mail to Accounts'
+                      : 'Send mail to Accounts'}
+                </button>
               </div>
             )}
             {needsInvoice && !saleCompliance?.einvoice_complete && (
@@ -1140,9 +1155,13 @@ export default function DeliveryChallanDetailPage() {
               {head.status === 'pending' && (
                 <PermissionGate section="dispatch_ops" action="edit">
                   <p className="text-amber-700 text-xs">This DC is not dispatched yet.</p>
-                  <button type="button"
-                    onClick={() => dispatchDC(dcNumber, { dispatch_mode: head.dispatch_mode || (head.ship_by === 'by_hand' ? 'inhouse' : head.ship_by === 'by_porter' ? 'porter' : 'courier'), courier_name: head.courier_name, awb_number: head.awb_number, delivery_person_id: head.delivery_person_id }).then(load).then(() => toast.success('Dispatched'))}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Mark Dispatched</button>
+                  {needsDemoEway && !demoEwayCompliance?.eway_complete ? (
+                    <p className="text-amber-800 text-sm">Dispatch is locked until Accounts uploads the E-Way Bill.</p>
+                  ) : (
+                    <button type="button"
+                      onClick={() => dispatchDC(dcNumber, { dispatch_mode: head.dispatch_mode || (head.ship_by === 'by_hand' ? 'inhouse' : head.ship_by === 'by_porter' ? 'porter' : 'courier'), courier_name: head.courier_name, awb_number: head.awb_number, delivery_person_id: head.delivery_person_id }).then(load).then(() => toast.success('Dispatched'))}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Mark Dispatched</button>
+                  )}
                 </PermissionGate>
               )}
               {['in_transit', 'reached', 'shipped'].includes(head.status) && (

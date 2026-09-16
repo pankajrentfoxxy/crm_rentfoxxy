@@ -138,6 +138,7 @@ router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotat
 router.post('/quotations/:quotationNumber/send', quoteEdit, ctrl.sendQuotationEmail);
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
+router.get('/sales-orders/export.xlsx', soView, ctrl.exportSalesOrders);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);
 router.get(...soRoute('/activities', checkSoViewOrAssignedDispatch, ctrl.listSalesOrderActivities));
 router.post(...soRoute('/activities', checkSoViewOrAssignedDispatch, ctrl.logSalesOrderDocumentActivity));

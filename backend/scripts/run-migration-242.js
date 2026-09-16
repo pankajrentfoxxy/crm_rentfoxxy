@@ -3,12 +3,17 @@
  * Usage: node scripts/run-migration-242.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+ * Run migration 242 — Dispatch charger flow.
+ * Usage: node scripts/run-migration-242.js
+ */
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
 const MIGRATION_NAME = '242_part_outward_movements.sql';
+const MIGRATION_NAME = '242_dispatch_charger_flow.sql';
 
 async function main() {
   const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);

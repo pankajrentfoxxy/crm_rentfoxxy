@@ -10,6 +10,7 @@ const { vacateWarehouseLocation } = require('../services/warehouseLocationServic
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
+const { assertReadyForDispatchQc } = require('../services/dispatchChargerService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -366,6 +367,15 @@ exports.submitQC = async (req, res) => {
             } catch (blockErr) {
                 await client.query('ROLLBACK');
                 return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+            }
+        }
+
+        if (qcStage === 'Dispatch QC') {
+            try {
+                await assertReadyForDispatchQc(client, Number(id), { requireScan: result === 'PASS' });
+            } catch (chargerErr) {
+                await client.query('ROLLBACK');
+                return res.status(chargerErr.status || 409).json({ success: false, message: chargerErr.message });
             }
         }
 

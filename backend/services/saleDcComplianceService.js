@@ -49,23 +49,32 @@ function buildDemoEwayCompliance(head, totals, userRole, {
   canUpload = false,
   canRequest = false,
   isFirstCustomerOrder = false,
+  assetValue = null,
+  billedValue = null,
+  assetUnits = [],
 } = {}) {
-  const productValue = Number(totals?.subtotal ?? totals?.grand_total ?? 0);
-  const needsEway = requiresDemoEwayCompliance(head?.quotation_type, isFirstCustomerOrder, productValue);
+  const billed = Number(billedValue ?? totals?.subtotal ?? totals?.grand_total ?? 0);
+  const productValue = Number(assetValue ?? billed);
+  const needsEway = requiresOutboundEway(head, productValue)
+    || requiresDemoEwayCompliance(head?.quotation_type, isFirstCustomerOrder, productValue);
   const ewayComplete = isEwayComplete(head, needsEway);
   const isSuperAdmin = userRole === 'super_admin';
   const requested = Boolean(head?.accounts_notified_at);
 
   return {
     applies: needsEway,
-    is_demo_dc: true,
+    is_demo_dc: isDemoDc(head?.quotation_type),
     is_first_customer_order: Boolean(isFirstCustomerOrder),
     requires_eway_bill: needsEway,
     eway_threshold: EWAY_VALUE_THRESHOLD,
     product_value: productValue,
+    asset_value: productValue,
+    billed_value: billed,
+    value_basis: 'processor_generation_matrix',
+    asset_units: assetUnits,
     eway_complete: ewayComplete,
     eway_status: !needsEway ? 'not_required' : (ewayComplete ? 'uploaded' : 'pending'),
-    can_download_pdf: isSuperAdmin || !needsEway || ewayComplete,
+    can_download_pdf: isSuperAdmin || canUpload || !needsEway || ewayComplete,
     can_upload_eway: isSuperAdmin || canUpload,
     can_request_eway: isSuperAdmin || canRequest,
     request_sent: requested,
@@ -78,6 +87,11 @@ function buildDemoEwayCompliance(head, totals, userRole, {
     eway_bill_pdf_path: head?.eway_bill_pdf_path || null,
     eway_bill_uploaded_at: head?.eway_bill_uploaded_at || null,
     eway_bill_uploaded_by: head?.eway_bill_uploaded_by || null,
+    lock_message: needsEway && !ewayComplete && !(isSuperAdmin || canUpload)
+      ? 'E-Way Bill is required for this DC. Accounts must add the E-Way Bill before download or dispatch.'
+      : (needsEway && !ewayComplete && (isSuperAdmin || canUpload)
+        ? 'Download the DC PDF if needed for the GST portal, then enter the E-Way Bill below to unlock the DC for dispatch.'
+        : null),
   };
 }
 
@@ -158,6 +172,31 @@ function requiresDemoEwayCompliance(quotationType, isFirstOrder, productValue) {
   return isDemoDc(quotationType) && Boolean(isFirstOrder) && requiresEwayBill(productValue);
 }
 
+/** Any outbound DC whose billed laptop value (ex. GST) is above the e-way threshold. */
+function requiresOutboundEway(head, productValue) {
+  const movement = String(head?.movement_type || 'outbound').toLowerCase();
+  if (movement === 'return') return false;
+  if (String(head?.status || '').toLowerCase() === 'cancelled') return false;
+  return requiresEwayBill(productValue);
+}
+
+/** Accounts / super_admin / dc_eway_bill — same gate as VRDC e-way upload. */
+async function canUploadDcValueEway(user, permissionCache = {}) {
+  if (!user) return false;
+  if (user.role === 'super_admin' || user.role === 'accounts') return true;
+  const { hasPermission } = require('./permissionService');
+  return (await hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_edit', permissionCache))
+    || (await hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_create', permissionCache));
+}
+
+async function canViewEwayLockedDc(user, permissionCache = {}) {
+  if (!user) return false;
+  if (user.role === 'super_admin' || user.role === 'accounts') return true;
+  if (await canUploadDcValueEway(user, permissionCache)) return true;
+  const { hasPermission } = require('./permissionService');
+  return hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_view', permissionCache);
+}
+
 function requiresEwayBill(grandTotal) {
   return Number(grandTotal) > EWAY_VALUE_THRESHOLD;
 }
@@ -182,9 +221,11 @@ function buildSaleCompliance(head, totals, userRole, {
   canUpload = false,
   canSendMail = false,
   isFirstCustomerOrder = false,
+  assetValue = null,
 } = {}) {
   const productValue = Number(totals?.subtotal ?? totals?.grand_total ?? 0);
-  const needsEway = requiresEwayBill(productValue);
+  const ewayValue = Number(assetValue ?? productValue);
+  const needsEway = requiresEwayBill(ewayValue);
   const einvoiceComplete = isEinvoiceComplete(head);
   const ewayComplete = isEwayComplete(head, needsEway);
   const isSuperAdmin = userRole === 'super_admin';
@@ -199,6 +240,8 @@ function buildSaleCompliance(head, totals, userRole, {
     requires_eway_bill: needsEway,
     eway_threshold: EWAY_VALUE_THRESHOLD,
     product_value: productValue,
+    asset_value: ewayValue,
+    billed_value: productValue,
     grand_total: productValue,
     einvoice_complete: einvoiceComplete,
     eway_complete: ewayComplete,
@@ -227,8 +270,149 @@ async function computeDcProductValue(dcNumber) {
   return +Number(subtotal || 0).toFixed(2);
 }
 
+function parseDcSerialEntries(raw) {
+  if (!raw) return [];
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  return list.filter(Boolean).map((entry) => {
+    const parts = String(entry).split('|');
+    const serialId = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : null;
+    return {
+      serialId,
+      serialNumber: parts[1] || parts[0] || null,
+      ttsplId: parts[2] || null,
+    };
+  });
+}
+
+/**
+ * E-way / BlueDart asset value per laptop from the processor + generation matrix.
+ * Rental billed amount is ignored — GST portal needs laptop value, not rent.
+ */
+async function collectDcAssetUnits(dcNumber, lines = null) {
+  const pool = require('../config/db');
+  const { lookupDeclaredValueForUnit } = require('../constants/bluedartDeclaredValue');
+  const dcLines = lines && lines.length ? lines : await getDeliveryChallanLines(dcNumber);
+  const units = [];
+
+  for (const line of dcLines) {
+    const details = Array.isArray(line.serials_detail) ? line.serials_detail : [];
+    if (details.length) {
+      for (const d of details) {
+        const processor = d.processor || line.processor || '';
+        const generation = d.generation || line.generation || '';
+        const model = d.model || d.model_name || line.model_name || '';
+        const amount = await lookupDeclaredValueForUnit(processor, generation, model);
+        units.push({
+          ttspl: d.ttspl || d.inventory_asset_code || null,
+          serial: d.serial_number || d.serial || null,
+          brand: d.brand || line.brand || '',
+          model,
+          processor,
+          generation,
+          config: [d.brand || line.brand, model, processor, generation].filter(Boolean).join(' · '),
+          asset_value: amount,
+        });
+      }
+      continue;
+    }
+
+    const serials = parseDcSerialEntries(line.serial_number);
+    if (serials.length) {
+      const ids = serials.map((s) => s.serialId).filter(Boolean);
+      const nums = serials.flatMap((s) => [s.serialNumber, s.ttsplId].filter(Boolean));
+      let specRows = [];
+      if (ids.length || nums.length) {
+        const r = await pool.query(
+          `SELECT serial_id, serial_number, inventory_asset_code,
+                  extra->>'processor' AS processor,
+                  extra->>'generation' AS generation,
+                  extra->>'brand' AS brand,
+                  COALESCE(extra->>'model', extra->>'model_name') AS model_name
+             FROM vendor_serial_numbers
+            WHERE deleted_at IS NULL
+              AND (serial_id = ANY($1::int[])
+                   OR serial_number = ANY($2::text[])
+                   OR inventory_asset_code = ANY($2::text[]))`,
+          [ids.length ? ids : [-1], nums.length ? nums : ['']]
+        );
+        specRows = r.rows;
+      }
+      for (const s of serials) {
+        const spec = specRows.find((x) =>
+          (s.serialId && x.serial_id === s.serialId)
+          || (s.serialNumber && x.serial_number === s.serialNumber)
+          || (s.ttsplId && x.inventory_asset_code === s.ttsplId)
+        ) || {};
+        const processor = spec.processor || line.processor || '';
+        const generation = spec.generation || line.generation || '';
+        const model = spec.model_name || line.model_name || '';
+        const amount = await lookupDeclaredValueForUnit(processor, generation, model);
+        units.push({
+          ttspl: spec.inventory_asset_code || s.ttsplId || null,
+          serial: spec.serial_number || s.serialNumber || null,
+          brand: spec.brand || line.brand || '',
+          model,
+          processor,
+          generation,
+          config: [spec.brand || line.brand, model, processor, generation].filter(Boolean).join(' · '),
+          asset_value: amount,
+        });
+      }
+      continue;
+    }
+
+    const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
+    for (let i = 0; i < qty; i += 1) {
+      const processor = line.processor || '';
+      const generation = line.generation || '';
+      const model = line.model_name || '';
+      const amount = await lookupDeclaredValueForUnit(processor, generation, model);
+      units.push({
+        ttspl: null,
+        serial: null,
+        brand: line.brand || '',
+        model,
+        processor,
+        generation,
+        config: [line.brand, model, processor, generation].filter(Boolean).join(' · '),
+        asset_value: amount,
+      });
+    }
+  }
+  return units;
+}
+
+async function computeDcAssetValue(dcNumber, lines = null) {
+  const units = await collectDcAssetUnits(dcNumber, lines);
+  const matched = units.filter((u) => u.asset_value != null && Number(u.asset_value) > 0);
+  const total = matched.reduce((sum, u) => sum + Number(u.asset_value), 0);
+  if (matched.length) {
+    return {
+      total: +total.toFixed(2),
+      units,
+      matched: matched.length,
+      unmatched: units.length - matched.length,
+      fallback_billed: false,
+    };
+  }
+  const billed = await computeDcProductValue(dcNumber);
+  return {
+    total: billed,
+    units,
+    matched: 0,
+    unmatched: units.length,
+    fallback_billed: true,
+  };
+}
+
+/** E-way uses asset (processor + generation) value, not rental billed amount. */
 async function computeDcGrandTotal(dcNumber) {
-  return computeDcProductValue(dcNumber);
+  const { total } = await computeDcAssetValue(dcNumber);
+  return total;
 }
 
 function resolveAccountsMailLogo({ isSale = false } = {}) {
@@ -261,11 +445,18 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
   const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
   const grandTotal = await computeDcGrandTotal(dcNumber);
 
-  if (requiresDemoEwayCompliance(quotationType, firstOrder, grandTotal)) {
-    if (isEwayComplete(head, true)) return;
-    throw new Error(
-      `E-Way Bill must be uploaded before downloading this demo DC PDF (value ₹${Number(grandTotal).toLocaleString('en-IN')})`
-    );
+  if (requiresOutboundEway({ ...head, quotation_type: quotationType }, grandTotal)
+    || requiresDemoEwayCompliance(quotationType, firstOrder, grandTotal)) {
+    const cache = {};
+    if (isEwayComplete(head, true)) {
+      // fall through to sale e-invoice lock if any
+    } else if (user?.role === 'super_admin' || await canUploadDcValueEway(user, cache)) {
+      return;
+    } else {
+      throw new Error(
+        `E-Way Bill must be uploaded before downloading this DC PDF (value ₹${Number(grandTotal).toLocaleString('en-IN')})`
+      );
+    }
   }
 
   if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) return;
@@ -441,14 +632,17 @@ async function sendAccountsSaleDcEmail({
 }
 
 function formatDemoLaptopRows(laptops = []) {
-  if (!laptops.length) return '<tr><td colspan="3" style="padding:8px 0;color:#64748b;">No laptops listed</td></tr>';
-  return laptops.map((row) => (
-    `<tr>
+  if (!laptops.length) return '<tr><td colspan="5" style="padding:8px 0;color:#64748b;">No laptops listed</td></tr>';
+  return laptops.map((row) => {
+    const unitVal = row.asset_value != null ? `₹${Number(row.asset_value).toLocaleString('en-IN')}` : '—';
+    return `<tr>
       <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;font-family:monospace;">${escapeHtml(row.ttspl || '—')}</td>
       <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;font-family:monospace;">${escapeHtml(row.serial || '—')}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${escapeHtml(row.config || '—')}</td>
-    </tr>`
-  )).join('');
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${escapeHtml(row.processor || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${escapeHtml(row.generation || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">${escapeHtml(unitVal)}</td>
+    </tr>`;
+  }).join('');
 }
 
 async function sendAccountsDemoEwayEmail({
@@ -456,7 +650,9 @@ async function sendAccountsDemoEwayEmail({
   salesOrderNumber,
   customerName,
   productValue,
+  billedValue = null,
   laptops = [],
+  pdfPath = null,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -474,8 +670,12 @@ async function sendAccountsDemoEwayEmail({
   const logoBlock = logo
     ? `<img src="cid:brand-logo" alt="${escapeHtml(brandLabel)}" style="height:44px;max-width:240px;display:block;margin:0;" />`
     : `<p style="margin:0;font-size:18px;font-weight:700;color:#0f172a;">${escapeHtml(brandLabel)}</p>`;
+  const billedStr = billedValue != null ? Number(billedValue).toLocaleString('en-IN') : null;
   const laptopText = laptops.length
-    ? laptops.map((row) => `  ${row.ttspl || '—'} / ${row.serial || '—'} — ${row.config || '—'}`).join('\n')
+    ? laptops.map((row) => {
+      const unitVal = row.asset_value != null ? `₹${Number(row.asset_value).toLocaleString('en-IN')}` : '—';
+      return `  ${row.ttspl || '—'} / ${row.serial || '—'} — ${row.processor || '—'} / ${row.generation || '—'} — ${unitVal}`;
+    }).join('\n')
     : '  —';
 
   const html = `<!DOCTYPE html>
@@ -489,24 +689,28 @@ async function sendAccountsDemoEwayEmail({
     <div style="padding:24px;">
       <p style="margin:0 0 16px;font-size:15px;">Hi Accounts Team,</p>
       <p style="margin:0 0 16px;line-height:1.6;">
-        A <strong>new-customer demo</strong> delivery challan is at or above ₹${escapeHtml(thresholdStr)}
-        and needs an E-Way Bill before the DC can be downloaded or dispatched.
+        A delivery challan has <strong>asset value</strong> above ₹${escapeHtml(thresholdStr)}
+        (processor + generation matrix — not rental charges) and needs an E-Way Bill.
       </p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px;">
-        <tr><td style="padding:8px 0;color:#64748b;width:160px;">Customer</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(customerName || '—')}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b;width:180px;">Customer</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(customerName || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Sales Order</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(salesOrderNumber || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Delivery Challan</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(dcNumber)}</td></tr>
-        <tr><td style="padding:8px 0;color:#64748b;">Consignment Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)} <span style="color:#64748b;">(exclusive of GST)</span></td></tr>
+        <tr><td style="padding:8px 0;color:#64748b;">Asset / E-Way Value</td><td style="padding:8px 0;font-weight:700;">₹${escapeHtml(valueStr)}</td></tr>
+        ${billedStr ? `<tr><td style="padding:8px 0;color:#64748b;">Rental / billed amount</td><td style="padding:8px 0;">₹${escapeHtml(billedStr)} <span style="color:#64748b;">(not used for E-Way)</span></td></tr>` : ''}
       </table>
-      <p style="margin:0 0 8px;font-weight:600;">Demo laptops</p>
+      <p style="margin:0 0 8px;font-weight:600;">Laptops — use these values on the GST portal</p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px;">
         <tr style="background:#f8fafc;color:#64748b;text-align:left;">
           <th style="padding:6px 8px;">TTSPL</th>
           <th style="padding:6px 8px;">Serial</th>
-          <th style="padding:6px 8px;">Configuration</th>
+          <th style="padding:6px 8px;">Processor</th>
+          <th style="padding:6px 8px;">Generation</th>
+          <th style="padding:6px 8px;text-align:right;">Asset value</th>
         </tr>
         ${formatDemoLaptopRows(laptops)}
       </table>
+      ${pdfPath ? `<p style="margin:0 0 16px;line-height:1.6;">The generated <strong>DC PDF is attached</strong> for GST portal entry.</p>` : ''}
       <p style="margin:0 0 20px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
         Action required: <strong>Upload E-Way Bill</strong> (number, date, and document) on this DC.
       </p>
@@ -526,16 +730,18 @@ async function sendAccountsDemoEwayEmail({
   const text = [
     'Hi Accounts Team,',
     '',
-    'A new-customer demo delivery challan needs an E-Way Bill before DC download.',
+    'A delivery challan needs an E-Way Bill before DC download.',
     '',
     `Customer: ${customerName || '—'}`,
     `Sales Order: ${salesOrderNumber || '—'}`,
     `Delivery Challan: ${dcNumber}`,
-    `Consignment value (exclusive of GST): ₹${valueStr}`,
+    `Asset / E-Way value (processor + generation): ₹${valueStr}`,
+    billedStr ? `Rental / billed amount (not used for E-Way): ₹${billedStr}` : '',
     '',
-    'Demo laptops:',
+    'Laptops:',
     laptopText,
     '',
+    pdfPath ? 'The generated DC PDF is attached for GST portal entry.' : '',
     'Action required: Upload E-Way Bill (number, date, and document).',
     portalUrl,
     '',
@@ -543,12 +749,16 @@ async function sendAccountsDemoEwayEmail({
     'Team Rentfoxxy',
   ].join('\n');
 
+  const pdfRelativePath = pdfPath
+    ? `uploads/${String(pdfPath).replace(/^uploads\//, '')}`
+    : null;
   const sent = await sendDispatchMail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
-    subject: `${dcNumber} : ${customerName || 'Customer'} : Upload E-Way Bill (Demo)`,
+    subject: `${dcNumber} : ${customerName || 'Customer'} : Upload E-Way Bill`,
     html,
     text,
+    pdfRelativePath,
     extraAttachments: logo ? [{
       filename: logo.filename,
       path: logo.path,
@@ -572,6 +782,77 @@ async function emailAccountsSaleDcCreated(params) {
   return sendAccountsSaleDcEmail(params);
 }
 
+async function markDcEwayRequired(dcNumber, required, assetValue = null) {
+  const pool = require('../config/db');
+  const params = [dcNumber, Boolean(required), assetValue == null ? null : Number(assetValue)];
+  try {
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET eway_required = $2,
+              eway_asset_value = COALESCE($3, eway_asset_value),
+              updated_at = NOW()
+        WHERE dc_number = $1`,
+      params
+    );
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET eway_required = $2, updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber, Boolean(required)]
+    );
+  }
+}
+
+/**
+ * After DC create: if billed value > threshold, lock the DC and email Accounts.
+ * Mail failure must not roll back DC create.
+ */
+function laptopRowsFromDcLines(lines = []) {
+  const rows = [];
+  for (const line of lines) {
+    const config = [line.brand, line.model_name || line.model, line.processor, line.generation, line.ram, line.storage]
+      .filter(Boolean).join(' · ');
+    let parsed = line.serial_number;
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch { parsed = parsed; }
+    }
+    const list = Array.isArray(line.serials_detail) && line.serials_detail.length
+      ? line.serials_detail.map((d) => ({
+        ttspl: d.ttspl || d.inventory_asset_code || null,
+        serial: d.serial_number || null,
+        config: [d.brand, d.model, d.processor, d.generation, d.ram, d.storage].filter(Boolean).join(' · ') || config,
+      }))
+      : (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).map((entry) => {
+        const parts = String(entry).split('|');
+        return { serial: parts[1] || parts[0] || null, ttspl: parts[2] || null, config };
+      });
+    if (list.length) rows.push(...list);
+    else rows.push({ ttspl: null, serial: null, config });
+  }
+  return rows;
+}
+
+/** Lock the DC when asset value > threshold. Does not send mail — dispatch clicks Send. */
+async function flagDcValueEwayIfNeeded(dcNumber) {
+  const lines = await getDeliveryChallanLines(dcNumber);
+  if (!lines.length) return { skipped: true };
+  const asset = await computeDcAssetValue(dcNumber, lines);
+  const productValue = asset.total;
+  if (!requiresOutboundEway(lines[0], productValue)) {
+    await markDcEwayRequired(dcNumber, false, productValue);
+    return { skipped: true, product_value: productValue };
+  }
+  await markDcEwayRequired(dcNumber, true, productValue);
+  return { flagged: true, product_value: productValue };
+}
+
+/** @deprecated Auto-send on DC create removed — dispatch uses requestDemoEway. */
+async function notifyAccountsDcValueEwayIfNeeded(dcNumber) {
+  return flagDcValueEwayIfNeeded(dcNumber);
+}
+
 module.exports = {
   EWAY_VALUE_THRESHOLD,
   ACCOUNTS_EMAIL,
@@ -589,6 +870,8 @@ module.exports = {
   buildDemoEwayCompliance,
   computeDcProductValue,
   computeDcGrandTotal,
+  computeDcAssetValue,
+  collectDcAssetUnits,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,
   sendAccountsSaleDcEmail,
@@ -596,5 +879,12 @@ module.exports = {
   emailAccountsSaleDcCreated,
   canUploadSaleDcCompliance,
   canManageDcEwayBill,
+  canUploadDcValueEway,
+  canViewEwayLockedDc,
+  requiresOutboundEway,
+  flagDcValueEwayIfNeeded,
+  notifyAccountsDcValueEwayIfNeeded,
+  markDcEwayRequired,
+  laptopRowsFromDcLines,
   UPLOAD_PERMISSION_CHECKS,
 };

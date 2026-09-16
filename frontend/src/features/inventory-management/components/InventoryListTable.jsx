@@ -7,6 +7,8 @@ import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
 import ItemDescriptionEditModal from './ItemDescriptionEditModal';
+import WarehouseLocationEditModal from './WarehouseLocationEditModal';
+import { formatDdMmYyyyDateTime } from '../../../utils/dateFormat';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import AddLaptopToQcModal from './AddLaptopToQcModal';
 import {
@@ -718,6 +720,7 @@ export default function InventoryListTable({ routeKey }) {
   const canCreateProductionTicket = isInventoryAdmin
     || canEditSection('qc_create_production_ticket')
     || canEditSection('qc_move_to_ticket');
+  const canChangeLocation = canEditSection('ready_to_rent_location');
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
@@ -747,6 +750,7 @@ export default function InventoryListTable({ routeKey }) {
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
+  const [locationEditRow, setLocationEditRow] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [scopeNote, setScopeNote] = useState(null);
   const isQcProcess = routeKey === 'qc-process';
@@ -1243,10 +1247,34 @@ export default function InventoryListTable({ routeKey }) {
                   ) : null}
                   {showLocationColumn ? (
                     <td className="px-3 py-3 text-xs whitespace-nowrap">
-                      {row.warehouse_location
-                        || (row.warehouse_carret && row.warehouse_carret_slot
-                          ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
-                          : '—')}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <span>
+                            {row.warehouse_location
+                              || (row.warehouse_carret && row.warehouse_carret_slot
+                                ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
+                                : '—')}
+                          </span>
+                          {canChangeLocation ? (
+                            <button
+                              type="button"
+                              onClick={() => setLocationEditRow(row)}
+                              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-teal-700 hover:bg-teal-50"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              Edit
+                            </button>
+                          ) : null}
+                        </div>
+                        {row.warehouse_location_change?.changed_by_name ? (
+                          <span className="text-[10px] text-slate-500">
+                            by {row.warehouse_location_change.changed_by_name}
+                            {row.warehouse_location_change.changed_at
+                              ? ` · ${formatDdMmYyyyDateTime(row.warehouse_location_change.changed_at)}`
+                              : ''}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                   ) : null}
                   {showTagColumn ? (
@@ -1287,6 +1315,13 @@ export default function InventoryListTable({ routeKey }) {
         onClose={() => setShowAddLaptopModal(false)}
         onSuccess={() => load()}
         intakeTarget={isQcPending ? 'qc_pending' : 'pending'}
+      />
+
+      <WarehouseLocationEditModal
+        open={Boolean(locationEditRow)}
+        row={locationEditRow}
+        onClose={() => setLocationEditRow(null)}
+        onSaved={() => load()}
       />
     </div>
   );

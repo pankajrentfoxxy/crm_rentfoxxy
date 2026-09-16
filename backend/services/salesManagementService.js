@@ -539,13 +539,12 @@ async function getQuotationLines(quotationNumber) {
   return result.rows;
 }
 
-async function listSalesOrdersGrouped({
-  page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
+/** Shared WHERE for sales-order list + Excel export (same filters as list page). */
+function buildSalesOrderListWhere({
+  search = '', assignedUserId = null, dateFrom, dateTo,
   customerId = null, status = '', entityScope = '', orderType = '',
   viewerRole = null, viewerUserId = null, restrictDispatchWorkflow = false,
 } = {}) {
-  const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
-  const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
   const params = [];
   let where = '';
   if (search) {
@@ -579,7 +578,6 @@ async function listSalesOrdersGrouped({
     where += ` AND ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'sales_order_lines.sales_order_number')} = 0`;
     where += ` AND ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, 'sales_order_lines.sales_order_number')} = 0`;
   } else if (normalizedStatus === 'active') {
-    // Anything still in flight: not cancelled and not yet fully delivered.
     where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
     where += ` AND NOT (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
   } else if (normalizedStatus === 'delivered') {
@@ -609,6 +607,131 @@ async function listSalesOrdersGrouped({
     role: viewerRole,
     userId: viewerUserId,
     restrictDispatchWorkflow,
+  });
+  return { where, params };
+}
+
+function formatSoLineModel(row = {}) {
+  return [
+    row.brand,
+    row.model_name,
+    row.processor,
+    row.generation,
+    row.ram,
+    row.storage,
+    row.gpu,
+    row.screen_size,
+  ].map((v) => String(v || '').trim()).filter(Boolean).join(' · ');
+}
+
+/**
+ * Line-level rows for SO Excel export (sale / rental pages).
+ * Respects the same filters as the list page, including date range.
+ */
+async function listSalesOrdersExportRows({
+  search = '', assignedUserId = null, dateFrom, dateTo,
+  customerId = null, status = '', entityScope = '', orderType = '',
+  viewerRole = null, viewerUserId = null, restrictDispatchWorkflow = false,
+} = {}) {
+  const { where, params } = buildSalesOrderListWhere({
+    search, assignedUserId, dateFrom, dateTo, customerId, status,
+    entityScope, orderType, viewerRole, viewerUserId, restrictDispatchWorkflow,
+  });
+
+  const { rows } = await pool.query(
+    `WITH filtered AS (
+       SELECT DISTINCT sales_order_number
+         FROM sales_order_lines
+         ${where}
+     ),
+     so_metrics AS (
+       SELECT
+         f.sales_order_number,
+         (SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int
+            FROM sales_order_lines sol WHERE sol.sales_order_number = f.sales_order_number) AS laptop_qty,
+         (SELECT COUNT(*)::int FROM sales_order_serials sos
+            WHERE sos.sales_order_number = f.sales_order_number AND sos.status = 'attached') AS attached_count,
+         ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, 'f.sales_order_number')} AS delivered_count,
+         ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'f.sales_order_number')} AS dispatched_count,
+         (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sol.status = 'cancelled') = COUNT(*)
+                      THEN 'cancelled' ELSE 'pending' END
+            FROM sales_order_lines sol WHERE sol.sales_order_number = f.sales_order_number) AS line_status,
+         (SELECT COALESCE(MAX(COALESCE(sol.shiping_charges, 0)), 0)
+            FROM sales_order_lines sol WHERE sol.sales_order_number = f.sales_order_number) AS shipping_charges,
+         (SELECT string_agg(DISTINCT dcl.dc_number, ', ' ORDER BY dcl.dc_number)
+            FROM delivery_challan_lines dcl
+           WHERE dcl.sales_order_number = f.sales_order_number
+             AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+             AND LOWER(COALESCE(dcl.status, '')) <> 'cancelled') AS dc_numbers
+       FROM filtered f
+     )
+     SELECT
+       sol.sales_order_number,
+       sol.created_at,
+       COALESCE(NULLIF(TRIM(sol.customer_name), ''), c.company_name, c.name) AS customer_name,
+       sol.quotation_type,
+       sol.brand,
+       sol.model_name,
+       sol.processor,
+       sol.generation,
+       sol.ram,
+       sol.storage,
+       sol.gpu,
+       sol.screen_size,
+       COALESCE(sol.main_qty, sol.quantity, 0)::int AS quantity,
+       COALESCE(sol.rate, 0)::numeric AS rate,
+       sol.security_type,
+       COALESCE(sol.security_amount, 0)::numeric AS security_amount,
+       m.shipping_charges,
+       m.dc_numbers,
+       m.laptop_qty,
+       m.attached_count,
+       m.delivered_count,
+       m.dispatched_count,
+       m.line_status AS status
+     FROM sales_order_lines sol
+     JOIN so_metrics m ON m.sales_order_number = sol.sales_order_number
+     LEFT JOIN customers c ON c.customer_id = sol.customer_id
+     WHERE sol.sales_order_number IN (SELECT sales_order_number FROM filtered)
+     ORDER BY sol.created_at DESC NULLS LAST, sol.sales_order_number, sol.id ASC`,
+    params
+  );
+
+  // Compute SO-level security once per order (one_month_rental vs fixed).
+  const linesBySo = new Map();
+  for (const row of rows) {
+    const key = row.sales_order_number;
+    if (!linesBySo.has(key)) linesBySo.set(key, []);
+    linesBySo.get(key).push(row);
+  }
+  const securityBySo = new Map();
+  for (const [so, lines] of linesBySo) {
+    securityBySo.set(so, sumSoSecurityAmount(lines));
+  }
+
+  return rows.map((row) => {
+    const reconciled = withPendingQty(row);
+    return {
+      ...reconciled,
+      model: formatSoLineModel(row),
+      status: deriveSalesOrderListStatus(reconciled),
+      security_total: securityBySo.get(row.sales_order_number) || 0,
+      shipping_charges: Number(row.shipping_charges || 0),
+      dc_numbers: row.dc_numbers || '',
+    };
+  });
+}
+
+async function listSalesOrdersGrouped({
+  page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
+  customerId = null, status = '', entityScope = '', orderType = '',
+  viewerRole = null, viewerUserId = null, restrictDispatchWorkflow = false,
+} = {}) {
+  const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
+  const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
+  const { where, params } = buildSalesOrderListWhere({
+    search, assignedUserId, dateFrom, dateTo, customerId, status,
+    entityScope, orderType, viewerRole, viewerUserId, restrictDispatchWorkflow,
   });
   const statsQuery = `
     WITH filtered AS (
@@ -785,6 +908,7 @@ function buildDeliveryChallanListWhere({
   assignedUserId = null,
   dateFrom,
   dateTo,
+  hidePendingEway = false,
 } = {}) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
@@ -823,14 +947,22 @@ function buildDeliveryChallanListWhere({
     where,
     appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params, tableAlias: 'd' })
   );
+  if (hidePendingEway) {
+    where += ` AND NOT (
+      COALESCE(d.eway_required, FALSE) = TRUE
+      AND COALESCE(TRIM(d.eway_bill_number), '') = ''
+      AND LOWER(COALESCE(NULLIF(TRIM(d.status), ''), 'pending')) IN ('pending', 'dispatch_ready')
+    )`;
+  }
   return { where, params };
 }
 
 async function listDeliveryChallansGrouped({
   page = 1, limit = 20, search = '', status = '', dcPurpose = '', orderType = '', assignedUserId = null, dateFrom, dateTo,
+  hidePendingEway = false,
 } = {}) {
   const { where, params } = buildDeliveryChallanListWhere({
-    search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo,
+    search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo, hidePendingEway,
   });
   const fromSql = `FROM delivery_challan_lines d ${DC_SO_TYPE_JOIN}`;
   // A DC can have several line items; list/count one row per DC (not per line)
@@ -881,6 +1013,7 @@ async function listDeliveryChallansGrouped({
             d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
             d.courier_name, d.awb_number, d.model_name, d.dispatch_mode, d.dispatched_at,
             d.created_at, d.updated_at, d.dc_purpose, d.support_ticket_id,
+            d.eway_required, d.eway_bill_number, d.eway_asset_value,
             COALESCE(u.name, u.email, '') AS delivery_person_name,
             so.quotation_type AS order_type,
             so.entity_code
@@ -2826,6 +2959,7 @@ module.exports = {
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
+  listSalesOrdersExportRows,
   getSalesOrderLines,
   getSalesOrderSupportMeta,
   listDeliveryChallansGrouped,
