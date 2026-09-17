@@ -1,4 +1,5 @@
-const { generateServiceDcPdf } = require('./salesManagementPdfService');
+const { generateServiceDcPdf, generateDocumentPdf } = require('./salesManagementPdfService');
+const { getDeliveryChallanLines } = require('./salesManagementService');
 const { buildUnitsForRdc } = require('./returnDcPdfService');
 
 async function buildUnitsForSdc(db, dcl, pickupItems) {
@@ -66,7 +67,28 @@ async function regenerateServiceDcPdfByNumber(db, sdcNumber) {
   }
 }
 
+/**
+ * Re-render an SDC with the standard DC layout, which prints the ship-by mode and
+ * the assigned delivery technician. Same output as POST /delivery-challans/:dc/pdf.
+ */
+async function regenerateServiceDcDocumentPdf(db, sdcNumber) {
+  const lines = await getDeliveryChallanLines(sdcNumber);
+  if (!lines.length) return null;
+  const pdfPath = await generateDocumentPdf({
+    docType: 'delivery_challan',
+    docNumber: sdcNumber,
+    header: lines[0] || {},
+    lines,
+  });
+  await db.query(
+    `UPDATE delivery_challan_lines SET pdf_path = $1, updated_at = NOW() WHERE dc_number = $2`,
+    [pdfPath, sdcNumber]
+  );
+  return pdfPath;
+}
+
 module.exports = {
   regenerateServiceDcPdfByNumber,
+  regenerateServiceDcDocumentPdf,
   buildUnitsForSdc,
 };
