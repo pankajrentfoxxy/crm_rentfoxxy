@@ -197,6 +197,20 @@ async function canViewEwayLockedDc(user, permissionCache = {}) {
   return hasPermission(user.user_id, user.role, 'dc_eway_bill', 'can_view', permissionCache);
 }
 
+// Once a DC has left the warehouse, or is rejected/cancelled, a fresh e-invoice /
+// e-way request only confuses Accounts. Mirrors isAccountsMailBlocked in the frontend.
+const ACCOUNTS_MAIL_BLOCKED_STATUSES = new Set([
+  'in_transit', 'shipped', 'reached', 'delivered', 'rejected', 'cancelled',
+]);
+
+/** Reason string if any line of the DC is in a status that must not mail Accounts, else null. */
+function accountsMailBlockedReason(lines = []) {
+  const blocked = [...new Set(lines.map((l) => String(l.status || '').toLowerCase()))]
+    .filter((s) => ACCOUNTS_MAIL_BLOCKED_STATUSES.has(s));
+  if (!blocked.length) return null;
+  return `Mail to Accounts is not sent for a DC that is ${blocked.map((s) => s.replace(/_/g, ' ')).join('/')}.`;
+}
+
 function requiresEwayBill(grandTotal) {
   return Number(grandTotal) > EWAY_VALUE_THRESHOLD;
 }
@@ -855,6 +869,8 @@ async function notifyAccountsDcValueEwayIfNeeded(dcNumber) {
 
 module.exports = {
   EWAY_VALUE_THRESHOLD,
+  ACCOUNTS_MAIL_BLOCKED_STATUSES,
+  accountsMailBlockedReason,
   ACCOUNTS_EMAIL,
   ACCOUNTS_EMAIL_CC,
   isSaleDc,

@@ -23,6 +23,7 @@ const {
   computeDcAssetValue,
   sendAccountsSaleDcEmail,
   sendAccountsDemoEwayEmail,
+  accountsMailBlockedReason,
   markDcEwayRequired,
   ACCOUNTS_EMAIL,
 } = require('../services/saleDcComplianceService');
@@ -255,6 +256,10 @@ exports.sendAccountsNotification = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     let head = lines[0];
+    const mailBlocked = accountsMailBlockedReason(lines);
+    if (mailBlocked) {
+      return res.status(409).json({ success: false, message: mailBlocked });
+    }
 
     let quotationType = null;
     if (head.sales_order_number) {
@@ -370,6 +375,10 @@ exports.requestDemoEway = async (req, res) => {
     const lines = await getDeliveryChallanLines(dcNumber);
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const mailBlocked = accountsMailBlockedReason(lines);
+    if (mailBlocked) {
+      return res.status(409).json({ success: false, message: mailBlocked });
     }
     let head = lines[0];
 

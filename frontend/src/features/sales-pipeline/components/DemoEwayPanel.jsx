@@ -13,6 +13,7 @@ function docUrl(path) {
 export default function DemoEwayPanel({
   dcNumber,
   compliance,
+  mailBlocked = false,
   onReload,
   isSuperAdmin,
 }) {
@@ -123,7 +124,7 @@ export default function DemoEwayPanel({
         )}
       </div>
 
-      {canRequest && (
+      {canRequest && !mailBlocked && (
         <section className="bg-white border rounded-xl p-5 space-y-3">
           <h3 className="font-semibold text-gray-900">Notify Accounts</h3>
           <p className="text-sm text-gray-600">

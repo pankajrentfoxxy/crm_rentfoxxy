@@ -19,7 +19,7 @@ import {
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
-  isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
+  isAccountsMailBlocked, isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
   dcOrderTypeLabel, dcOrderTypeStyle,
   resolveDcBackNavigation, downloadBlob, collectBluedartAwbRows, persistDcBackContext,
   readDcBackContext, DC_NAV_SOURCE_SALES_ORDER,
@@ -472,6 +472,7 @@ export default function DeliveryChallanDetailPage() {
 
   const isRejected = head.status === 'rejected';
   const isCancelled = head.status === 'cancelled';
+  const accountsMailBlocked = isAccountsMailBlocked(head.status);
   const canCancelDc = isSuperAdmin && isDcCancellable(head);
   const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
   const pendingWarehouseReturn = isRejected && !head.return_to_warehouse_at;
@@ -711,6 +712,7 @@ export default function DeliveryChallanDetailPage() {
                 {demoEwayCompliance?.accounts_notified_at && (
                   <p className="text-xs text-emerald-800">Last sent: {formatDateTime(demoEwayCompliance.accounts_notified_at)}</p>
                 )}
+                {!accountsMailBlocked && (
                 <button
                   type="button"
                   disabled={sendingAccountsMail || demoEwayCompliance?.dispatch_mail_configured === false}
@@ -737,6 +739,7 @@ export default function DeliveryChallanDetailPage() {
                       ? 'Resend mail to Accounts'
                       : 'Send mail to Accounts'}
                 </button>
+                )}
               </div>
             )}
             {needsInvoice && !saleCompliance?.einvoice_complete && (
@@ -747,7 +750,7 @@ export default function DeliveryChallanDetailPage() {
                   {saleCompliance?.requires_eway_bill ? ' (e-way bill is also mandatory — value above ₹50,000)' : ''}.
                   {saleCompliance?.is_first_customer_order && !isSale ? ' This is the customer’s first DC.' : ''}
                 </p>
-                {saleCompliance?.can_send_accounts_mail && (
+                {saleCompliance?.can_send_accounts_mail && !accountsMailBlocked && (
                   <button
                     type="button"
                     disabled={sendingAccountsMail || saleCompliance?.dispatch_mail_configured === false}
@@ -1292,6 +1295,7 @@ export default function DeliveryChallanDetailPage() {
             <DemoEwayPanel
               dcNumber={dcNumber}
               compliance={demoEwayCompliance}
+              mailBlocked={accountsMailBlocked}
               onReload={load}
               isSuperAdmin={isSuperAdmin}
             />
