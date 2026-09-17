@@ -136,7 +136,9 @@ function lookupInMatrix(matrix, processor, generation, model) {
     return row ? Number(row.amount) : null;
   }
 
-  const category = normalizeCategory(processor);
+  // Ryzen units are usually recorded as processor "AMD", generation "Ryzen 7".
+  const category = normalizeCategory(processor)
+    || (normalizeCategory(generation) === 'R7' ? 'R7' : null);
   if (!category) return null;
 
   if (category === 'APPLE') {
