@@ -2347,14 +2347,22 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   }
   const serialIds = rows.map((r) => r.serial_id).filter(Boolean);
 
+  // The first rental invoice is raised from this same gate submit (see
+  // maybeInvoiceOnRentalDcCreate below) off vsn.rent_monthly_rate, so the new
+  // SO's rate has to land before that — otherwise a re-rented asset bills at
+  // its previous customer's rate.
+  const { resolveSerialRentRate } = require('./serialRentRateService');
+
   for (const row of rows) {
     if (!row.serial_id) continue;
+    const rentMonthlyRate = await resolveSerialRentRate(db, row.serial_id, dcNumber);
     try {
       await inventorySM.markDispatched(db, row.serial_id, {
         dcNumber,
         customerId: ctx.customer_id || null,
         entityCode: ctx.entity_code || null,
         dispatchMode: ctx.dispatch_mode || null,
+        rentMonthlyRate,
         actorUserId: actor.userId,
         actorName: actor.name,
       });
@@ -2365,11 +2373,12 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
             SET inventory_status = 'in_transit',
                 current_dc_number = $2,
                 dispatch_mode = COALESCE($3, dispatch_mode),
+                rent_monthly_rate = COALESCE($4, rent_monthly_rate),
                 dispatched_at = NOW(),
                 status_changed_at = NOW(),
                 updated_at = NOW()
           WHERE serial_id = $1`,
-        [row.serial_id, dcNumber, ctx.dispatch_mode || null]
+        [row.serial_id, dcNumber, ctx.dispatch_mode || null, rentMonthlyRate]
       );
     }
   }
