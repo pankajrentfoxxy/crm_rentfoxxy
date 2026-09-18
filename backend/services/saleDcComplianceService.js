@@ -1,7 +1,7 @@
 /**
  * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> threshold).
  * New-customer Demo DCs use a separate e-way-only lock (see requiresDemoEwayCompliance).
- * Existing-customer demo and rental DCs (including a first rental DC) are unaffected.
+ * A new customer's first DC is covered too; their later rental DCs are unaffected.
  */
 const fs = require('fs');
 const path = require('path');
@@ -160,12 +160,16 @@ async function isNewCustomerFirstDc(db, customerId, dcNumber) {
   return first.rows[0]?.dc_number === dcNumber;
 }
 
-function requiresInvoiceCompliance(entityCode, quotationType, _isFirstOrder = false) {
-  // E-invoice / Accounts mail is sale DCs only.
-  // A customer's first rental DC must not inherit this from their first SO.
-  // Demo first orders use the e-way-only path.
+/**
+ * E-invoice / Accounts mail applies to every sale DC, and to a new customer's
+ * first-ever DC whatever the order type — a rental customer's opening shipment
+ * still needs an invoice before it leaves. Their *later* DCs do not, which is why
+ * this keys off the first DC (isNewCustomerFirstDc) and not the first SO.
+ * Demo DCs are excluded: they use the e-way-only path.
+ */
+function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false) {
   if (isDemoDc(quotationType)) return false;
-  return isSaleDc(entityCode, quotationType);
+  return isSaleDc(entityCode, quotationType) || Boolean(isFirstDc);
 }
 
 function requiresDemoEwayCompliance(quotationType, isFirstOrder, productValue) {
@@ -457,6 +461,7 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
     quotationType = qt.rows[0]?.quotation_type || null;
   }
   const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+  const firstDc = await isNewCustomerFirstDc(pool, head.customer_id, dcNumber);
   const grandTotal = await computeDcGrandTotal(dcNumber);
 
   if (requiresOutboundEway({ ...head, quotation_type: quotationType }, grandTotal)
@@ -473,7 +478,7 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
     }
   }
 
-  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) return;
+  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) return;
   if (isEinvoiceComplete(head)) return;
 
   throw new Error(

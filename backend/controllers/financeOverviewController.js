@@ -7,6 +7,26 @@ const PENDING_DC_INVOICE_WHERE = `
   AND (
     LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
     OR LOWER(COALESCE(dcl.entity_code, '')) = 'gorefurbo'
+    OR (
+      -- A new customer's first-ever outbound DC needs an e-invoice too, whatever
+      -- the order type. Mirrors isNewCustomerFirstDc in saleDcComplianceService.
+      dcl.customer_id IS NOT NULL
+      AND LOWER(COALESCE(sol.quotation_type, '')) <> 'demo'
+      AND LOWER(COALESCE(dcl.status, '')) IN ('pending', 'processing', 'in_transit', 'reached', 'shipped')
+      AND NOT EXISTS (
+        SELECT 1 FROM delivery_challan_lines prior
+         WHERE prior.customer_id = dcl.customer_id
+           AND prior.dc_number IS DISTINCT FROM dcl.dc_number
+           AND COALESCE(prior.movement_type, 'outbound') = 'outbound'
+           AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
+           AND (
+             prior.dc_number ILIKE 'DC/%'
+             OR prior.dc_number ILIKE 'DC-%'
+             OR prior.dc_number ILIKE 'GDC%'
+           )
+           AND prior.created_at < dcl.created_at
+      )
+    )
   )
   AND (
     COALESCE(NULLIF(TRIM(dcl.einvoice_number), ''), NULLIF(TRIM(dcl.irn), '')) IS NULL
