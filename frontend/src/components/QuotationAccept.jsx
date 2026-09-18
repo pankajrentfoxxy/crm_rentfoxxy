@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { CheckCircle, Loader2, AlertTriangle } from 'lucide-react';
 import api from '../utils/api';
 
@@ -122,9 +122,15 @@ export default function QuotationAccept() {
                     </div>
 
                     <p className="text-center text-xs text-slate-400 mt-6">
-                        <Link to="/login" className="text-orange-500 hover:underline">
-                            Rentfoxxy CRM
-                        </Link>
+                        {/* Public page: point customers at the website, never the CRM login. */}
+                        <a
+                            href="https://rentfoxxy.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-orange-500 hover:underline"
+                        >
+                            Rentfoxxy
+                        </a>
                     </p>
                 </div>
         </div>

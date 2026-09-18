@@ -281,7 +281,7 @@ async function resolveQuotationType(docType, header) {
   return qt;
 }
 
-async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [], sender = null }) {
+async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [], sender = null, acceptUrl = null }) {
   ensureUploadDir();
   const fileName = `${String(docNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
@@ -601,10 +601,23 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     // A quotation is an offer, not a handover, so it carries no acknowledgement
     // or signature block — it ends with the terms and the sender's details.
     if (docType === 'quotation') {
-      if (y > 660) { doc.addPage(); y = 40; }
+      if (y > 620) { doc.addPage(); y = 40; }
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
         .text(QUOTATION_TAX_NOTE, L, y);
-      y += 18;
+      y += 20;
+
+      // Accept button — a real PDF link annotation, so the customer can confirm
+      // straight from the attachment instead of going back to the email.
+      if (acceptUrl) {
+        const bw = 190; const bh = 30; const bx = L;
+        doc.roundedRect(bx, y, bw, bh, 6).fill(accent);
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(C.white)
+          .text('Accept this quotation', bx, y + 9, { width: bw, align: 'center' });
+        doc.link(bx, y, bw, bh, acceptUrl);
+        doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+          .text('Opens a secure page — no login required.', bx + bw + 12, y + 11);
+        y += bh + 16;
+      }
 
       doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Terms and Conditions', L, y);
       y += 15;
@@ -616,18 +629,29 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       }
       y += 12;
 
-      if (y > 740) { doc.addPage(); y = 40; }
+      if (y > 720) { doc.addPage(); y = 40; }
       doc.font('Helvetica').fontSize(9).fillColor(C.ink).text('Regards,', L, y);
       y += 13;
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(sender?.name || company.legal_name, L, y);
       y += 12;
+      // Phone and email are tap-to-call / tap-to-mail on a phone or in a reader.
       if (sender?.phone) {
-        doc.font('Helvetica').fontSize(9).fillColor(C.ink).text(sender.phone, L, y);
+        const tel = String(sender.phone).replace(/[^\d+]/g, '');
+        const w = doc.font('Helvetica').fontSize(9).widthOfString(sender.phone);
+        doc.fillColor(C.ink).text(sender.phone, L, y);
+        if (tel) doc.link(L, y - 1, w, 11, `tel:${tel}`);
         y += 12;
       }
       if (sender?.email) {
-        doc.font('Helvetica').fontSize(9).fillColor(C.sub).text(sender.email, L, y);
+        const w = doc.font('Helvetica').fontSize(9).widthOfString(sender.email);
+        doc.fillColor(C.teal).text(sender.email, L, y);
+        doc.link(L, y - 1, w, 11, `mailto:${sender.email}`);
+        y += 14;
       }
+
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+        .text('rentfoxxy.com', L, y);
+      doc.link(L, y - 1, doc.widthOfString('rentfoxxy.com'), 10, 'https://rentfoxxy.com/');
 
       doc.end();
       stream.on('finish', resolve);

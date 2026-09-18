@@ -149,6 +149,7 @@ async function sendSalesQuotationEmail({
     header: lines[0],
     lines,
     sender: { name: senderName, phone: senderPhone, email: senderEmail },
+    acceptUrl,
   });
   await pool.query(
     `UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`,
