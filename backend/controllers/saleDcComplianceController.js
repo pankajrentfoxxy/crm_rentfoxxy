@@ -10,6 +10,7 @@ const {
 const {
   isSaleDc,
   isNewCustomerFirstOrder,
+  isNewCustomerFirstDc,
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
   requiresOutboundEway,
@@ -23,6 +24,7 @@ const {
   computeDcAssetValue,
   sendAccountsSaleDcEmail,
   sendAccountsDemoEwayEmail,
+  accountsMailBlockedReason,
   markDcEwayRequired,
   ACCOUNTS_EMAIL,
 } = require('../services/saleDcComplianceService');
@@ -133,11 +135,11 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       quotationType = qtRes.rows[0]?.quotation_type || null;
     }
 
-    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
-    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
+    const firstDc = await isNewCustomerFirstDc(pool, head.customer_id, dcNumber);
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Invoice upload applies to Sale DCs only',
+        message: 'E-Invoice upload applies to Sale DCs and new-customer first DCs only',
       });
     }
 
@@ -208,7 +210,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       { ...updated[0], quotation_type: quotationType },
       totals,
       req.user?.role,
-      { canUpload, canSendMail: canUpload, isFirstCustomerOrder: firstOrder, assetValue: asset.total },
+      { canUpload, canSendMail: canUpload, isFirstCustomerOrder: firstDc, assetValue: asset.total },
     );
 
     if (head.sales_order_number) {
@@ -255,6 +257,10 @@ exports.sendAccountsNotification = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     let head = lines[0];
+    const mailBlocked = accountsMailBlockedReason(lines);
+    if (mailBlocked) {
+      return res.status(409).json({ success: false, message: mailBlocked });
+    }
 
     let quotationType = null;
     if (head.sales_order_number) {
@@ -269,11 +275,11 @@ exports.sendAccountsNotification = async (req, res) => {
       }
     }
 
-    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
-    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
+    const firstDc = await isNewCustomerFirstDc(pool, head.customer_id, dcNumber);
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) {
       return res.status(400).json({
         success: false,
-        message: 'Accounts notification applies to Sale DCs only',
+        message: 'Accounts notification applies to Sale DCs and new-customer first DCs only',
       });
     }
 
@@ -304,7 +310,7 @@ exports.sendAccountsNotification = async (req, res) => {
       grandTotal: productValue,
       laptopCount,
       isSale,
-      isFirstCustomerOrder: firstOrder,
+      isFirstCustomerOrder: firstDc,
     });
 
     await pool.query(
@@ -330,7 +336,7 @@ exports.sendAccountsNotification = async (req, res) => {
       { ...head, quotation_type: quotationType },
       totals,
       req.user?.role,
-      { canUpload: canSend, canSendMail: canSend, isFirstCustomerOrder: firstOrder },
+      { canUpload: canSend, canSendMail: canSend, isFirstCustomerOrder: firstDc },
     );
 
     if (head.sales_order_number) {
@@ -370,6 +376,10 @@ exports.requestDemoEway = async (req, res) => {
     const lines = await getDeliveryChallanLines(dcNumber);
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const mailBlocked = accountsMailBlockedReason(lines);
+    if (mailBlocked) {
+      return res.status(409).json({ success: false, message: mailBlocked });
     }
     let head = lines[0];
 

@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
-const nodemailer = require('nodemailer');
+const mailTransport = require('./mailTransport');
 const { formatPdfDateIst, formatPdfDateTimeIst } = require('../utils/pdfDateTimeUtils');
 
 const LOGO_PATH = path.join(__dirname, '../assets/rentfoxxy-logo.png');
@@ -323,7 +323,7 @@ async function sendQuotationAcceptedEmail({ toEmail, companyName, estimateNo, se
   if (!transporter) {
     throw new Error('Email is not configured (SMTP_HOST / SMTP_USER / SMTP_PASS)');
   }
-  const fromAddress = process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const fromAddress = mailTransport.getFromAddress('quotation');
   const companyLabel = (companyName || '').trim() || 'your organization';
   const subject = `Quotation accepted — ${companyLabel} (${estimateNo})`;
   const html = `<!DOCTYPE html><html><body style="margin:0;padding:24px;font-family:Segoe UI,sans-serif;background:#ffffff;color:#334155;">
@@ -548,14 +548,12 @@ function generateProformaPdfBuffer(opts) {
   });
 }
 
+/**
+ * Lead quotations go out from the no-reply mailbox, same as sales-pipeline
+ * quotations: QUOTATION_SMTP_* -> DISPATCH_SMTP_* -> SMTP_*.
+ */
 function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-  if (!host || !user || !pass) return null;
-  return nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
+  return mailTransport.getTransport('quotation');
 }
 
 function uniqueEmails(list) {
@@ -662,7 +660,7 @@ async function buildQuotationPdfAndSend(params) {
     throw new Error('Email is not configured (SMTP_HOST / SMTP_USER / SMTP_PASS)');
   }
 
-  const fromAddress = process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const fromAddress = mailTransport.getFromAddress('quotation');
   const ccList = ccRecipients != null
     ? uniqueEmails(ccRecipients)
     : uniqueEmails([...getDefaultQuotationCc(), senderEmail, ...parseCcList(ccExtra)].filter(Boolean));

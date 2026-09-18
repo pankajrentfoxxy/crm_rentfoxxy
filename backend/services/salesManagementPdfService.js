@@ -153,7 +153,7 @@ async function attachDcLineRates(lines, dcNumber) {
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
 async function resolveDcUnitRows(lines, dcNumber) {
-  const { getDcSerialRateLookup, lookupSerialRate, lookupSerialRemark, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec } = require('./salesManagementService');
+  const { getDcSerialRateLookup, lookupSerialRate, lookupSerialRemark, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec, getSalesOrderTermsFallback } = require('./salesManagementService');
   const head = lines[0] || {};
   const son = head.sales_order_number;
   const dcNum = dcNumber || head.dc_number;
@@ -161,6 +161,9 @@ async function resolveDcUnitRows(lines, dcNumber) {
   const rateMap = (!serialLookup?.rows?.length && son)
     ? await getSalesOrderRateMap(son)
     : null;
+  // Lock-in and warranties are SO terms; delivery_challan_lines has no columns for
+  // them, so every DC row resolves them from the sales order.
+  const terms = await getSalesOrderTermsFallback(son);
   const rows = [];
   for (const line of lines) {
     const raw = line.serial_number;
@@ -174,6 +177,10 @@ async function resolveDcUnitRows(lines, dcNumber) {
         ttspl: '',
         serial: '',
         qty: line.quantity || 1,
+        locking_period: line.locking_period ?? terms.locking_period ?? null,
+        technical_warranty: line.technical_warranty ?? terms.technical_warranty ?? null,
+        battery_charger_warranty:
+          line.battery_charger_warranty ?? terms.battery_charger_warranty ?? null,
         remarks: (line.remarks || line.remark || '').trim(),
       });
       continue;
@@ -199,9 +206,11 @@ async function resolveDcUnitRows(lines, dcNumber) {
         serial: spec.serial_number || serialNumber,
         ttspl: spec.inventory_asset_code || ttspl || '',
         rate: priced?.rate ?? (rateMap ? rateForDcLine(line, rateMap) : line.rate),
-        locking_period: line.locking_period,
-        technical_warranty: line.technical_warranty,
-        battery_charger_warranty: line.battery_charger_warranty,
+        locking_period: priced?.locking_period ?? line.locking_period ?? terms.locking_period ?? null,
+        technical_warranty:
+          priced?.technical_warranty ?? line.technical_warranty ?? terms.technical_warranty ?? null,
+        battery_charger_warranty: priced?.battery_charger_warranty
+          ?? line.battery_charger_warranty ?? terms.battery_charger_warranty ?? null,
         qty: 1,
         hsn_code: line.hsn_code,
         remarks: (line.remarks || line.remark || '').trim()

@@ -1,7 +1,10 @@
 const pool = require('../config/db');
 const { normalizeDcNumber } = require('../middleware/dcNumberRoutes');
 
-const EDITABLE_STATUSES = new Set(['pending', 'processing', 'in_transit', 'shipped']);
+// dispatch_ready is included so an assignee can be swapped before the gate outward
+// (a Service DC is created directly in dispatch_ready). Matches isDcAssignmentEditable
+// in the frontend.
+const EDITABLE_STATUSES = new Set(['pending', 'processing', 'dispatch_ready', 'in_transit', 'shipped']);
 
 function isAssignmentEditable(status) {
   return EDITABLE_STATUSES.has(String(status || '').toLowerCase());

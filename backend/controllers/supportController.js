@@ -42,7 +42,7 @@ const {
 const { markReturnPickupInTransit } = require('../services/supportReturnPickupInventory');
 const supportServiceDcService = require('../services/supportServiceDcService');
 const supportWa = require('../services/supportWhatsApp');
-const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
+const { regenerateServiceDcPdfByNumber, regenerateServiceDcDocumentPdf } = require('../services/serviceDcPdfService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
 const { syncPartRequestsTechForItem } = require('./supportPartsController');
@@ -5700,6 +5700,62 @@ exports.initiateReturnRedelivery = async (req, res) => {
         success: true,
         message: `New replacement sales order ${resultPayload.sales_order_number} created`,
         ...resultPayload,
+        ...data,
+    });
+};
+
+exports.changeServiceDcTechnician = async (req, res) => {
+    if (!canManageAsTicketLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can change the Service DC technician' });
+    }
+    const sdcNumber = req.params.sdcNumber;
+    let result;
+    try {
+        result = await supportServiceDcService.changeServiceDcTechnician(pool, {
+            sdcNumber,
+            technicianUserId: req.body?.technician_user_id,
+            reason: req.body?.reason,
+            actor: req.user,
+        });
+    } catch (e) {
+        if (!e.status) console.error('changeServiceDcTechnician:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to change technician' });
+    }
+
+    let pdfPath = null;
+    try {
+        pdfPath = await regenerateServiceDcDocumentPdf(pool, sdcNumber);
+    } catch (pdfErr) {
+        console.error('[support] service DC pdf after technician change:', pdfErr.message);
+    }
+
+    if (result.ticketId) {
+        try {
+            await logAudit(pool, {
+                ticketId: result.ticketId,
+                userId: req.user.user_id,
+                action: 'service_dc_technician_changed',
+                detail: {
+                    service_dc_number: sdcNumber,
+                    previous_technician: result.previous_assignee,
+                    new_technician: result.new_assignee,
+                    reason: result.reason,
+                    pdf_regenerated: Boolean(pdfPath),
+                },
+            });
+            await bumpTicketActivity(pool, result.ticketId);
+        } catch (auditErr) {
+            console.error('[support] service DC technician audit:', auditErr.message);
+        }
+    }
+
+    const data = result.ticketId ? await getTicketWithItems(result.ticketId, req.user) : {};
+    res.json({
+        success: true,
+        message: pdfPath
+            ? `Technician changed to ${result.new_assignee} — PDF updated`
+            : `Technician changed to ${result.new_assignee} (PDF regeneration failed — use Regenerate PDF)`,
+        pdf_path: pdfPath,
         ...data,
     });
 };

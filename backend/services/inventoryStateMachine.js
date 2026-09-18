@@ -123,6 +123,9 @@ async function transitionAsset(db, {
       break;
     case STATUS.DISPATCH_READY:
       if (customerId !== null) add('current_customer_id', customerId);
+      // Callers resolve the new SO's rate here; persist it so the first invoice
+      // cannot bill a rate left over from this asset's previous customer.
+      if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       break;
     case STATUS.IN_TRANSIT:
       if (customerId !== null) add('current_customer_id', customerId);
@@ -171,6 +174,9 @@ async function transitionAsset(db, {
       add('rent_start_date', null);
       add('rent_end_date', null);
       add('rent_billed_until', null);
+      // rent_monthly_rate deliberately survives: a unit parked in stock mid-repair
+      // returns to its customer at the same rate (supportServiceDcService's
+      // preservedRate). A re-rental overwrites it at dispatch_ready instead.
       add('returned_at', null);
       break;
     default:

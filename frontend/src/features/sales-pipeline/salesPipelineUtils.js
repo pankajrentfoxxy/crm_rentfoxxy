@@ -65,6 +65,12 @@ export const DISPATCH_MODE_STYLES = {
   inhouse: 'bg-teal-100 text-teal-800',
 };
 
+/** No Send/Resend mail to Accounts once a DC has left, or is rejected/cancelled (backend enforces the same). */
+export function isAccountsMailBlocked(status) {
+  return ['in_transit', 'shipped', 'reached', 'delivered', 'rejected', 'cancelled']
+    .includes(String(status || '').toLowerCase());
+}
+
 /** DC assignee can be changed while pending/assigned and before reached/delivered. */
 export function isDcAssignmentEditable(status) {
   return ['pending', 'processing', 'dispatch_ready', 'in_transit', 'shipped'].includes(String(status || '').toLowerCase());

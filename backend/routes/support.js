@@ -4,6 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
 const { authMiddleware } = require('../middleware/auth');
+const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 const { requireSupportAccess, requireSupportLead, requireTicketLead, requireSupportTicketClose, requireSupportTicketCancel } = require('../middleware/supportAccess');
 const {
     listCategories,
@@ -73,6 +74,7 @@ const {
     getReturnRedeliveryContext,
     initiateReturnRedelivery,
     regenerateServiceDcPdf,
+    changeServiceDcTechnician,
 } = require('../controllers/supportController');
 
 const router = express.Router();
@@ -202,6 +204,13 @@ router.post('/tickets/:ticketId/pickup', requireTicketLead, createPickupWithRetu
 router.get('/tickets/:ticketId/service-dc/eligibility', getServiceDcEligibility);
 router.post('/tickets/:ticketId/service-dc', requireTicketLead, createServiceDc);
 router.post('/service-dc/:sdcNumber/pdf', requireTicketLead, regenerateServiceDcPdf);
+// SDC numbers contain slashes (SDC/26-27/0004) — slash-safe pattern, then expose as sdcNumber for requireTicketLead.
+router.patch(
+    ...prefixedDcRoute('/service-dc', '/technician', (req, _res, next) => {
+        req.params.sdcNumber = req.params.dcNumber;
+        next();
+    }, requireTicketLead, changeServiceDcTechnician)
+);
 router.post('/items/:itemId/pickup-reached', logVisit);
 router.post('/items/:itemId/technician-esign', technicianSignPickup);
 router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);

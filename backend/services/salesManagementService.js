@@ -2662,6 +2662,28 @@ function rateForDcLine(line, rateMap) {
 }
 
 /** Per-serial SO line rates for a DC (authoritative when allocations exist). */
+/**
+ * Contract terms (lock-in, warranties) live on the sales order, not on the challan —
+ * delivery_challan_lines has no such columns. The DC PDF therefore reads them back
+ * from the SO, the same way it already does for rate and remarks.
+ *
+ * Returns the terms only when the whole SO agrees on them. A multi-config SO with
+ * different lock-ins per line is ambiguous for an unmatched row, so we return nulls
+ * and let the row render N/A rather than print the wrong contract term.
+ */
+async function getSalesOrderTermsFallback(salesOrderNumber) {
+  if (!salesOrderNumber) return {};
+  const r = await pool.query(
+    `SELECT DISTINCT locking_period, technical_warranty, battery_charger_warranty
+       FROM sales_order_lines
+      WHERE sales_order_number = $1
+        AND LOWER(COALESCE(status, 'pending')) <> 'cancelled'`,
+    [salesOrderNumber]
+  );
+  if (r.rows.length !== 1) return {};
+  return r.rows[0];
+}
+
 async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
   const r = await pool.query(
     `SELECT sos.serial_id, sos.ttspl_id, sos.serial_number,
@@ -2669,6 +2691,7 @@ async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
             sol.brand, sol.model_name, sol.processor, sol.generation,
             sol.ram, sol.storage, sol.gpu, sol.screen_size,
             sol.rate, sol.remark,
+            sol.locking_period, sol.technical_warranty, sol.battery_charger_warranty,
             ro.old_machine_serial
        FROM sales_order_serials sos
        INNER JOIN sales_order_lines sol
@@ -2950,6 +2973,7 @@ module.exports = {
   getSalesOrderRateMap,
   rateForDcLine,
   getDcSerialRateLookup,
+  getSalesOrderTermsFallback,
   lookupSerialRate,
   lookupSerialRemark,
   resolveSoLineRemarksForLines,

@@ -10,6 +10,7 @@ const {
   entityForQuotationType,
 } = require('./salesManagementService');
 const { loadDeliveryDefaults } = require('./supportReplacementFlowService');
+const dcAssignment = require('./dcAssignmentService');
 
 const DC_PURPOSE = 'service_return';
 const OPEN_SDC_STATUSES = new Set([
@@ -115,6 +116,9 @@ function buildSdcTracking(sdc, extras = {}) {
     porter_order_id: sdc.porter_order_id || null,
     courier_tracking_url: sdc.courier_tracking_url || null,
     pdf_path: sdc.pdf_path || null,
+    delivery_person_user_id: sdc.delivery_person_user_id || null,
+    delivery_person_name: sdc.delivery_person_name || null,
+    assignment_editable: dcAssignment.isAssignmentEditable(status),
     sales_order_number: sdc.sales_order_number || null,
     original_dc_number: sdc.original_dc_number || null,
     dc_purpose: sdc.dc_purpose || DC_PURPOSE,
@@ -347,9 +351,13 @@ async function getServiceDcContext(db, ticketId) {
             dcl.dispatch_mode, dcl.ship_by, dcl.courier_name, dcl.awb_number,
             dcl.porter_tracking_id, dcl.porter_order_id, dcl.courier_tracking_url,
             dcl.created_at, dcl.updated_at, dcl.dispatched_at, dcl.delivered_at,
-            u.name AS created_by_name
+            u.name AS created_by_name,
+            COALESCE(dt.user_id, dcl.delivery_person_id) AS delivery_person_user_id,
+            COALESCE(NULLIF(TRIM(dt.first_name || ' ' || COALESCE(dt.last_name, '')), ''), du.name) AS delivery_person_name
        FROM delivery_challan_lines dcl
        LEFT JOIN users u ON u.user_id = dcl.created_by
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = dcl.delivery_person_id
+       LEFT JOIN users du ON du.user_id = COALESCE(dt.user_id, dcl.delivery_person_id)
       WHERE (
             dcl.support_ticket_id = $1
             OR dcl.dc_number IN (
@@ -818,8 +826,72 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
   return { handled: true, closed, billingLog };
 }
 
+/**
+ * Reassign the in-house technician carrying an SDC (the repair pickup and the
+ * service return are often done by different people). Allowed until the SDC is
+ * delivered; goes through dcAssignmentService so dc_assignment_history is kept.
+ * The caller regenerates the PDF.
+ */
+async function changeServiceDcTechnician(db, { sdcNumber, technicianUserId, reason, actor }) {
+  const cur = await db.query(
+    `SELECT dc_number, status, support_ticket_id, estimated_delivery, dispatched_at
+       FROM delivery_challan_lines
+      WHERE dc_number = $1 AND movement_type = 'outbound' AND dc_purpose = $2
+      LIMIT 1`,
+    [sdcNumber, DC_PURPOSE]
+  );
+  const sdc = cur.rows[0];
+  if (!sdc) throw Object.assign(new Error('Service DC not found'), { status: 404 });
+  if (!dcAssignment.isAssignmentEditable(sdc.status)) {
+    throw Object.assign(
+      new Error(`Technician cannot be changed — Service DC is ${String(sdc.status || '').replace(/_/g, ' ')}`),
+      { status: 409 }
+    );
+  }
+
+  const userId = parseInt(technicianUserId, 10);
+  if (!userId) throw Object.assign(new Error('Select a technician'), { status: 400 });
+  // Hand dcAssignmentService a technician_id: it treats the raw id as a technician_id
+  // first, so passing a user_id could silently match a different technician.
+  const tech = await db.query(
+    `SELECT dt.technician_id
+       FROM delivery_technicians dt
+       JOIN users u ON u.user_id = dt.user_id AND u.active = TRUE
+      WHERE dt.user_id = $1 AND dt.is_active = TRUE
+      LIMIT 1`,
+    [userId]
+  );
+  if (!tech.rows.length) {
+    throw Object.assign(new Error('This user has no active delivery technician profile'), { status: 400 });
+  }
+
+  const result = await dcAssignment.updateDcAssignment({
+    dcNumber: sdcNumber,
+    body: {
+      dispatch_mode: 'inhouse',
+      delivery_person_id: tech.rows[0].technician_id,
+      estimated_delivery: sdc.estimated_delivery,
+      dispatched_at: sdc.dispatched_at,
+      reason,
+    },
+    user: actor,
+  });
+  if (!result.ok) {
+    throw Object.assign(new Error(result.message), { status: result.status || 400 });
+  }
+  // updateDcAssignment stores dates only; keep the real gate outward timestamp.
+  if (sdc.dispatched_at) {
+    await db.query(
+      `UPDATE delivery_challan_lines SET dispatched_at = $2 WHERE dc_number = $1`,
+      [sdcNumber, sdc.dispatched_at]
+    );
+  }
+  return { ticketId: sdc.support_ticket_id, ...result.data };
+}
+
 module.exports = {
   DC_PURPOSE,
+  changeServiceDcTechnician,
   OPEN_SDC_STATUSES,
   getServiceDcContext,
   createServiceDc,

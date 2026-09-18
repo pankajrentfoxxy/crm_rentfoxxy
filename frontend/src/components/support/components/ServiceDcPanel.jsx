@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FileText, Loader2, PackageCheck, Truck } from 'lucide-react';
+import { FileText, Loader2, PackageCheck, Truck, UserCog } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
 import SdcTrackingTimeline from './SdcTrackingTimeline';
@@ -46,6 +46,8 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [trackDc, setTrackDc] = useState(null);
+  const [techEdit, setTechEdit] = useState(null); // { dc_number, technician_user_id, reason }
+  const [technicians, setTechnicians] = useState(null);
 
   const repairPickups = (pickups || []).filter(
     (p) => (p.pickup_type === 'repair' || p.source_item_id) && p.warehouse_received_at
@@ -106,6 +108,41 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
       load();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to create Service DC');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openTechEdit = (sdc) => {
+    setTechEdit({
+      dc_number: sdc.dc_number,
+      technician_user_id: sdc.delivery_person_user_id ? String(sdc.delivery_person_user_id) : '',
+      reason: '',
+    });
+    if (!technicians) {
+      api.get('/support/technicians')
+        .then((r) => setTechnicians(r.data.technicians || []))
+        .catch(() => setTechnicians([]));
+    }
+  };
+
+  const saveTechnician = async () => {
+    if (!techEdit?.technician_user_id) {
+      toast.error('Select a technician');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await api.patch(
+        `/support/service-dc/${encodeURIComponent(techEdit.dc_number)}/technician`,
+        { technician_user_id: techEdit.technician_user_id, reason: techEdit.reason?.trim() || undefined }
+      );
+      toast.success(data?.message || 'Technician changed — PDF updated');
+      setTechEdit(null);
+      onRefresh?.();
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to change technician');
     } finally {
       setSaving(false);
     }
@@ -180,10 +217,53 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
                 {(mode || sdc.awb_number || sdc.porter_tracking_id) && (
                   <p className="mt-1.5 text-slate-600">
                     {mode ? `${mode}` : null}
+                    {sdc.delivery_person_name ? ` · ${sdc.delivery_person_name}` : ''}
                     {sdc.courier_name ? ` · ${sdc.courier_name}` : ''}
                     {sdc.awb_number ? ` · AWB ${sdc.awb_number}` : ''}
                     {sdc.porter_tracking_id ? ` · Porter ${sdc.porter_tracking_id}` : ''}
                   </p>
+                )}
+                {techEdit?.dc_number === sdc.dc_number && (
+                  <div className="mt-2 rounded-lg border border-teal-100 bg-teal-50/60 p-2 space-y-2">
+                    <select
+                      value={techEdit.technician_user_id}
+                      onChange={(e) => setTechEdit((t) => ({ ...t, technician_user_id: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white"
+                      disabled={saving}
+                    >
+                      <option value="">{technicians ? 'Select technician…' : 'Loading technicians…'}</option>
+                      {(technicians || []).filter((t) => t.assignee_kind === 'technician').map((t) => (
+                        <option key={t.user_id} value={t.user_id}>{t.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={techEdit.reason}
+                      onChange={(e) => setTechEdit((t) => ({ ...t, reason: e.target.value }))}
+                      placeholder="Reason (optional)"
+                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white"
+                      disabled={saving}
+                    />
+                    <p className="text-[11px] text-slate-500">The SDC PDF is regenerated with the new technician.</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={saveTechnician}
+                        disabled={saving}
+                        className="px-3 py-1.5 rounded-lg bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-60"
+                      >
+                        {saving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTechEdit(null)}
+                        disabled={saving}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 )}
                 <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   Tracking history
@@ -192,6 +272,16 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
                 <div className="mt-2 flex flex-wrap gap-2">
                   {canOpenDc ? (
                     <Link to={dcTo} className="text-teal-700 hover:underline">View DC</Link>
+                  ) : null}
+                  {isLead && sdc.assignment_editable && techEdit?.dc_number !== sdc.dc_number ? (
+                    <button
+                      type="button"
+                      onClick={() => openTechEdit(sdc)}
+                      className="inline-flex items-center gap-1 text-teal-700 hover:underline"
+                    >
+                      <UserCog className="w-3.5 h-3.5" />
+                      {String(sdc.dispatch_mode || '').includes('inhouse') ? 'Change technician' : 'Assign technician'}
+                    </button>
                   ) : null}
                   {pdfUrl && (
                     <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-teal-700 hover:underline">
