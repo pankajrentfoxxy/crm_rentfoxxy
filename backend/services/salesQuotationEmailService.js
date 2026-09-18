@@ -140,6 +140,7 @@ async function sendSalesQuotationEmail({
   }
 
   const { senderName, senderEmail, senderPhone } = await resolveSender(user);
+  const acceptUrl = buildAcceptUrl(token);
 
   // Always rebuild the PDF at send time: it signs off with whoever is sending,
   // so a copy generated earlier (or by someone else) would carry the wrong name.
@@ -160,7 +161,6 @@ async function sendSalesQuotationEmail({
   const isSale = isSaleQuotation(lines[0]?.quotation_type);
   const { config1, config2 } = configsFromQuotationLines(lines);
   const sentAtLine = formatSentAtLine(new Date());
-  const acceptUrl = buildAcceptUrl(token);
   const ccList = uniqueEmails([
     ...getDefaultQuotationCc(),
     senderEmail,
