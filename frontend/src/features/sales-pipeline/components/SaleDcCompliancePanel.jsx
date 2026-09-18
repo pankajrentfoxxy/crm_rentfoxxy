@@ -62,7 +62,7 @@ export default function SaleDcCompliancePanel({
     }
     if (needsEway) {
       if (!ewayNumber.trim() && !compliance.eway_bill_number) {
-        toast.error('E-Way Bill number is required — DC value exceeds ₹50,000');
+        toast.error('E-Way Bill number is required — DC value is ₹50,000 or more');
         return;
       }
       if (!ewayFile && !compliance.eway_bill_pdf_path) {
@@ -104,7 +104,7 @@ export default function SaleDcCompliancePanel({
           {' '}
           <span className="font-normal">(laptop prices, exclusive of GST)</span>
           {needsEway
-            ? ' — E-Way Bill is mandatory (above ₹50,000).'
+            ? ' — E-Way Bill is mandatory (₹50,000 or more).'
             : ' — E-Way Bill is not required for this DC.'}
         </p>
         {!compliance.einvoice_complete && (

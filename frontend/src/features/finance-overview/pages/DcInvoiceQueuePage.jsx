@@ -270,7 +270,7 @@ export default function DcInvoiceQueuePage() {
     }
     if (uploadRow.requires_eway_bill) {
       if (!ewayNumber.trim() && !uploadRow.eway_bill_number) {
-        toast.error('E-Way Bill number is required — value exceeds ₹50,000');
+        toast.error('E-Way Bill number is required — value is ₹50,000 or more');
         return;
       }
       if (!ewayFile && !uploadRow.eway_bill_pdf_path) {
@@ -470,7 +470,7 @@ export default function DcInvoiceQueuePage() {
       <div className="mt-8 mb-3">
         <h2 className="text-lg font-semibold">New Customer Demo — E-Way Bill</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Demo DCs for a first-time customer when consignment value is above ₹{Number(ewayThreshold).toLocaleString('en-IN')}.
+          Demo DCs for a first-time customer when consignment value is ₹{Number(ewayThreshold).toLocaleString('en-IN')} or more.
         </p>
       </div>
 
@@ -632,7 +632,7 @@ export default function DcInvoiceQueuePage() {
             </p>
             {uploadRow.requires_eway_bill && (
               <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                Amount is above ₹50,000 — e-way bill is mandatory. Upload number and file.
+                Amount is ₹50,000 or more — e-way bill is mandatory. Upload number and file.
               </p>
             )}
             <div>

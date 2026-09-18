@@ -81,7 +81,7 @@ export default function DemoEwayPanel({
         <p className="font-semibold">{uploaded ? 'E-Way Bill Uploaded' : 'E-Way Bill Required'}</p>
         <p className="mt-1">
           Asset value <strong>{formatCurrency(c.asset_value ?? c.product_value)}</strong>
-          {' '}(processor + generation matrix) is above ₹{Number(threshold).toLocaleString('en-IN')}.
+          {' '}(processor + generation matrix) is ₹{Number(threshold).toLocaleString('en-IN')} or more.
         </p>
         {c.billed_value != null && Number(c.billed_value) !== Number(c.asset_value ?? c.product_value) && (
           <p className="mt-1 text-xs">

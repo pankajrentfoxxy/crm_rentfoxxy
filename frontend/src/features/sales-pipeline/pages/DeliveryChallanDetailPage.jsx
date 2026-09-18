@@ -703,7 +703,7 @@ export default function DeliveryChallanDetailPage() {
                 <p className="font-semibold">E-Way Bill Required</p>
                 <p>
                   Asset value {formatCurrency(demoEwayCompliance?.asset_value ?? demoEwayCompliance?.product_value)}
-                  {' '}(processor + generation) is above ₹{Number(demoEwayCompliance?.eway_threshold || 50000).toLocaleString('en-IN')}.
+                  {' '}(processor + generation) is ₹{Number(demoEwayCompliance?.eway_threshold || 50000).toLocaleString('en-IN')} or more.
                   Accounts must upload the E-Way Bill using this value — not the rental amount.
                 </p>
                 <p className="text-sm text-amber-900">
@@ -747,7 +747,7 @@ export default function DeliveryChallanDetailPage() {
                 <p className="font-semibold">Accounts invoice required</p>
                 <p>
                   Warehouse cannot download this DC until Accounts creates the e-invoice in Zoho and uploads it
-                  {saleCompliance?.requires_eway_bill ? ' (e-way bill is also mandatory — value above ₹50,000)' : ''}.
+                  {saleCompliance?.requires_eway_bill ? ' (e-way bill is also mandatory — value ₹50,000 or more)' : ''}.
                   {saleCompliance?.is_first_customer_order && !isSale ? ' This is the customer’s first DC.' : ''}
                 </p>
                 {saleCompliance?.can_send_accounts_mail && !accountsMailBlocked && (

@@ -170,7 +170,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       if (!ewayBillNumber && !head.eway_bill_number) {
         return res.status(400).json({
           success: false,
-          message: `E-Way Bill number is required — DC asset value exceeds ₹50,000 (₹${Number(asset.total).toLocaleString('en-IN')})`,
+          message: `E-Way Bill number is required — DC asset value is ₹50,000 or more (₹${Number(asset.total).toLocaleString('en-IN')})`,
         });
       }
       if (!ewayFile && !hasExistingEwbPdf) {

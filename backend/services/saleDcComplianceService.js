@@ -1,5 +1,5 @@
 /**
- * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> threshold).
+ * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (>= threshold).
  * New-customer Demo DCs use a separate e-way-only lock (see requiresDemoEwayCompliance).
  * A new customer's first DC is covered too; their later rental DCs are unaffected.
  */
@@ -176,7 +176,7 @@ function requiresDemoEwayCompliance(quotationType, isFirstOrder, productValue) {
   return isDemoDc(quotationType) && Boolean(isFirstOrder) && requiresEwayBill(productValue);
 }
 
-/** Any outbound DC whose billed laptop value (ex. GST) is above the e-way threshold. */
+/** Any outbound DC whose laptop value (ex. GST) reaches the e-way threshold. */
 function requiresOutboundEway(head, productValue) {
   const movement = String(head?.movement_type || 'outbound').toLowerCase();
   if (movement === 'return') return false;
@@ -215,8 +215,13 @@ function accountsMailBlockedReason(lines = []) {
   return `Mail to Accounts is not sent for a DC that is ${blocked.map((s) => s.replace(/_/g, ' ')).join('/')}.`;
 }
 
+/**
+ * Inclusive of the threshold: a consignment valued at exactly ₹50,000 needs an
+ * e-way bill. DC/26-27/1342 (2 × i5 11th Gen at ₹25,000) landed on the boundary
+ * and shipped unlocked while the value was strictly compared.
+ */
 function requiresEwayBill(grandTotal) {
-  return Number(grandTotal) > EWAY_VALUE_THRESHOLD;
+  return Number(grandTotal) >= EWAY_VALUE_THRESHOLD;
 }
 
 function isEinvoiceComplete(head) {
@@ -511,7 +516,7 @@ function buildAccountsSaleDcEmailHtml({
 }) {
   const ewayBlock = needsEway
     ? `<p style="margin:0 0 12px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
-         DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}
+         DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more
          (value <strong>₹${escapeHtml(valueStr)}</strong>, exclusive of GST) so <strong>e-way bill is mandatory</strong>.
          Please upload the waybill also.
        </p>`
@@ -613,7 +618,7 @@ async function sendAccountsSaleDcEmail({
     `DC value (exclusive of GST): ₹${valueStr}`,
     '',
     needsEway
-      ? `DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} — e-way bill is mandatory. Please upload the waybill also.`
+      ? `DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more — e-way bill is mandatory. Please upload the waybill also.`
       : 'E-Way Bill is not required for this value.',
     '',
     'Upload in CRM (Finance → DC Invoice or DC E-Invoice tab):',
@@ -708,7 +713,7 @@ async function sendAccountsDemoEwayEmail({
     <div style="padding:24px;">
       <p style="margin:0 0 16px;font-size:15px;">Hi Accounts Team,</p>
       <p style="margin:0 0 16px;line-height:1.6;">
-        A delivery challan has <strong>asset value</strong> above ₹${escapeHtml(thresholdStr)}
+        A delivery challan has <strong>asset value</strong> of ₹${escapeHtml(thresholdStr)} or more
         (processor + generation matrix — not rental charges) and needs an E-Way Bill.
       </p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px;">

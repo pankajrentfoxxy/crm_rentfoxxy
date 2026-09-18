@@ -817,7 +817,7 @@ export default function DCForm({ open, onClose, onSaved, prefillSo, soScope, ret
                 {isSale && (
                   <p className="text-xs text-indigo-700 mt-2">
                     Sale order: DC will be created now. Accounts will be emailed to prepare E-Invoice.
-                    If DC value exceeds ₹50,000, E-Way Bill is required on upload. Vehicle number is required for Porter / Inhouse.
+                    If DC value is ₹50,000 or more, E-Way Bill is required on upload. Vehicle number is required for Porter / Inhouse.
                   </p>
                 )}
                         </div>
