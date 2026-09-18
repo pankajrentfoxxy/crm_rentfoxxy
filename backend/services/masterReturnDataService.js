@@ -7,6 +7,7 @@ const pool = require('../config/db');
 const XLSX = require('xlsx');
 const { pickMultiSpecFilters, buildSerialSpecFilter } = require('../utils/inventorySpecFilter');
 const { appendDateRangeClauses, resolveMasterDateRange, parseCsvQuery } = require('../utils/dateRangeFilter');
+const { serialIdFromToken } = require('../utils/dcSerialToken');
 const {
   mapLaptopRow,
   SQL_IS_SALE,
@@ -255,11 +256,7 @@ rdc_elems AS (
       e.return_at,
       NULLIF(split_part(elem, '|', 3), '') AS ttspl,
       NULLIF(split_part(elem, '|', 2), '') AS serial_no,
-      CASE
-        WHEN NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '') ~ '^[0-9]+$'
-        THEN NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int
-        ELSE NULL
-      END AS serial_id_hint
+      ${serialIdFromToken('elem')} AS serial_id_hint
     FROM eligible_rdc e
     CROSS JOIN LATERAL jsonb_array_elements_text(e.serials) AS elem
 ),

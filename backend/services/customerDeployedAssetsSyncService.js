@@ -1,3 +1,4 @@
+const { serialIdFromToken } = require('../utils/dcSerialToken');
 /**
  * Reconcile vendor_serial_numbers deployment anchors (current_customer_id, DC, status,
  * delivered_at) from delivered outbound delivery challans. Fixes ERP-migrated units stuck
@@ -22,7 +23,7 @@ const DC_SERIAL_ELEMENTS_SQL = `
 
 function parseDcSerialElemSql(alias = 'elem') {
   return {
-    serialId: `NULLIF(REGEXP_REPLACE(split_part(${alias}, '|', 1), '[^0-9]', '', 'g'), '')::int`,
+    serialId: serialIdFromToken(alias),
     serialNumber: `NULLIF(split_part(${alias}, '|', 2), '')`,
     ttspl: `NULLIF(split_part(${alias}, '|', 3), '')`,
   };

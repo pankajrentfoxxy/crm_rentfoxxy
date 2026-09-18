@@ -1,3 +1,4 @@
+const { serialIdFromToken } = require('../utils/dcSerialToken');
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -740,7 +741,7 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
            ) AS elem
           WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
             AND dcl.status = 'delivered'
-            AND NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+            AND ${serialIdFromToken('elem')} = vsn.serial_id
           ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
           LIMIT 1
        ) dd ON TRUE
@@ -868,7 +869,7 @@ exports.exportCustomerSaleAssets = async (req, res) => {
             AND COALESCE(dcl.status, '') = 'delivered'
             AND LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
             AND (
-              vsn.serial_id = NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int
+              vsn.serial_id = ${serialIdFromToken('elem')}
               OR vsn.inventory_asset_code = NULLIF(split_part(elem, '|', 3), '')
               OR vsn.serial_number = NULLIF(split_part(elem, '|', 2), '')
             )
@@ -1924,11 +1925,7 @@ WITH outbound_reout AS MATERIALIZED (
     COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at) AS out_at,
     NULLIF(split_part(out_elem, '|', 3), '') AS ttspl,
     NULLIF(split_part(out_elem, '|', 2), '') AS serial_no,
-    CASE
-      WHEN NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '') ~ '^[0-9]+$'
-      THEN NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int
-      ELSE NULL
-    END AS serial_id
+    ${serialIdFromToken('out_elem')} AS serial_id
   FROM delivery_challan_lines dcl
   CROSS JOIN LATERAL jsonb_array_elements_text(
     CASE WHEN jsonb_typeof(dcl.serial_number) = 'array'
@@ -2023,7 +2020,7 @@ const RETURNED_FROM_SQL = `
        AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
        AND dcl.customer_id = rl.customer_id
        AND dcl.status = 'delivered'
-       AND NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+       AND ${serialIdFromToken('elem')} = vsn.serial_id
        AND COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at)
            <= ${RETURNED_AT_SQL}
      ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
