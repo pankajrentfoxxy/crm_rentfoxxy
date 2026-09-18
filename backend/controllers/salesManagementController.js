@@ -4431,6 +4431,10 @@ exports.ensureSalesManagementSchema = async () => {
     '061_phase4_sales_pipeline.sql',
     '065_quotation_lead_link.sql',
     '066_quotation_sent_status.sql',
+    // Order matters: 066 re-creates sales_quotations_status_check without
+    // 'accepted', so replaying it on every boot silently reverted 200 and broke
+    // customer accept with a check-constraint violation. 200 must follow it.
+    '200_sales_quotation_accept.sql',
     '149_so_dc_line_hsn.sql',
   ]) {
     const sqlPath = path.join(__dirname, '../migrations', file);
