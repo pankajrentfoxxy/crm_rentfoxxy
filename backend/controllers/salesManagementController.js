@@ -68,7 +68,7 @@ const {
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
 } = require('../services/saleDcComplianceService');
-const { validateSaleVehicleOnCreate } = require('../controllers/saleDcComplianceController');
+const { validateSaleVehicleOnCreate, validateEwayVehicleOnCreate } = require('../controllers/saleDcComplianceController');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
@@ -2906,6 +2906,24 @@ exports.storeDeliveryChallan = async (req, res) => {
         : shipBy === 'by_courier' ? 'courier'
           : (body.dispatch_mode || 'courier');
 
+    // An inhouse / porter run at or above the e-way threshold needs the vehicle
+    // for Part B, whatever the order type. Checked before any write.
+    {
+      const ids = [];
+      for (let i = 0; i < count; i += 1) {
+        const raw = (body.serial_number || [])[i];
+        const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        for (const entry of list) {
+          const first = String(entry).split('|')[0];
+          if (/^\d+$/.test(first)) ids.push(Number(first));
+        }
+      }
+      const err = await validateEwayVehicleOnCreate(pool, {
+        shipBy, dispatchMode, serialIds: ids, vehicleNumber: body.vehicle_number,
+      });
+      if (err) return res.status(400).json({ success: false, message: err });
+    }
+
     const dcNumber = body.challan_number || body.dc_number
       || (await nextFinancialYearNumber('delivery_challan'));
     const shipping = parseJsonField(body.customer_shipping_address);
@@ -3414,7 +3432,13 @@ exports.createDcsByAddress = async (req, res) => {
       const vehicleErr = validateSaleVehicleOnCreate(entityCode, ship_by, {
         ...group,
         vehicle_number: groupVehicleNumber,
-      });
+      })
+        || await validateEwayVehicleOnCreate(client, {
+          shipBy: ship_by,
+          dispatchMode,
+          serialIds: groupSerials.map((sr) => sr.serial_id),
+          vehicleNumber: groupVehicleNumber,
+        });
       if (vehicleErr) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: vehicleErr });

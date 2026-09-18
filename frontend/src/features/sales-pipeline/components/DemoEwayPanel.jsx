@@ -22,10 +22,12 @@ export default function DemoEwayPanel({
   const canUpload = c.can_upload_eway ?? isSuperAdmin;
   const canRequest = c.can_request_eway !== false;
   const uploaded = c.eway_complete === true;
+  const needsVehicle = c.requires_vehicle_number === true;
 
   const [ewayNumber, setEwayNumber] = useState(c.eway_bill_number || '');
   const [ewayDate, setEwayDate] = useState(c.eway_bill_date ? String(c.eway_bill_date).slice(0, 10) : '');
   const [ewayFile, setEwayFile] = useState(null);
+  const [vehicleNumber, setVehicleNumber] = useState(c.vehicle_number || '');
   const [saving, setSaving] = useState(false);
   const [requesting, setRequesting] = useState(false);
 
@@ -58,10 +60,15 @@ export default function DemoEwayPanel({
       toast.error('E-Way Bill document is required');
       return;
     }
+    if (needsVehicle && !vehicleNumber.trim() && !c.vehicle_number) {
+      toast.error('Vehicle number is required for an inhouse / porter dispatch');
+      return;
+    }
     const fd = new FormData();
     if (ewayNumber.trim()) fd.append('eway_bill_number', ewayNumber.trim());
     if (ewayDate) fd.append('eway_bill_date', ewayDate);
     if (ewayFile) fd.append('eway_bill_pdf', ewayFile);
+    if (vehicleNumber.trim()) fd.append('vehicle_number', vehicleNumber.trim());
     setSaving(true);
     try {
       const res = await uploadDemoEway(dcNumber, fd);
@@ -116,6 +123,15 @@ export default function DemoEwayPanel({
             </table>
           </div>
         )}
+        {needsVehicle && (
+          <p className="mt-1">
+            Carried {c.dispatch_mode === 'porter' ? 'by Porter' : 'inhouse'} — vehicle number{' '}
+            {c.vehicle_number
+              ? <strong className="font-mono">{c.vehicle_number}</strong>
+              : <strong>not captured yet</strong>}
+            {' '}is needed for Part B of the E-Way Bill.
+          </p>
+        )}
         <p className="mt-1">
           DC Download: <strong>{uploaded || canUpload ? 'Enabled' : 'Locked'}</strong>
         </p>
@@ -153,6 +169,9 @@ export default function DemoEwayPanel({
         <section className="bg-white border rounded-xl p-5 text-sm space-y-2">
           <p><span className="text-gray-500">E-Way Bill:</span> {c.eway_bill_number || '—'}</p>
           {c.eway_bill_date && <p><span className="text-gray-500">Date:</span> {formatDate(c.eway_bill_date)}</p>}
+          {c.vehicle_number && (
+            <p><span className="text-gray-500">Vehicle:</span> <span className="font-mono">{c.vehicle_number}</span></p>
+          )}
           {c.eway_bill_pdf_path && (
             <a href={docUrl(c.eway_bill_pdf_path)} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
               View document
@@ -185,6 +204,19 @@ export default function DemoEwayPanel({
               onChange={(e) => setEwayDate(e.target.value)}
             />
           </div>
+          {needsVehicle && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Vehicle number * <span className="font-normal text-gray-500">(inhouse / porter — E-Way Bill Part B)</span>
+              </label>
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase"
+                value={vehicleNumber}
+                onChange={(e) => setVehicleNumber(e.target.value)}
+                placeholder="DL01AB1234"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">E-Way Bill document *</label>
             <input
@@ -206,6 +238,11 @@ export default function DemoEwayPanel({
       ) : (
         <section className="bg-white border rounded-xl p-5 text-sm text-gray-600">
           Accounts will upload the E-Way Bill. After it is saved, DC download unlocks.
+          {needsVehicle && !c.vehicle_number && (
+            <span className="block mt-1 text-amber-700">
+              Vehicle number is still missing — Accounts will be asked for it on upload.
+            </span>
+          )}
         </section>
       )}
     </div>

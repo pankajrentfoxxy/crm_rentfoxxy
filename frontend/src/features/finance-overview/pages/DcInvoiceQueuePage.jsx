@@ -148,6 +148,7 @@ export default function DcInvoiceQueuePage() {
   const [einvoiceNumber, setEinvoiceNumber] = useState('');
   const [ewayNumber, setEwayNumber] = useState('');
   const [ewayDate, setEwayDate] = useState('');
+  const [vehicleNumber, setVehicleNumber] = useState('');
   const [einvoiceFile, setEinvoiceFile] = useState(null);
   const [ewayFile, setEwayFile] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -224,10 +225,14 @@ export default function DcInvoiceQueuePage() {
     setEwayFile(null);
   };
 
+  const demoNeedsVehicle = (row) =>
+    row?.dispatch_mode === 'inhouse' || row?.dispatch_mode === 'porter';
+
   const openDemoUpload = (row) => {
     setDemoUploadRow(row);
     setEwayNumber(row.eway_bill_number || '');
     setEwayDate(row.eway_bill_date ? String(row.eway_bill_date).slice(0, 10) : '');
+    setVehicleNumber(row.vehicle_number || '');
     setEwayFile(null);
   };
 
@@ -241,10 +246,15 @@ export default function DcInvoiceQueuePage() {
       toast.error('E-Way Bill document is required');
       return;
     }
+    if (demoNeedsVehicle(demoUploadRow) && !vehicleNumber.trim() && !demoUploadRow.vehicle_number) {
+      toast.error('Vehicle number is required for an inhouse / porter dispatch');
+      return;
+    }
     const fd = new FormData();
     if (ewayNumber.trim()) fd.append('eway_bill_number', ewayNumber.trim());
     if (ewayDate) fd.append('eway_bill_date', ewayDate);
     if (ewayFile) fd.append('eway_bill_pdf', ewayFile);
+    if (vehicleNumber.trim()) fd.append('vehicle_number', vehicleNumber.trim());
     setSaving(true);
     try {
       const res = await uploadDemoEway(demoUploadRow.dc_number, fd);
@@ -562,7 +572,17 @@ export default function DcInvoiceQueuePage() {
                   ) : '—'}
                 </td>
                 <td className="px-4 py-3 font-mono text-xs">{r.laptops || '—'}</td>
-                <td className="px-4 py-3">{formatMoney(r.amount)}</td>
+                <td className="px-4 py-3">
+                  {formatMoney(r.amount)}
+                  {(r.dispatch_mode === 'inhouse' || r.dispatch_mode === 'porter') && (
+                    <span className="block text-xs text-gray-500">
+                      {r.dispatch_mode === 'porter' ? 'Porter' : 'Inhouse'} ·{' '}
+                      {r.vehicle_number
+                        ? <span className="font-mono">{r.vehicle_number}</span>
+                        : <span className="text-amber-700">vehicle not captured</span>}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   {r.eway_status === 'uploaded'
                     ? <span className="text-emerald-700 font-medium">Uploaded</span>
@@ -608,6 +628,21 @@ export default function DcInvoiceQueuePage() {
                 onChange={(e) => setEwayDate(e.target.value)}
               />
             </div>
+            {demoNeedsVehicle(demoUploadRow) && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Vehicle number * <span className="font-normal text-gray-500">
+                    ({demoUploadRow.dispatch_mode === 'porter' ? 'Porter' : 'Inhouse'} — E-Way Bill Part B)
+                  </span>
+                </label>
+                <input
+                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase"
+                  value={vehicleNumber}
+                  onChange={(e) => setVehicleNumber(e.target.value)}
+                  placeholder="DL01AB1234"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">E-Way Bill document *</label>
               <input type="file" accept=".pdf,image/*" className="w-full text-sm" onChange={(e) => setEwayFile(e.target.files?.[0] || null)} />

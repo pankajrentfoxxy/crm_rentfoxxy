@@ -338,6 +338,9 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.eway_bill_date,
            dcl.eway_bill_pdf_path,
            dcl.accounts_notified_at,
+           dcl.ship_by,
+           dcl.dispatch_mode,
+           dcl.vehicle_number,
            COALESCE(dcq.dc_qty, 0) AS quantity,
            COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            CASE

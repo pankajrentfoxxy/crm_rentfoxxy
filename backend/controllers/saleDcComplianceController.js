@@ -15,6 +15,9 @@ const {
   requiresDemoEwayCompliance,
   requiresOutboundEway,
   requiresEwayBill,
+  requiresVehicleNumber,
+  isOwnVehicleDispatch,
+  assetValueForSerialIds,
   buildSaleCompliance,
   buildDemoEwayCompliance,
   normalizeVehicleNumber,
@@ -247,6 +250,23 @@ exports.validateSaleVehicleOnCreate = function validateSaleVehicleOnCreate(entit
   return null;
 };
 
+/**
+ * Rental and demo DCs skip the sale rule above, but an e-way bill still needs a
+ * vehicle for Part B once the consignment reaches the threshold and we carry it
+ * ourselves. Values the serials off the same processor + generation matrix the
+ * DC e-way check uses, since the DC lines do not exist yet at this point.
+ */
+exports.validateEwayVehicleOnCreate = async function validateEwayVehicleOnCreate(
+  db, { shipBy, dispatchMode, serialIds = [], vehicleNumber }
+) {
+  if (!isOwnVehicleDispatch(shipBy, dispatchMode)) return null;
+  if (normalizeVehicleNumber(vehicleNumber)) return null;
+  const value = await assetValueForSerialIds(db, serialIds);
+  if (!requiresEwayBill(value)) return null;
+  return `Vehicle number is required — this DC is valued at ₹${Number(value).toLocaleString('en-IN')} `
+    + `and needs an E-Way Bill, which records the vehicle for an inhouse / porter dispatch.`;
+};
+
 /** POST — manually send accounts E-Invoice request (dispatch SMTP only). */
 exports.sendAccountsNotification = async (req, res) => {
   const dcNumber = req.params.dcNumber;
@@ -416,6 +436,8 @@ exports.requestDemoEway = async (req, res) => {
       billedValue: billedSubtotal,
       laptops: asset.units.length ? asset.units : laptopRowsFromLines(lines),
       pdfPath: head.pdf_path || null,
+      vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
+      needsVehicle: requiresVehicleNumber(head, true),
     });
 
     await pool.query(
@@ -483,6 +505,7 @@ exports.uploadDemoEway = async (req, res) => {
   const body = req.body || {};
   const ewayBillNumber = String(body.eway_bill_number || '').trim();
   const ewayBillDate = String(body.eway_bill_date || '').trim() || null;
+  const vehicleNumber = normalizeVehicleNumber(body.vehicle_number || body.vehicleNumber);
 
   try {
     const lines = await getDeliveryChallanLines(dcNumber);
@@ -519,6 +542,14 @@ exports.uploadDemoEway = async (req, res) => {
     if (!ewayFile && !hasExistingPdf) {
       return res.status(400).json({ success: false, message: 'E-Way Bill document is required' });
     }
+    // Part B of the e-way bill needs the vehicle when we carry the goods ourselves.
+    const finalVehicle = vehicleNumber || normalizeVehicleNumber(head.vehicle_number);
+    if (requiresVehicleNumber(head, true) && !finalVehicle) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vehicle number is required for an inhouse / porter dispatch (E-Way Bill Part B)',
+      });
+    }
 
     const ewayPdfPath = ewayFile ? relativeUploadPath(ewayFile.path) : head.eway_bill_pdf_path;
     const finalNum = ewayBillNumber || head.eway_bill_number;
@@ -530,9 +561,10 @@ exports.uploadDemoEway = async (req, res) => {
           eway_bill_pdf_path = COALESCE($3, eway_bill_pdf_path),
           eway_bill_uploaded_at = NOW(),
           eway_bill_uploaded_by = $4,
+          vehicle_number = COALESCE($6, vehicle_number),
           updated_at = NOW()
         WHERE dc_number = $5`,
-      [finalNum, ewayBillDate, ewayPdfPath, req.user?.user_id || null, dcNumber]
+      [finalNum, ewayBillDate, ewayPdfPath, req.user?.user_id || null, dcNumber, finalVehicle || null]
     );
 
     if (head.sales_order_number) {
