@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
+const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -280,7 +281,7 @@ async function resolveQuotationType(docType, header) {
   return qt;
 }
 
-async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [] }) {
+async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [], sender = null }) {
   ensureUploadDir();
   const fileName = `${String(docNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
@@ -368,25 +369,29 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code, L, y + 4);
     }
     // Doc numbers (right cluster)
+    // Only the numbers this document actually has — a quotation has no DC or SO
+    // yet, and three "N/A" captions in the header read as broken.
     const num = (label, value, x, color) => {
-      doc.font('Helvetica-Bold').fontSize(13).fillColor(color || C.ink).text(value || 'N/A', x, y, { width: 150, align: 'center' });
+      if (!value) return;
+      doc.font('Helvetica-Bold').fontSize(13).fillColor(color || C.ink).text(value, x, y, { width: 150, align: 'center' });
       doc.font('Helvetica').fontSize(7).fillColor(C.sub).text(label, x, y + 18, { width: 150, align: 'center' });
     };
-    num('DC Number', docType === 'delivery_challan' ? docNumber : (header.dc_number || 'N/A'), 250, C.docNum);
-    num('Sales Order Number', docType === 'sales_order' ? docNumber : (header.sales_order_number || 'N/A'), 360, C.ink);
+    num('DC Number', docType === 'delivery_challan' ? docNumber : header.dc_number, 250, C.docNum);
+    num('Sales Order Number', docType === 'sales_order' ? docNumber : header.sales_order_number, 360, C.ink);
     if (gateQrPng) {
       const { drawGateQr } = require('./gateQrService');
       drawGateQr(doc, gateQrPng, { x: R - 40, y: 38, size: 36, caption: 'Gate scan' });
     } else {
-      num('Quotation Number', docType === 'quotation' ? docNumber : (header.quotation_number || 'N/A'), 470, C.ink);
+      num('Quotation Number', docType === 'quotation' ? docNumber : header.quotation_number, 470, C.ink);
     }
     y += 50;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
 
     // ── Seller block + type/dispatch ─────────────────────────────────────
-    const docDate = formatPdfDateIst(header.dc_date || header.created_at) || formatPdfNowIst();
-    const dispatchDate = formatPdfDateIst(header.dispatched_at || header.dispatch_date, { fallback: null });
+    const docDate = formatPdfDateIst(header.dc_date || header.created_at, { withLabel: false })
+      || formatPdfNowIst({ withLabel: false });
+    const dispatchDate = formatPdfDateIst(header.dispatched_at || header.dispatch_date, { fallback: null, withLabel: false });
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
       .text(`Date: ${docDate}`, L, y);
     y += 14;
@@ -394,12 +399,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.text(`Dispatch Date: ${dispatchDate}`, L, y);
       y += 14;
     }
-    const estimatedDelivery = formatPdfDateIst(header.estimated_delivery, { fallback: null });
+    const estimatedDelivery = formatPdfDateIst(header.estimated_delivery, { fallback: null, withLabel: false });
     if (estimatedDelivery) {
       doc.text(`Estimated Delivery: ${estimatedDelivery}`, L, y);
       y += 14;
     }
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(accent).text(company.legal_name, L, y);
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(C.ink).text(company.legal_name, L, y);
     y += 18;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
     if (company.email) { doc.text(`Email: ${company.email}`, L, y); y += 12; }
@@ -591,6 +596,44 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.text(`• ${rk || '—'}`, L + 6, y); y += 13;
     }
     y += 14;
+
+    // ── Quotation close: tax note, terms, and who to reply to ─────────────
+    // A quotation is an offer, not a handover, so it carries no acknowledgement
+    // or signature block — it ends with the terms and the sender's details.
+    if (docType === 'quotation') {
+      if (y > 660) { doc.addPage(); y = 40; }
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(QUOTATION_TAX_NOTE, L, y);
+      y += 18;
+
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Terms and Conditions', L, y);
+      y += 15;
+      doc.font('Helvetica').fontSize(8).fillColor(C.ink);
+      for (const term of QUOTATION_TERMS) {
+        if (y > 770) { doc.addPage(); y = 40; }
+        doc.text(term, L + 6, y, { width: W - 12 });
+        y = doc.y + 3;
+      }
+      y += 12;
+
+      if (y > 740) { doc.addPage(); y = 40; }
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text('Regards,', L, y);
+      y += 13;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(sender?.name || company.legal_name, L, y);
+      y += 12;
+      if (sender?.phone) {
+        doc.font('Helvetica').fontSize(9).fillColor(C.ink).text(sender.phone, L, y);
+        y += 12;
+      }
+      if (sender?.email) {
+        doc.font('Helvetica').fontSize(9).fillColor(C.sub).text(sender.email, L, y);
+      }
+
+      doc.end();
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+      return;
+    }
 
     // ── Acknowledgement / e-sign area (future tracking) ──────────────────
     if (y > 720) { doc.addPage(); y = 40; }

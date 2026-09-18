@@ -139,21 +139,22 @@ async function sendSalesQuotationEmail({
     );
   }
 
-  let pdfPath = lines[0]?.pdf_path;
-  if (!pdfPath) {
-    pdfPath = await generateDocumentPdf({
-      docType: 'quotation',
-      docNumber: quotationNumber,
-      header: lines[0],
-      lines,
-    });
-    await pool.query(
-      `UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`,
-      [pdfPath, quotationNumber]
-    );
-  }
-
   const { senderName, senderEmail, senderPhone } = await resolveSender(user);
+
+  // Always rebuild the PDF at send time: it signs off with whoever is sending,
+  // so a copy generated earlier (or by someone else) would carry the wrong name.
+  const pdfPath = await generateDocumentPdf({
+    docType: 'quotation',
+    docNumber: quotationNumber,
+    header: lines[0],
+    lines,
+    sender: { name: senderName, phone: senderPhone, email: senderEmail },
+  });
+  await pool.query(
+    `UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`,
+    [pdfPath, quotationNumber]
+  );
+
   const { companyName } = quotationContactFields(lines[0]);
   const isSale = isSaleQuotation(lines[0]?.quotation_type);
   const { config1, config2 } = configsFromQuotationLines(lines);

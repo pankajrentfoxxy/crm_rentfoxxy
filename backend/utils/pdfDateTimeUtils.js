@@ -68,8 +68,8 @@ function formatPdfDateTimeIstOrDash(value) {
   return formatPdfDateTimeIst(value, { fallback: '—' });
 }
 
-function formatPdfNowIst() {
-  return formatPdfDateTimeIst(new Date());
+function formatPdfNowIst(opts = {}) {
+  return formatPdfDateTimeIst(new Date(), opts);
 }
 
 function formatPdfDateLabel(prefix, value) {
