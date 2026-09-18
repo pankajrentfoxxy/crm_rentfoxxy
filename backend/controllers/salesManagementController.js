@@ -1,3 +1,4 @@
+const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
@@ -3813,24 +3814,27 @@ exports.sendDeliveryOtp = async (req, res) => {
       try {
         await emailDocument({
           to: customerEmail,
+          cc: deliveryNotifyCc(),
           subject: `Delivery OTP for ${dcNumber}`,
           text: `Your delivery OTP is ${otp}`,
           pdfRelativePath: null,
+          mailer: 'dispatch',
         });
       } catch (mailErr) {
         console.error('Customer OTP email failed:', mailErr.message);
       }
     }
 
-    const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (salesEmail) {
+    const notifyEmail = deliveryNotifyTo();
+    if (notifyEmail) {
       try {
         const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
         const shipping = normalizeDeliveryAddress(first.customer_shipping_address) || {};
         const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode || shipping.zip_code]
           .filter(Boolean).join(', ');
         await emailDocument({
-          to: salesEmail,
+          to: notifyEmail,
+          cc: deliveryNotifyCc(),
           subject: `Delivery OTP — ${dcNumber} — ${first.customer_name || ''}`.trim(),
           text:
             `DC: ${dcNumber}\n`
@@ -3839,6 +3843,7 @@ exports.sendDeliveryOtp = async (req, res) => {
             + `OTP: ${otp}\n\n`
             + `(Share this OTP verbally with the customer at delivery.)`,
           pdfRelativePath: null,
+          mailer: 'dispatch',
         });
       } catch (mailErr) {
         console.error('Sales OTP email failed:', mailErr.message);

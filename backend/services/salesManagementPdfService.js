@@ -25,6 +25,8 @@ function ensureUploadDir() {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+const mailTransport = require('./mailTransport');
+
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -979,11 +981,19 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
   return relativePath;
 }
 
-async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo }) {
-  const transport = getMailTransport();
+/**
+ * `mailer` picks the sending identity from mailTransport's named chains:
+ * 'dispatch' is the no-reply mailbox, used for OTP and delivery notifications so
+ * they no longer leave (and land in) the sales inbox. Omitted = the general CRM
+ * mailer, which is what invoices and e-invoices still use.
+ */
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer }) {
+  const named = mailer ? mailTransport.getTransport(mailer) : null;
+  const transport = named || getMailTransport();
   if (!transport || !to) return false;
   const abs = pdfRelativePath ? path.join(__dirname, '..', pdfRelativePath) : null;
-  const fromAddress = process.env.SMTP_FROM
+  const fromAddress = (named && mailTransport.getFromAddress(mailer))
+    || process.env.SMTP_FROM
     || process.env.FROM_EMAIL
     || process.env.EMAIL_FROM
     || process.env.SMTP_USER;

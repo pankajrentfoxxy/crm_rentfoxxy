@@ -1,3 +1,4 @@
+const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -136,9 +137,11 @@ exports.sendOtp = async (req, res) => {
     );
     await emailDocument({
       to: email,
+      cc: deliveryNotifyCc(),
       subject: `Delivery OTP for ${dcNumber}`,
       text: `Your delivery OTP is ${otp}`,
       pdfRelativePath: null,
+      mailer: 'dispatch',
     });
     try {
       const { notifyDeliveryOtpAsync } = require('../services/salesOrderWhatsApp');

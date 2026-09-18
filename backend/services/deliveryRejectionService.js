@@ -1,3 +1,4 @@
+const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 /**
  * Customer refused delivery → mark rejected → warehouse receives the units back
  * (OTP or e-sign inward) → QC re-entry. Only after the warehouse receipt is the
@@ -609,14 +610,15 @@ async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
 
   const warehouseEmail = process.env.WAREHOUSE_LEAD_EMAIL
     || process.env.OPS_ALERT_EMAIL
-    || process.env.SMTP_FROM
-    || process.env.SMTP_USER;
+    || deliveryNotifyTo();
 
   let emailed = false;
   if (warehouseEmail) {
     try {
       await emailDocument({
         to: warehouseEmail,
+        cc: deliveryNotifyCc(),
+        mailer: 'dispatch',
         subject: `Warehouse return OTP — ${dcNumber}`,
         text:
           `Delivery rejected — return to warehouse confirmation\n\n`
