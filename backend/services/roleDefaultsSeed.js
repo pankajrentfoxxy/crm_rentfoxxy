@@ -4,6 +4,9 @@ const FINANCIAL_NO_DELETE = [
   'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes', 'security_deposits',
 ];
 
+// Sections a reset of the blanket admin role must not pick up: they belong to one team.
+const ADMIN_EXCLUDED_SECTIONS = ['sale_in_place'];
+
 const ROLE_ROW_DEFAULTS = {
   manager: [
     ['dashboard', false, false, false], ['analytics_dashboard', false, false, false],
@@ -139,6 +142,7 @@ const ROLE_ROW_DEFAULTS = {
     ['dashboard', false, false, false], ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
     ['credit_notes', true, false, false], ['debit_notes', true, false, false], ['security_deposits', true, true, false],
     ['billing_dashboard', false, false, false], ['einvoice_ewb', true, false, false],
+    ['sale_in_place', true, true, false],
     ['reports_access', false, false, false], ['production_qc_report', false, false, false],
     ['report_revenue', false, false, false], ['report_inventory', false, false, false],
     ['report_lead_conversion', false, false, false], ['report_salesperson', false, false, false],
@@ -190,8 +194,9 @@ async function seedRoleDefaults(client, role) {
       `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
        SELECT $1, section, true, true, true,
          CASE WHEN section = ANY($2::text[]) THEN false ELSE true END
-       FROM permission_sections`,
-      [role, FINANCIAL_NO_DELETE]
+       FROM permission_sections
+       WHERE section <> ALL($3::text[])`,
+      [role, FINANCIAL_NO_DELETE, ADMIN_EXCLUDED_SECTIONS]
     );
     return;
   }

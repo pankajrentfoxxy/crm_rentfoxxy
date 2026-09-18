@@ -119,3 +119,40 @@ describe('sale in place — service contract', () => {
       'an owned unit must never be flagged for vendor settlement');
   });
 });
+
+describe('sale in place — delivered address for the sale order', () => {
+  const { toSoAddress } = require('../services/saleInPlaceService');
+
+  it('unwraps the double-encoded ERP DC address into the SO address shape', () => {
+    const raw = {
+      name: 'karan Verma',
+      address: JSON.stringify(JSON.stringify({
+        name: 'Siddhartha Singh', phone: '9311672925', country: 'India',
+        state: 'uttar_pradesh', city: 'ujjain', zip_code: '110058',
+        address: '704, Tower 2, Janakpuri, New Delhi',
+      })),
+    };
+    const a = toSoAddress(raw);
+    assert.equal(a.address, '704, Tower 2, Janakpuri, New Delhi');
+    assert.equal(a.zip_code, '110058');
+    assert.equal(a.phone, '9311672925');
+  });
+
+  it('drops the ERP placeholder city/state so GST is never charged for the wrong state', () => {
+    const a = toSoAddress({ address: 'Plot 4, Sector 18', city: 'ujjain', state: 'uttar_pradesh', zip_code: '122015' });
+    assert.equal(a.city, '');
+    assert.equal(a.state, '', 'the user must confirm the real state before the SO is raised');
+  });
+
+  it('keeps a real state and city untouched', () => {
+    const a = toSoAddress({ address: 'Hosur Road', city: 'Bengaluru', state: 'Karnataka', pincode: '560068' });
+    assert.equal(a.state, 'Karnataka');
+    assert.equal(a.city, 'Bengaluru');
+    assert.equal(a.zip_code, '560068');
+  });
+
+  it('returns null when there is no street address to ship to', () => {
+    assert.equal(toSoAddress(null), null);
+    assert.equal(toSoAddress({ city: 'Delhi' }), null);
+  });
+});

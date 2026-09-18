@@ -1685,6 +1685,12 @@ function mapActiveAssetRow(r) {
     lifecycle: 'active',
     dc_pdf_path: r.dc_pdf_path || null,
     pod_files: [...new Set(podFiles)],
+    sale_in_place: r.sale_in_place_reason ? {
+      reason: r.sale_in_place_reason,
+      rent_stopped_on: r.sale_in_place_rent_stopped_on,
+      vendor_pending: Boolean(r.sale_in_place_vendor_pending),
+      sales_order_number: r.sale_in_place_so_number || null,
+    } : null,
     ...mapDeliveryLocation(r.customer_shipping_address),
   };
 }
@@ -1755,15 +1761,23 @@ function parseCommaList(raw) {
 
 const RETURNED_PICKUP_TYPE_OPTIONS = ['return', 'repair', 'replacement'];
 
-function resolveActiveInventoryStatuses(raw) {
+// The CRM Assets tab splits a customer's holdings into "Active (on rent)" and
+// "Purchased" (sold to them). The customer portal and support screens still read
+// the combined DEPLOYED list, so the split is opt-in via `onRentOnly`.
+const ON_RENT_WITH_CUSTOMER_STATUSES = Object.freeze(
+  DEPLOYED_WITH_CUSTOMER_STATUSES.filter((s) => s !== 'sold')
+);
+
+function resolveActiveInventoryStatuses(raw, { onRentOnly = false } = {}) {
+  const allowed = onRentOnly ? ON_RENT_WITH_CUSTOMER_STATUSES : DEPLOYED_WITH_CUSTOMER_STATUSES;
   const selected = parseCommaList(raw);
-  if (!selected.length) return [...DEPLOYED_WITH_CUSTOMER_STATUSES];
+  if (!selected.length) return [...allowed];
   const set = new Set();
   for (const s of selected) {
-    if (DEPLOYED_WITH_CUSTOMER_STATUSES.includes(s)) set.add(s);
+    if (allowed.includes(s)) set.add(s);
     if (s === 'rented') set.add('out_stock');
   }
-  return set.size ? [...set] : [...DEPLOYED_WITH_CUSTOMER_STATUSES];
+  return set.size ? [...set] : [...allowed];
 }
 
 function resolveReturnedPickupTypes(raw) {
@@ -1958,11 +1972,25 @@ const ACTIVE_CORE_FROM_SQL = `
   ${ACTIVE_WHERE_SQL}
 `;
 
+// An open sale-in-place case: rent already stopped, laptop being sold to the customer.
+const SALE_IN_PLACE_JOIN_SQL = `
+  LEFT JOIN LATERAL (
+    SELECT e.reason, e.rent_stopped_on,
+           (e.vendor_id IS NOT NULL AND NOT e.vendor_settled) AS vendor_pending,
+           (SELECT sos.sales_order_number FROM sales_order_serials sos
+             WHERE sos.serial_id = e.serial_id AND sos.status = 'attached'
+             ORDER BY sos.allocation_id DESC LIMIT 1) AS sales_order_number
+      FROM sale_in_place_events e
+     WHERE e.serial_id = vsn.serial_id AND e.sales_order_number IS NULL
+     LIMIT 1
+  ) sip ON TRUE`;
+
 const ACTIVE_FROM_SQL = `
   FROM vendor_serial_numbers vsn
   ${INVENTORY_JOIN_SQL}
   ${POD_JOIN_SQL}
   ${RATE_JOIN_SQL}
+  ${SALE_IN_PLACE_JOIN_SQL}
   ${ACTIVE_WHERE_SQL}
 `;
 
@@ -1990,7 +2018,11 @@ const ACTIVE_SELECT_SQL = `
          pod.pod_photo_url AS pod_photo_url,
          pod.esign_url AS pod_esign_url,
          pod.pdf_path AS dc_pdf_path,
-         pod.customer_shipping_address AS customer_shipping_address
+         pod.customer_shipping_address AS customer_shipping_address,
+         sip.reason AS sale_in_place_reason,
+         sip.rent_stopped_on AS sale_in_place_rent_stopped_on,
+         sip.vendor_pending AS sale_in_place_vendor_pending,
+         sip.sales_order_number AS sale_in_place_so_number
 `;
 
 const RETURNED_FROM_SQL = `
@@ -2104,10 +2136,10 @@ function activeFilterFromSql({ search = '', from = '', to = '', specWhere = '' }
 `;
 }
 
-async function countCustomerActiveAssets(customerId) {
+async function countCustomerActiveAssets(customerId, { onRentOnly = false } = {}) {
   const { rows } = await pool.query(
     withActiveCte(`SELECT COUNT(*)::int AS total ${ACTIVE_CORE_FROM_SQL}`),
-    [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+    [customerId, onRentOnly ? ON_RENT_WITH_CUSTOMER_STATUSES : DEPLOYED_WITH_CUSTOMER_STATUSES]
   );
   return rows[0]?.total || 0;
 }
@@ -2120,8 +2152,8 @@ async function countCustomerReturnedAssets(customerId) {
   return rows[0]?.total || 0;
 }
 
-async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', statuses = '', specQuery = {}, limit, offset, skipCount = false } = {}) {
-  const statusList = resolveActiveInventoryStatuses(statuses);
+async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', statuses = '', specQuery = {}, limit, offset, skipCount = false, onRentOnly = false } = {}) {
+  const statusList = resolveActiveInventoryStatuses(statuses, { onRentOnly });
   const params = [customerId, statusList];
   const searchSql = buildActiveSearchSql(search, params);
   const dateSql = buildActiveDateSql(from, to, params);
@@ -2154,6 +2186,129 @@ async function queryCustomerActiveAssets(customerId, { search = '', from = '', t
 // Exposed so the customer portal serves the same deployed-asset rows as this
 // screen instead of maintaining a second copy of the query.
 exports.queryCustomerActiveAssets = queryCustomerActiveAssets;
+
+// "Purchased": laptops sold to this customer — sold in place (lost / damaged /
+// buyout of a rented unit) or delivered against a normal Sale order.
+const PURCHASED_FROM_SQL = `
+  FROM vendor_serial_numbers vsn
+  ${INVENTORY_JOIN_SQL}
+  LEFT JOIN LATERAL (
+    SELECT t.created_at AS sold_at
+      FROM inventory_status_transitions t
+     WHERE t.serial_id = vsn.serial_id AND t.to_status = 'sold'
+     ORDER BY t.transition_id DESC
+     LIMIT 1
+  ) sold ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT sol.sales_order_number, sol.rate, sol.sale_invoice_number,
+           COALESCE(sol.fulfillment_mode, 'dispatch') AS fulfillment_mode
+      FROM sales_order_serials sos
+      JOIN sales_order_lines sol ON sol.id = sos.line_id
+     WHERE sos.serial_id = vsn.serial_id
+       AND sos.status <> 'removed'
+       AND LOWER(COALESCE(sol.status, '')) <> 'cancelled'
+       AND sol.customer_id = vsn.current_customer_id
+     ORDER BY sos.allocation_id DESC
+     LIMIT 1
+  ) so ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT e.reason
+      FROM sale_in_place_events e
+     WHERE e.serial_id = vsn.serial_id AND e.customer_id = vsn.current_customer_id
+     ORDER BY e.event_id DESC
+     LIMIT 1
+  ) sip ON TRUE
+  WHERE vsn.current_customer_id = $1
+    AND vsn.deleted_at IS NULL
+    AND vsn.inventory_status = 'sold'
+`;
+
+const PURCHASED_DATE_EXPR = "(COALESCE(sold.sold_at, vsn.delivered_at) AT TIME ZONE 'Asia/Kolkata')::date";
+
+async function countCustomerPurchasedAssets(customerId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendor_serial_numbers vsn
+      WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL AND vsn.inventory_status = 'sold'`,
+    [customerId]
+  );
+  return rows[0]?.total || 0;
+}
+
+async function queryCustomerPurchasedAssets(customerId, { search = '', from = '', to = '', specQuery = {}, limit, offset } = {}) {
+  const params = [customerId];
+  let where = '';
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    where += ` AND (
+      vsn.serial_number ILIKE $${i}
+      OR COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id', '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
+      OR COALESCE(so.sales_order_number, '') ILIKE $${i}
+      OR COALESCE(so.sale_invoice_number, '') ILIKE $${i}
+    )`;
+  }
+  if (from) { params.push(from); where += ` AND ${PURCHASED_DATE_EXPR} >= $${params.length}`; }
+  if (to) { params.push(to); where += ` AND ${PURCHASED_DATE_EXPR} <= $${params.length}`; }
+  where += buildCustomerActiveAssetSpecWhere(specQuery, params);
+
+  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${PURCHASED_FROM_SQL} ${where}`, params);
+  const listParams = [...params];
+  let listSql = `
+    SELECT vsn.serial_id,
+           COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+           vsn.serial_number,
+           COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
+           COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
+           COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
+           vsn.extra->>'generation' AS generation,
+           COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
+           COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
+           vsn.extra->>'gpu' AS gpu,
+           vsn.extra->>'screen_size' AS screen_size,
+           vsn.current_entity AS entity_code,
+           vsn.current_dc_number AS dc_number,
+           vsn.delivered_at,
+           COALESCE(sold.sold_at, vsn.delivered_at) AS sold_at,
+           so.sales_order_number, so.rate AS sale_price, so.sale_invoice_number, so.fulfillment_mode,
+           sip.reason AS sale_in_place_reason
+      ${PURCHASED_FROM_SQL} ${where}
+     ORDER BY COALESCE(sold.sold_at, vsn.delivered_at) DESC NULLS LAST, vsn.serial_id DESC`;
+  if (limit != null) {
+    listParams.push(limit, offset || 0);
+    listSql += ` LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`;
+  }
+  const { rows } = await pool.query(listSql, listParams);
+  return {
+    total: countR.rows[0]?.total || 0,
+    rows: rows.map((r) => ({
+      serial_id: r.serial_id,
+      ttspl_id: r.ttspl_id,
+      serial_number: r.serial_number,
+      brand: r.brand,
+      model_name: r.model_name,
+      processor: r.processor,
+      generation: r.generation,
+      ram: r.ram,
+      storage: r.storage,
+      gpu: r.gpu,
+      screen_size: r.screen_size,
+      entity_code: r.entity_code,
+      // A sale in place has no DC; current_dc_number is the old rental delivery.
+      dc_number: r.fulfillment_mode === 'in_place' ? null : r.dc_number,
+      delivered_at: r.delivered_at,
+      sold_at: r.sold_at,
+      sales_order_number: r.sales_order_number,
+      sale_price: r.sale_price,
+      sale_invoice_number: r.sale_invoice_number,
+      sale_type: r.fulfillment_mode === 'in_place' || r.sale_in_place_reason ? 'in_place' : 'dispatch',
+      sale_in_place_reason: r.sale_in_place_reason,
+      status: 'sold',
+      lifecycle: 'purchased',
+    })),
+  };
+}
 
 async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', statuses = '', specQuery = {}, limit, offset, skipCount = false } = {}) {
   const params = [customerId];
@@ -2745,13 +2900,14 @@ exports.getCustomerLaptops = async (req, res) => {
     const limitRaw = parseInt(req.query.limit, 10) || 0;
     const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
     const paginate = page > 0 && limit > 0;
-    const lifecycle = req.query.lifecycle === 'returned' ? 'returned' : 'active';
+    const lifecycle = ['returned', 'purchased'].includes(req.query.lifecycle) ? req.query.lifecycle : 'active';
     const search = (req.query.search || '').trim();
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
     const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
     const statuses = (req.query.status || req.query.statuses || '').trim();
 
+    // Unpaginated callers (support ticket laptop picker) keep the combined list.
     if (!paginate) {
       const [{ rows: active }, { rows: returned }] = await Promise.all([
         pool.query(withActiveCte(`${ACTIVE_SELECT_SQL} ${ACTIVE_FROM_SQL} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`), [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]).then((r) => ({ rows: r.rows.map(mapActiveAssetRow) })),
@@ -2776,17 +2932,21 @@ exports.getCustomerLaptops = async (req, res) => {
       return res.json(cached);
     }
 
-    const [result, otherTotal] = await Promise.all([
+    const listOpts = { search, from, to, statuses, specQuery: req.query, limit, offset };
+    const [result, activeTotal, returnedTotal, purchasedTotal] = await Promise.all([
       lifecycle === 'returned'
-        ? queryCustomerReturnedAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit, offset })
-        : queryCustomerActiveAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit, offset }),
-      lifecycle === 'returned'
-        ? countCustomerActiveAssets(customerId)
-        : countCustomerReturnedAssets(customerId),
+        ? queryCustomerReturnedAssets(customerId, listOpts)
+        : lifecycle === 'purchased'
+          ? queryCustomerPurchasedAssets(customerId, listOpts)
+          : queryCustomerActiveAssets(customerId, { ...listOpts, onRentOnly: true }),
+      lifecycle === 'active' ? null : countCustomerActiveAssets(customerId, { onRentOnly: true }),
+      lifecycle === 'returned' ? null : countCustomerReturnedAssets(customerId),
+      lifecycle === 'purchased' ? null : countCustomerPurchasedAssets(customerId),
     ]);
     const counts = {
-      active: lifecycle === 'active' ? result.total : otherTotal,
-      returned: lifecycle === 'returned' ? result.total : otherTotal,
+      active: lifecycle === 'active' ? result.total : activeTotal,
+      returned: lifecycle === 'returned' ? result.total : returnedTotal,
+      purchased: lifecycle === 'purchased' ? result.total : purchasedTotal,
     };
 
     const payload = {
@@ -2855,7 +3015,7 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
 
     const result = lifecycle === 'returned'
       ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit: EXPORT_LIMIT, offset: 0 })
-      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit: EXPORT_LIMIT, offset: 0 });
+      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, specQuery: req.query, limit: EXPORT_LIMIT, offset: 0, onRentOnly: true });
 
     const rows = [...result.rows].sort((a, b) => {
       const loc = locationSortKey(a).localeCompare(locationSortKey(b));
@@ -3214,10 +3374,12 @@ exports.getCustomerRentalSummary = async (req, res) => {
     }
 
     const { rows } = await pool.query(
+      // Sold units and units whose rent was stopped for a sale in place are not rent.
       withActiveCte(`SELECT COALESCE(SUM(COALESCE(NULLIF(vsn.rent_monthly_rate, 0), sos_rate.rate)), 0)::numeric AS total_monthly_rent,
               COUNT(*)::int AS active_asset_count
-         ${ACTIVE_FROM_SQL}`),
-      [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+         ${ACTIVE_FROM_SQL}
+         AND sip.reason IS NULL`),
+      [customerId, ON_RENT_WITH_CUSTOMER_STATUSES]
     );
 
     res.json({
@@ -3438,6 +3600,10 @@ exports.reportSaleInPlace = async (req, res) => {
     if (!Number.isInteger(customerId)) {
       return res.status(400).json({ success: false, message: 'Invalid customer id' });
     }
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const body = req.body || {};
     const result = await saleInPlaceService.report({
       customerId,
@@ -3489,5 +3655,90 @@ exports.listSaleInPlaceCases = async (req, res) => {
   } catch (err) {
     console.error('listSaleInPlaceCases:', err);
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /customers/:customerId/sale-in-place/prefill?serial_ids=1,2
+ * Billing address, delivered addresses and laptop details for the
+ * "stop rent + create sale order" screen.
+ */
+exports.getSaleInPlacePrefill = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+    const serialIds = String(req.query.serial_ids || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const data = await saleInPlaceService.getSalePrefill({ customerId, serialIds });
+    res.json({ success: true, data });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    if (code >= 500) console.error('getSaleInPlacePrefill:', err);
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /customers/:customerId/sale-in-place/sale-order
+ * Stop rent and raise the sale-in-place Sales Order in one step, straight from
+ * the customer's Assets tab. Owned laptops are sold immediately; vendor-rented
+ * ones are confirmed automatically when their vendor buyout is recorded.
+ */
+exports.createSaleInPlaceOrder = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+    const body = req.body || {};
+    const result = await saleInPlaceService.createInPlaceSale({
+      customerId,
+      serialIds: Array.isArray(body.serial_ids) ? body.serial_ids : [],
+      reason: body.reason,
+      reportedOn: body.reported_on,
+      notes: body.notes || null,
+      prices: body.prices && typeof body.prices === 'object' ? body.prices : {},
+      billingAddress: body.customer_billing_address,
+      shippingAddress: body.customer_shipping_address,
+      gstNumber: body.gst_number || null,
+      customerEmail: body.customer_email || null,
+      customerMobile: body.customer_mobile || null,
+      remark: body.remark || null,
+      actorUserId: req.user?.user_id || null,
+      actorName: req.user?.name || null,
+      actorRole: req.user?.role || null,
+    });
+
+    const so = result.sales_order_number;
+    const waiting = result.awaiting_vendor_buyout.length;
+    res.status(201).json({
+      success: true,
+      message: `Sales order ${so} created.`
+        + (result.sold.length ? ` ${result.sold.length} laptop(s) sold and moved to Purchased.` : '')
+        + (waiting ? ` ${waiting} vendor-rented laptop(s) will be sold once the vendor buyout is recorded.` : ''),
+      data: result,
+    });
+
+    // Post-response, best-effort: SO PDF, activity trail, list caches.
+    saleInPlaceService.regenerateSalesOrderPdf(so).catch(() => {});
+    const { invalidateInventoryListCachesFireAndForget } = require('../services/inventoryListCache');
+    invalidateInventoryListCachesFireAndForget();
+    const { ACTIVITY_TYPES, safeLogSalesOrderActivity } = require('../services/salesOrderActivityService');
+    const codes = [...result.sold, ...result.awaiting_vendor_buyout].map((i) => i.ttspl_id).filter(Boolean);
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: so,
+      activityType: ACTIVITY_TYPES.SALES_ORDER,
+      action: 'created',
+      description: `${req.user?.name || 'User'} created sale-in-place order ${so} from the customer's assets `
+        + `(${result.reason}): ${codes.join(', ')}. No delivery challan or e-way bill.`,
+      user: req.user,
+    });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    if (code >= 500) console.error('createSaleInPlaceOrder:', err);
+    if (!res.headersSent) res.status(code).json({ success: false, message: err.message });
   }
 };

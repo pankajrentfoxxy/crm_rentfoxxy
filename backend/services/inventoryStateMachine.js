@@ -361,7 +361,7 @@ const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorNam
  */
 const markSoldInPlace = (db, serialId, {
   salesOrderNumber, customerId, entityCode = null, reason = 'lost',
-  rentEndDate = null, actorUserId = null, actorName = null,
+  rentEndDate = null, deliveredAt = null, actorUserId = null, actorName = null,
 }) =>
   transitionAsset(db, {
     serialId,
@@ -369,6 +369,9 @@ const markSoldInPlace = (db, serialId, {
     customerId,
     entityCode,
     rentEndDate: toDateStr(rentEndDate),
+    // The unit reached the customer when it was first delivered on rent; without
+    // this the transition would restamp delivered_at to the moment of sale.
+    deliveredAt,
     reason: `Sold in place on ${salesOrderNumber} \u2014 ${reason} at customer (no DC / no movement)`,
     actorUserId,
     actorName,

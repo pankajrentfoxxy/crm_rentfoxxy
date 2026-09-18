@@ -3,7 +3,7 @@
  */
 const { cacheGet, cacheSet, cacheDelPattern, CACHE_TTL } = require('../utils/cacheService');
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4'; // v4: counts.purchased + Purchased lifecycle
 const LIST_TTL_SEC = parseInt(
   process.env.CACHE_TTL_CUSTOMER_LAPTOPS_SEC || String(CACHE_TTL.CUSTOMER_LAPTOPS || 45),
   10

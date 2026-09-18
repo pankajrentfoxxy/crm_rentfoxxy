@@ -200,12 +200,20 @@ async function recordVendorBuyout(req, res) {
       vendorBillNo: req.body.vendor_bill_no,
       amount: req.body.amount,
       actorUserId: req.user?.user_id || null,
+      actorName: req.user?.name || null,
     });
-    res.json({
-      success: true,
-      message: 'Vendor buyout recorded. This unit is now owned and can be sold in place.',
-      data,
-    });
+    const sc = data.sale_confirmation;
+    let message = 'Vendor buyout recorded. This unit is now owned and can be sold in place.';
+    if (sc?.error) {
+      message = `Vendor buyout recorded, but ${sc.sales_order_number} could not be confirmed: ${sc.error}`;
+    } else if (sc?.sold_count) {
+      message = `Vendor buyout recorded. ${sc.sold_count} laptop(s) on ${sc.sales_order_number} are now sold to the customer.`;
+    }
+    if (data.sales_order_number) {
+      const { invalidateInventoryListCachesFireAndForget } = require('../../services/inventoryListCache');
+      invalidateInventoryListCachesFireAndForget();
+    }
+    res.json({ success: true, message, data });
   } catch (err) {
     const code = err.statusCode || 500;
     if (code >= 500) console.error('recordVendorBuyout:', err);

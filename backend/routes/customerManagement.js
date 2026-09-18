@@ -50,7 +50,10 @@ router.get('/customers/:customerId/laptops/export.xlsx', cp('customer_assets', '
 router.get('/customers/:customerId/laptops', cp('customer_assets', 'view'), ctrl.getCustomerLaptops);
 // Sale in place (PHASE 21): report a rented laptop lost / damaged / bought out.
 router.get('/customers/:customerId/sale-in-place', cp('customer_assets', 'view'), ctrl.listSaleInPlaceCases);
-router.post('/customers/:customerId/sale-in-place', cp('customer_assets', 'edit'), ctrl.reportSaleInPlace);
+// Accounts only (section 'sale_in_place', migration 249); super_admin always passes.
+router.post('/customers/:customerId/sale-in-place', cp('sale_in_place', 'create'), ctrl.reportSaleInPlace);
+router.get('/customers/:customerId/sale-in-place/prefill', cp('sale_in_place', 'create'), ctrl.getSaleInPlacePrefill);
+router.post('/customers/:customerId/sale-in-place/sale-order', cp('sale_in_place', 'create'), ctrl.createSaleInPlaceOrder);
 router.get('/customers/:customerId/assets/activity', cp('customer_assets', 'view'), ctrl.getCustomerAssetActivity);
 router.get('/customers/:customerId/tickets', cp('customers', 'view'), ctrl.getCustomerTickets);
 router.get('/customers/:customerId/rental-summary', cp('customers', 'view'), ctrl.getCustomerRentalSummary);

@@ -83,6 +83,7 @@ export const APPLICATION_SECTIONS = [
   'billing_dashboard',
   'einvoice_ewb',
   'dc_eway_bill',
+  'sale_in_place',
   'support_tickets',
   'support_requests',
   'support_settings',
@@ -198,6 +199,7 @@ export const SECTION_LABELS = {
   billing_dashboard: 'Billing Dashboard',
   einvoice_ewb: 'E-Invoice & E-Way Bill',
   dc_eway_bill: 'DC E-Way Bill Management',
+  sale_in_place: 'Lost / Buyout Sale (stop rent + sale order)',
   support_tickets: 'Support Tickets',
   support_requests: 'Support Requests (QR)',
   support_settings: 'Support Settings',
@@ -266,7 +268,7 @@ export const SECTION_GROUPS = {
   'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders'],
   'Finance & Billing': [
     'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes',
-    'security_deposits', 'billing_dashboard', 'einvoice_ewb', 'dc_eway_bill',
+    'security_deposits', 'billing_dashboard', 'einvoice_ewb', 'dc_eway_bill', 'sale_in_place',
   ],
   Support: ['support_tickets', 'support_requests', 'support_settings', 'support_technician'],
   'Reports & Analytics': [

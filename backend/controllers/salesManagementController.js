@@ -1194,6 +1194,21 @@ exports.updateSalesOrder = async (req, res) => {
 
     await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
 
+    // A sale-in-place order is one line per laptop, created with its laptops already
+    // attached (customer Assets → Report Lost / Buyout). The generic editor would add
+    // dispatch lines or drop attached ones, so it is not editable here.
+    const inPlaceRes = await client.query(
+      `SELECT 1 FROM sales_order_lines WHERE sales_order_number = $1 AND fulfillment_mode = 'in_place' LIMIT 1`,
+      [soNumber]
+    );
+    if (inPlaceRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'A sale-in-place order cannot be edited. Cancel it (while nothing is sold) and raise it again from the customer\'s Assets tab.',
+      });
+    }
+
     const dcRes = await client.query(
       `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
       [soNumber]
@@ -4573,7 +4588,9 @@ exports.getSoWithPayments = async (req, res) => {
       status: soStatus,
       refusal_status: refusalStatusLabel(soStatus, dcCancelEligibility),
       dc_cancel_eligibility: dcCancelEligibility,
-      can_cancel: soStatus !== 'cancelled' && (dcCancelEligibility?.can_cancel !== false),
+      can_cancel: soStatus !== 'cancelled' && (dcCancelEligibility?.can_cancel !== false)
+        // A sale in place has no DC to lock it; a sold unit locks it instead.
+        && !(lines[0].fulfillment_mode === 'in_place' && fulfillment.delivered_count > 0),
       is_replacement_order: supportMeta.is_replacement_order,
       support_ticket_id: supportMeta.support_ticket_id,
       laptop_qty: laptopQty,
@@ -4669,6 +4686,26 @@ exports.cancelSalesOrder = async (req, res) => {
           ? 'Cannot cancel: refused units are still awaiting warehouse receipt. Receive them back at the warehouse first.'
           : 'Cannot cancel: a delivery challan has already been created for this sales order.',
         dc_cancel_eligibility: dcEligibility,
+      });
+    }
+
+    // A sale in place has no DC to lock it, so guard it directly: once a unit is
+    // sold in place, reversing it needs a credit note in Zoho, not a CRM cancel.
+    const soldInPlace = await client.query(
+      `SELECT sos.ttspl_id
+         FROM sales_order_serials sos
+         JOIN sales_order_lines sol ON sol.id = sos.line_id
+        WHERE sos.sales_order_number = $1
+          AND sol.fulfillment_mode = 'in_place'
+          AND sos.status = 'dispatched'`,
+      [soNumber]
+    );
+    if (soldInPlace.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Cannot cancel: ${soldInPlace.rows.map((r) => r.ttspl_id).join(', ')} already sold in place on this order. `
+          + 'Reverse the sale with a credit note instead.',
       });
     }
 
@@ -6954,10 +6991,7 @@ exports.confirmInPlaceSale = async (req, res) => {
       actorUserId: req.user?.user_id || null,
       actorName: req.user?.name || null,
     });
-
-    // Best-effort, post-commit: refresh the SO PDF so the customer copy is current.
-    regenerateSoAndLinkedDcPdfs(req.params.soNumber)
-      .catch((e) => console.error('[saleInPlace] SO pdf regen:', e.message));
+    // confirmSale() refreshes the SO PDF itself once the sale is committed.
 
     res.json({
       success: true,

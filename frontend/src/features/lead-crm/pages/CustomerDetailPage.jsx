@@ -18,6 +18,8 @@ import CustomerAddressesTab from '../components/CustomerAddressesTab';
 import CustomerAddressModal from '../components/CustomerAddressModal';
 import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
 import SaleInPlaceModal from '../components/SaleInPlaceModal';
+import VendorBuyoutModal from '../components/VendorBuyoutModal';
+import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
 import MultiSelectFilter from '../components/MultiSelectFilter';
 import usePermission from '../../../hooks/usePermission';
@@ -42,10 +44,10 @@ const TICKET_STATUS_OPTIONS = [
   { value: 'closed', label: 'Closed' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
+// Sold laptops live under Purchased, not Active (on rent).
 const ACTIVE_ASSET_STATUS_OPTIONS = [
   { value: 'rented', label: 'Rented' },
   { value: 'on_demo', label: 'On Demo' },
-  { value: 'sold', label: 'Sold' },
   { value: 'reserved', label: 'Reserved' },
   { value: 'dispatch_ready', label: 'Dispatch Ready' },
   { value: 'in_transit', label: 'In Transit' },
@@ -55,6 +57,31 @@ const RETURNED_ASSET_STATUS_OPTIONS = [
   { value: 'repair', label: 'Repair' },
   { value: 'replacement', label: 'Replacement' },
 ];
+
+const SALE_REASON_LABELS = { lost: 'Lost', damaged: 'Damaged', buyout: 'Buyout' };
+
+function SaleInPlaceBadge({ info }) {
+  if (!info) return null;
+  const label = SALE_REASON_LABELS[info.reason] || info.reason;
+  return (
+    <span
+      className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs whitespace-nowrap"
+      title={`Rent stopped ${fmtAssetDate(info.rent_stopped_on)} — being sold to the customer`}
+    >
+      Rent stopped · {label}{info.vendor_pending ? ' · awaiting vendor buyout' : ''}
+    </span>
+  );
+}
+
+/** SO number: a link for users who can open Sale orders, plain text otherwise. */
+function SoRef({ so, canOpen, className = '' }) {
+  if (!canOpen) return <span className={`font-mono text-slate-700 ${className}`}>{so}</span>;
+  return (
+    <Link to={salesOrderDetailPath(so, 'sale')} className={`font-mono text-blue-600 hover:underline ${className}`}>
+      {so}
+    </Link>
+  );
+}
 
 function formatTicketNumber(id) {
   return `STK-${String(id).padStart(4, '0')}`;
@@ -210,7 +237,7 @@ export default function CustomerDetailPage() {
   const navigate = useNavigate();
   const [customer, setCustomer] = useState(null);
   const [assetRows, setAssetRows] = useState([]);
-  const [assetCounts, setAssetCounts] = useState({ active: 0, returned: 0 });
+  const [assetCounts, setAssetCounts] = useState({ active: 0, returned: 0, purchased: 0 });
   const [assetView, setAssetView] = useState('active');
   const [assetPage, setAssetPage] = useState(1);
   const [assetSearchInput, setAssetSearchInput] = useState('');
@@ -242,8 +269,13 @@ export default function CustomerDetailPage() {
   const [ticketStatuses, setTicketStatuses] = useState([]);
   const [ticketPagination, setTicketPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: TICKET_PAGE_SIZE });
   const [rentalSummary, setRentalSummary] = useState({ total_monthly_rent: 0, active_asset_count: 0 });
-  const { canEdit: canEditCustomerAssets, user } = usePermission();
+  const { canEdit: canEditCustomerAssets, canCreate, canView, user } = usePermission();
   const [saleInPlaceOpen, setSaleInPlaceOpen] = useState(false);
+  const [buyoutAsset, setBuyoutAsset] = useState(null);
+  // Lost / Buyout sale is an Accounts action (section 'sale_in_place').
+  const canSaleInPlace = canCreate('sale_in_place');
+  const canRecordBuyout = canEditCustomerAssets('vendor_management') || canEditCustomerAssets('sale_in_place');
+  const canOpenSaleOrders = canView('sales_orders_sale');
   const isSuperAdmin = user?.role === 'super_admin';
   const [portalPreviewBusy, setPortalPreviewBusy] = useState(false);
 
@@ -592,7 +624,7 @@ export default function CustomerDetailPage() {
 
       {tab === TAB_ASSETS && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 sm:max-w-md">
+          <div className="grid grid-cols-3 gap-3 sm:max-w-xl">
             <button
               type="button"
               onClick={() => { setAssetPage(1); setAssetView('active'); }}
@@ -613,6 +645,16 @@ export default function CustomerDetailPage() {
               <p className="text-xs text-gray-500">Returned</p>
               <p className="text-2xl font-bold text-amber-700">{assetCounts.returned ?? 0}</p>
             </button>
+            <button
+              type="button"
+              onClick={() => { setAssetPage(1); setAssetView('purchased'); }}
+              className={`rounded-xl border p-4 text-left transition-colors ${
+                assetView === 'purchased' ? 'border-violet-500 bg-violet-50' : 'border-gray-100 bg-white hover:bg-gray-50'
+              }`}
+            >
+              <p className="text-xs text-gray-500">Purchased</p>
+              <p className="text-2xl font-bold text-violet-700">{assetCounts.purchased ?? 0}</p>
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -623,7 +665,7 @@ export default function CustomerDetailPage() {
               className="max-w-md flex-1 min-w-[220px]"
             />
             <div className="flex flex-wrap items-center gap-2">
-              {assetView === 'active' && canEditCustomerAssets('customer_assets') && (
+              {assetView === 'active' && canSaleInPlace && (
                 <button
                   type="button"
                   onClick={() => setSaleInPlaceOpen(true)}
@@ -656,19 +698,21 @@ export default function CustomerDetailPage() {
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col text-xs text-gray-500 min-w-[180px]">
-              Status
-              <div className="mt-1">
-                <MultiSelectFilter
-                  options={assetView === 'returned' ? RETURNED_ASSET_STATUS_OPTIONS : ACTIVE_ASSET_STATUS_OPTIONS}
-                  value={assetStatuses}
-                  onChange={setAssetStatuses}
-                  allLabel="All statuses"
-                />
-              </div>
-            </label>
+            {assetView !== 'purchased' && (
+              <label className="flex flex-col text-xs text-gray-500 min-w-[180px]">
+                Status
+                <div className="mt-1">
+                  <MultiSelectFilter
+                    options={assetView === 'returned' ? RETURNED_ASSET_STATUS_OPTIONS : ACTIVE_ASSET_STATUS_OPTIONS}
+                    value={assetStatuses}
+                    onChange={setAssetStatuses}
+                    allLabel="All statuses"
+                  />
+                </div>
+              </label>
+            )}
             <label className="flex flex-col text-xs text-gray-500">
-              Delivery date from
+              {assetView === 'purchased' ? 'Sold date from' : 'Delivery date from'}
               <input
                 type="date"
                 value={assetFrom}
@@ -733,9 +777,20 @@ export default function CustomerDetailPage() {
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                       ) : null}
-                      <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>
+                      {lap.sale_in_place
+                        ? <SaleInPlaceBadge info={lap.sale_in_place} />
+                        : <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>}
                     </div>
                   </div>
+                  {lap.sale_in_place?.vendor_pending && canRecordBuyout && (
+                    <button
+                      type="button"
+                      onClick={() => setBuyoutAsset(lap)}
+                      className="px-2 py-1 text-xs rounded-lg border border-amber-300 text-amber-800"
+                    >
+                      Record vendor buyout
+                    </button>
+                  )}
                   <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
                   <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
                   <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
@@ -750,6 +805,26 @@ export default function CustomerDetailPage() {
                     {lap.rent_monthly_rate && <span className="font-semibold text-slate-700">{formatCurrency(lap.rent_monthly_rate)}</span>}
                   </div>
                   <div className="pt-2 border-t border-slate-100"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
+                </div>
+              ))
+            ) : assetView === 'purchased' ? (
+              assetRows.length === 0 ? (
+                <p className="p-6 text-center text-gray-400 text-sm">No laptops purchased by this customer</p>
+              ) : assetRows.map((lap) => (
+                <div key={lap.serial_id || lap.ttspl_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number}</button>
+                    <span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs">sold</span>
+                  </div>
+                  <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
+                  <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                    {lap.sales_order_number && <SoRef so={lap.sales_order_number} canOpen={canOpenSaleOrders} />}
+                    <span>{lap.sale_type === 'in_place' ? `In place · ${SALE_REASON_LABELS[lap.sale_in_place_reason] || 'sale'}` : 'Delivered'}</span>
+                    {lap.sale_price && <span className="font-semibold text-slate-700">{formatCurrency(lap.sale_price)}</span>}
+                    {lap.sold_at && <span>Sold: {fmtAssetDate(lap.sold_at)}</span>}
+                    <span>Invoice: {lap.sale_invoice_number || 'Pending'}</span>
+                  </div>
                 </div>
               ))
             ) : (
@@ -795,7 +870,9 @@ export default function CustomerDetailPage() {
                 <tr>
                   {(assetView === 'active'
                     ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'Location', 'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
-                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Location', 'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'POD', 'Status', 'Actions']
+                    : assetView === 'purchased'
+                      ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'Sales Order', 'Sale Type', 'Sale Price', 'Sold On', 'Invoice', 'Status']
+                      : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Location', 'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'POD', 'Status', 'Actions']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
               </thead>
@@ -826,21 +903,77 @@ export default function CustomerDetailPage() {
                       <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
                       <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
                       <td className="p-3 text-xs"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
-                      <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>
                       <td className="p-3">
-                        {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
-                          <button
-                            type="button"
-                            title="Edit asset"
-                            onClick={() => setAssetEdit(lap)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-teal-700"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
+                        {lap.sale_in_place ? (
+                          <div className="space-y-1">
+                            <SaleInPlaceBadge info={lap.sale_in_place} />
+                            {lap.sale_in_place.sales_order_number && (
+                              <SoRef so={lap.sale_in_place.sales_order_number} canOpen={canOpenSaleOrders} className="block text-[11px]" />
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-xs text-gray-300">—</span>
+                          <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>
                         )}
                       </td>
+                      <td className="p-3">
+                        <div className="flex items-center gap-1">
+                          {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
+                            <button
+                              type="button"
+                              title="Edit asset"
+                              onClick={() => setAssetEdit(lap)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-teal-700"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <span className="text-xs text-gray-300">—</span>
+                          )}
+                          {lap.sale_in_place?.vendor_pending && canRecordBuyout && (
+                            <button
+                              type="button"
+                              onClick={() => setBuyoutAsset(lap)}
+                              className="px-2 py-1 text-[11px] rounded-lg border border-amber-300 text-amber-800 hover:bg-amber-50 whitespace-nowrap"
+                            >
+                              Record vendor buyout
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : assetView === 'purchased' ? (
+                  assetRows.length === 0 ? (
+                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No laptops purchased by this customer</td></tr>
+                  ) : assetRows.map((lap, i) => (
+                    <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
+                      <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
+                      <td className="p-3">
+                        <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
+                          className="text-blue-600 hover:underline font-mono text-xs">
+                          {lap.ttspl_id || lap.serial_number}
+                        </button>
+                      </td>
+                      <td className="p-3 text-xs font-mono">{lap.serial_number || '—'}</td>
+                      <td className="p-3">{lap.model_name || '—'}</td>
+                      <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
+                      <td className="p-3 text-xs">
+                        {lap.entity_code === 'gorefurbo'
+                          ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
+                          : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
+                      </td>
+                      <td className="p-3 text-xs font-mono">
+                        {lap.sales_order_number ? <SoRef so={lap.sales_order_number} canOpen={canOpenSaleOrders} /> : '—'}
+                      </td>
+                      <td className="p-3 text-xs">
+                        {lap.sale_type === 'in_place'
+                          ? <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800">In place · {SALE_REASON_LABELS[lap.sale_in_place_reason] || 'sale'}</span>
+                          : <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700">Delivered{lap.dc_number ? ` · ${lap.dc_number}` : ''}</span>}
+                      </td>
+                      <td className="p-3 text-xs">{lap.sale_price ? formatCurrency(lap.sale_price) : '—'}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.sold_at)}</td>
+                      <td className="p-3 text-xs font-mono">{lap.sale_invoice_number || <span className="text-gray-400 font-sans">Pending</span>}</td>
+                      <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs">sold</span></td>
                     </tr>
                   ))
                 ) : (
@@ -1198,9 +1331,14 @@ export default function CustomerDetailPage() {
       <SaleInPlaceModal
         open={saleInPlaceOpen}
         customerId={id}
-        assets={assetRows}
+        canOpenSaleOrder={canOpenSaleOrders}
         onClose={() => setSaleInPlaceOpen(false)}
         onDone={() => { refreshAssetsTab(); loadCustomer(); }}
+      />
+      <VendorBuyoutModal
+        asset={buyoutAsset}
+        onClose={() => setBuyoutAsset(null)}
+        onDone={() => { refreshAssetsTab(); }}
       />
 
       <CustomerAssetEditModal

@@ -196,7 +196,8 @@ router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, 
 router.post(
   '/serials/:serialId/buyout',
   authMiddleware,
-  checkSectionPermission('vendor_management', 'edit'),
+  // Procurement (vendor_management) or Accounts, who receive the vendor's buyout bill.
+  checkAnySectionPermission(['vendor_management', 'sale_in_place'], 'edit'),
   serials.buyoutValidators,
   serials.recordVendorBuyout
 );

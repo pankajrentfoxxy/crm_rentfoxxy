@@ -368,3 +368,146 @@ behaviour is reuse.
 3. **Buyout price floor.** With manual pricing there is no guard against selling below
    written-down value. Worth a soft warning in the UI if the price is under, say, 50% of
    purchase cost — cheap to add, easy to skip.
+
+---
+
+## Phase 21b — one-step flow for Accounts (implemented 2026-09-18, deployed to QA)
+
+### What it does
+
+Accounts no longer raise the sale order from Sales Orders. **Customer → Assets → Report
+Lost / Buyout** is a two-step dialog:
+
+1. **Laptops** — pick laptops on rent with this customer, the reason (lost / damaged /
+   buyout) and the date rent stops. A laptop whose rent was stopped earlier without an order
+   is still selectable and keeps its original stop date and credit note.
+2. **Sale order** — prefilled by `GET /api/customer-management/customers/:id/sale-in-place/prefill`:
+   billing address (customer profile), shipping address (the address each laptop was
+   delivered to on its DC; or billing; or manual), GST no., email, mobile, and a **sale price
+   per laptop** (ex-GST). GST (CGST+SGST vs IGST) is previewed from the shipping state.
+
+`POST /api/customer-management/customers/:id/sale-in-place/sale-order`
+(`saleInPlaceService.createInPlaceSale`) then does, in **one transaction**:
+
+| # | Step |
+|---|---|
+| 1 | Stop customer rent (+ vendor rent for vendor-rented units), raise the credit note — new cases only |
+| 2 | Allocate `SO/yy-yy/nnnn` inside the transaction; one Sale line per laptop: `quotation_type='sale'`, `entity_code='gorefurbo'`, `fulfillment_mode='in_place'`, `security_type='none'`, own price / config / delivered address |
+| 3 | Attach each laptop to its line (`sales_order_serials`, no QC ticket, no dispatch workflow) |
+| 4 | Confirm every **owned** laptop: `rented → sold` via `markSoldInPlace`, original `delivered_at` kept |
+
+Vendor-rented laptops stay attached and `rented` with rent stopped. **Record vendor buyout**
+on the Active row settles the serial (`acquisition_type='direct_purchase'`, PO untouched) and
+confirms the SO automatically for every settled unit (`confirmSale({ partial: true })`).
+
+### Who can use it
+
+New permission section **`sale_in_place`** — *Lost / Buyout Sale (stop rent + sale order)*,
+under Finance & Billing in Roles & Permissions. Migration **249** grants it to **`accounts`**
+only (view / create / edit). `super_admin` passes every check. `admin` is not granted, and a
+"reset to defaults" of the admin role skips it (`ADMIN_EXCLUDED_SECTIONS` in
+`roleDefaultsSeed.js`). To give one more person access, grant `sale_in_place` → Create on that
+user in Roles & Permissions.
+
+| Action | Gate |
+|---|---|
+| Report Lost / Buyout button, prefill, create SO, old report-only endpoint | `sale_in_place` create |
+| Record vendor buyout | `vendor_management` edit **or** `sale_in_place` edit (Procurement or Accounts) |
+| Confirm Sale on the SO page (fallback) | `sales_orders_doc` edit (unchanged) |
+| Attach Zoho invoice (Finance → Sale Invoice Queue) | `einvoice_ewb` (unchanged) |
+
+SO numbers show as links only to users who can view `sales_orders_sale`; Accounts on QA
+cannot, so they see plain text. Grant `sales_orders_sale` → View to Accounts if they should
+open the SO.
+
+### Customer type — no change needed
+
+The customer does **not** need to be switched to *Sales* or *Both*. The normal Sale SO form
+refuses Rental-only customers (311 of 341 on QA), but a rental customer buying the laptop they
+already rent is exactly this flow, so `createInPlaceSale` skips that check. The SO still lands
+under **Sales Orders – Sale** (entity gorefurbo).
+
+### Customer Assets tab
+
+- New **Purchased** card/table (`GET …/laptops?lifecycle=purchased`): every `sold` laptop the
+  customer holds (sold in place or via a normal Sale DC) with SO, sale type, price, sold date,
+  invoice no. `counts.purchased` added; list cache key bumped to `v4`.
+- **Active (on rent)** and **Current Rental Amount / month** no longer include sold laptops,
+  nor rent-stopped ones awaiting the vendor buyout (amber badge *Rent stopped · awaiting
+  vendor buyout*).
+- Unchanged: the unpaginated list used by the support-ticket picker, and the customer portal.
+
+### Guards added
+
+- An in-place SO with a sold laptop cannot be cancelled (`cancelSalesOrder` → 409,
+  `can_cancel=false`).
+- An in-place SO cannot be edited through the generic SO editor (`updateSalesOrder` → 409,
+  *Edit SO* hidden) — it would add dispatch lines or drop attached ones.
+- ERP placeholder city/state (`ujjain` / `uttar_pradesh`) on DC addresses are blanked, so the
+  real state must be confirmed before GST is charged.
+- A laptop already on an open in-place SO cannot be selected again; double buyout is refused.
+
+### Files
+
+| File | Change |
+|---|---|
+| `backend/migrations/249_sale_in_place_permission.sql` | **new** — `sale_in_place` section + accounts grant |
+| `backend/services/saleInPlaceService.js` | `getSalePrefill`, `createInPlaceSale`, `confirmInTx` (partial), buyout auto-confirm, `regenerateSalesOrderPdf`, `toSoAddress` |
+| `backend/services/inventoryStateMachine.js` | `markSoldInPlace` keeps `delivered_at` |
+| `backend/controllers/customerManagementController.js` | prefill + create endpoints; Purchased lifecycle; on-rent-only counts / rental summary |
+| `backend/routes/customerManagement.js` | routes gated on `sale_in_place` |
+| `backend/routes/vendorManagement.js`, `controllers/vendorManagement/serialNumbers.controller.js` | buyout gate + auto-confirm message |
+| `backend/controllers/salesManagementController.js` | cancel / edit guards for in-place SOs |
+| `backend/services/roleDefaultsSeed.js` | accounts default; admin reset excludes `sale_in_place` |
+| `backend/services/customerLaptopsCache.js` | cache version `v4` |
+| `backend/test/saleInPlace.test.js` | address normalisation tests |
+| `frontend/src/features/lead-crm/components/SaleInPlaceModal.jsx` | two-step dialog |
+| `frontend/src/features/lead-crm/components/VendorBuyoutModal.jsx` | **new** |
+| `frontend/src/features/lead-crm/pages/CustomerDetailPage.jsx` | Purchased tab, badges, buyout button, permission gates |
+| `frontend/src/features/sales-pipeline/pages/SalesOrderDetailPage.jsx` | hide *Edit SO* for in-place |
+| `frontend/src/constants/sections.js` | `sale_in_place` label + group |
+| `frontend/src/utils/saleInPlaceApi.js` | prefill + create calls |
+
+### Production rollout
+
+Production already has Phase 21 (commit `653918f7`, migration 248 applied). This change needs
+**one SQL file applied by hand** — the deploy workflow runs no migrations.
+
+**Option A — move it through git (recommended)**
+
+1. Merge `new_stagging_crm` into `new_crm_rentfoxxy` (or cherry-pick the Phase 21b commit)
+   and push. The GitHub Action builds and restarts production.
+2. On the production VPS, from `backend/`, apply only migration 249 and record it:
+   ```bash
+   psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -1 \
+     -f migrations/249_sale_in_place_permission.sql \
+     -c "INSERT INTO schema_migrations (name) SELECT '249_sale_in_place_permission.sql'
+         WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = '249_sale_in_place_permission.sql');"
+   ```
+   (or `node scripts/run-all-migrations.js` if every other pending file is meant to run too).
+   Until 249 is applied only super_admin sees the button — nothing breaks.
+3. Accounts users must log out and back in (or refresh) to pick up the new permission.
+
+**Option B — hand this prompt to Claude Code in the production checkout**
+
+> Port "Phase 21b — one-step sale in place for Accounts" from branch `new_stagging_crm` to
+> this branch. Read `docs/PHASE21_LOST_LAPTOP_SALE.md` § Phase 21b for the full spec and the
+> file list; bring those files over by merging or cherry-picking the Phase 21b commit, resolve
+> any conflict in `salesManagementController.js` keeping both sides. Apply only
+> `backend/migrations/249_sale_in_place_permission.sql` to the database and record it in
+> `schema_migrations`. Run `npm run test:unit` in `backend/`. Then verify: an `accounts` user
+> sees *Report Lost / Buyout* on a customer's Assets tab and an `admin`/`sales` user does not;
+> Active excludes sold laptops and the new Purchased tab lists them.
+
+### Verification on the QA database (2026-09-18)
+
+Run inside a transaction that was rolled back, so no QA data changed; UI sign-off is pending.
+
+- Owned laptops (customer 986, TTSPL3038 / TTSPL3787): one submit → SO created, both `sold`,
+  SO delivered, both under Purchased, cancel blocked.
+- Mixed (customer 41, TTSPL5941 owned + TTSPL5257 vendor-rented from SG LAPTOPS): owned sold at
+  once; vendor unit waits; strict *Confirm Sale* refused; *Record vendor buyout* sells it and the
+  SO reaches 2/2 delivered; vendor rent stopped for that serial only.
+- Rejected: missing/zero price, future stop date, no shipping state, laptop already on an SO,
+  laptop with another customer, double buyout.
+- Permission: accounts ✔, super_admin ✔, admin ✘, sales ✘, warehouse ✘.

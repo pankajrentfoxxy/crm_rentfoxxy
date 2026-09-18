@@ -178,6 +178,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const canEditSo = (resolvedScope === 'rental' || resolvedScope === 'sale')
     && !isCancelled
     && !hasDcCreated
+    && !isInPlaceSale
     && canEdit(scopeConfig?.permissionSection || 'sales_orders_doc');
   const listPath = salesOrderListPath(resolvedScope);
   const cameFromElsewhere = Boolean(location.state?.from);
