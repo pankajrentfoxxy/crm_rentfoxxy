@@ -123,9 +123,11 @@ const {
   checkSoSerialOrAssignedDispatch,
 } = require('../middleware/dispatchSoAccess');
 const { checkAdminDeliverAccess } = require('../middleware/deliveryAdminDeliverAccess');
+const { rejectCancelledReturnDc, rejectCancelledReturnDcWrite } = require('../middleware/cancelledPickupGuard');
 
 router.use(authMiddleware);
 router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
+router.use('/delivery-challans', rejectCancelledReturnDcWrite);
 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
 router.get(...soRoute('/serials', checkSoViewOrAssignedDispatch, sosCtrl.listSerials));
@@ -282,7 +284,7 @@ router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
 router.get('/return-dc/:rdcNumber/download-pdf', rdcView, ctrl.downloadReturnDcPdf);
 router.post('/return-dc/:rdcNumber/pdf', rdcView, ctrl.regenerateReturnDcPdf);
 router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
-router.post('/return-dc/:rdcNumber/config-tokens', rdcEdit, ctrl.remintReturnDcConfigTokens);
+router.post('/return-dc/:rdcNumber/config-tokens', rdcEdit, rejectCancelledReturnDc, ctrl.remintReturnDcConfigTokens);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);
 router.post('/return-dc/tickets/:ticketId/generate', rdcEdit, ctrl.generateReturnDc);
 

@@ -719,7 +719,7 @@ async function tryCloseServiceDcTicket(db, ticketId, actor) {
             updated_at = CURRENT_TIMESTAMP
       WHERE ticket_id = $1
         AND item_type IN ('complaint', 'pickup')
-        AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
+        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')`,
     [ticketId]
   );
   await db.query(

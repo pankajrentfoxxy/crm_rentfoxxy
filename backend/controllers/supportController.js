@@ -4008,7 +4008,7 @@ exports.getTechnicianLaptopBucket = async (req, res) => {
           LEFT JOIN users u ON u.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
          WHERE sti.item_type = 'pickup'
            AND sti.pickup_method IN ('technician','inhouse')
-           AND sti.status NOT IN ('resolved','closed','inventory_updated')
+           AND sti.status NOT IN ('resolved','closed','inventory_updated','cancelled')
            ${techFilter}
          ORDER BY sti.created_at DESC
     `, params);

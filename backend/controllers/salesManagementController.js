@@ -4247,7 +4247,7 @@ exports.generateReturnDc = async (req, res) => {
     let itemsRes = await client.query(
       `SELECT * FROM support_ticket_items
         WHERE ticket_id = $1 AND item_type = 'pickup'
-          AND status NOT IN ('resolved','closed','inventory_updated')
+          AND status NOT IN ('resolved','closed','inventory_updated','cancelled')
           AND return_dc_number IS NULL
         ORDER BY id ASC`,
       [ticketId]
@@ -4258,6 +4258,7 @@ exports.generateReturnDc = async (req, res) => {
         `SELECT * FROM support_ticket_items
           WHERE ticket_id = $1 AND item_type = 'pickup'
             AND return_dc_number IS NULL
+            AND COALESCE(status, '') <> 'cancelled'
           ORDER BY id ASC`,
         [ticketId]
       );

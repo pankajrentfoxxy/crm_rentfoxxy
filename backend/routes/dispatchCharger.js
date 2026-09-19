@@ -1,6 +1,7 @@
 const express = require('express');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/dispatchChargerController');
+const { rejectCancelledPickupItem, rejectCancelledReturnDc } = require('../middleware/cancelledPickupGuard');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -32,8 +33,8 @@ router.get('/available-units', warehouseView, ctrl.availableUnits);
 router.post('/:requestId/approve-handover', warehouseEdit, ctrl.approveHandover);
 
 router.get('/pickup/:itemId', pickupAccess, ctrl.getPickupCharger);
-router.post('/pickup/:itemId/scan', pickupAccess, ctrl.pickupScan);
+router.post('/pickup/:itemId/scan', pickupAccess, rejectCancelledPickupItem, ctrl.pickupScan);
 router.get('/return-dc/:rdcNumber', pickupAccess, ctrl.getReturnDcChargers);
-router.post('/return-dc/:rdcNumber/scan', pickupAccess, ctrl.returnDcScan);
+router.post('/return-dc/:rdcNumber/scan', pickupAccess, rejectCancelledReturnDc, ctrl.returnDcScan);
 
 module.exports = router;

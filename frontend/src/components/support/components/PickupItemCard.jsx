@@ -277,6 +277,32 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
     }
   };
 
+  // Cancelled pickups are frozen history — no stepper, no actions (server enforces too).
+  if (item.status === 'cancelled') {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden opacity-80">
+        <div className="bg-gray-100 p-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded-full font-semibold">
+              Cancelled
+            </span>
+            <span className="text-xs bg-white text-gray-600 px-2 py-0.5 rounded-full">{pickupTypeBadge}</span>
+          </div>
+          <p className="font-semibold text-gray-700 mt-1.5 truncate">{item.brand} {item.model}</p>
+          <p className="text-xs text-gray-500 font-mono">
+            {item.ttspl_id || item.unique_serial_number}
+            {item.serial_number ? ` · S/N ${item.serial_number}` : ''}
+          </p>
+          <p className="text-xs text-gray-500 mt-2">
+            This pickup and its Return DC were cancelled
+            {item.updated_at ? ` on ${new Date(item.updated_at).toLocaleDateString('en-IN')}` : ''}.
+            No further action is possible on it.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
       {/* Header */}
