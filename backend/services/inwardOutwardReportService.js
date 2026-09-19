@@ -54,6 +54,16 @@ const scalar = async (sql, params) => {
 
 const DETAIL_LIMIT = 5000;
 
+// TTSPL of a unit, from the authoritative vendor_serial_numbers row (unique on
+// LOWER(serial_number) among live rows, so this is an index lookup).
+const vsnTtsplSql = (serialExpr) => `(SELECT NULLIF(v.inventory_asset_code, '')
+  FROM vendor_serial_numbers v
+  WHERE LOWER(v.serial_number) = LOWER(${serialExpr}) AND v.deleted_at IS NULL)`;
+
+// inventory.machine_number is legacy free text: a clean TTSPL, or "801/TTSPL1265",
+// or just the serial number again. Only trust the TTSPL pattern inside it.
+const invTtsplSql = (alias = 'inv') => `UPPER((regexp_match(${alias}.machine_number, 'TTSPL[0-9]+', 'i'))[1])`;
+
 const unitSql = `CASE
   WHEN COALESCE(jsonb_array_length(d.serial_number), 0) > 0 THEN jsonb_array_length(d.serial_number)
   ELSE COALESCE(d.quantity, 1)
@@ -298,7 +308,7 @@ async function getInwardOutwardDetails({
     if (hasCustomer || hasCourier || hasUser) return [];
     const params = [];
     let sql = `SELECT
-        COALESCE(NULLIF(vsn.inventory_asset_code, ''), inv.machine_number) AS ttspl,
+        COALESCE(NULLIF(vsn.inventory_asset_code, ''), ${invTtsplSql()}) AS ttspl,
         vsn.serial_number AS serial_number,
         COALESCE(inv.brand, vsn.extra->>'brand') AS brand,
         COALESCE(inv.model, vsn.extra->>'model') AS model,
@@ -330,7 +340,8 @@ async function getInwardOutwardDetails({
         COALESCE(
           NULLIF(CASE WHEN $REPL$ THEN it.replacement_ttspl_id ELSE it.ttspl_id END, ''),
           NULLIF(it.ttspl_id, ''),
-          inv.machine_number
+          ${vsnTtsplSql("COALESCE(NULLIF(CASE WHEN $REPL$ THEN it.replacement_serial_number ELSE it.serial_number END, ''), it.serial_number)")},
+          ${invTtsplSql()}
         ) AS ttspl,
         COALESCE(
           NULLIF(CASE WHEN $REPL$ THEN it.replacement_serial_number ELSE it.serial_number END, ''),
@@ -369,7 +380,7 @@ async function getInwardOutwardDetails({
     if (hasVendor || hasEntity) return [];
     const params = [];
     let sql = `SELECT
-        COALESCE(i.ttspl_id, inv.machine_number) AS ttspl,
+        COALESCE(NULLIF(i.ttspl_id, ''), ${vsnTtsplSql('i.serial_number')}, ${invTtsplSql()}) AS ttspl,
         i.serial_number AS serial_number,
         COALESCE(i.brand, inv.brand) AS brand,
         COALESCE(i.model, inv.model) AS model,
@@ -404,7 +415,7 @@ async function getInwardOutwardDetails({
     if (hasEntity) return [];
     const params = [];
     let sql = `SELECT
-        COALESCE(inv.machine_number, io.unique_number) AS ttspl,
+        COALESCE(${vsnTtsplSql('io.serial_number')}, ${invTtsplSql()}, NULLIF(io.unique_number, '')) AS ttspl,
         io.serial_number AS serial_number,
         inv.brand AS brand,
         inv.model AS model,
@@ -436,7 +447,7 @@ async function getInwardOutwardDetails({
     if (hasVendor) return [];
     const params = [];
     let sql = `SELECT
-        COALESCE(inv.machine_number, ser.ttspl_raw, ser.serial_clean) AS ttspl,
+        COALESCE(UPPER(ser.ttspl_raw), ${vsnTtsplSql('ser.serial_clean')}, ${invTtsplSql()}) AS ttspl,
         COALESCE(inv.serial_number, ser.serial_clean) AS serial_number,
         COALESCE(inv.brand, d.brand) AS brand,
         COALESCE(inv.model, d.model_name) AS model,
@@ -459,7 +470,7 @@ async function getInwardOutwardDetails({
       ) ser ON true
       LEFT JOIN inventory inv
         ON LOWER(inv.serial_number) = LOWER(ser.serial_clean)
-        OR (ser.ttspl_raw IS NOT NULL AND UPPER(inv.machine_number) = UPPER(ser.ttspl_raw))
+        OR (ser.ttspl_raw IS NOT NULL AND ${invTtsplSql()} = UPPER(ser.ttspl_raw))
       WHERE COALESCE(d.movement_type, 'outbound') = 'outbound'
         AND d.dispatched_at IS NOT NULL`;
     if (purpose === 'standard') {
@@ -481,7 +492,7 @@ async function getInwardOutwardDetails({
     if (hasCustomer || hasEntity) return [];
     const params = [];
     let sql = `SELECT
-        COALESCE(NULLIF(it.ttspl_id, ''), inv.machine_number) AS ttspl,
+        COALESCE(NULLIF(it.ttspl_id, ''), ${vsnTtsplSql('it.serial_number')}, ${invTtsplSql()}) AS ttspl,
         it.serial_number AS serial_number,
         inv.brand AS brand,
         inv.model AS model,
