@@ -116,11 +116,38 @@ const resolvePickupDeliveryContext = async (db, customerId, code) => {
     };
 };
 
+/**
+ * A pickup still "in flight": not closed/cancelled, and not sitting on a voided Return DC
+ * (cancelled RDCs used to regain orphan pickup rows when their detail page was opened).
+ */
+const LIVE_PICKUP_SQL = `
+    item_type = 'pickup'
+    AND COALESCE(status, '') NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')
+    AND NOT EXISTS (
+        SELECT 1 FROM delivery_challan_lines rdc
+         WHERE rdc.dc_number = support_ticket_items.return_dc_number
+           AND rdc.movement_type = 'return'
+           AND rdc.status = 'cancelled'
+    )`;
+
+const assertNoLivePickupForSources = async (client, sourceItemIds, message) => {
+    const ids = (sourceItemIds || []).filter(Boolean);
+    if (!ids.length) return;
+    const linked = await client.query(
+        `SELECT id FROM support_ticket_items
+          WHERE source_item_id = ANY($1::int[]) AND ${LIVE_PICKUP_SQL}
+          LIMIT 1`,
+        [ids]
+    );
+    if (linked.rows.length) {
+        throw Object.assign(new Error(message), { status: 400 });
+    }
+};
+
 const assertNoActivePickup = async (client, ticketId, sourceItemId = null) => {
     const active = await client.query(
         `SELECT id FROM support_ticket_items
-          WHERE ticket_id = $1 AND item_type = 'pickup'
-            AND status NOT IN ('resolved', 'closed', 'inventory_updated')
+          WHERE ticket_id = $1 AND ${LIVE_PICKUP_SQL}
           LIMIT 1`,
         [ticketId]
     );
@@ -131,19 +158,7 @@ const assertNoActivePickup = async (client, ticketId, sourceItemId = null) => {
         );
     }
     if (sourceItemId) {
-        const linked = await client.query(
-            `SELECT id FROM support_ticket_items
-              WHERE source_item_id = $1 AND item_type = 'pickup'
-                AND status NOT IN ('resolved', 'closed', 'inventory_updated')
-              LIMIT 1`,
-            [sourceItemId]
-        );
-        if (linked.rows.length) {
-            throw Object.assign(
-                new Error('A pickup is already scheduled for this machine.'),
-                { status: 400 }
-            );
-        }
+        await assertNoLivePickupForSources(client, [sourceItemId], 'A pickup is already scheduled for this machine.');
     }
 };
 
@@ -229,19 +244,11 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     });
 
     await assertNoActivePickup(client, ticketId, null);
-    for (const m of machines) {
-        if (!m.source_item_id) continue;
-        const linked = await client.query(
-            `SELECT id FROM support_ticket_items
-              WHERE source_item_id = $1 AND item_type = 'pickup'
-                AND status NOT IN ('resolved', 'closed', 'inventory_updated')
-              LIMIT 1`,
-            [m.source_item_id]
-        );
-        if (linked.rows.length) {
-            throw Object.assign(new Error('A pickup is already scheduled for one of the selected machines.'), { status: 400 });
-        }
-    }
+    await assertNoLivePickupForSources(
+        client,
+        machines.map((m) => m.source_item_id),
+        'A pickup is already scheduled for one of the selected machines.'
+    );
 
     let pickupAddr = pickup_address || parseAddressJson(ticket.pickup_address);
     if (pickupAddr) {
@@ -472,19 +479,11 @@ const appendMachinesToReturnDc = async (client, ticket, ticketId, userId, opts) 
         ticketCategory: 'pickup',
     });
 
-    for (const m of machines) {
-        if (!m.source_item_id) continue;
-        const linked = await client.query(
-            `SELECT id FROM support_ticket_items
-              WHERE source_item_id = $1 AND item_type = 'pickup'
-                AND status NOT IN ('resolved', 'closed', 'inventory_updated')
-              LIMIT 1`,
-            [m.source_item_id]
-        );
-        if (linked.rows.length) {
-            throw Object.assign(new Error('A pickup is already scheduled for one of the selected machines.'), { status: 400 });
-        }
-    }
+    await assertNoLivePickupForSources(
+        client,
+        machines.map((m) => m.source_item_id),
+        'A pickup is already scheduled for one of the selected machines.'
+    );
 
     const dclRes = await client.query(
         `SELECT dc_number, serial_number, quantity, remarks, dispatch_mode, delivery_person_id,
@@ -4134,7 +4133,18 @@ exports.getReplacementContext = async (req, res) => {
         const ticket = ticketRes.rows[0];
         const eligible = await replacementFlow.listEligibleComplaintItems(pool, ticketId);
         const context = await replacementFlow.buildTicketReplacementContext(pool, ticket, eligible);
-        res.json({ success: true, ...context });
+        let openReturnDc = null;
+        if (ticket.return_dc_number && !context.active_order) {
+            const open = await loadOpenReturnDcForReplacement(pool, ticketId, ticket.return_dc_number);
+            if (open) {
+                openReturnDc = {
+                    return_dc_number: open.dc_number,
+                    status: open.status,
+                    pickup_started: open.started,
+                };
+            }
+        }
+        res.json({ success: true, ...context, open_return_dc: openReturnDc });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message || 'Failed to load replacement context' });
     }
@@ -4177,6 +4187,142 @@ exports.moveComplaintToReplacement = async (req, res) => {
     res.json({ success: true, message: 'Complaint marked for replacement', ...data });
 };
 
+const pickupHasStarted = (row) => !!(row.picked_up_at || row.warehouse_received_at || row.customer_otp_verified_at);
+
+/**
+ * Existing (non-replacement) Return DC on a ticket that is about to get a replacement.
+ * Returns null when there is none or it is already voided (stale pointer).
+ */
+const loadOpenReturnDcForReplacement = async (client, ticketId, rdc) => {
+    if (!rdc) return null;
+    const dcRes = await client.query(
+        `SELECT dc_number, status FROM delivery_challan_lines
+          WHERE dc_number = $1 AND movement_type = 'return'
+          ORDER BY id ASC LIMIT 1
+          FOR UPDATE`,
+        [rdc]
+    );
+    const dc = dcRes.rows[0];
+    if (!dc || String(dc.status || '').toLowerCase() === 'cancelled') return null;
+    const pickupsRes = await client.query(
+        `SELECT * FROM support_ticket_items
+          WHERE ticket_id = $1 AND return_dc_number = $2 AND ${LIVE_PICKUP_SQL}
+          ORDER BY id ASC`,
+        [ticketId, rdc]
+    );
+    const pickups = pickupsRes.rows;
+    return {
+        dc_number: dc.dc_number,
+        status: dc.status,
+        pickups,
+        started: pickups.some(pickupHasStarted),
+        in_warehouse: pickups.some((p) => !!p.warehouse_received_at),
+    };
+};
+
+/** Void an un-collected Return DC so a fresh replacement Return DC can be raised. */
+const voidReturnDcForReplacement = async (client, ticketId, openRdc, userId, reason) => {
+    if (openRdc.started) {
+        throw Object.assign(
+            new Error(`Pickup on ${openRdc.dc_number} has already started — reuse it instead of cancelling`),
+            { status: 400 }
+        );
+    }
+    await client.query(
+        `UPDATE support_ticket_items
+            SET status = 'cancelled', return_dc_number = NULL,
+                assigned_to = NULL, pickup_assigned_to = NULL, pickup_method = NULL,
+                updated_at = NOW()
+          WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
+        [ticketId, openRdc.dc_number]
+    );
+    await client.query(
+        `UPDATE delivery_challan_lines SET status = 'cancelled', updated_at = NOW()
+          WHERE dc_number = $1 AND movement_type = 'return'`,
+        [openRdc.dc_number]
+    );
+    await client.query(
+        `UPDATE support_ticket_items SET return_dc_number = NULL, updated_at = NOW()
+          WHERE ticket_id = $1 AND return_dc_number = $2`,
+        [ticketId, openRdc.dc_number]
+    );
+    await client.query(
+        'UPDATE support_tickets SET return_dc_number = NULL, updated_at = NOW() WHERE id = $1',
+        [ticketId]
+    );
+    await logAudit(client, {
+        ticketId, userId,
+        action: 'return_pickup_cancelled',
+        detail: { return_dc_number: openRdc.dc_number, reason, replaced_by_replacement: true },
+    });
+};
+
+/**
+ * Turn an existing pickup Return DC into the replacement Return DC: link pickup rows that
+ * already carry the faulty laptops, append the rest.
+ */
+const reuseReturnDcForReplacement = async (client, ticket, ticketId, userId, openRdc, machines, opts) => {
+    const codeOf = (x) => [x.ttspl_id, x.unique_serial_number, x.serial_number]
+        .map((v) => String(v || '').trim().toUpperCase())
+        .filter(Boolean);
+    const pickupItemIds = [];
+    const toAppend = [];
+    const usedPickupIds = new Set();
+    for (const m of machines) {
+        const codes = codeOf(m);
+        const match = openRdc.pickups.find(
+            (p) => !usedPickupIds.has(p.id) && codeOf(p).some((c) => codes.includes(c))
+        );
+        if (match) {
+            usedPickupIds.add(match.id);
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET source_item_id = $2, pickup_type = 'return', updated_at = NOW()
+                  WHERE id = $1`,
+                [match.id, m.source_item_id]
+            );
+            pickupItemIds.push(match.id);
+        } else {
+            toAppend.push(m);
+            pickupItemIds.push(null);
+        }
+    }
+
+    let customerOtp = null;
+    if (toAppend.length) {
+        const appended = await appendMachinesToReturnDc(client, ticket, ticketId, userId, {
+            ...opts,
+            return_dc_number: openRdc.dc_number,
+            machines: toAppend,
+        });
+        customerOtp = appended.customerOtp;
+        let k = 0;
+        for (let i = 0; i < pickupItemIds.length; i += 1) {
+            if (pickupItemIds[i] == null) pickupItemIds[i] = appended.pickupItemIds[k++];
+        }
+    }
+
+    await client.query(
+        `UPDATE delivery_challan_lines
+            SET dc_purpose = 'replacement',
+                remarks = COALESCE($2, remarks),
+                updated_at = NOW()
+          WHERE dc_number = $1 AND movement_type = 'return'`,
+        [openRdc.dc_number, opts.remarks || null]
+    );
+    await logAudit(client, {
+        itemId: pickupItemIds[0], ticketId, userId,
+        action: 'return_dc_reused_for_replacement',
+        detail: {
+            return_dc_number: openRdc.dc_number,
+            linked_pickup_ids: [...usedPickupIds],
+            appended_count: toAppend.length,
+        },
+    });
+
+    return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc: openRdc.dc_number, customerOtp, reused: true };
+};
+
 exports.initiateReplacement = async (req, res) => {
     if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can initiate replacement' });
@@ -4197,7 +4343,11 @@ exports.initiateReplacement = async (req, res) => {
         awb_number,
         porter_tracking_id,
         porter_order_id,
+        existing_rdc_action: existingRdcActionRaw,
     } = body;
+    const existingRdcAction = ['reuse', 'cancel'].includes(String(existingRdcActionRaw || ''))
+        ? String(existingRdcActionRaw)
+        : null;
 
     const client = await pool.connect();
     let resultPayload = {};
@@ -4210,9 +4360,44 @@ exports.initiateReplacement = async (req, res) => {
         if (!ticketRes.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
         const ticket = ticketRes.rows[0];
 
-        const isAppend = !!(ticket.return_dc_number && ticket.sales_order_number);
+        // Append only onto a live replacement order. ticket.sales_order_number alone is not
+        // enough: a plain pickup RDC copies the customer's original rental SO onto the ticket.
+        const activeReplRes = await client.query(
+            `SELECT sales_order_number FROM support_replacement_orders
+              WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')
+                AND sales_order_number IS NOT NULL
+              ORDER BY id DESC LIMIT 1`,
+            [ticketId]
+        );
+        const activeReplSo = activeReplRes.rows[0]?.sales_order_number || null;
+        const isAppend = !!(ticket.return_dc_number && activeReplSo);
+        if (isAppend) ticket.sales_order_number = activeReplSo;
+
+        // A pickup Return DC already on the ticket (not a replacement one): the lead chooses to
+        // reuse it for the replacement, or cancel it and raise a fresh replacement Return DC.
+        let openRdc = null;
         if (!isAppend && ticket.return_dc_number) {
-            throw Object.assign(new Error('Replacement order already created on this ticket'), { status: 400 });
+            openRdc = await loadOpenReturnDcForReplacement(client, ticketId, ticket.return_dc_number);
+            if (!openRdc) {
+                ticket.return_dc_number = null; // stale pointer to a voided RDC
+            } else if (!existingRdcAction) {
+                throw Object.assign(
+                    new Error(`Return DC ${openRdc.dc_number} is already open on this ticket. Choose to use it for the replacement, or cancel it and create a new Return DC.`),
+                    {
+                        status: 409,
+                        code: 'RETURN_DC_EXISTS',
+                        return_dc_number: openRdc.dc_number,
+                        pickup_started: openRdc.started,
+                    }
+                );
+            } else if (existingRdcAction === 'cancel') {
+                await voidReturnDcForReplacement(
+                    client, ticketId, openRdc, req.user.user_id,
+                    reason || 'Cancelled to raise replacement Return DC'
+                );
+                ticket.return_dc_number = null;
+                openRdc = null;
+            }
         }
         if (isAppend) {
             const outboundDc = await client.query(
@@ -4418,7 +4603,14 @@ exports.initiateReplacement = async (req, res) => {
             ? String(remarksBody).trim()
             : replacementFlow.buildReplacementRdcRemarks(machines);
 
-        const pickupResult = isAppend
+        const pickupResult = openRdc
+            ? await reuseReturnDcForReplacement(client, ticket, ticketId, req.user.user_id, openRdc, machines, {
+                pickup_type: 'return',
+                pickup_address: shippingAddress,
+                machines,
+                remarks: rdcRemarks,
+            })
+            : isAppend
             ? await appendMachinesToReturnDc(client, ticket, ticketId, req.user.user_id, {
                 return_dc_number: ticket.return_dc_number,
                 pickup_type: 'return',
@@ -4501,10 +4693,12 @@ exports.initiateReplacement = async (req, res) => {
                     quantity: sourceItems.length,
                 });
             }
-            supportWa.notifySupportPickupScheduledAsync({
-                ticketId,
-                rdcNumber: pickupResult.rdc,
-            });
+            if (!pickupResult.reused) {
+                supportWa.notifySupportPickupScheduledAsync({
+                    ticketId,
+                    rdcNumber: pickupResult.rdc,
+                });
+            }
         });
 
         resultPayload = {
@@ -4512,6 +4706,7 @@ exports.initiateReplacement = async (req, res) => {
             return_dc_number: pickupResult.rdc,
             unit_count: sourceItems.length,
             appended: isAppend,
+            reused_return_dc: !!pickupResult.reused,
             customer_otp_visible: pickupResult.customerOtp,
             next_steps: isAppend
                 ? 'New SO lines added — attach laptops on the sales order and extend the same return pickup.'
@@ -4519,7 +4714,13 @@ exports.initiateReplacement = async (req, res) => {
         };
     } catch (e) {
         await client.query('ROLLBACK');
-        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to initiate replacement' });
+        return res.status(e.status || 400).json({
+            success: false,
+            message: e.message || 'Failed to initiate replacement',
+            ...(e.code === 'RETURN_DC_EXISTS'
+                ? { code: e.code, return_dc_number: e.return_dc_number, pickup_started: e.pickup_started }
+                : {}),
+        });
     } finally {
         client.release();
     }

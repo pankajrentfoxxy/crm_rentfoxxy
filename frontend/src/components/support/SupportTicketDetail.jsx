@@ -1089,7 +1089,10 @@ export default function SupportTicketDetail() {
     return replacementOrders.some((o) => o.source_item_id === c.id && o.status === 'cancelled');
   });
   const canInitiateReplacement = ticketLead && eligibleForReplacement.length > 0;
-  const replacementActionLabel = ticket.return_dc_number && ticket.sales_order_number
+  const hasActiveReplacementOrder = replacementOrders.some(
+    (o) => !['completed', 'cancelled'].includes(o.status)
+  );
+  const replacementActionLabel = ticket.return_dc_number && hasActiveReplacementOrder
     ? `Add to replacement (${eligibleForReplacement.length})`
     : 'Initiate replacement';
   const canMoveToReplacement = ticketLead && complaintForReplacement
@@ -1119,7 +1122,9 @@ export default function SupportTicketDetail() {
     (p) => p.source_item_id === sourceId && !['resolved', 'closed', 'inventory_updated'].includes(p.status)
   );
   const hasLinkedReplacement = (sourceId) => replacements.some((r) => r.source_item_id === sourceId);
-  const activePickupExists = pickups.some((p) => !['resolved', 'closed', 'inventory_updated'].includes(p.status));
+  const activePickupExists = pickups.some(
+    (p) => !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)
+  );
 
   const workflowForItem = (item) => {
     if (!ticketLead || ticket.status === 'closed' || isCancelled) return null;
