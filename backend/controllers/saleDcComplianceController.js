@@ -331,6 +331,9 @@ exports.sendAccountsNotification = async (req, res) => {
       laptopCount,
       isSale,
       isFirstCustomerOrder: firstDc,
+      shipBy: head.ship_by,
+      dispatchMode: head.dispatch_mode,
+      vehicleNumber: head.vehicle_number,
     });
 
     await pool.query(

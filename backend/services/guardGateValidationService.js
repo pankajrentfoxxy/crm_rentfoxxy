@@ -11,6 +11,7 @@ const { parseGateQrPayload, lookupToken } = require('./gateQrService');
 const inventorySM = require('./inventoryStateMachine');
 const { compareConfig } = require('./grnConfigService');
 const { resolveVrdcItemSpecs, enrichVrdcItemRow, buildVrdcConfigurationString } = require('./vendorRepairDcShared');
+const { stripBrandFromModel } = require('../utils/assetConfigNormalize');
 
 const DIRECTIONS = new Set(['inward', 'outward']);
 const CANCELLED_DC = new Set(['cancelled']);
@@ -36,9 +37,33 @@ function normalizeTtspl(raw) {
   return code;
 }
 
+const KNOWN_LAPTOP_BRANDS = [
+  'Dell', 'HP', 'Lenovo', 'Apple', 'Asus', 'Acer', 'Microsoft', 'Samsung',
+  'MSI', 'Toshiba', 'Fujitsu', 'LG', 'Huawei', 'Xiaomi', 'Panasonic', 'Sony',
+];
+
+/**
+ * Resolve laptop specs identically for the expected and the scanned side.
+ * Units often carry only extra.model_name ("Dell Latitude 5400") with a blank
+ * brand/model; resolving one side from a bare object dropped model_name, and the
+ * shorter expected string was then re-parsed positionally (processor read as brand).
+ */
+function gateSpecs(source) {
+  const src = source && typeof source === 'object' ? source : {};
+  const specs = resolveVrdcItemSpecs(src.extra && typeof src.extra === 'object' ? src : { ...src, extra: src });
+  if (!String(specs.brand || '').trim() && specs.model) {
+    const lead = String(specs.model).trim().split(/\s+/)[0].toLowerCase();
+    const brand = KNOWN_LAPTOP_BRANDS.find((b) => b.toLowerCase() === lead);
+    if (brand) {
+      specs.brand = brand;
+      specs.model = stripBrandFromModel(brand, specs.model);
+    }
+  }
+  return specs;
+}
+
 function formatConfig(extra) {
-  const specs = resolveVrdcItemSpecs({ extra: extra && typeof extra === 'object' ? extra : {} });
-  return formatConfigDisplay(specs);
+  return formatConfigDisplay(gateSpecs(extra));
 }
 
 function parseConfigLine(str) {
@@ -150,8 +175,8 @@ function resolveSerialConfigSource(serial) {
 
 function compareMovementConfigs(expectedLine, actualExtra) {
   const extra = actualExtra && typeof actualExtra === 'object' ? actualExtra : {};
-  const expectedSpecs = resolveVrdcItemSpecs(parseConfigLine(expectedLine));
-  const actualSpecs = resolveVrdcItemSpecs({ ...extra, extra });
+  const expectedSpecs = gateSpecs(parseConfigLine(expectedLine));
+  const actualSpecs = gateSpecs(extra);
   const expectedDisplay = formatConfigDisplay(expectedSpecs);
   const scannedDisplay = formatConfigDisplay(actualSpecs);
 
@@ -328,7 +353,7 @@ function buildLaptopChecks({ expected, serial, ctx, scanRaw, sessionDirection })
     configuration: checkRow(
       configOk,
       configCmp.expected || expCfg || null,
-      configCmp.scanned || formatConfigDisplay(resolveVrdcItemSpecs(serialConfigSource)) || serial?.configuration || null,
+      configCmp.scanned || formatConfigDisplay(gateSpecs(serialConfigSource)) || serial?.configuration || null,
       'Laptop configuration matches',
       configCmp.mismatch_message || 'Laptop configuration does not match this movement'
     ),
@@ -350,7 +375,7 @@ function laptopDto(row, extra = {}) {
     serial_id: row.serial_id || null,
     ttspl: row.ttspl || row.inventory_asset_code || row.ttspl_id || extra.ttspl || null,
     serial_number: row.serial_number || extra.serial_number || null,
-    configuration: row.configuration || formatConfigDisplay(resolveVrdcItemSpecs(rowExtra || {})) || extra.configuration || null,
+    configuration: row.configuration || formatConfigDisplay(gateSpecs(rowExtra)) || extra.configuration || null,
     extra: rowExtra,
     inventory_status: row.inventory_status || extra.inventory_status || null,
     awb_number: row.awb_number || extra.awb_number || null,

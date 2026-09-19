@@ -559,7 +559,14 @@ function buildAccountsSaleDcEmailHtml({
   portalUrl,
   brandLabel,
   hasLogo,
+  needsVehicle = false,
+  vehicleNumber = null,
 }) {
+  const vehicleRow = needsVehicle
+    ? `<tr><td style="padding:8px 0;color:#64748b;">Vehicle number</td><td style="padding:8px 0;font-weight:600;">${vehicleNumber
+      ? escapeHtml(vehicleNumber)
+      : '<span style="color:#b45309;">Not captured</span>'}</td></tr>`
+    : '';
   const ewayBlock = needsEway
     ? `<p style="margin:0 0 12px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
          DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more
@@ -593,6 +600,7 @@ function buildAccountsSaleDcEmailHtml({
         <tr><td style="padding:8px 0;color:#64748b;">Customer</td><td style="padding:8px 0;">${escapeHtml(customerName || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Laptops</td><td style="padding:8px 0;">${escapeHtml(laptopCount)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">DC Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)} <span style="font-weight:400;color:#64748b;">(exclusive of GST)</span></td></tr>
+        ${vehicleRow}
       </table>
       ${ewayBlock}
       <p style="margin:0 0 20px;line-height:1.6;">
@@ -623,6 +631,9 @@ async function sendAccountsSaleDcEmail({
   laptopCount,
   isSale = false,
   isFirstCustomerOrder = false,
+  shipBy = null,
+  dispatchMode = null,
+  vehicleNumber = null,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -632,6 +643,9 @@ async function sendAccountsSaleDcEmail({
 
   const value = Number(productValue ?? grandTotal ?? 0);
   const needsEway = requiresEwayBill(value);
+  // Porter / inhouse: Accounts needs the vehicle for E-Way Bill Part B.
+  const needsVehicle = isOwnVehicleDispatch(shipBy, dispatchMode);
+  const vehicle = normalizeVehicleNumber(vehicleNumber) || null;
   const portalUrl = `${FRONTEND_URL}/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
   const valueStr = value.toLocaleString('en-IN');
   const fromAddress = getDispatchFromAddress();
@@ -650,6 +664,8 @@ async function sendAccountsSaleDcEmail({
     portalUrl,
     brandLabel,
     hasLogo: Boolean(logo),
+    needsVehicle,
+    vehicleNumber: vehicle,
   });
 
   const text = [
@@ -662,6 +678,7 @@ async function sendAccountsSaleDcEmail({
     `Customer: ${customerName || '—'}`,
     `Laptops: ${laptopCount}`,
     `DC value (exclusive of GST): ₹${valueStr}`,
+    needsVehicle ? `Vehicle number: ${vehicle || 'not captured'}` : '',
     '',
     needsEway
       ? `DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more — e-way bill is mandatory. Please upload the waybill also.`
