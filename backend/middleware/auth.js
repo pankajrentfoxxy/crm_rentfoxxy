@@ -48,6 +48,16 @@ const authMiddleware = async (req, res, next) => {
     }
 
     req.user = decoded;
+
+    // Refresh the /uploads cookie on every authenticated API call. Issuing it
+    // only at login would leave anyone already signed in unable to open files
+    // until their next login; this way simply using the CRM keeps it current.
+    if (decoded.user_id && !decoded.auth_type) {
+      try {
+        require('./uploadsAuth').issueUploadsCookie(res, decoded);
+      } catch { /* never block a request over the uploads cookie */ }
+    }
+
     next();
   } catch (error) {
     // A DB fault must not read as a bad token, and must not fail open either.

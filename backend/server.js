@@ -84,6 +84,13 @@ try {
 
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
+
+try {
+  // Needed to read the /uploads access cookie. Nothing else uses cookies.
+  app.use(require('cookie-parser')());
+} catch {
+  console.warn('[server] cookie-parser unavailable — /uploads cookie auth disabled. Run npm install in backend/');
+}
 // VRDC PDFs must be downloaded through the authenticated API (E-way lock enforced there).
 app.use('/uploads/vendor-repair', (_req, res) => {
   res.status(403).json({
@@ -91,6 +98,10 @@ app.use('/uploads/vendor-repair', (_req, res) => {
     message: 'Download this VRDC from the CRM using the Dispatch PDF button.',
   });
 });
+// P0-2: these two mounts served 14,433 files to anyone on the internet. Every
+// request below now needs the uploads cookie, a bearer token, or a signed URL.
+// Behaviour is controlled by UPLOADS_AUTH_MODE (off | grace | enforce).
+app.use('/uploads', require('./middleware/uploadsAuth').uploadsAuth);
 // Always serve from backend/uploads regardless of process cwd; fall back to repo-root/uploads for legacy files.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
