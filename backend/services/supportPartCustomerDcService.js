@@ -15,7 +15,7 @@ function parseJsonSafe(raw) {
 /** Resolve SO, billing/shipping addresses, GST for a support ticket + TTSPL. */
 async function resolveTicketPartDcContext(client, ticketId, ttsplId = null) {
   const tkRes = await client.query(
-    `SELECT st.*, c.name AS cust_name, c.company_name, c.email AS cust_email,
+    `SELECT st.*, c.name AS cust_name, c.company_name, c.trade_name, c.email AS cust_email,
             c.phone AS cust_phone, c.gst_no,
             c.billing_address, c.billing_city, c.billing_state, c.billing_pincode,
             c.details AS customer_details
@@ -86,7 +86,10 @@ async function resolveTicketPartDcContext(client, ticketId, ttsplId = null) {
   }
   if (!shipping?.address) shipping = billing;
 
-  const customerName = ticket.customer_name
+  // GST trade name first, matching SO / DC / SDC. The ticket's own
+  // customer_name is a snapshot and can be stale, so the live trade name wins.
+  const customerName = String(ticket.trade_name || '').trim()
+    || ticket.customer_name
     || ticket.company_name
     || ticket.cust_name
     || ec?.customer_name

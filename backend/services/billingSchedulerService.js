@@ -2125,11 +2125,14 @@ async function persistConsolidatedReturnCreditNote(client, {
   );
   const cnNumber = num.rows[0].number;
   const ins = await client.query(
+    // credit_note_type = 'return': a permanent return, unused prepaid days
+    // refunded. Repair-window credits are typed 'repair' so finance can filter
+    // and approve or reject the two separately.
     `INSERT INTO customer_credit_notes
       (credit_note_number, customer_id, invoice_id, reason, description, amount,
        quantity, unit_rate, from_date, to_date, ttspl_ids, line_items, status, created_by,
-       serial_id, source, support_ticket_id, return_dc_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int,$16)
+       serial_id, source, support_ticket_id, return_dc_number, credit_note_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int,$16,'return')
      RETURNING *`,
     [
       cnNumber,

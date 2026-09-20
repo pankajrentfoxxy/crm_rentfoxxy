@@ -96,6 +96,12 @@ async function createSupportPartReturnDc(client, {
     requests[0].ttspl_id ? `Laptop: ${requests[0].ttspl_id}` : null,
   ].filter(Boolean);
 
+  // Same trade-name rule as SO/DC/SDC.
+  const { resolveCustomerDocumentName } = require('./salesManagementService');
+  const rpdcDocumentName = await resolveCustomerDocumentName(
+    client, ctx.ticket.customer_id, ctx.customerName
+  );
+
   await client.query(
     `INSERT INTO delivery_challan_lines (
        dc_number, movement_type, dc_purpose, support_ticket_id,
@@ -117,7 +123,7 @@ async function createSupportPartReturnDc(client, {
      )`,
     [
       rpdcNumber, ticketId,
-      ctx.salesOrderNumber, ctx.ticket.customer_id, ctx.customerName,
+      ctx.salesOrderNumber, ctx.ticket.customer_id, rpdcDocumentName,
       ctx.email, ctx.gstNumber,
       ctx.supplyState, ctx.entityCode,
       ctx.billing ? JSON.stringify(ctx.billing) : null,

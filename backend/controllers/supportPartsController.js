@@ -371,10 +371,29 @@ exports.approveAndGenerateChallan = async (req, res) => {
       }
 
       if (!instance && Number(reqRow.quantity) > 0) {
+        // Legacy bridge: stock that predates part_instances has a counter but no
+        // per-unit rows, so this mints one on demand. It is deliberately kept —
+        // removing it would block approvals for parts that are physically on the
+        // shelf — but it is the mechanism by which parts.quantity, which has
+        // drifted from the physical count on 15 of 114 SKUs, conjures unit
+        // records. Every fabrication is now logged and counted so the drift is
+        // visible instead of silent, and so a physical stock count has something
+        // to reconcile against.
         const partQtyRes = await client.query(
-          'SELECT quantity, cost FROM parts WHERE part_id = $1', [reqRow.part_id]
+          'SELECT quantity, cost, part_name FROM parts WHERE part_id = $1', [reqRow.part_id]
         );
         if (Number(partQtyRes.rows[0]?.quantity || 0) > 0) {
+          const realCount = await client.query(
+            `SELECT count(*)::int AS n FROM part_instances
+              WHERE part_id = $1 AND status = 'in_stock'`,
+            [reqRow.part_id]
+          );
+          console.warn(
+            `[parts][fabricated-instance] part_id=${reqRow.part_id}`
+            + ` "${partQtyRes.rows[0]?.part_name || ''}" counter=${partQtyRes.rows[0]?.quantity}`
+            + ` in_stock_instances=${realCount.rows[0].n} request=${reqRow.id}`
+            + ' — minting a unit record from the legacy counter; needs a physical count'
+          );
           const { generatePrtId } = require('../services/partIdService');
           const prtId = await generatePrtId(new Date(), client);
           const newInst = await client.query(

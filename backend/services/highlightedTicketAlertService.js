@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { escapeHtml } = require('../utils/escapeHtml');
 
 function smtpTransport() {
   const host = process.env.SMTP_HOST;
@@ -31,12 +32,12 @@ async function sendHighlightedTicketAlert({
   const ticketUrl = `${frontendUrl.replace(/\/$/, '')}/floor-pipeline/tickets/${ticketId}`;
   const subject = `⚠ Ticket ${ttsplId || ticketId} needs your attention — ${reason || 'QC failed'}`;
   const html = `
-    <p>Hi ${technicianName || 'Technician'},</p>
+    <p>Hi ${escapeHtml(technicianName || 'Technician')},</p>
     <p>A floor ticket needs your attention:</p>
     <ul>
-      <li><strong>TTSPL:</strong> ${ttsplId || '—'}</li>
+      <li><strong>TTSPL:</strong> ${escapeHtml(ttsplId || '—')}</li>
       <li><strong>Ticket ID:</strong> #${ticketId}</li>
-      <li><strong>Reason:</strong> ${reason || 'QC failed — please review'}</li>
+      <li><strong>Reason:</strong> ${escapeHtml(reason || 'QC failed — please review')}</li>
     </ul>
     <p><a href="${ticketUrl}">Open ticket in CRM</a></p>
   `;

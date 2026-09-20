@@ -1018,6 +1018,8 @@ exports.downloadInvoicesZip = async (req, res) => {
 
 const CN_BILL_DATE = `COALESCE(cn.to_date, cn.from_date, (cn.created_at AT TIME ZONE 'Asia/Kolkata')::date)`;
 
+const CREDIT_NOTE_TYPES = ['return', 'repair', 'manual', 'other'];
+
 function creditNoteListFilters(query, { includeStatus = true, includePeriod = true } = {}) {
   const { customer_id, status, search, ttspl } = query;
   const params = [];
@@ -1025,6 +1027,22 @@ function creditNoteListFilters(query, { includeStatus = true, includePeriod = tr
   if (customer_id) {
     params.push(customer_id);
     where.push(`cn.customer_id = $${params.length}`);
+  }
+  // Finance filters by kind before approving: a return credit is contractual,
+  // a repair credit is a service-quality decision they may reject. Accepts a
+  // single value or a comma-separated list.
+  const typeRaw = (Array.isArray(query.type) ? query.type : String(query.type || '').split(','))
+    .map((t) => String(t).trim().toLowerCase())
+    .filter(Boolean);
+  const typeKeys = typeRaw.filter((t) => CREDIT_NOTE_TYPES.includes(t));
+  if (typeKeys.length) {
+    params.push(typeKeys);
+    where.push(`COALESCE(cn.credit_note_type, 'other') = ANY($${params.length}::text[])`);
+  } else if (typeRaw.length) {
+    // A type was asked for but none of the values are real. Return nothing
+    // rather than everything — on a finance screen, silently ignoring a typo
+    // would look like "all of these are that type".
+    where.push('1=0');
   }
   if (includePeriod) {
     const month = Number(query.month);
@@ -1667,10 +1685,12 @@ exports.createCreditNote = async (req, res) => {
     const cnNumber = await nextCreditNoteNumber();
     const amount = parseFloat(body.amount || 0);
     const result = await pool.query(
+      // Raised by hand from the billing screen, so it is typed 'manual' rather
+      // than sitting untyped alongside the automated return and repair credits.
       `INSERT INTO customer_credit_notes
         (credit_note_number, customer_id, invoice_id, reason, description, amount,
-         quantity, unit_rate, from_date, to_date, ttspl_ids, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+         quantity, unit_rate, from_date, to_date, ttspl_ids, created_by, credit_note_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,'manual')
        RETURNING *`,
       [
         cnNumber,
