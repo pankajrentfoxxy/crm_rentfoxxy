@@ -657,7 +657,14 @@ async function buildCustomerInvoiceLines(client, {
     const { prevStart } = previousMonthRange(month, year);
     const prevStartYmd = toLocalYmd(prevStart);
     const markedInPrevMonth = Boolean(dcDelivery && deliveryYmd >= prevStartYmd && deliveryYmd < toLocalYmd(monthStart));
-    if (!includeCurrentMonthStarts && billStart < monthStart && !markedInPrevMonth) {
+    // A unit with a watermark has a billing history, and billStart is
+    // watermark + 1 — the first day nobody has charged for yet. Snapping that
+    // forward to the 1st does not avoid a double bill, it throws the gap away
+    // permanently: the watermark then jumps to monthEnd and no later run ever
+    // looks back. That is how September was lost on seven units whose delivery
+    // was months ago and so could never be "marked in the previous month".
+    // Only snap when there is no watermark to trust.
+    if (!includeCurrentMonthStarts && billStart < monthStart && !markedInPrevMonth && !billedUntil) {
       billStart = new Date(monthStart);
     }
 
