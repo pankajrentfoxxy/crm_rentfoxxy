@@ -3625,6 +3625,25 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
                     [vsn.serial_id]
                 );
             }
+
+            // The customer is billed until the unit is physically back in the
+            // warehouse, not until it left their site. returnCompletionService
+            // stamps rent_end_date at Return-DC POD, which is the pickup moment,
+            // so the transit days went unbilled. Extend to the warehouse receipt
+            // date. Only ever moves the date forward, so re-running is safe and a
+            // receipt that predates the stamped end never shortens billing.
+            await client.query(
+                `UPDATE vendor_serial_numbers vsn
+                    SET rent_end_date = sub.recv, updated_at = NOW()
+                   FROM (
+                     SELECT (warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv
+                       FROM support_ticket_items WHERE id = $2
+                   ) sub
+                  WHERE vsn.serial_id = $1
+                    AND sub.recv IS NOT NULL
+                    AND (vsn.rent_end_date IS NULL OR vsn.rent_end_date < sub.recv)`,
+                [vsn.serial_id, it.id]
+            );
         }
         await resetVendorSerialForQcReentry(client, vsn.serial_id);
     }
