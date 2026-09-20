@@ -4000,32 +4000,111 @@ exports.submitDeliveryRegister = async (req, res) => {
         message: `Invalid status "${status}". Allowed: ${ALLOWED_REGISTER_STATUSES.join(', ')}.`,
       });
     }
-    const upd = await pool.query(
-      `UPDATE delivery_challan_lines SET
-         delivered_serial_numbers = $1,
-         rejected_serial_numbers = $2,
-         submitted_remark = $3,
-         status = $4,
-         delivery_completed_at = NOW(),
-         updated_at = NOW()
-       WHERE dc_number = $5
-         AND LOWER(COALESCE(status, '')) <> 'cancelled'`,
-      [
-        JSON.stringify(delivered_serial_numbers || []),
-        JSON.stringify(rejected_serial_numbers || []),
-        submitted_remark || null,
-        nextStatus,
-        dcNumber,
-      ]
-    );
-    if (!upd.rowCount) {
-      return res.status(409).json({
-        success: false,
-        message: 'Delivery challan not found, or it is cancelled and cannot be updated.',
-      });
+    // V2: this handler used to write the status and delivery_completed_at and
+    // stop there — no delivered_at, no finalizeDeliveryInventory. The challan
+    // read delivered everywhere while the asset stayed in_transit,
+    // rent_start_date was never set and no rental invoice was ever raised.
+    //
+    // 'delivered' and 'rejected' are completions with consequences, so each goes
+    // through the one routine that owns them. Only 'processing' — which is not a
+    // completion — still writes the register fields directly.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (nextStatus === 'delivered') {
+        const result = await performDcDelivery(client, {
+          dcNumber,
+          user: req.user,
+          deliveredSerialNumbers: delivered_serial_numbers || [],
+          rejectedSerialNumbers: rejected_serial_numbers || [],
+          submittedRemark: submitted_remark || null,
+        });
+        if (!result.ok) {
+          await client.query('ROLLBACK');
+          return res.status(result.statusCode).json({ success: false, message: result.message });
+        }
+        await client.query('COMMIT');
+        await runPostDeliveryEffects(dcNumber, req.user);
+        return res.json({ success: true, message: 'Delivery register updated' });
+      }
+
+      if (nextStatus === 'rejected') {
+        // T1: the bare status write stranded the unit permanently — still
+        // in_transit, allocation never released, sales order impossible to
+        // cancel. The rejection service releases the allocation and raises the
+        // QC re-entry ticket.
+        const reason = String(submitted_remark || '').trim();
+        if (!reason) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'A rejection needs a reason — send it in submitted_remark.',
+          });
+        }
+        const { markDeliveryRejectedByCustomer } = require('../services/deliveryRejectionService');
+        await client.query(
+          `UPDATE delivery_challan_lines SET
+             delivered_serial_numbers = $1,
+             rejected_serial_numbers = $2,
+             submitted_remark = $3,
+             updated_at = NOW()
+           WHERE dc_number = $4
+             AND LOWER(COALESCE(status, '')) <> 'cancelled'`,
+          [
+            JSON.stringify(delivered_serial_numbers || []),
+            JSON.stringify(rejected_serial_numbers || []),
+            reason,
+            dcNumber,
+          ]
+        );
+        await markDeliveryRejectedByCustomer(client, {
+          dcNumber,
+          reason,
+          remarks: reason,
+          source: 'delivery_register',
+          actorUserId: req.user?.user_id || null,
+        });
+        await client.query('COMMIT');
+        return res.json({ success: true, message: 'Delivery register updated' });
+      }
+
+      // 'processing' — an in-flight note, not a completion.
+      const upd = await client.query(
+        `UPDATE delivery_challan_lines SET
+           delivered_serial_numbers = $1,
+           rejected_serial_numbers = $2,
+           submitted_remark = $3,
+           status = $4,
+           delivery_completed_at = NOW(),
+           updated_at = NOW()
+         WHERE dc_number = $5
+           AND LOWER(COALESCE(status, '')) <> 'cancelled'`,
+        [
+          JSON.stringify(delivered_serial_numbers || []),
+          JSON.stringify(rejected_serial_numbers || []),
+          submitted_remark || null,
+          nextStatus,
+          dcNumber,
+        ]
+      );
+      if (!upd.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'Delivery challan not found, or it is cancelled and cannot be updated.',
+        });
+      }
+      await client.query('COMMIT');
+      return res.json({ success: true, message: 'Delivery register updated' });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    res.json({ success: true, message: 'Delivery register updated' });
   } catch (error) {
+    console.error('submitDeliveryRegister:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -5956,88 +6035,125 @@ exports.cancelDeliveryChallan = async (req, res) => {
   }
 };
 
-exports.markDcDelivered = async (req, res) => {
-  const client = await pool.connect();
+/**
+ * The one delivery-completion routine (finding V1/V2, Part 0.3).
+ *
+ * Five code paths write status='delivered'; only four called
+ * finalizeDeliveryInventory and only four set delivered_at. submitDeliveryRegister
+ * was the worst of them — it set delivery_completed_at alone, so the challan read
+ * delivered everywhere while the asset stayed in_transit, rent_start_date was
+ * never set and no rental invoice was ever raised.
+ *
+ * Rather than add a sixth variation of the same logic, both callers now share
+ * this. Part 3 collapses all five paths properly; this makes the worst one safe
+ * in the meantime.
+ *
+ * Caller owns the transaction. Returns {ok:false, statusCode, message} for the
+ * refusals so each HTTP handler can shape its own response, and never throws for
+ * an expected refusal.
+ */
+async function performDcDelivery(client, {
+  dcNumber,
+  user,
+  deliveryLocation = null,
+  podImageUrl = null,
+  // Present only when the delivery register is the caller: the per-serial split
+  // and the field remark, written in the same UPDATE as the status.
+  deliveredSerialNumbers = null,
+  rejectedSerialNumbers = null,
+  submittedRemark = null,
+}) {
+  // FOR UPDATE so two clicks serialise: without it a double-click re-ran the
+  // whole routine, re-stamping delivered_at and potentially invoicing twice.
+  const dcState = await client.query(
+    `SELECT DISTINCT LOWER(COALESCE(status, '')) AS status
+       FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+  if (!dcState.rows.length) {
+    return { ok: false, statusCode: 404, message: 'Delivery challan not found' };
+  }
+  const states = dcState.rows.map((r) => r.status);
+  if (states.includes('cancelled')) {
+    return {
+      ok: false,
+      statusCode: 409,
+      message: 'This delivery challan is cancelled and cannot be marked delivered.',
+    };
+  }
+  if (states.every((st) => st === 'delivered')) {
+    return {
+      ok: false,
+      statusCode: 409,
+      message: 'This delivery challan is already marked delivered.',
+    };
+  }
+
+  const writesRegister = deliveredSerialNumbers !== null || rejectedSerialNumbers !== null;
+  const upd = await client.query(
+    `UPDATE delivery_challan_lines SET
+      status = 'delivered', delivered_at = NOW(), delivered_by = $1,
+      delivery_location = $2, pod_image_url = $3, delivery_completed_at = NOW(),
+      delivered_serial_numbers = CASE WHEN $5::boolean THEN $6::jsonb ELSE delivered_serial_numbers END,
+      rejected_serial_numbers  = CASE WHEN $5::boolean THEN $7::jsonb ELSE rejected_serial_numbers END,
+      submitted_remark = COALESCE($8, submitted_remark),
+      updated_at = NOW()
+     WHERE dc_number = $4
+       AND LOWER(COALESCE(status, '')) NOT IN ('delivered', 'cancelled')`,
+    [
+      user?.user_id || null,
+      deliveryLocation,
+      podImageUrl,
+      dcNumber,
+      writesRegister,
+      JSON.stringify(deliveredSerialNumbers || []),
+      JSON.stringify(rejectedSerialNumbers || []),
+      submittedRemark,
+    ]
+  );
+  if (!upd.rowCount) {
+    return {
+      ok: false,
+      statusCode: 409,
+      message: 'No deliverable lines on this challan — nothing was changed.',
+    };
+  }
+
+  // The step submitDeliveryRegister never took: move the serials out of
+  // in_transit and set rent_start_date.
+  await exports.finalizeDeliveryInventory(client, dcNumber, user);
+
+  return { ok: true };
+}
+
+/**
+ * Post-commit effects of a delivery. None of these may roll it back: a delivery
+ * that physically happened stays recorded even if WhatsApp, billing or the
+ * activity log fails. The 1st-of-month billing cron is the safety net.
+ */
+async function runPostDeliveryEffects(dcNumber, user) {
   try {
-    const dcNumber = req.params.dcNumber;
-    const body = req.body || {};
-    await client.query('BEGIN');
+    const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
+    notifySoDeliveredAsync({ dcNumber });
+  } catch (_) { /* WhatsApp must never block delivery */ }
+  try {
+    const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
+    notifySupportServiceDeliveredAsync({ dcNumber });
+  } catch (_) { /* WhatsApp must never block delivery */ }
 
-    // No state check at all before this: a CANCELLED DC could be marked
-    // delivered, putting serials on rent and raising a rental invoice for a
-    // shipment that never happened. And with no rowCount check a double-click
-    // re-ran the whole thing, re-stamping delivered_at and potentially invoicing
-    // the month twice. FOR UPDATE so two clicks serialise.
-    const dcState = await client.query(
-      `SELECT DISTINCT LOWER(COALESCE(status, '')) AS status
-         FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE`,
-      [dcNumber]
-    );
-    if (!dcState.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
-    }
-    const states = dcState.rows.map((r) => r.status);
-    if (states.includes('cancelled')) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: 'This delivery challan is cancelled and cannot be marked delivered.',
-      });
-    }
-    if (states.every((st) => st === 'delivered')) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: 'This delivery challan is already marked delivered.',
-      });
-    }
+  try {
+    const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
+    const ctx = await getDcContext(pool, dcNumber);
+    await maybeInvoiceOnRentalDelivery({
+      customerId: ctx.customer_id || null,
+      dcNumber,
+      quotationType: ctx.quotation_type || 'rental',
+    });
+  } catch (billingErr) {
+    console.error('delivery on-delivery invoice:', billingErr.message);
+  }
 
-    const upd = await client.query(
-      `UPDATE delivery_challan_lines SET
-        status = 'delivered', delivered_at = NOW(), delivered_by = $1,
-        delivery_location = $2, pod_image_url = $3, delivery_completed_at = NOW(),
-        updated_at = NOW()
-       WHERE dc_number = $4
-         AND LOWER(COALESCE(status, '')) NOT IN ('delivered', 'cancelled')`,
-      [req.user.user_id, body.delivery_location || null, body.pod_image_url || null, dcNumber]
-    );
-    if (!upd.rowCount) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: 'No deliverable lines on this challan — nothing was changed.',
-      });
-    }
-
-    await exports.finalizeDeliveryInventory(client, dcNumber, req.user);
-
-    await client.query('COMMIT');
-
-    try {
-      const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
-      notifySoDeliveredAsync({ dcNumber });
-    } catch (_) { /* WhatsApp must never block delivery */ }
-    try {
-      const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
-      notifySupportServiceDeliveredAsync({ dcNumber });
-    } catch (_) { /* WhatsApp must never block delivery */ }
-
-    // Post-commit: first prorated rental invoice (delivery → month-end). Billing
-    // must never roll back a successful delivery; failures are logged and the
-    // 1st-of-month cron remains the safety net.
-    try {
-      const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
-      const ctx = await getDcContext(pool, dcNumber);
-      await maybeInvoiceOnRentalDelivery({
-        customerId: ctx.customer_id || null,
-        dcNumber,
-        quotationType: ctx.quotation_type || 'rental',
-      });
-    } catch (billingErr) {
-      console.error('markDcDelivered on-delivery invoice:', billingErr.message);
-    }
-
+  try {
     const soRes = await pool.query(
       `SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]
@@ -6050,9 +6166,37 @@ exports.markDcDelivered = async (req, res) => {
         action: 'dispatch_completed',
         description: `${dcNumber} marked as delivered.`,
         metadata: { dc_number: dcNumber },
-        user: req.user,
+        user,
       });
     }
+  } catch (logErr) {
+    console.error('delivery activity log:', logErr.message);
+  }
+}
+
+exports.performDcDelivery = performDcDelivery;
+
+exports.markDcDelivered = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const body = req.body || {};
+    await client.query('BEGIN');
+
+    const result = await performDcDelivery(client, {
+      dcNumber,
+      user: req.user,
+      deliveryLocation: body.delivery_location || null,
+      podImageUrl: body.pod_image_url || null,
+    });
+    if (!result.ok) {
+      await client.query('ROLLBACK');
+      return res.status(result.statusCode).json({ success: false, message: result.message });
+    }
+
+    await client.query('COMMIT');
+
+    await runPostDeliveryEffects(dcNumber, req.user);
 
     res.json({ success: true, message: 'Marked as delivered' });
   } catch (error) {

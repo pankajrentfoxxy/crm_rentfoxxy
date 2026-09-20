@@ -848,6 +848,9 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
             vsn.current_dc_number AS dc_number,
             vsn.inventory_status,
             vsn.rent_monthly_rate,
+            -- Only read by the BL3 skip warning below, so it can report the
+            -- watermark it is deliberately leaving alone.
+            vsn.rent_billed_until,
             COALESCE(
               (
                 SELECT cil.monthly_rate
@@ -904,6 +907,22 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
     if (billStart > billEnd) continue;
 
     const monthlyRate = parseFloat(row.billed_rate || row.rent_monthly_rate || 0);
+
+    // BL3, postpaid side. Identical defect to the prepaid path above: with no
+    // rate this wrote a Rs 0 line and then advanced rent_billed_until at the
+    // bottom of the loop, so the month was skipped permanently and nothing ever
+    // revisited it. Same rule, same shape, deliberately — the two paths must
+    // stay readable as one decision.
+    if (!(monthlyRate > 0)) {
+      console.warn(
+        `[billing] SKIPPED ${row.ttspl_id || `serial ${row.serial_id}`} for customer ${customerId}:`
+        + ` no rent_monthly_rate. Nothing billed and rent_billed_until left at`
+        + ` ${row.rent_billed_until ? toLocalYmd(new Date(row.rent_billed_until)) : 'NULL'}`
+        + ' so the period is preserved. Set the rate on the asset to bill it.'
+      );
+      continue;
+    }
+
     const days = daysInclusive(billStart, billEnd);
     const daysInMonth = monthEnd.getDate();
     const dailyRate = monthlyRate / daysInMonth;
@@ -3437,6 +3456,7 @@ async function generateVendorBill(vendorId, month, year) {
                 NULLIF((vpo.line_items->0->>'monthly_rental_amount')::numeric, 0),
                 NULLIF((vpo.line_items->0->>'monthly_rate')::numeric, 0)
               ) AS rental_monthly_rate,
+              vsn.po_id,
               COALESCE(vsn.acquisition_type, vpo.purchase_order_type) AS po_type
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
@@ -3474,6 +3494,21 @@ async function generateVendorBill(vendorId, month, year) {
     let subtotal = 0;
 
     for (const row of serialsRes.rows) {
+      // BL3, vendor side. calcVendorLineAmount now returns null for a
+      // non-positive rate as well as for a serial outside the month, so name the
+      // rate case explicitly before calling — a silent skip would swap one
+      // invisible failure for another, and the whole point is that the missing
+      // rate becomes findable.
+      if (!(parseFloat(row.rental_monthly_rate || 0) > 0)) {
+        console.warn(
+          `[billing] SKIPPED vendor line for ${row.ttspl_id || `serial ${row.serial_id}`}`
+          + ` on PO ${row.po_id} (vendor ${vendorId}, ${year}-${String(month).padStart(2, '0')}):`
+          + ' no usable rate on the PO line_items. No line written.'
+          + ' Set rate / monthly_rental_amount / monthly_rate on the PO to bill it.'
+        );
+        continue;
+      }
+
       const calc = calcVendorLineAmount({
         receivedAt: row.received_at,
         returnedAt: row.returned_at,
@@ -3646,4 +3681,8 @@ module.exports = {
   collapseDuplicateRentalLines,
   collapseDuplicateCatchupOnDraft,
   ensureInvoiceSecurityLines,
+  // Exported for test/moneyLeaks.test.js: the BL3 postpaid guard is only
+  // observable from inside the builder — whether a line was pushed and whether
+  // the watermark UPDATE was issued.
+  buildPostpaidInvoiceLines,
 };
