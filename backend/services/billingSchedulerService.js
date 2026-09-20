@@ -696,7 +696,13 @@ async function buildCustomerInvoiceLines(client, {
     const { prevStart } = previousMonthRange(month, year);
     const prevStartYmd = toLocalYmd(prevStart);
     const markedInPrevMonth = Boolean(dcDelivery && deliveryYmd >= prevStartYmd && deliveryYmd < toLocalYmd(monthStart));
-    if (!includeCurrentMonthStarts && billStart < monthStart && !markedInPrevMonth) {
+    // Snapping billStart forward can only ever be right for a unit that has never
+    // been billed, where the delivery marker is the sole evidence of when rent
+    // began. Once rent_billed_until is set it is the authoritative watermark:
+    // billing must resume at watermark + 1 or the skipped span is lost for good,
+    // because nothing ever revisits it. That is how a unit billed through August
+    // and invoiced again in October silently loses September.
+    if (!includeCurrentMonthStarts && billStart < monthStart && !markedInPrevMonth && !billedUntil) {
       billStart = new Date(monthStart);
     }
 
