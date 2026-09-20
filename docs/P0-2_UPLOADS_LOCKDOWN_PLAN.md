@@ -1,112 +1,99 @@
 # P0-2 — Locking down `/uploads`
 
-**Status:** planned, not implemented. Deliberately deferred from the P0 batch because
-it is the only P0 that can break working features, and it needs its own test pass.
+**Status:** Phases 1 and 2 implemented. Controlled at runtime by `UPLOADS_AUTH_MODE`.
 
 ## The problem
 
-`backend/server.js:77-79` mounts `express.static` on `/uploads` twice with no auth
-middleware:
-
-```js
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
-```
-
-Measured on the production box:
+Both `/uploads` mounts in `server.js` were plain `express.static` with no auth:
 
 | | |
 |---|---|
-| Files reachable anonymously | **14,267** |
-| Total size | **1.3 GB** (`backend/uploads`) + 508 KB (repo-root `uploads`) |
-| Folders | 24 under `backend/uploads`, plus `delivery-man` and `pod_files` at repo root |
-
-Contents include customer KYC (GST certificates, PAN, signed agreements), delivery proofs
-and customer e-signatures, customer invoices, e-way bills and e-invoices, vendor bills,
-and delivery-staff identity documents.
+| Files reachable anonymously | **14,433** |
+| Total size | **1.3 GB** |
+| Largest folders | `pod` 644M (delivery proofs + customer e-signatures), `sales-documents` 185M, `support` 142M, `customer-invoices` 83M |
+| Also exposed | `customer-documents` (KYC: GST certificate, PAN, agreements), `sale-dc-compliance` (e-way bills, e-invoices), `delivery-man` (staff identity documents) |
 
 Filenames are predictable — `${Date.now()}_${originalName}`, `pod_${dcNumber}_${Date.now()}.jpg`,
 `esign_${dcNumber}_${Date.now()}.ext` — and document numbers are sequential, so the
-namespace is enumerable. Any link ever pasted into an email or WhatsApp is permanently
-public.
+namespace is enumerable.
 
-Exactly one folder is already protected, which establishes both the precedent and the
-pattern to follow (`server.js:71-76`):
+## What an earlier version of this plan got wrong
+
+The first draft called this a multi-day project and claimed a fix would break links
+already sitting in sent emails and generated PDFs. **Both claims were wrong**, and they
+were the reason the work was deferred. Checked against the running system:
+
+| Assumption | Reality |
+|---|---|
+| nginx serves the files from disk | **No.** `location /uploads/` proxies to `127.0.0.1:5001`, so Express controls access. |
+| Customer and vendor portals serve `/uploads` | **No such block** on either domain. |
+| The portals link to `/uploads` | **Zero references** in `customer-portal/src` and `vendor-portal/src`. They already use authenticated API routes. |
+| Emails link to uploaded PDFs | **No.** `emailDocument` attaches the file (`attachments: [{ path }]`). Nothing to break. |
+| Public capture flows read uploads | **No references.** |
+| Four actor types need different subsets | Only the internal CRM consumes `/uploads` — 17 frontend files. |
+
+## The one real constraint
+
+The CRM builds absolute URLs and uses them as `<img src>` / `<a href>`:
 
 ```js
-app.use('/uploads/vendor-repair', (_req, res) => {
-  res.status(403).json({ success: false, message: 'Download this VRDC from the CRM using the Dispatch PDF button.' });
-});
+return `${origin}/uploads/${path.replace(/^\//, '')}`;
 ```
 
-## Why this was not done in the same batch as the other P0s
+Browser-initiated requests never carry an `Authorization` header — the bearer token lives
+in `sessionStorage` and is attached by axios only. Requiring the header would break every
+image and document link in the CRM. That single fact dictates the design.
 
-Deleting the static mounts is one line. Making that safe is not:
+## The implementation
 
-- **35 files** across the backend, the CRM frontend and both portals build or consume
-  `/uploads/...` URLs — **39 call sites**.
-- Links are also embedded in **generated PDFs** and in **emails already sent**. Those
-  cannot be rewritten. Any already-delivered link will 404 the moment the mount is removed.
-- Four different actor types with four different auth mechanisms (internal JWT, customer
-  portal opaque session, vendor portal JWT + session row, technician JWT) need to reach
-  different subsets of these files. A single `authMiddleware` in front of `/uploads` would
-  lock the portals out.
-- Six unauthenticated public capture flows (`routes/*Public.js`) upload into these folders
-  and may read back what they just wrote.
+`middleware/uploadsAuth.js`, mounted ahead of both static mounts. It accepts three
+credentials, in order:
 
-A blunt fix therefore trades a confidentiality bug for a visible outage.
+1. **`uploads_tk` cookie** — HttpOnly, Secure, SameSite=Lax, `Path=/uploads`, HMAC-signed
+   with `JWT_SECRET`. The browser sends it automatically, so no frontend change was
+   needed. Issued and refreshed by `authMiddleware` on **every authenticated API call**,
+   not only at login, so users already signed in never had to sign in again.
+2. **`Authorization: Bearer`** — programmatic callers.
+3. **`?exp=…&sig=…` signed URL** — for handing a single file to someone outside the CRM.
+   No current flow needs it, but it is the supported way to add one without reopening the
+   tree. Use `signedUploadUrl(relativePath, ttlSeconds, origin)`.
 
-## Proposed approach
+Cookie TTL is **2 hours**. The cookie is verified by HMAC alone — checking
+`users.token_version` per request would mean a DB round trip per image, and one page can
+load dozens — so the TTL is what bounds how long a revoked user keeps file access. It
+refreshes on every API call, so active users never notice.
 
-### Phase 1 — stop the bleeding on the worst folders (small, shippable alone)
+### `UPLOADS_AUTH_MODE`
 
-Extend the `vendor-repair` 403 pattern to the folders whose contents are personal or
-statutory, and which have the fewest link consumers:
+| Value | Behaviour |
+|---|---|
+| `off` | No checking. Pre-P0-2 behaviour. |
+| `grace` | Anonymous requests are **logged but still served** (`[uploadsAuth][grace]`). The observation window. |
+| `enforce` | Anonymous requests get **403**. |
 
-- `customer-documents` (KYC: GST certificate, PAN, agreements) — 1 file
-- `pod` (delivery proofs + customer e-signatures) — 584 files
-- `customer-invoices` — 626 files
+The mode is read per request, so switching needs only a `pm2 restart` — no deploy, and
+reverting is immediate if anything unexpected surfaces.
 
-Before flipping each one, grep for its consumers and route them through the authenticated
-download endpoint first. Ship folder by folder, not all at once.
+## Verified
 
-### Phase 2 — one authenticated download route
+On a throwaway instance on port 5099, production untouched:
 
-Add `GET /api/files/:folder/:filename` that:
+```
+grace    anonymous                 200 + warning logged
+enforce  anonymous                 403
+enforce  cookie only (browser)     200
+enforce  bearer token              200
+enforce  valid signed URL          200
+enforce  tampered signature        403
+enforce  expired signature         403
+enforce  /uploads/vendor-repair    403   (pre-existing VRDC guard intact)
+         ../.env and 3 traversal variants   404
+         directory listing                  404
+```
 
-1. resolves the caller through whichever of the four auth mechanisms applies;
-2. maps `:folder` to an ownership rule (a customer may read a POD only for their own DC; a
-   vendor only their own bills; internal users via the existing section permission matrix);
-3. rejects any `:filename` containing a path separator or `..`, and resolves the final path
-   with `path.resolve` asserting it stays inside the folder root;
-4. streams with `res.sendFile`.
+## Still open — Phase 3 (optional)
 
-Ownership rules are the real work here — they are per-folder and there are 26 folders.
-Write them as an explicit table, not as a default-allow.
-
-### Phase 3 — signed expiring URLs for links that must be shareable
-
-For anything that legitimately goes into an email or a WhatsApp message (customer invoice
-PDFs, e-way bills), issue an HMAC-signed URL with a short expiry rather than a permanent
-public path. Keep the signing key in `.env` alongside `JWT_SECRET`.
-
-### Phase 4 — remove the static mounts
-
-Only once Phases 2 and 3 cover every one of the 39 call sites. Keep a temporary
-access log on the static mount beforehand to catch consumers the grep missed — some
-links live in PDFs and inboxes that no grep can reach.
-
-## Verification checklist
-
-- [ ] Anonymous `curl` of one file per folder returns 401/403, not 200
-- [ ] A logged-in internal user can still open every document they could before
-- [ ] Customer portal can open its own invoices and PODs, and **not** another customer's
-- [ ] Vendor portal can open its own bills, and **not** another vendor's
-- [ ] Technician flows and the six public capture flows still work
-- [ ] Generated PDFs contain signed URLs, not raw `/uploads` paths
-- [ ] Path traversal (`../`, encoded separators) is rejected
-
-## Estimate
-
-Phase 1 is roughly half a day. Phases 2–4 are several days, dominated by writing and
-testing the per-folder ownership rules — not by the routing code.
+Any signed-in CRM user can fetch any file. That is "any employee" rather than "anyone on
+the internet", which was the urgent part, but it is not least-privilege. Per-folder
+ownership rules are worth adding for `customer-documents` (KYC) and `pod` (customer
+e-signatures). Write them as an explicit allow table, not a default-allow.

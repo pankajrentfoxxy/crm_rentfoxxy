@@ -101,7 +101,9 @@ export default function DeliveryChallanAddPage() {
     setError('');
     try {
       await createDeliveryChallan({
-        challan_number: meta?.dc_number,
+        // challan_number is deliberately not sent. The server allocates it inside
+        // the save transaction; posting the previewed number back meant two users
+        // who opened this form before either saved both got the same DC number.
         sales_order_number: salesOrderNumber,
         quotation_number: meta?.quotation_number,
         customer_id: meta?.customer_id,
@@ -171,7 +173,10 @@ export default function DeliveryChallanAddPage() {
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
           <h2 className="text-sm font-semibold border-b pb-3 mb-4">Delivery Challan Form</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <ReadOnlyField label="Challan Number" value={meta?.dc_number} />
+            <ReadOnlyField
+              label="Challan Number"
+              value={meta?.dc_number ? `${meta.dc_number} (preview — assigned on save)` : 'Assigned on save'}
+            />
             <ReadOnlyField label="Sales Order Number" value={salesOrderNumber} />
             <ReadOnlyField label="Quotation Number" value={meta?.quotation_number} />
             <ReadOnlyField label="Quotation Type" value={meta?.quotation_type} />
