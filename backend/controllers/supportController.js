@@ -3650,15 +3650,21 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
                     `[support] Skipping returned status for ${code}: active outbound ${activeOutbound.rows[0].dc_number}`
                 );
             } else {
+                // Keep the customer link if this unit has been billed and nothing
+                // records it coming back — see services/customerAssetGuard.
+                const { checkSafeToDetach } = require('../services/customerAssetGuard');
+                const detachOk = await checkSafeToDetach(client, vsn.serial_id, {
+                    context: 'support warehouse receive',
+                });
                 await client.query(
                     `UPDATE vendor_serial_numbers SET
                         inventory_status = 'returned',
-                        current_customer_id = NULL,
+                        current_customer_id = CASE WHEN $2 THEN NULL ELSE current_customer_id END,
                         current_dc_number = NULL,
                         status_changed_at = NOW(),
                         updated_at = NOW()
                      WHERE serial_id = $1`,
-                    [vsn.serial_id]
+                    [vsn.serial_id, detachOk.safe]
                 );
             }
         }

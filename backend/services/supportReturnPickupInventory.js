@@ -60,13 +60,22 @@ async function markReturnPickupInTransit(client, pickupItem, actor = {}) {
     allowOverride: true,
   });
 
-  await client.query(
-    `UPDATE vendor_serial_numbers
-        SET current_customer_id = NULL,
-            updated_at = NOW()
-      WHERE serial_id = $1`,
-    [serial.serial_id]
-  );
+  // Never drop a billed laptop out of the customer's assets without evidence it
+  // actually came back. ERP/Excel imports left units with billing history and no
+  // DC at all, and those must not be detached by inference.
+  const { checkSafeToDetach } = require('./customerAssetGuard');
+  const detachOk = await checkSafeToDetach(client, serial.serial_id, {
+    context: 'support return pickup in transit',
+  });
+  if (detachOk.safe) {
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET current_customer_id = NULL,
+              updated_at = NOW()
+        WHERE serial_id = $1`,
+      [serial.serial_id]
+    );
+  }
 
   await logTtsplEvent({
     ttsplId,
