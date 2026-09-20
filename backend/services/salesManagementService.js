@@ -2532,19 +2532,43 @@ function normalizeStateForGst(state) {
   return String(state || '').trim().toLowerCase().replace(/\s+/g, '_');
 }
 
-/** Prefer shipping-address state for GST; fall back to stored supply_state. */
-function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '') {
+/**
+ * Resolve the place of supply for GST.
+ *
+ * Order: shipping-address state -> stored supply_state -> `fallbackState`
+ * (normally the customer's billing_state).
+ *
+ * The fallback matters. The shipping-address JSON has no `state` key for
+ * free-text addresses and lead-converted shell records, and when that happened
+ * this returned '' and isIntraState treated unknown as intra-state. Measured on
+ * live data: 2,215 delivery challans had a blank supply_state, and of those
+ * **1,232 were to customers outside Haryana** — billed CGST+SGST when IGST was
+ * due. The buyer cannot claim input credit on those and the company
+ * under-reported IGST. The customer's state was in the database the whole time;
+ * it simply was not consulted.
+ */
+function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '') {
   const addr = parseAddressField(shippingAddress);
   const fromAddr = addr?.state;
   if (fromAddr && String(fromAddr).trim()) {
     return normalizeStateForGst(fromAddr);
   }
-  return normalizeStateForGst(explicitSupplyState);
+  const explicit = normalizeStateForGst(explicitSupplyState);
+  if (explicit) return explicit;
+  return normalizeStateForGst(fallbackState);
 }
 
 function isIntraState(supplyState, sellerStateCode = SELLER_STATE_CODE) {
   const s = normalizeStateForGst(supplyState);
-  if (!s) return true; // Unknown buyer state -> assume intra (seller's own state).
+  if (!s) {
+    // Still the old behaviour, because refusing here would block document
+    // creation outright — but it is no longer silent. Every occurrence is a
+    // customer whose state we could not determine from any source, and each one
+    // risks the wrong GST head on a statutory document.
+    console.warn('[gst] place of supply unknown — defaulting to intra-state (CGST+SGST).'
+      + ' Set the customer billing state to bill this correctly.');
+    return true;
+  }
   const seller = String(sellerStateCode || SELLER_STATE_CODE).toLowerCase();
   return s === seller || s === '06' || s === 'hr' || s.includes('haryana');
 }

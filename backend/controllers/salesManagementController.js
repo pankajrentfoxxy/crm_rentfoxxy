@@ -932,6 +932,29 @@ exports.storeSalesOrder = async (req, res) => {
     if (!lineItems.length) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
     }
+    // updateSalesOrder validates these; create did not, so the two disagreed.
+    // rate: -5000 created a negative-revenue SO, and security_type
+    // 'one_month_rental' then wrote a NEGATIVE security_amount that flowed into
+    // every total, the rental invoice and the security-deposit ledger.
+    // rate: "abc" became NaN and surfaced as an opaque 500 mid-transaction.
+    for (const item of lineItems) {
+      const qty = Number(item.quantity);
+      if (!Number.isFinite(qty) || qty < 1) {
+        return res.status(400).json({ success: false, message: 'Each line quantity must be at least 1' });
+      }
+      const rate = Number(item.rate);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        return res.status(400).json({ success: false, message: 'Each line requires a positive rate' });
+      }
+    }
+    const securityAmount = Number(body.security_amount || 0);
+    if (!Number.isFinite(securityAmount) || securityAmount < 0) {
+      return res.status(400).json({ success: false, message: 'Security amount cannot be negative' });
+    }
+    const shippingChargeInput = Number(body.shiping_charges || body.shipping_charges || 0);
+    if (!Number.isFinite(shippingChargeInput) || shippingChargeInput < 0) {
+      return res.status(400).json({ success: false, message: 'Shipping charges cannot be negative' });
+    }
 
     const salesOrderNumber = await nextFinancialYearNumber('sales_order');
     const quotationNumber = body.is_without_quotation ? 'N/A' : (body.quotation_number || 'N/A');
@@ -1069,8 +1092,15 @@ exports.storeSalesOrder = async (req, res) => {
           item.quantity,
           item.rate,
           item.locking_period,
-          item.technical_warranty,
+          // Column order above is (battery_charger_warranty, technical_warranty).
+          // These two were bound the other way round, so an SO quoted as
+          // "36-month technical, 12-month battery" was saved, PDF'd and emailed
+          // as "12-month technical, 36-month battery" — and then silently
+          // corrected itself the first time anyone edited the SO, which made the
+          // discrepancy look like tampering. The quotation insert and both
+          // SO-update paths always bound them correctly; only create was wrong.
           item.battery_charger_warranty,
+          item.technical_warranty,
           item.remark,
           generateToken(),
           req.user?.user_id,
@@ -2978,6 +3008,20 @@ exports.storeDeliveryChallan = async (req, res) => {
         );
       }
     }
+    // Last resort before assuming intra-state: the customer's own state. This is
+    // what was missing — 1,232 DCs went out with CGST+SGST to customers outside
+    // Haryana purely because the shipping-address JSON had no state key, while
+    // the state sat in the customers table all along.
+    if (!supplyState && body.customer_id) {
+      const custRes = await pool.query(
+        `SELECT COALESCE(NULLIF(TRIM(shipping_state), ''), NULLIF(TRIM(billing_state), '')) AS st
+           FROM customers WHERE customer_id = $1`,
+        [body.customer_id]
+      );
+      if (custRes.rows[0]?.st) {
+        supplyState = resolveSupplyStateFromAddress(null, '', custRes.rows[0].st);
+      }
+    }
 
     // Pro-rata security: the SO security_amount is the TOTAL across all laptops on
     // the order. A DC for a subset of laptops only carries its share, so the
@@ -3936,23 +3980,41 @@ exports.submitDeliveryRegister = async (req, res) => {
   try {
     const { dcNumber } = req.params;
     const { delivered_serial_numbers, rejected_serial_numbers, submitted_remark, status } = req.body;
-    await pool.query(
+    // status went straight from the request body into the column with no
+    // validation, so any string could be written — and every downstream
+    // `status IN (...)` filter silently stops matching that row.
+    const ALLOWED_REGISTER_STATUSES = ['delivered', 'rejected', 'processing'];
+    const nextStatus = String(status || 'delivered').toLowerCase();
+    if (!ALLOWED_REGISTER_STATUSES.includes(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status "${status}". Allowed: ${ALLOWED_REGISTER_STATUSES.join(', ')}.`,
+      });
+    }
+    const upd = await pool.query(
       `UPDATE delivery_challan_lines SET
          delivered_serial_numbers = $1,
          rejected_serial_numbers = $2,
          submitted_remark = $3,
-         status = COALESCE($4, 'delivered'),
+         status = $4,
          delivery_completed_at = NOW(),
          updated_at = NOW()
-       WHERE dc_number = $5`,
+       WHERE dc_number = $5
+         AND LOWER(COALESCE(status, '')) <> 'cancelled'`,
       [
         JSON.stringify(delivered_serial_numbers || []),
         JSON.stringify(rejected_serial_numbers || []),
         submitted_remark || null,
-        status || 'delivered',
+        nextStatus,
         dcNumber,
       ]
     );
+    if (!upd.rowCount) {
+      return res.status(409).json({
+        success: false,
+        message: 'Delivery challan not found, or it is cancelled and cannot be updated.',
+      });
+    }
     res.json({ success: true, message: 'Delivery register updated' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -5892,14 +5954,52 @@ exports.markDcDelivered = async (req, res) => {
     const body = req.body || {};
     await client.query('BEGIN');
 
-    await client.query(
+    // No state check at all before this: a CANCELLED DC could be marked
+    // delivered, putting serials on rent and raising a rental invoice for a
+    // shipment that never happened. And with no rowCount check a double-click
+    // re-ran the whole thing, re-stamping delivered_at and potentially invoicing
+    // the month twice. FOR UPDATE so two clicks serialise.
+    const dcState = await client.query(
+      `SELECT DISTINCT LOWER(COALESCE(status, '')) AS status
+         FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE`,
+      [dcNumber]
+    );
+    if (!dcState.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const states = dcState.rows.map((r) => r.status);
+    if (states.includes('cancelled')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This delivery challan is cancelled and cannot be marked delivered.',
+      });
+    }
+    if (states.every((st) => st === 'delivered')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'This delivery challan is already marked delivered.',
+      });
+    }
+
+    const upd = await client.query(
       `UPDATE delivery_challan_lines SET
         status = 'delivered', delivered_at = NOW(), delivered_by = $1,
         delivery_location = $2, pod_image_url = $3, delivery_completed_at = NOW(),
         updated_at = NOW()
-       WHERE dc_number = $4`,
+       WHERE dc_number = $4
+         AND LOWER(COALESCE(status, '')) NOT IN ('delivered', 'cancelled')`,
       [req.user.user_id, body.delivery_location || null, body.pod_image_url || null, dcNumber]
     );
+    if (!upd.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'No deliverable lines on this challan — nothing was changed.',
+      });
+    }
 
     await exports.finalizeDeliveryInventory(client, dcNumber, req.user);
 

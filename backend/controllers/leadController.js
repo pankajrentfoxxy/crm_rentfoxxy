@@ -551,9 +551,34 @@ exports.getLeads = async (req, res) => {
     const assignedOnly = await leadsAssignedOnly(req);
     const where = buildPrismaWhereForLeads(req, { assignedOnly });
 
+    // This had no take/skip at all: the whole table, each row carrying its raw
+    // research JSON, pulled into a 1 GB single-process heap and shipped to the
+    // browser, which then sliced it client-side. enrichLeadsPhase3 is a second
+    // unbounded pass on top.
+    //
+    // The frontend does not send page/limit today and reads research.gst from
+    // the list, so neither can be changed unilaterally without a regression.
+    // What this adds is a hard ceiling so the query cannot grow unbounded, plus
+    // honouring page/limit when a client does send them.
+    const MAX_LEADS = parseInt(process.env.LEADS_LIST_MAX || '5000', 10);
+    const limitParam = parseInt(req.query.limit, 10);
+    const pageParam = parseInt(req.query.page, 10);
+    const take = Number.isFinite(limitParam) && limitParam > 0
+      ? Math.min(limitParam, MAX_LEADS)
+      : MAX_LEADS;
+    const skip = Number.isFinite(pageParam) && pageParam > 1 ? (pageParam - 1) * take : 0;
+
+    const total = await prisma.lead.count({ where });
+    if (total > MAX_LEADS && !Number.isFinite(limitParam)) {
+      console.warn(`[leads] ${total} leads match but the list is capped at ${MAX_LEADS}.`
+        + ' The UI is showing a truncated set — add pagination to the lead list.');
+    }
+
     let leads = await prisma.lead.findMany({
       where,
       orderBy: { createdAt: 'desc' },
+      take,
+      skip,
       include: {
         assignedUser: { select: { userId: true, name: true, role: true } },
         research: true
@@ -563,7 +588,7 @@ exports.getLeads = async (req, res) => {
     leads = await enrichLeadsPhase3(leads);
     leads = applyLeadListFilters(leads, req);
 
-    res.json({ success: true, count: leads.length, leads });
+    res.json({ success: true, count: leads.length, total, truncated: total > take, leads });
   } catch (error) {
     console.error('Get leads error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching leads' });

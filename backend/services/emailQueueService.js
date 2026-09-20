@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
+const { escapeHtml } = require('../utils/escapeHtml');
 
 const QUEUE_POLL_INTERVAL_MS = parseInt(process.env.EMAIL_QUEUE_POLL_INTERVAL_MS || '60000', 10);
 const FOLLOWUP_SCAN_INTERVAL_MS = parseInt(process.env.FOLLOWUP_SCAN_INTERVAL_MS || '60000', 10);
@@ -72,8 +73,8 @@ const scanAndQueueFollowUpReminderEmails = async () => {
       const html = `
         <div style="font-family: Arial, sans-serif; line-height: 1.5;">
           <h3>Follow-up Reminder</h3>
-          <p><strong>Lead:</strong> ${lead.name}</p>
-          <p><strong>Company:</strong> ${lead.company_name || '-'}</p>
+          <p><strong>Lead:</strong> ${escapeHtml(lead.name)}</p>
+          <p><strong>Company:</strong> ${escapeHtml(lead.company_name || '-')}</p>
           <p><strong>Follow-up Time:</strong> ${followupAt}</p>
           <p>Please contact this lead on time.</p>
         </div>
@@ -260,7 +261,7 @@ async function sendCustomerPortalWelcome({ customerEmail, customerName, portalUr
   const bodyHtml = `
     <div style="font-family: Arial, sans-serif; line-height: 1.6; max-width: 560px;">
       <h2 style="color: #0D9488;">Customer Portal Access</h2>
-      <p>Hello ${customerName || 'Customer'},</p>
+      <p>Hello ${escapeHtml(customerName || 'Customer')},</p>
       <p>Your Rentfoxxy customer portal is now active.</p>
       <p><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
       <p><strong>Email:</strong> ${customerEmail}</p>
