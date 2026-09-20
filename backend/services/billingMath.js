@@ -38,6 +38,49 @@ function monthSegments(start, end) {
   return segs;
 }
 
+/** Months covered by one invoice, per customers.billing_frequency. */
+const FREQUENCY_MONTHS = { monthly: 1, quarterly: 3, half_yearly: 6 };
+
+function normalizeBillingFrequency(freq) {
+  const f = String(freq || 'monthly').toLowerCase().replace(/[\s-]+/g, '_');
+  return Object.hasOwn(FREQUENCY_MONTHS, f) ? f : 'monthly';
+}
+
+/**
+ * Last day of the billing period that opens on `billStart`.
+ *
+ * Monthly keeps the calendar month end, which is what every existing caller
+ * expects. Quarterly and half-yearly are anchored to the asset: a laptop whose
+ * period opens 12 Nov bills 12 Nov - 11 Feb, then 12 Feb - 11 May. The anchor is
+ * billStart, which is rent_billed_until + 1 (or the rental start when nothing has
+ * been billed yet), so an asset moved onto a longer cycle mid-life transitions
+ * cleanly from wherever its billing currently stands instead of re-opening a
+ * period that was already invoiced.
+ *
+ * Month-end anchors are clamped to the target month's length rather than allowed
+ * to roll forward, because `new Date(y, m, 31)` on a 30-day month silently
+ * becomes the 1st of the next one and lengthens the period. A quarter opening
+ * 31 Aug ends 29 Nov (31 Aug + 3 months clamps to 30 Nov, less a day), and one
+ * opening 30 Nov ends 27 Feb in a non-leap year.
+ *
+ * The caller still caps this at rent_end_date, so a unit returned mid-quarter is
+ * billed only to its return.
+ */
+function billingPeriodEnd(frequency, billStart, monthEnd) {
+  const months = FREQUENCY_MONTHS[normalizeBillingFrequency(frequency)];
+  if (months === 1) return monthEnd;
+
+  const y = billStart.getFullYear();
+  const m = billStart.getMonth();
+  const d = billStart.getDate();
+
+  // First day of the month `months` later, then step back one day from the
+  // anchor day — clamped to that month's length.
+  const targetMonthLast = new Date(y, m + months + 1, 0).getDate();
+  const anchorDay = Math.min(d, targetMonthLast);
+  return addDays(new Date(y, m + months, anchorDay), -1);
+}
+
 /** Return-credit unused prepaid days that were actually invoiced past return. */
 function calcReturnCreditNoteAmount({ rentMonthlyRate, returnDate, rentBilledUntil }) {
   if (!rentBilledUntil || !returnDate) return null;
@@ -141,4 +184,7 @@ module.exports = {
   calcReturnCreditNoteAmount,
   calcRepairWindowCreditAmount,
   calcVendorLineAmount,
+  FREQUENCY_MONTHS,
+  normalizeBillingFrequency,
+  billingPeriodEnd,
 };

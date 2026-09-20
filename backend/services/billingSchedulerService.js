@@ -13,6 +13,8 @@ const {
   calcReturnCreditNoteAmount,
   calcRepairWindowCreditAmount,
   calcVendorLineAmount,
+  normalizeBillingFrequency,
+  billingPeriodEnd,
 } = require('./billingMath');
 const {
   insertCustomerInvoiceLines,
@@ -568,6 +570,7 @@ async function buildCustomerInvoiceLines(client, {
   // (sent 10 Aug or 1 Sep → next invoice bills that start span + the new month).
   // includeCurrentMonthStarts is only for rare same-month backfills.
   const startCutoff = includeCurrentMonthStarts ? monthEnd : addDays(monthStart, -1);
+  const billingFrequency = await getCustomerBillingFrequency(client, customerId);
   const scopedIds = normalizeSerialIds(serialIds);
   const params = [customerId, toLocalYmd(startCutoff), toLocalYmd(monthEnd)];
   let serialFilter = '';
@@ -707,7 +710,12 @@ async function buildCustomerInvoiceLines(client, {
       billStart = new Date(monthStart);
     }
 
-    let billEnd = monthEnd;
+    // Monthly returns monthEnd unchanged. Quarterly/half-yearly extend the
+    // period to three or six months from billStart, which is this asset's own
+    // anchor (rent_billed_until + 1, or its rental start). The watermark below
+    // then moves to the period end, so the next monthly run finds
+    // billStart > billEnd and skips the unit until its cycle comes round again.
+    let billEnd = billingPeriodEnd(billingFrequency, billStart, monthEnd);
     if (rentEnd && rentEnd < billEnd) billEnd = rentEnd;
 
     if (billStart > billEnd) continue;
@@ -803,6 +811,27 @@ async function getCustomerBillingType(clientOrPool, customerId) {
   return String(rows[0]?.billing_type || 'prepaid').toLowerCase() === 'postpaid'
     ? 'postpaid'
     : 'prepaid';
+}
+
+/**
+ * How many months one invoice covers for this customer — monthly (default),
+ * quarterly or half_yearly. Independent of prepaid/postpaid.
+ *
+ * Tolerates the column being absent: the deploy applies no migrations, so the
+ * code can reach a database that has not had 255 run yet. Undefined column
+ * (42703) means everyone is monthly, which is the behaviour that predates it.
+ */
+async function getCustomerBillingFrequency(clientOrPool, customerId) {
+  try {
+    const { rows } = await clientOrPool.query(
+      `SELECT billing_frequency FROM customers WHERE customer_id = $1`,
+      [customerId]
+    );
+    return normalizeBillingFrequency(rows[0]?.billing_frequency);
+  } catch (err) {
+    if (err.code === '42703') return 'monthly';
+    throw err;
+  }
 }
 
 /**
@@ -966,6 +995,19 @@ async function generatePostpaidCustomerInvoice(customerId, month, year) {
         invoice_number: existing.rows[0].invoice_number,
         reason: 'Invoice already exists',
       };
+    }
+
+    // Frequency is implemented for prepaid only. Postpaid bills a calendar
+    // month of occupancy in arrears and has no watermark to anchor a longer
+    // cycle to, so a quarterly postpaid customer would quietly keep getting
+    // monthly invoices. Say so loudly rather than mis-bill in silence.
+    const postpaidFrequency = await getCustomerBillingFrequency(client, customerId);
+    if (postpaidFrequency !== 'monthly') {
+      billingLog.warn(
+        { customerId, month, year, billingFrequency: postpaidFrequency },
+        `Customer is postpaid with ${postpaidFrequency} frequency — frequency IGNORED, billing monthly in arrears.`
+        + ' Quarterly/half-yearly is implemented for prepaid only.'
+      );
     }
 
     const built = await buildPostpaidInvoiceLines(client, {
