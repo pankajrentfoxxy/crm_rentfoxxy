@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { sendEmailImmediate } = require('./emailQueueService');
+const { secureOtp } = require('../utils/secureRandom');
 
 const OTP_EXPIRY_MINUTES = 10;
 const OTP_RESEND_COOLDOWN_SECONDS = 60;
@@ -18,7 +19,7 @@ const hashOtp = (otp, email) => {
   return crypto.createHmac('sha256', `${secret}:${email}`).update(String(otp)).digest('hex');
 };
 
-const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+const generateOtp = () => secureOtp();
 
 const validateNewPassword = (password) => {
   const value = String(password || '');

@@ -28,6 +28,7 @@ const {
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
 const { unifiedLogin } = require('../controllers/unifiedLoginController');
+const { loginLimiter, otpLimiter, otpSendLimiter } = require('../middleware/rateLimit');
 
 // @route   POST /api/auth/register
 // @desc    Register a new user
@@ -37,42 +38,30 @@ router.post('/register', authMiddleware, register);
 // @route   POST /api/auth/unified-login
 // @desc    Single login for CRM / vendor / customer — routes by credentials
 // @access  Public
-router.post('/unified-login', unifiedLogin);
-router.post('/login-unified', unifiedLogin); // alias
+router.post('/unified-login', loginLimiter, unifiedLogin);
+router.post('/login-unified', loginLimiter, unifiedLogin); // alias
 
 // @route   GET /api/auth/debug
 // @desc    Debug connection (remove in production)
-// @access  Public
-router.get('/debug', async (req, res) => {
-  try {
-    const pool = require('../config/db');
-    await pool.query('SELECT 1');
-    const hasJwt = !!process.env.JWT_SECRET;
-    const userCount = await pool.query('SELECT COUNT(*) FROM public.users WHERE email = $1', ['admin@rentfoxxy.com']);
-    res.json({
-      db: 'ok',
-      jwtSecret: hasJwt ? 'set' : 'MISSING',
-      adminExists: parseInt(userCount.rows[0].count) > 0
-    });
-  } catch (err) {
-    res.status(500).json({ db: 'fail', error: err.message });
-  }
-});
+// Removed: GET /api/auth/debug. It was public and confirmed to an anonymous
+// caller that the DB was reachable, whether JWT_SECRET was set, and that
+// admin@rentfoxxy.com existed — reconnaissance for a credential-guessing attack.
+// On failure it returned the raw Postgres error. Use GET /api/health instead.
 
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
-router.post('/login', login);
+router.post('/login', loginLimiter, login);
 
 // @route   POST /api/auth/forgot-password/request
 // @desc    Send password reset OTP to email
 // @access  Public
-router.post('/forgot-password/request', requestForgotPasswordOtp);
+router.post('/forgot-password/request', otpSendLimiter, requestForgotPasswordOtp);
 
 // @route   POST /api/auth/forgot-password/reset
 // @desc    Verify OTP and set new password
 // @access  Public
-router.post('/forgot-password/reset', resetPasswordWithOtp);
+router.post('/forgot-password/reset', otpLimiter, resetPasswordWithOtp);
 
 // @route   POST /api/auth/register/customer
 // @desc    Public customer self-registration
@@ -107,7 +96,7 @@ router.get('/me', authMiddleware, getCurrentUser);
 // @route   POST /api/auth/login-barcode
 // @desc    Login with barcode
 // @access  Public
-router.post('/login-barcode', loginBarcode);
+router.post('/login-barcode', loginLimiter, loginBarcode);
 
 // @route   PUT /api/auth/users/:id/barcode
 // @desc    Update user barcode

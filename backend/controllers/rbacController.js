@@ -15,7 +15,12 @@ const {
 
 const hasRbacAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
 const hasRbacReadAccess = (user) => ['admin', 'super_admin', 'manager'].includes(user?.role);
-const hasRbacWriteAccess = (user) => ['admin', 'super_admin', 'manager'].includes(user?.role);
+// Managers may READ the permission matrix but not write it. With write access a
+// manager could PUT /api/role-permissions/manager and grant their own role every
+// section — billing, vendor management, the user export — or edit the admin role.
+// Creating and deleting roles already required admin; granting every permission
+// on an existing role was the gap.
+const hasRbacWriteAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
 
 const slugifyRoleName = (value) =>
   String(value || '')

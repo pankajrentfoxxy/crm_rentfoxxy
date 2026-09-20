@@ -6,6 +6,7 @@ const pool = require('../config/db');
 const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
 const { getDisplayTeams, normalizeTeamIds } = require('../utils/teamUtils');
 const { parseIndianMobile } = require('../utils/phoneValidation');
+const { secureInt } = require('../utils/secureRandom');
 const {
   requestPasswordResetOtp,
   resetPasswordWithOtp: applyPasswordResetWithOtp,
@@ -129,7 +130,7 @@ const generatePassword = (length = 10) => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#';
   let out = '';
   for (let i = 0; i < length; i += 1) {
-    out += chars[Math.floor(Math.random() * chars.length)];
+    out += chars[secureInt(0, chars.length - 1)];
   }
   return out;
 };
@@ -417,6 +418,18 @@ exports.loginBarcode = async (req, res) => {
     }
 
     const user = result.rows[0];
+    // The query filters on active = true but not on status, and the token below
+    // omitted `status` entirely — so checkPermission's status gate never fired
+    // and a pending_approval or rejected user with active = true passed every
+    // permission check. Reject them here and carry status in the token.
+    const accountStatus = user.status || 'active';
+    if (accountStatus !== 'active') {
+      return res.status(403).json({
+        success: false,
+        message: `Your account is ${accountStatus.replace(/_/g, ' ')}. Contact your administrator.`,
+      });
+    }
+
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
     const teamNames = await getUserTeamNames(user.user_id, user.team_id);
 
@@ -425,6 +438,8 @@ exports.loginBarcode = async (req, res) => {
         user_id: user.user_id,
         email: user.email,
         role: user.role,
+        status: accountStatus,
+        tv: user.token_version ?? 1,
         team_id: user.team_id,
         team_ids: teamIds,
         team_names: teamNames,
@@ -858,6 +873,9 @@ exports.updateUserStatus = async (req, res) => {
          deactivated_at = $3,
          deactivated_by = $4,
          deactivation_reason = $5,
+         -- Any status change revokes live sessions: blocking or suspending a
+         -- user must take effect now, not in up to 30 days.
+         token_version = token_version + 1,
          updated_at = NOW()
        WHERE user_id = $6`,
       [
@@ -933,6 +951,7 @@ exports.loginAsUser = async (req, res) => {
         role: user.role,
         status: user.status || 'active',
         user_type: user.user_type || 'internal',
+        tv: user.token_version ?? 1,
         team_id: user.team_id,
         team_ids: teamIds,
         team_names: teamNames,
@@ -1334,7 +1353,10 @@ exports.deleteUser = async (req, res) => {
       `UPDATE users
        SET active = false,
            permissions = ARRAY[]::text[],
-           team_id = NULL
+           team_id = NULL,
+           -- Cut existing sessions immediately. Without this the user kept full
+           -- access until their 30-day token expired.
+           token_version = token_version + 1
        WHERE user_id = $1`,
       [id]
     );

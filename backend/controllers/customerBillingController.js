@@ -772,13 +772,28 @@ exports.sendInvoice = async (req, res) => {
       text: `Please find attached invoice ${invoice.invoice_number} for the billing period ${invoice.from_date} to ${invoice.to_date}.`,
       pdfRelativePath: pdfPath,
     });
-    await pool.query(
-      `UPDATE customer_invoices
-       SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW()
-       WHERE invoice_id = $2`,
-      [req.user?.user_id || null, id]
-    );
-    res.json({ success: true, email_sent: sent, message: sent ? 'Invoice sent' : 'Invoice marked sent (SMTP not configured)' });
+    // Only mark it sent if it actually went out, and only from 'draft'.
+    // Without the status guard, re-sending a PAID invoice reverted it to 'sent'
+    // and wiped the AR position, and re-sending a CANCELLED one resurrected it.
+    // Without the `sent` check, an SMTP failure still recorded the invoice as
+    // delivered to a customer who received nothing, with no way to find them
+    // afterwards. billingSchedulerService already had the status guard.
+    if (sent) {
+      await pool.query(
+        `UPDATE customer_invoices
+         SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW()
+         WHERE invoice_id = $2 AND LOWER(COALESCE(status, 'draft')) = 'draft'`,
+        [req.user?.user_id || null, id]
+      );
+    }
+    if (!sent) {
+      return res.status(502).json({
+        success: false,
+        email_sent: false,
+        message: 'Invoice could not be emailed — it has NOT been marked as sent. Check SMTP settings and retry.',
+      });
+    }
+    res.json({ success: true, email_sent: true, message: 'Invoice sent' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

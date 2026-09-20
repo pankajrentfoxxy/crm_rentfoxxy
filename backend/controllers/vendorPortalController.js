@@ -66,6 +66,13 @@ async function login(req, res) {
   }
 
   const hash = vendor.vendor_portal_password_hash || vendor.password_hash;
+  // bcrypt.compare throws on a null hash. With no try/catch on this handler and
+  // no unhandledRejection handler on the process, an approved vendor whose hash
+  // was never set could take the whole CRM process down by attempting to log in.
+  if (!hash) {
+    console.warn(`[vendorPortal] login attempt for vendor ${vendor.vendor_id} with no password hash set`);
+    return res.status(401).json({ success: false, message: 'Invalid email or password' });
+  }
   const ok = await bcrypt.compare(password, hash);
   if (!ok) {
     return res.status(401).json({ success: false, message: 'Invalid email or password' });

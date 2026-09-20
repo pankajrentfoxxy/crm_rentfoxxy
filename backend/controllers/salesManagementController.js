@@ -46,6 +46,7 @@ const {
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
+const { secureOtp } = require('../utils/secureRandom');
 const {
   sendSalesQuotationEmail,
   assertQuotationSendFields,
@@ -3812,7 +3813,7 @@ exports.sendDeliveryOtp = async (req, res) => {
     const first = lines[0];
     const customerEmail = body.email || first.email || null;
     const customerName = body.name || first.customer_name || null;
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = secureOtp();
 
     await pool.query(
       `UPDATE delivery_challan_lines

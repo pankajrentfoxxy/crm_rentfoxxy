@@ -17,6 +17,7 @@ const { getDeliveryChallanLines } = require('../services/salesManagementService'
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 const sm = require('./salesManagementController');
 const vrtdcFlow = require('../services/vendorReturnDeliveryFlow');
+const { secureOtp } = require('../utils/secureRandom');
 
 function latestActivityMs(row) {
   const times = [row?.updated_at, row?.reached_at, row?.serial_verified_at, row?.dispatched_at, row?.created_at];
@@ -499,7 +500,7 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       });
     }
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = secureOtp();
     await pool.query(
       `UPDATE delivery_challan_lines
           SET otp_code = $1, otp_sent_at = NOW(), otp_verified_at = NULL,

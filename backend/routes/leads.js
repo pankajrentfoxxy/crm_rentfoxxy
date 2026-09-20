@@ -28,9 +28,28 @@ const storage = multer.diskStorage({
   }
 });
 
+// Without a fileFilter this accepted any extension, and uploads/leads is served
+// publicly — so a user with only leads:create could upload x.html and get stored
+// XSS on the CRM's own origin. Every other upload route already filters; this
+// one and routes/sales.js were missed.
+const LEAD_ALLOWED = [
+  'text/csv', 'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/pdf',
+];
 const upload = multer({
   storage,
-  limits: multerLimits()
+  limits: multerLimits(),
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || '').toLowerCase();
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    // Reject by extension too: mimetype is client-supplied and trivially spoofed.
+    if (['.html', '.htm', '.svg', '.js', '.mjs', '.xhtml', '.php'].includes(ext)) {
+      return cb(new Error('This file type is not allowed'));
+    }
+    if (LEAD_ALLOWED.includes(mime) || mime.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only CSV, Excel, PDF or image files are allowed'));
+  },
 });
 
 router.use(authMiddleware);

@@ -2875,10 +2875,33 @@ exports.cancelOrder = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const current = await client.query(`SELECT status FROM orders WHERE order_id = $1`, [id]);
+        // FOR UPDATE so two concurrent cancels cannot both pass the guards below.
+        const current = await client.query(
+            `SELECT status FROM orders WHERE order_id = $1 FOR UPDATE`,
+            [id]
+        );
         const fromStatus = current.rows[0]?.status || null;
-        if (!fromStatus) return res.status(404).json({ message: 'Order not found' });
-        if (fromStatus === 'Cancelled') return res.status(400).json({ message: 'Order is already cancelled' });
+        // Each early return must ROLLBACK. Returning with the transaction still
+        // open handed the connection back to the pool inside BEGIN; Postgres only
+        // reaped it after idle_in_transaction_session_timeout (30s), so a burst of
+        // 404s could starve a pool capped at 20.
+        if (!fromStatus) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Order not found' });
+        }
+        if (fromStatus === 'Cancelled') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Order is already cancelled' });
+        }
+        // A delivered order must not be cancellable: the inventory reset below
+        // would flip every laptop physically at the customer's site back to
+        // 'In Stock', making it selectable for the next order.
+        if (['Delivered', 'delivered', 'Completed', 'completed'].includes(fromStatus)) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                message: `Cannot cancel an order that is already ${fromStatus}. Raise a return instead.`,
+            });
+        }
 
         await client.query(
             `UPDATE orders

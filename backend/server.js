@@ -65,6 +65,23 @@ try {
 } catch {
   console.warn('[server] compression middleware unavailable — run npm install in backend/');
 }
+
+// The app sits behind nginx, so without this req.ip is always 127.0.0.1: every IP
+// in the audit trail (users.last_login_ip, the impersonation log, GRN access
+// attempts) was wrong, and the rate limiter below would bucket the whole
+// internet into one counter. 1 = trust exactly one proxy hop (nginx).
+app.set('trust proxy', 1);
+
+try {
+  const helmet = require('helmet');
+  // contentSecurityPolicy is off for now: the CRM is a CRA bundle served from the
+  // same origin and a default-src policy would need auditing against every inline
+  // style and third-party asset first. The rest of the headers cost nothing.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+} catch {
+  console.warn('[server] helmet unavailable — run npm install in backend/');
+}
+
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
 // VRDC PDFs must be downloaded through the authenticated API (E-way lock enforced there).
@@ -201,6 +218,20 @@ app.use((req, res) => {
     message: 'Endpoint not found'
   });
 });
+// Express 4 does not await async route handlers, so a rejected promise in one
+// becomes an unhandledRejection — and Node 22 terminates the process by default.
+// A single vendor-portal login against a null password hash was enough to take
+// the whole CRM down and drop every in-flight request. Log and keep serving:
+// one broken request must not be a site-wide outage. This is a safety net, not
+// a licence to skip try/catch in handlers.
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled promise rejection (process kept alive):',
+    reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception (process kept alive):', err?.stack || err);
+});
+
 const PORT = process.env.PORT || 5000;
 const http = require('http');
 const server = http.createServer(app);

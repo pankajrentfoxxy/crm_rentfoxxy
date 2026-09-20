@@ -6,10 +6,11 @@ const express = require('express');
 const portal = require('../controllers/vendorPortalController');
 const { vendorPortalAuth } = require('../middleware/vendorPortalAuth');
 const { wrapMulter } = require('../config/uploadLimits');
+const { loginLimiter } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
-router.post('/login', portal.loginValidators, portal.login);
+router.post('/login', loginLimiter, portal.loginValidators, portal.login);
 router.post('/logout', vendorPortalAuth, portal.logout);
 router.get('/me', vendorPortalAuth, portal.me);
 router.get('/dashboard', vendorPortalAuth, portal.dashboardStats);
