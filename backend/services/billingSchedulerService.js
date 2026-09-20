@@ -2138,6 +2138,13 @@ async function createMissingReturnCreditNotes(client, {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
+        -- A repair pickup is NOT a return: the unit comes back to this same customer
+        -- on a Service DC. Without this filter a repair pickup was issued a permanent
+        -- return credit note crediting through rent_billed_until (usually month-end) —
+        -- far beyond the repair window — whenever this ran before the SDC was created.
+        -- The repair window is credited separately by createRepairWindowCreditNote.
+        AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
+            IS DISTINCT FROM 'repair'
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -2348,6 +2355,9 @@ async function listCreditNoteEligibleCustomerIds(month, year) {
              ON sti.return_dc_number = rl.dc_number
             AND sti.item_type = 'pickup'
             AND sti.warehouse_received_at IS NOT NULL
+            -- Repair pickups are not returns; see createMissingReturnCreditNotes.
+            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
+                IS DISTINCT FROM 'repair'
           WHERE rl.movement_type = 'return'
             AND COALESCE(rl.status, '') NOT IN ('cancelled')
             AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
