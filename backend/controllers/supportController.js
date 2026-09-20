@@ -3400,40 +3400,33 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
         console.error('pickup charger gate:', chargerErr);
     }
     const stored = it.customer_otp_code || it.otp_code;
-    if (!stored || String(otp || '').trim() !== String(stored)) {
+    if (!otpMatches(stored, otp)) {
         return res.status(400).json({ success: false, message: 'Invalid OTP. Ask the customer for the correct OTP.' });
     }
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        // One OTP verifies one laptop. This previously also picked up every other
+        // pickup item sharing the return DC, so collecting 1 of 12 marked all 12
+        // collected: 11 machines left the customer's books and stopped generating
+        // rent while still on their desks. The customer supplies an OTP per unit.
         await client.query(
             `UPDATE support_ticket_items SET
                 customer_otp_verified_at = CURRENT_TIMESTAMP,
                 status = 'picked_up',
                 picked_up_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1
-                OR (
-                  return_dc_number IS NOT NULL
-                  AND return_dc_number = $2
-                  AND item_type = 'pickup'
-                  AND customer_otp_verified_at IS NULL
-                )`,
-            [itemId, it.return_dc_number]
+             WHERE id = $1`,
+            [itemId]
         );
 
+        // Only the item just verified. The old DC-wide predicate also re-selected
+        // items verified on earlier calls, re-running the inventory transition
+        // below for units that had already been processed.
         const affectedRes = await client.query(
-            `SELECT * FROM support_ticket_items
-              WHERE id = $1
-                 OR (
-                   return_dc_number IS NOT NULL
-                   AND return_dc_number = $2
-                   AND item_type = 'pickup'
-                   AND customer_otp_verified_at IS NOT NULL
-                   AND picked_up_at IS NOT NULL
-                 )`,
-            [itemId, it.return_dc_number]
+            `SELECT * FROM support_ticket_items WHERE id = $1`,
+            [itemId]
         );
         for (const pickupItem of affectedRes.rows) {
             if (isRepairPickupItem(pickupItem)) {

@@ -189,8 +189,10 @@ function normalizeVendorRow(row) {
     l_name: row.last_name,
     number: row.phone,
     gst_number: row.gst_number,
-    /* Laravel seller.remember_pass — shown in admin hover card; omit hash */
-    remember_pass: remember_pass_plain ?? null
+    /* remember_pass (the Laravel seller.remember_pass carry-over) is no longer
+       returned. It exposed the vendor's live portal password to any admin page
+       that listed vendors. Reset the password instead of reading it back. */
+    remember_pass: null
   };
 }
 
@@ -285,7 +287,9 @@ async function createVendor(req, res) {
     const pwd = req.body.password;
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(pwd, salt);
-    const remember_pass_plain = String(pwd);
+    // Never store the vendor's cleartext portal password. The column is still
+    // bound so the positional parameters below stay aligned, but only as NULL.
+    const remember_pass_plain = null;
 
     const image_url = saveUploadedFile(req.files?.image?.[0]);
     const licenses_url = saveUploadedFile(req.files?.licenses_and_permits?.[0]);
@@ -458,12 +462,13 @@ async function updateVendor(req, res) {
 
   let password_hash = prev.password_hash;
   let vendor_portal_password_hash = prev.vendor_portal_password_hash || prev.password_hash;
-  let remember_pass_plain = prev.remember_pass_plain;
+  // Always NULL: stops new cleartext being written, and clears any legacy value
+  // still on the row the next time the vendor is edited.
+  const remember_pass_plain = null;
   if (req.body.password && String(req.body.password).length >= 8) {
     const hashed = await bcrypt.hash(req.body.password, await bcrypt.genSalt(10));
     password_hash = hashed;
     vendor_portal_password_hash = hashed;
-    remember_pass_plain = String(req.body.password);
   }
 
   const image_url = saveUploadedFile(req.files?.image?.[0]) || prev.image_url;
@@ -735,8 +740,9 @@ async function updatePortalAccess(req, res) {
     sets.push(`password_hash = $${idx}`);
     params.push(hashed);
     idx += 1;
+    // Clear any stored cleartext rather than replacing it with the new one.
     sets.push(`remember_pass_plain = $${idx}`);
-    params.push(newPasswordPlain);
+    params.push(null);
     idx += 1;
   } else if (req.body.password && String(req.body.password).length >= 8) {
     const hashed = await bcrypt.hash(String(req.body.password), await bcrypt.genSalt(10));
@@ -747,7 +753,7 @@ async function updatePortalAccess(req, res) {
     params.push(hashed);
     idx += 1;
     sets.push(`remember_pass_plain = $${idx}`);
-    params.push(String(req.body.password));
+    params.push(null);
     idx += 1;
   }
 
