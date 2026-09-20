@@ -141,3 +141,72 @@ describe('paymentLedger status derivation', () => {
     assert.equal(deriveVendorStatus(1000, 1000, 'approved'), 'paid');
   });
 });
+
+describe('billingPeriodEnd — quarterly and half-yearly cycles', () => {
+  const { billingPeriodEnd, normalizeBillingFrequency } = require('../services/billingMath');
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const monthEnd = new Date(2026, 10, 30); // 30 Nov 2026
+
+  it('monthly keeps the calendar month end', () => {
+    assert.equal(ymd(billingPeriodEnd('monthly', new Date(2026, 10, 12), monthEnd)), '2026-11-30');
+    assert.equal(ymd(billingPeriodEnd(null, new Date(2026, 10, 12), monthEnd)), '2026-11-30');
+  });
+
+  it('quarterly anchors to the asset: 12 Nov -> 11 Feb', () => {
+    assert.equal(ymd(billingPeriodEnd('quarterly', new Date(2026, 10, 12), monthEnd)), '2027-02-11');
+  });
+
+  it('half-yearly: 12 Nov -> 11 May', () => {
+    assert.equal(ymd(billingPeriodEnd('half_yearly', new Date(2026, 10, 12), monthEnd)), '2027-05-11');
+  });
+
+  it('clamps a month-end anchor instead of rolling it forward', () => {
+    assert.equal(ymd(billingPeriodEnd('quarterly', new Date(2026, 7, 31), monthEnd)), '2026-11-29');
+    assert.equal(ymd(billingPeriodEnd('quarterly', new Date(2026, 11, 31), monthEnd)), '2027-03-30');
+    assert.equal(ymd(billingPeriodEnd('quarterly', new Date(2026, 10, 30), monthEnd)), '2027-02-27');
+  });
+
+  // An asset-anchored quarter is NOT exactly three times the monthly rate, and
+  // this test pins that down rather than hiding it. The engine prices every
+  // segment at monthly_rate / days-in-THAT-month, so the 11 days of a 28-day
+  // February cost more per day than the 19 days of a 30-day November:
+  //   Nov 12-30 : 3000/30 * 19 = 1900.00
+  //   Dec 1-31  : 3000/31 * 31 = 3000.00
+  //   Jan 1-31  : 3000/31 * 31 = 3000.00
+  //   Feb 1-11  : 3000/28 * 11 = 1178.57
+  //                              --------
+  //                              9078.57  vs 9000.00 for three flat months
+  // That is a +0.87% drift on this anchor. It is a consequence of combining an
+  // asset-anchored cycle with per-month daily rates; a quarter anchored to a
+  // month boundary comes out exact. Whether a full quarter should instead bill a
+  // flat 3x is a commercial decision, not a maths one.
+  it('prices a quarter by month segments, which drifts from a flat 3x', () => {
+    const start = new Date(2026, 10, 12);
+    const end = billingPeriodEnd('quarterly', start, monthEnd);
+    const rate = 3000;
+    const total = monthSegments(start, end).reduce((s, seg) => {
+      const days = daysInclusive(seg.segStart, seg.segEnd);
+      return s + (rate / seg.daysInMonth) * days;
+    }, 0);
+    assert.equal(total.toFixed(2), '9078.57');
+  });
+
+  it('a quarter anchored to a month boundary is exactly 3x', () => {
+    const start = new Date(2026, 9, 1); // 1 Oct
+    const end = billingPeriodEnd('quarterly', start, monthEnd);
+    assert.equal(ymd(end), '2026-12-31');
+    const rate = 3000;
+    const total = monthSegments(start, end).reduce((s, seg) => {
+      const days = daysInclusive(seg.segStart, seg.segEnd);
+      return s + (rate / seg.daysInMonth) * days;
+    }, 0);
+    assert.equal(total.toFixed(2), '9000.00');
+  });
+
+  it('falls back to monthly for anything unrecognised', () => {
+    assert.equal(normalizeBillingFrequency('weekly'), 'monthly');
+    assert.equal(normalizeBillingFrequency(undefined), 'monthly');
+    assert.equal(normalizeBillingFrequency('Half-Yearly'), 'half_yearly');
+    assert.equal(normalizeBillingFrequency('QUARTERLY'), 'quarterly');
+  });
+});
