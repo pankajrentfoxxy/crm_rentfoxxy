@@ -242,6 +242,18 @@ exports.unifiedLogin = async (req, res) => {
         portal: resolved.portal || undefined,
       });
     }
+    // Issue the /uploads cookie on the login response itself. authMiddleware also
+    // refreshes it on every authenticated call, but a page can request images in
+    // parallel with its first API call — without this, those first few images
+    // would 403 once enforcement is on.
+    if (resolved.data?.user?.user_id) {
+      try {
+        require('../middleware/uploadsAuth').issueUploadsCookie(res, {
+          user_id: resolved.data.user.user_id,
+          tv: resolved.data.user.token_version ?? 1,
+        });
+      } catch { /* never block a login over the uploads cookie */ }
+    }
     return res.json({ success: true, ...resolved.data });
   } catch (error) {
     console.error('unifiedLogin:', error);
