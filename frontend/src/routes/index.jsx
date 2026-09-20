@@ -13,6 +13,7 @@ import { reportingRoutes } from './reportingRoutes';
 import { assetConfigurationRoutes } from './assetConfigurationRoutes';
 import { dispatchRoutes } from './dispatchRoutes';
 import { guardRoutes } from './guardRoutes';
+import { carretRoutes } from './carretRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -30,6 +31,8 @@ export const appRoutes = [
   ...technicianRoutes,
   ...financeRoutes,
   ...reportingRoutes,
+  // Empty unless REACT_APP_CARRET=1, so the router is unchanged by default.
+  ...carretRoutes,
 ];
 
 export {

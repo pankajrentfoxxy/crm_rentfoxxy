@@ -11,7 +11,8 @@ const { execSync } = require('child_process');
 
 const ROOTS = ['src/components/carret', 'src/shells'];
 // carret.css is the one file allowed to hold literals: it defines the tokens.
-const PATTERN = '#[0-9a-fA-F]{3,8}\\b|rgba?\\(|hsla?\\(|\\b(?:text|bg|border|ring|from|to|via)-(?:gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-[0-9]{2,3}\\b';
+// grep -E is POSIX ERE: no (?:) groups, so these are plain alternations.
+const PATTERN = '#[0-9a-fA-F]{3,8}|rgba?\\(|hsla?\\(|(text|bg|border|ring|from|to|via)-(gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-[0-9]{2,3}';
 
 const present = ROOTS.filter((r) => { try { require('fs').statSync(r); return true; } catch { return false; } });
 if (!present.length) {
