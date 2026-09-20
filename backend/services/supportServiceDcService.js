@@ -689,6 +689,35 @@ async function deliverServiceDcSerial(db, {
     });
   }
 
+  // Billing ran continuously while the unit was away, so credit the days it
+  // actually sat in the warehouse: warehouse arrival + 1 through dispatch - 1.
+  // Both transit legs stay billed, which is why the window ends at the DC's
+  // dispatch date rather than this delivery. Best-effort: a credit-note failure
+  // must not roll back a completed service delivery.
+  try {
+    const { createRepairWindowCreditNote } = require('./billingSchedulerService');
+    const dispatchRes = await db.query(
+      `SELECT MIN(COALESCE(dispatched_at, delivered_at, created_at)) AS dispatched_at
+         FROM delivery_challan_lines WHERE dc_number = $1`,
+      [dcNumber]
+    );
+    const dispatchedBackAt = dispatchRes.rows[0]?.dispatched_at || new Date();
+    const out = await createRepairWindowCreditNote(db, {
+      serialId,
+      customerId,
+      warehouseReceivedAt: pickupItem?.warehouse_received_at || null,
+      dispatchedBackAt,
+      supportTicketId: pickupItem?.ticket_id || null,
+      serviceDcNumber: dcNumber,
+      actorUserId: actor?.user_id || null,
+    });
+    if (out?.skipped) {
+      console.log(`[serviceDc] repair credit skipped for ${dcNumber}: ${out.reason}`);
+    }
+  } catch (cnErr) {
+    console.error('[serviceDc] repair window credit note failed:', cnErr.message);
+  }
+
   return { delivered: true, billingBranch: billing.billingBranch };
 }
 

@@ -11,6 +11,7 @@ const {
   daysInclusive,
   monthSegments,
   calcReturnCreditNoteAmount,
+  calcRepairWindowCreditAmount,
   calcVendorLineAmount,
 } = require('./billingMath');
 const {
@@ -192,6 +193,12 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
+        -- Permanent returns only. A repair receipt must not shorten the billed
+        -- window: the unit goes back to this customer and billing is continuous
+        -- across the repair. The comment below always claimed this; the SQL did
+        -- not implement it once current_customer_id had been cleared.
+        AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
+            IS DISTINCT FROM 'repair'
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -579,6 +586,12 @@ async function buildCustomerInvoiceLines(client, {
             vsn.dispatched_at,
             vsn.rent_billed_until,
             CASE
+              -- Away for repair: the rental has not ended, so returned_at must not
+              -- be used as an end date. Billing runs continuously across the repair
+              -- and the warehouse days are credited back separately.
+              WHEN last_pickup.ptype = 'repair'
+                   AND vsn.inventory_status IN ('returned', 'in_stock', 'in_repair')
+                THEN vsn.rent_end_date
               WHEN vsn.inventory_status = 'returned'
                 THEN COALESCE(vsn.rent_end_date, vsn.returned_at::date)
               ELSE vsn.rent_end_date
@@ -591,10 +604,36 @@ async function buildCustomerInvoiceLines(client, {
             COALESCE(vsn.extra->>'ram', '') AS ram,
             COALESCE(vsn.extra->>'storage', '') AS storage
        FROM vendor_serial_numbers vsn
+       -- Most recent warehouse receipt for this unit, whatever its type. If that
+       -- receipt was a repair and the unit is still warehouse-side, the unit is
+       -- away for repair rather than returned. service_dc_number is not usable as
+       -- the "sent back" marker: 581 of 587 repair items have it NULL, including
+       -- units long since back with the customer.
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sti.pickup_type,
+                         CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) AS ptype,
+                (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv
+           FROM support_ticket_items sti
+          WHERE sti.item_type = 'pickup'
+            AND sti.warehouse_received_at IS NOT NULL
+            AND (
+              sti.ttspl_id = vsn.inventory_asset_code
+              OR sti.unique_serial_number = vsn.inventory_asset_code
+              OR sti.serial_number = vsn.serial_number
+            )
+          ORDER BY sti.warehouse_received_at DESC
+          LIMIT 1
+       ) last_pickup ON TRUE
       WHERE vsn.current_customer_id = $1
         AND vsn.deleted_at IS NULL
         -- in_transit: first bill can start at DC generate (dispatch), before POD.
-        AND vsn.inventory_status IN ('rented', 'returned', 'in_transit')
+        AND (
+          vsn.inventory_status IN ('rented', 'returned', 'in_transit')
+          -- A unit away for repair keeps billing even once QC has moved it to
+          -- in_stock. Gated on the repair check so ordinary stock is never billed.
+          OR (last_pickup.ptype = 'repair'
+              AND vsn.inventory_status IN ('in_stock', 'in_repair'))
+        )
         AND vsn.rent_start_date IS NOT NULL
         AND vsn.rent_start_date <= $2::date
         AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
@@ -2108,6 +2147,133 @@ async function persistConsolidatedReturnCreditNote(client, {
   return ins.rows[0];
 }
 
+const REPAIR_CN_REASON = 'Repair — days in warehouse';
+
+/**
+ * Credit the days a unit sat in the warehouse for repair.
+ *
+ * A repair pickup does not end the rental: the unit goes back to the same
+ * customer on a Service DC, so billing runs continuously and the warehouse days
+ * are credited here instead. Both transit legs stay billed — the credit is
+ * warehouse-arrival+1 through dispatched-back-1.
+ *
+ * Idempotent per (serial, warehouse arrival): re-running for the same repair
+ * returns the existing note rather than issuing a second one.
+ */
+async function createRepairWindowCreditNote(db, {
+  serialId, customerId, warehouseReceivedAt, dispatchedBackAt,
+  supportTicketId = null, serviceDcNumber = null, actorUserId = null,
+}) {
+  if (!serialId || !customerId) return { skipped: true, reason: 'missing serial or customer' };
+
+  const billingType = await getCustomerBillingType(db, customerId);
+  if (billingType === 'postpaid') {
+    // Postpaid bills actual occupancy after the fact, so there is nothing prepaid
+    // to credit back.
+    return { skipped: true, reason: 'postpaid customer' };
+  }
+
+  const sRes = await db.query(
+    `SELECT COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id,
+            rent_monthly_rate, rent_billed_until
+       FROM vendor_serial_numbers WHERE serial_id = $1`,
+    [serialId]
+  );
+  const serial = sRes.rows[0];
+  if (!serial) return { skipped: true, reason: 'serial not found' };
+
+  const calc = calcRepairWindowCreditAmount({
+    rentMonthlyRate: serial.rent_monthly_rate,
+    warehouseReceivedAt,
+    dispatchedBackAt,
+  });
+  if (!calc) return { skipped: true, reason: 'no creditable warehouse days' };
+
+  // Only credit days this customer was actually billed for. If billing has not
+  // reached the repair window yet, crediting now would hand back money that was
+  // never charged.
+  const billedUntil = serial.rent_billed_until ? new Date(serial.rent_billed_until) : null;
+  if (!billedUntil || billedUntil < calc.creditStart) {
+    return { skipped: true, reason: 'repair window not billed yet' };
+  }
+  const effectiveEnd = calc.creditEnd > billedUntil ? billedUntil : calc.creditEnd;
+  const effective = calcRepairWindowCreditAmount({
+    rentMonthlyRate: serial.rent_monthly_rate,
+    warehouseReceivedAt,
+    dispatchedBackAt: toLocalYmd(addDays(effectiveEnd, 1)),
+  });
+  if (!effective) return { skipped: true, reason: 'no creditable billed days' };
+
+  const fromDate = toLocalYmd(effective.creditStart);
+  const toDate = toLocalYmd(effective.creditEnd);
+
+  const dupe = await db.query(
+    `SELECT credit_note_id, credit_note_number, amount
+       FROM customer_credit_notes
+      WHERE customer_id = $1 AND serial_id = $2 AND status <> 'cancelled'
+        AND reason = $3 AND from_date = $4::date
+      LIMIT 1`,
+    [customerId, serialId, REPAIR_CN_REASON, fromDate]
+  );
+  if (dupe.rows.length) {
+    return { skipped: true, reason: 'already credited', creditNote: dupe.rows[0] };
+  }
+
+  const line = {
+    serial_id: serialId,
+    ttspl_id: serial.ttspl_id || null,
+    amount: effective.amount,
+    quantity: effective.days,
+    unit_rate: effective.dailyRate,
+    monthly_rate: Number(serial.rent_monthly_rate || 0),
+    from_date: fromDate,
+    to_date: toDate,
+    rent_start: fromDate,
+    rent_end: toDate,
+    service_dc_number: serviceDcNumber,
+    support_ticket_id: supportTicketId,
+    brand: 'Laptop rental',
+    model: 'Days in warehouse for repair',
+    days_in_month: effective.days,
+  };
+
+  const num = await db.query(
+    `UPDATE sm_document_sequences SET last_value = last_value + 1
+      WHERE doc_type = 'credit_note'
+      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+  );
+  const ins = await db.query(
+    `INSERT INTO customer_credit_notes
+      (credit_note_number, customer_id, reason, description, amount, quantity, unit_rate,
+       from_date, to_date, ttspl_ids, line_items, status, created_by, serial_id, source,
+       support_ticket_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int)
+     RETURNING *`,
+    [
+      num.rows[0].number,
+      customerId,
+      REPAIR_CN_REASON,
+      `${serial.ttspl_id || `serial ${serialId}`} in warehouse for repair ${fromDate} to ${toDate} (${effective.days} day(s) @ ${effective.dailyRate}/day)`,
+      effective.amount,
+      effective.days,
+      effective.dailyRate,
+      fromDate,
+      toDate,
+      JSON.stringify([serial.ttspl_id].filter(Boolean)),
+      JSON.stringify([line]),
+      actorUserId,
+      serialId,
+      'repair_window',
+      supportTicketId,
+    ]
+  );
+  billingLog.info(
+    { customerId, serialId, creditNote: ins.rows[0].credit_note_number, days: effective.days, amount: effective.amount },
+    'Repair window credit note created'
+  );
+  return { created: true, creditNote: ins.rows[0] };
+}
+
 /**
  * Credit unused prepaid days when this customer returned units to
  * warehouse. One draft credit note per customer lists every laptop.
@@ -3390,6 +3556,7 @@ module.exports = {
   stripWarehouseReturnedRentalsFromDraft,
   reconcileDraftRentalWindow,
   createMissingReturnCreditNotes,
+  createRepairWindowCreditNote,
   consolidateAllPendingReturnCreditNotes,
   generateReturnCreditNotesForCustomer,
   generateReturnCreditNotesForCustomers,
