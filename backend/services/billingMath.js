@@ -161,6 +161,16 @@ function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, mo
   const daysInMonth = monthEnd.getDate();
   const days = Math.max(1, Math.round((effectiveEnd - effectiveStart) / MS_PER_DAY) + 1);
   const rate = parseFloat(monthlyRate || 0);
+
+  // BL3, vendor side. `parseFloat(monthlyRate || 0)` produced a Rs 0 line
+  // whenever the PO's line_items->0 carried no usable rate, and the caller only
+  // skipped a null result — so the zero line was written onto the vendor bill.
+  // There is no watermark here, so nothing is lost permanently, but a Rs 0 line
+  // reads as "this unit was billed" when it was never priced: it hides the data
+  // gap and under-pays the vendor silently. Return null so the caller can skip
+  // it and say which serial and which PO need a rate.
+  if (!(rate > 0)) return null;
+
   const dailyRate = rate / daysInMonth;
   const amount = parseFloat((dailyRate * days).toFixed(2));
 
