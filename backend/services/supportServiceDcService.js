@@ -488,6 +488,13 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       : dispatchInfo.dcDispatchMode === 'courier' ? 'by_courier'
         : null;
 
+  // Print the GST trade name, as on SO and DC. Falls back to the ticket's stored
+  // customer name when the customer has no trade name.
+  const { resolveCustomerDocumentName } = require('./salesManagementService');
+  const sdcDocumentName = await resolveCustomerDocumentName(
+    db, ticket.customer_id, ticket.customer_name
+  );
+
   await db.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
@@ -504,7 +511,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       sdcNumber,
       ticketId,
       ticket.customer_id,
-      ticket.customer_name,
+      sdcDocumentName,
       ticket.ticket_email || null,
       JSON.stringify(shippingAddress),
       firstItem.brand || firstSpec.brand || null,

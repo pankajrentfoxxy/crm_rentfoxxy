@@ -674,7 +674,7 @@ const addressKey = (a) => [a.address, a.zip_code].map((x) => String(x || '').tri
 async function getSalePrefill({ customerId, serialIds }) {
   const ids = normalizeIds(serialIds);
   const cr = await pool.query(
-    `SELECT customer_id, name, company_name, email, phone, gst_no, status, customer_type,
+    `SELECT customer_id, name, company_name, trade_name, email, phone, gst_no, status, customer_type,
             billing_address, billing_city, billing_state, billing_pincode, details
        FROM customers WHERE customer_id = $1`,
     [customerId]
@@ -818,7 +818,7 @@ async function createInPlaceSale({
     await client.query('BEGIN');
 
     const cr = await client.query(
-      `SELECT customer_id, name, company_name, email, phone, gst_no, status
+      `SELECT customer_id, name, company_name, trade_name, email, phone, gst_no, status
          FROM customers WHERE customer_id = $1`,
       [customerId]
     );
@@ -864,7 +864,9 @@ async function createInPlaceSale({
     const soNumber = await nextFinancialYearNumber('sales_order', client);
     const supplyState = resolveSupplyStateFromAddress(shipping);
     const hsn = resolveHsnForPersist({ quotationType: 'sale', role: actorRole });
-    const customerName = cust.company_name || cust.name;
+    // Trade name first, as on every other customer-facing document.
+    const customerName = String(cust.trade_name || '').trim()
+      || cust.company_name || cust.name;
     const billingJson = JSON.stringify({ ...billing, name: customerName, gst_number: gstNumber || cust.gst_no || '' });
     const shippingJson = JSON.stringify(shipping);
     const reasonByserial = new Map(reused.map((r) => [Number(r.serial_id), r.event.reason]));
