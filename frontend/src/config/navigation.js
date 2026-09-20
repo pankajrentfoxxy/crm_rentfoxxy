@@ -24,7 +24,6 @@ export const SECTIONS = [
       { to: '/vendor-management/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
       { to: '/vendor-management/vendor-return', label: 'Vendor Returns', section: 'vendor_return_to_vendor', action: 'view' },
       { to: '/vendor-management/vendor-repair', label: 'Vendor Repair', section: 'vendor_repair_dc', action: 'view' },
-      { to: '/procurement', label: 'Procurement', section: 'procurement', action: 'view' },
     ],
   },
   {
