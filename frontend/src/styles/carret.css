@@ -1,0 +1,140 @@
+/* =====================================================================
+   CARRET — token system
+   Light ("paper") is the base and the one that prints.
+   Dark ("graphite") is a selected theme: its steps are re-picked against
+   the dark ground, not dimmed versions of the light ones.
+   ===================================================================== */
+:root{
+  color-scheme: light;
+
+  /* --- surfaces --- */
+  --ground:        #EFEFEB;
+  --surface:       #FBFAF6;
+  --surface-2:     #F4F3ED;
+  --surface-3:     #EAE9E1;
+  --surface-sunk:  #E3E2D9;
+
+  /* --- ink --- */
+  --ink:           #14151A;
+  --ink-2:         #4A4E55;
+  --ink-3:         #7E848B;
+  --ink-inverse:   #FBFAF6;
+
+  /* --- rules --- */
+  --rule:          #E2DED2;
+  --rule-2:        #CBC6B8;
+  --rule-strong:   #14151A;
+
+  /* --- accent: one navy ink, used for interaction only --- */
+  --accent:        #0F4C81;
+  --accent-hover:  #0B3C68;
+  --accent-soft:   #DFE9F2;
+  --accent-ink:    #FFFFFF;
+
+  /* --- entity edge (Decision 1 / 7) -------------------------------
+     4px left edge on any record belonging to one book.
+     NEVER used for state. NEVER recolours a surface.
+     The sale-book label comes from config, not from this file — the
+     marketplace brand name is not settled, and renaming it later must
+     cost one string, not a repaint.                                  */
+  --entity-rental: #E2571F;   /* RentFoxxy */
+  --entity-sale:   #16605A;   /* placeholder until the brand lands */
+
+  /* --- lifecycle families (Decision 3) -----------------------------
+     FOUR chromatic families, not twelve statuses. Validated against
+     #FBFAF6: lightness band PASS, chroma floor PASS, CVD separation
+     PASS (worst pair 10.2 protan), normal-vision floor PASS (18.4),
+     contrast PASS. Re-run the validator before changing any of them.  */
+  --lc-idle:       #0C5EA6;   /* in_stock                              */
+  --lc-earning:    #0E6B3E;   /* rented, on_demo                       */
+  --lc-moving:     #AD8200;   /* reserved, dispatch_ready, at_gate, in_transit */
+  --lc-offcycle:   #D05F97;   /* qc_failed, in_repair, returned        */
+  --lc-closed:     #6E6C68;   /* sold, scrapped — deliberately neutral */
+
+  --lc-idle-soft:     #E0EAF4;
+  --lc-earning-soft:  #DFEDE5;
+  --lc-moving-soft:   #F2EBD6;
+  --lc-offcycle-soft: #F7E4EE;
+  --lc-closed-soft:   #E8E7E3;
+
+  /* --- reserved alert palette -------------------------------------
+     Separate from the lifecycle families and NEVER reused as a chart
+     series. Always shipped with an icon and a word.                  */
+  --alert-good:    #1F7A3D;
+  --alert-warn:    #8A6410;
+  --alert-serious: #B4531C;
+  --alert-crit:    #A62015;
+
+  /* --- type --- */
+  --font-ui:    "Archivo", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* --- density: DESK (default) ------------------------------------
+     The three shells set --density on their own root. Never set a
+     hard pixel size on a component; read these.                      */
+  --d-base:      13px;   /* body text                    */
+  --d-sm:        11.5px;
+  --d-lg:        15px;
+  --d-row:       28px;   /* table row / list row height  */
+  --d-tap:       28px;   /* minimum interactive target   */
+  --d-gap:       4px;    /* base spacing unit            */
+  --d-pad-x:     12px;
+  --d-pad-y:     6px;
+  --d-radius:    3px;
+}
+
+/* --- density: FIELD (support technician, tablet) --- */
+[data-density="field"]{
+  --d-base: 15px;  --d-sm: 13px;   --d-lg: 17px;
+  --d-row: 40px;   --d-tap: 40px;  --d-gap: 6px;
+  --d-pad-x: 16px; --d-pad-y: 10px; --d-radius: 4px;
+}
+
+/* --- density: FLOOR (guard, bench technician) --- */
+[data-density="floor"]{
+  --d-base: 17px;  --d-sm: 14px;   --d-lg: 21px;
+  --d-row: 52px;   --d-tap: 48px;  --d-gap: 8px;
+  --d-pad-x: 20px; --d-pad-y: 14px; --d-radius: 5px;
+}
+
+/* --- theme: GRAPHITE, for viewers on system-dark --- */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1014; --surface:#161B21; --surface-2:#1D242B; --surface-3:#242D35;
+    --surface-sunk:#0A0D11;
+    --ink:#E7EAED; --ink-2:#9AA3AC; --ink-3:#6A737C; --ink-inverse:#0D1014;
+    --rule:#242C34; --rule-2:#333D46; --rule-strong:#E7EAED;
+    --accent:#5AA0E0; --accent-hover:#7AB4E9; --accent-soft:#12283C; --accent-ink:#0D1014;
+    --entity-rental:#F07341; --entity-sale:#3E9187;
+    --lc-idle:#3E88CC; --lc-earning:#2E9A64; --lc-moving:#B78A1E; --lc-offcycle:#C86FA0;
+    --lc-closed:#7C848B;
+    --lc-idle-soft:#12253A; --lc-earning-soft:#10281C; --lc-moving-soft:#2A2312;
+    --lc-offcycle-soft:#30192A; --lc-closed-soft:#1E2329;
+    --alert-good:#3FA06B; --alert-warn:#C9971F; --alert-serious:#D2673A; --alert-crit:#E0524B;
+  }
+}
+/* --- theme: GRAPHITE, chosen explicitly --- */
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1014; --surface:#161B21; --surface-2:#1D242B; --surface-3:#242D35;
+  --surface-sunk:#0A0D11;
+  --ink:#E7EAED; --ink-2:#9AA3AC; --ink-3:#6A737C; --ink-inverse:#0D1014;
+  --rule:#242C34; --rule-2:#333D46; --rule-strong:#E7EAED;
+  --accent:#5AA0E0; --accent-hover:#7AB4E9; --accent-soft:#12283C; --accent-ink:#0D1014;
+  --entity-rental:#F07341; --entity-sale:#3E9187;
+  --lc-idle:#3E88CC; --lc-earning:#2E9A64; --lc-moving:#B78A1E; --lc-offcycle:#C86FA0;
+  --lc-closed:#7C848B;
+  --lc-idle-soft:#12253A; --lc-earning-soft:#10281C; --lc-moving-soft:#2A2312;
+  --lc-offcycle-soft:#30192A; --lc-closed-soft:#1E2329;
+  --alert-good:#3FA06B; --alert-warn:#C9971F; --alert-serious:#D2673A; --alert-crit:#E0524B;
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important}
+}
+
+/* Focus is always visibly styled — Phase 3 rule, stated once here so
+   every carret component inherits it rather than re-declaring it. */
+.carret :focus-visible,
+.carret-root :focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
