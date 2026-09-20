@@ -143,23 +143,40 @@ async function isNewCustomerFirstOrder(db, customerId, salesOrderNumber) {
 }
 
 /**
- * Customer's first-ever outbound DC (cancelled / return / service DCs ignored).
+ * Customer's first-ever billable outbound DC (cancelled / return / service DCs
+ * ignored).
+ *
+ * Demo DCs are excluded from the candidate set, not just from the answer. A demo
+ * shipment used to occupy the first-DC slot, so a customer who demoed before they
+ * rented had their real opening rental DC classified as a later DC — which meant
+ * requiresInvoiceCompliance() returned false, Accounts was never asked for the
+ * e-invoice, and the DC was never locked. Five customers reached production that
+ * way (BILLPLAN, Indigenesis, KHUSHI HOUSING, MEDIOTIX, SPNN).
+ *
+ * A demo is not a billable order, so the first rental order is the customer's
+ * first order and its first DC is the one that must be invoiced and locked.
  */
 async function isNewCustomerFirstDc(db, customerId, dcNumber) {
   if (!customerId || !dcNumber) return false;
   const first = await db.query(
-    `SELECT dc_number
-       FROM delivery_challan_lines
-      WHERE customer_id = $1
-        AND COALESCE(movement_type, 'outbound') = 'outbound'
-        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+    `SELECT dcl.dc_number
+       FROM delivery_challan_lines dcl
+       LEFT JOIN sales_order_lines sol
+              ON sol.sales_order_number = dcl.sales_order_number
+       LEFT JOIN sales_quotations sq
+              ON sq.quotation_number = dcl.quotation_number
+      WHERE dcl.customer_id = $1
+        AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+        AND LOWER(COALESCE(dcl.status, '')) NOT IN ('cancelled')
         AND (
-          dc_number ILIKE 'DC/%'
-          OR dc_number ILIKE 'DC-%'
-          OR dc_number ILIKE 'GDC%'
+          dcl.dc_number ILIKE 'DC/%'
+          OR dcl.dc_number ILIKE 'DC-%'
+          OR dcl.dc_number ILIKE 'GDC%'
         )
-      GROUP BY dc_number
-      ORDER BY MIN(created_at) ASC NULLS LAST, dc_number ASC
+      GROUP BY dcl.dc_number
+     HAVING LOWER(COALESCE(
+              MIN(sol.quotation_type), MIN(sq.quotation_type), 'rental')) <> 'demo'
+      ORDER BY MIN(dcl.created_at) ASC NULLS LAST, dcl.dc_number ASC
       LIMIT 1`,
     [customerId]
   );
