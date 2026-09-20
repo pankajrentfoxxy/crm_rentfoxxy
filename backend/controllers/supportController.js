@@ -1549,7 +1549,18 @@ exports.closeTicket = async (req, res) => {
         return res.status(e.status || 500).json({ success: false, message: e.message });
     }
     const force = !!(req.body && req.body.force);
+    // Parts are checked even before the item check, because an unsettled part is
+    // stock that has physically left the building.
+    const { getSupportTicketPartBlock } = require('../services/supportTicketPartBlock');
+    const partBlock = await getSupportTicketPartBlock(pool, ticketId);
     if (!force) {
+        if (partBlock.blocked) {
+            return res.status(400).json({
+                success: false,
+                message: partBlock.message,
+                open_part_requests: partBlock.requests,
+            });
+        }
         const itemsRes = await pool.query(
             `SELECT status FROM support_ticket_items WHERE ticket_id = $1`,
             [ticketId]
@@ -1593,6 +1604,18 @@ exports.closeTicket = async (req, res) => {
                 manual: true,
                 force,
                 leftover_items_closed: leftover.rows.map((r) => r.id),
+                // A force close can still walk past open parts — that is the point
+                // of the override — but it must never be silent. Record exactly
+                // what was abandoned so it is recoverable and reportable.
+                abandoned_part_requests: partBlock.blocked
+                    ? partBlock.requests.map((r) => ({
+                        request_id: r.request_id,
+                        request_number: r.request_number,
+                        part_name: r.part_name,
+                        status: r.status,
+                        quantity: r.quantity,
+                    }))
+                    : [],
             }
         });
         await client.query('COMMIT');
@@ -1614,6 +1637,18 @@ exports.cancelTicket = async (req, res) => {
     const remark = String(req.body?.cancellation_remark || req.body?.remark || '').trim();
     if (!remark) {
         return res.status(400).json({ success: false, message: 'Cancellation remark is required' });
+    }
+
+    // Cancelling is not a way around the parts check: an issued part is out of
+    // stock whether the ticket ends as closed or cancelled.
+    const { getSupportTicketPartBlock } = require('../services/supportTicketPartBlock');
+    const cancelPartBlock = await getSupportTicketPartBlock(pool, ticketId);
+    if (cancelPartBlock.blocked && !(req.body && req.body.force)) {
+        return res.status(400).json({
+            success: false,
+            message: cancelPartBlock.message,
+            open_part_requests: cancelPartBlock.requests,
+        });
     }
 
     const client = await pool.connect();

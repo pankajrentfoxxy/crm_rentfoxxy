@@ -1490,34 +1490,67 @@ exports.addPartToTicket = async (req, res) => {
     }
     const ticket = ticketRes.rows[0];
 
-    const partRes = await pool.query(
-      `SELECT part_id, part_name, part_type, cost FROM parts WHERE part_id = $1`,
-      [part_id]
-    );
-    if (!partRes.rows.length) {
-      return res.status(404).json({ success: false, message: 'Part not found' });
-    }
-    const part = partRes.rows[0];
     const qty = Number(quantity_used) || 1;
-    const unitCost = parseFloat(part.cost) || 0;
-    const totalCost = unitCost * qty;
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return res.status(400).json({ success: false, message: 'Quantity must be a positive number' });
+    }
 
-    await pool.query(
-      `INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, notes)
-       VALUES ($1, $2, $3, $4)`,
-      [id, part_id, qty, notes]
-    );
+    // This used to be three separate pool.query calls with no transaction, no
+    // row lock and no stock check, so it could take parts.quantity below zero
+    // and could half-complete — a ticket_parts row written with no matching
+    // decrement, or the reverse. The sibling endpoint
+    // (POST /:id/parts-with-config) already did this correctly; both are routed.
+    const partClient = await pool.connect();
+    let part;
+    let unitCost = 0;
+    let totalCost = 0;
+    try {
+      await partClient.query('BEGIN');
+      // FOR UPDATE: two technicians issuing the last unit must serialise.
+      const partRes = await partClient.query(
+        `SELECT part_id, part_name, part_type, cost, quantity
+           FROM parts WHERE part_id = $1 FOR UPDATE`,
+        [part_id]
+      );
+      if (!partRes.rows.length) {
+        await partClient.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Part not found' });
+      }
+      part = partRes.rows[0];
+      if (Number(part.quantity) < qty) {
+        await partClient.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Not enough stock for ${part.part_name}: ${part.quantity} available, ${qty} requested.`,
+        });
+      }
+      unitCost = parseFloat(part.cost) || 0;
+      totalCost = unitCost * qty;
 
-    await pool.query(
-      `UPDATE parts SET quantity = quantity - $1 WHERE part_id = $2`,
-      [qty, part_id]
-    );
-
-    await pool.query(
-      `INSERT INTO activities (ticket_id, user_id, action, notes) 
-       VALUES ($1, $2, $3, $4)`,
-      [id, req.user.user_id, 'part_added', `Added ${qty} × ${part.part_name}`]
-    );
+      await partClient.query(
+        `INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, notes)
+         VALUES ($1, $2, $3, $4)`,
+        [id, part_id, qty, notes]
+      );
+      // Plain subtraction, not GREATEST(0, ...): the guard above means it cannot
+      // go negative, and clamping would silently swallow an over-issue instead
+      // of surfacing it.
+      await partClient.query(
+        `UPDATE parts SET quantity = quantity - $1 WHERE part_id = $2`,
+        [qty, part_id]
+      );
+      await partClient.query(
+        `INSERT INTO activities (ticket_id, user_id, action, notes)
+         VALUES ($1, $2, $3, $4)`,
+        [id, req.user.user_id, 'part_added', `Added ${qty} × ${part.part_name}`]
+      );
+      await partClient.query('COMMIT');
+    } catch (txErr) {
+      await partClient.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      partClient.release();
+    }
 
     if (ticket.ttspl_id) {
       await ttsplAuditService.logTtsplEvent({
