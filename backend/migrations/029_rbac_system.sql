@@ -75,7 +75,11 @@ ALTER TABLE public.users
       'dispatch_qc',
       'customer',
       'vendor',
-      'technician'
+      'technician',
+      -- 'guard' arrived in 207. This file is replayed on every boot by
+      -- ensureUserSchema, so a narrower list here aborts the replay against a
+      -- live guard user and 207 never gets the chance to widen it back.
+      'guard'
     )
   );
 
