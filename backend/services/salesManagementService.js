@@ -2528,6 +2528,33 @@ function parseAddressField(raw) {
   }
 }
 
+
+/**
+ * The name to print on a customer-facing document (SO, DC, SDC, challans).
+ *
+ * Prefers the GST trade name, which is what the buyer is registered as and what
+ * should appear on a tax document, falling back to the CRM company name and
+ * finally to whatever the caller supplied. Documents snapshot this at creation,
+ * so changing it here affects new documents only — already-issued paperwork
+ * keeps the name it was printed with, which is what you want.
+ */
+async function resolveCustomerDocumentName(db, customerId, fallback = '') {
+  const supplied = String(fallback || '').trim();
+  if (!customerId) return supplied;
+  try {
+    const { rows } = await db.query(
+      `SELECT NULLIF(TRIM(trade_name), '') AS trade_name,
+              NULLIF(TRIM(company_name), '') AS company_name
+         FROM customers WHERE customer_id = $1`,
+      [customerId]
+    );
+    return rows[0]?.trade_name || rows[0]?.company_name || supplied;
+  } catch (e) {
+    console.warn('resolveCustomerDocumentName:', e.message);
+    return supplied;
+  }
+}
+
 function normalizeStateForGst(state) {
   return String(state || '').trim().toLowerCase().replace(/\s+/g, '_');
 }
@@ -3053,6 +3080,7 @@ module.exports = {
   recalcSoSecurityIfOneMonthRental,
   syncDcSecurityForSo,
   resolveSupplyStateFromAddress,
+  resolveCustomerDocumentName,
   parseAddressField,
   normalizeStateForGst,
   isIntraState,

@@ -9,6 +9,7 @@ const {
   peekFinancialYearNumber,
   computeGstBreakdown,
   resolveSupplyStateFromAddress,
+  resolveCustomerDocumentName,
   resolveDcBilling,
   entityForQuotationType,
   generateToken,
@@ -951,6 +952,11 @@ exports.storeSalesOrder = async (req, res) => {
     if (!Number.isFinite(securityAmount) || securityAmount < 0) {
       return res.status(400).json({ success: false, message: 'Security amount cannot be negative' });
     }
+    // Print the GST trade name on the document, falling back to the CRM company
+    // name. Snapshotted at creation, so issued documents keep their own name.
+    const soDocumentName = await resolveCustomerDocumentName(
+      pool, body.customer_id, body.customer_name
+    );
     const shippingChargeInput = Number(body.shiping_charges || body.shipping_charges || 0);
     if (!Number.isFinite(shippingChargeInput) || shippingChargeInput < 0) {
       return res.status(400).json({ success: false, message: 'Shipping charges cannot be negative' });
@@ -1069,7 +1075,7 @@ exports.storeSalesOrder = async (req, res) => {
           salesOrderNumber,
           quotationNumber,
           customerId,
-          body.customer_name,
+          soDocumentName,
           body.email || body.customer_email,
           body.customer_mobile,
           shipping ? JSON.stringify(shipping) : null,
@@ -3008,6 +3014,9 @@ exports.storeDeliveryChallan = async (req, res) => {
         );
       }
     }
+    const dcDocumentName = await resolveCustomerDocumentName(
+      pool, body.customer_id, body.customer_name
+    );
     // Last resort before assuming intra-state: the customer's own state. This is
     // what was missing — 1,232 DCs went out with CGST+SGST to customers outside
     // Haryana purely because the shipping-address JSON had no state key, while
@@ -3126,7 +3135,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           body.sales_order_number,
           body.quotation_number,
           body.customer_id || null,
-          body.customer_name,
+          dcDocumentName,
           body.email || body.customer_email,
           body.GST_number || body.gst_number,
           supplyState,
