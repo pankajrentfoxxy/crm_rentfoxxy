@@ -266,7 +266,7 @@ async function searchLaptopsForMovement(db, { q, limit = 50 }) {
   return { ok: true, data, meta: buildSearchMeta(terms, data) };
 }
 
-async function applyMovementTarget(db, row, targetKey, actorUserId) {
+async function applyMovementTarget(db, row, targetKey, actorUserId, correlationId = null) {
   const cfg = MOVEMENT_TARGETS[targetKey];
   const ex = parseExtra(row.extra);
   const prevQc = String(row.qc_status || ex.status || 'pending').trim();
@@ -287,58 +287,66 @@ async function applyMovementTarget(db, row, targetKey, actorUserId) {
     };
   }
 
-  ex.status = cfg.qcStatus;
-  ex.action_status = cfg.qcStatus;
-  ex.asset_movement_at = new Date().toISOString();
-  ex.asset_movement_by = actorUserId;
-  if (targetKey === 'qc_process') {
-    ex.came_from = ex.came_from || 'Asset movement to QC Process';
+  // Part 2.2, finding I12 / register D. `ex` was the whole loaded object and it
+  // was written back whole, so two concurrent movements each read `extra`, each
+  // set their own key, and the second silently discarded the first's. Only the
+  // DELTA is collected here and merged with `||` below, so concurrent writes
+  // lose nothing unless they touch the same key.
+  const exDelta = {
+    status: cfg.qcStatus,
+    action_status: cfg.qcStatus,
+    asset_movement_at: new Date().toISOString(),
+    asset_movement_by: actorUserId,
+  };
+  if (targetKey === 'qc_process' && !ex.came_from) {
+    exDelta.came_from = 'Asset movement to QC Process';
   }
   if (targetKey === 'dead') {
-    ex.dead_marked_at = new Date().toISOString();
+    exDelta.dead_marked_at = new Date().toISOString();
   }
   if (targetKey === 'missing') {
-    ex.missing_marked_at = new Date().toISOString();
+    exDelta.missing_marked_at = new Date().toISOString();
   }
-  if (targetKey === 'passed') {
-    ex.passed_via = ex.passed_via || 'asset_movement';
+  if (targetKey === 'passed' && !ex.passed_via) {
+    exDelta.passed_via = 'asset_movement';
   }
   if (prevInv === 'returned') {
-    ex.returned_floor_cleared_at = new Date().toISOString();
-    ex.returned_floor_cleared_via = 'asset_movement';
+    exDelta.returned_floor_cleared_at = new Date().toISOString();
+    exDelta.returned_floor_cleared_via = 'asset_movement';
   }
 
-  if (prevInv === 'returned' && cfg.inventoryStatus !== prevInv) {
-    try {
-      await transitionAsset(db, {
-        serialId: row.serial_id,
-        toStatus: cfg.inventoryStatus,
-        reason: `Asset movement to ${targetLabel(targetKey)} (from returned)`,
-        actorUserId,
-        allowOverride: true,
-      });
-    } catch (invErr) {
-      console.warn(`applyMovementTarget transition skipped serial ${row.serial_id}:`, invErr.message);
-    }
-    await db.query(
-      `UPDATE vendor_serial_numbers
-          SET qc_status = $1,
-              extra = $2::jsonb,
-              updated_at = NOW()
-        WHERE serial_id = $3`,
-      [cfg.qcStatus, JSON.stringify(ex), row.serial_id]
-    );
-  } else {
-    await db.query(
-      `UPDATE vendor_serial_numbers
-          SET qc_status = $1,
-              inventory_status = $2,
-              extra = $3::jsonb,
-              updated_at = NOW()
-        WHERE serial_id = $4`,
-      [cfg.qcStatus, cfg.inventoryStatus, JSON.stringify(ex), row.serial_id]
-    );
+  // Part 2.2, bypass-register A. Both branches bypassed the machine: the first
+  // caught the refusal and wrote anyway, the second never attempted a
+  // transition at all and wrote inventory_status raw.
+  //
+  // The status change now goes through transitionAsset in every case, so the
+  // move is validated, audited in both legacy trails, and recorded as an event.
+  // allowOverride is kept because asset movement IS the sanctioned manual
+  // correction — but it is now an explicit, audited override rather than a
+  // silent raw write, which is the whole difference.
+  if (cfg.inventoryStatus && cfg.inventoryStatus !== prevInv) {
+    await transitionAsset(db, {
+      serialId: row.serial_id,
+      toStatus: cfg.inventoryStatus,
+      reason: `Asset movement to ${targetLabel(targetKey)}${prevInv ? ` (from ${prevInv})` : ''}`,
+      actorUserId,
+      allowOverride: true,
+      correlationId,
+      caller: 'inventoryAssetMovementService.applyMovementTarget',
+    });
   }
+
+  // qc_status is still written directly: Part 1 defines no canonical list for
+  // that column and decision D2 defers it out of Part 2.3, so there is nothing
+  // yet for a state machine to validate it against.
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = $1,
+            extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+      WHERE serial_id = $3`,
+    [cfg.qcStatus, JSON.stringify(exDelta), row.serial_id]
+  );
 
   let ticketId = null;
   if (cfg.createTicket) {

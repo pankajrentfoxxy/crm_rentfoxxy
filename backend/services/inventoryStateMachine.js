@@ -108,6 +108,32 @@ async function loadSerial(db, serialId) {
 }
 
 /**
+ * A refusal, as a type rather than a string (Part 2.2).
+ *
+ * Every one of the nine catch-block bypasses caught a plain Error, could not
+ * tell "this move is illegal" from "the database is down", and chose to force
+ * the write. With a typed refusal a caller can answer 409 for the first and
+ * fail loudly for the second — which is the whole difference between a gate
+ * and a suggestion.
+ *
+ * Carries the serial, the attempted move and the caller so the log line is
+ * actionable without reproducing the request.
+ */
+class TransitionRefused extends Error {
+  constructor({ serialId, ttsplId, from, to, caller }) {
+    super(`Illegal inventory transition ${from || 'null'} -> ${to} (serial ${serialId}${ttsplId ? ` / ${ttsplId}` : ''})`);
+    this.name = 'TransitionRefused';
+    this.code = 'TRANSITION_REFUSED';
+    this.statusCode = 409;
+    this.serialId = serialId;
+    this.ttsplId = ttsplId || null;
+    this.from = from || null;
+    this.to = to;
+    this.caller = caller || null;
+  }
+}
+
+/**
  * Core transition. Pass an open pg client as `db` to run inside a caller's
  * transaction (recommended). Returns { ok, from, to } or throws on invalid move.
  */
@@ -129,6 +155,9 @@ async function transitionAsset(db, {
   // Part 2.1: the caller passes req.correlationId so every event one
   // request writes shares an id. Null is honest for a worker with no request.
   correlationId = null,
+  // Part 2.2: who asked. Named in the refusal log so a rejection is
+  // traceable to a code path without reproducing the request.
+  caller = null,
 }) {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
@@ -136,7 +165,9 @@ async function transitionAsset(db, {
 
   const from = serial.inventory_status || null;
   if (!allowOverride && !isAllowed(from, toStatus)) {
-    throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);
+    throw new TransitionRefused({
+      serialId, ttsplId: serial.ttspl_id, from, to: toStatus, caller,
+    });
   }
 
   // Build the column updates relevant to this transition.
@@ -303,16 +334,16 @@ const toDateStr = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
 
 // ── Convenience wrappers used by callers ────────────────────────────────────
 
-const reserveForDc = (db, serialId, { dcNumber, customerId, entityCode, actorUserId, actorName }) =>
-  transitionAsset(db, { serialId, toStatus: STATUS.RESERVED, dcNumber, customerId, entityCode,
+const reserveForDc = (db, serialId, { dcNumber, customerId, entityCode, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, { ...rest, serialId, toStatus: STATUS.RESERVED, dcNumber, customerId, entityCode,
     reason: `Reserved on ${dcNumber}`, actorUserId, actorName });
 
-const markDispatchReady = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName }) =>
-  transitionAsset(db, { serialId, toStatus: STATUS.DISPATCH_READY, dcNumber, customerId, entityCode,
+const markDispatchReady = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, { ...rest, serialId, toStatus: STATUS.DISPATCH_READY, dcNumber, customerId, entityCode,
     dispatchMode, rentMonthlyRate, reason: `Dispatch ready on ${dcNumber}`, actorUserId, actorName });
 
-const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName }) =>
-  transitionAsset(db, { serialId, toStatus: STATUS.IN_TRANSIT, dcNumber, customerId, entityCode,
+const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, { ...rest, serialId, toStatus: STATUS.IN_TRANSIT, dcNumber, customerId, entityCode,
     dispatchMode, rentMonthlyRate, reason: `In transit on ${dcNumber} (${dispatchMode || 'gate'})`, actorUserId, actorName });
 
 /**
@@ -412,8 +443,8 @@ const convertDemoToRental = (db, serialId, { rentStartDate, rentMonthlyRate, act
     rentStartDate: toDateStr(rentStartDate), rentMonthlyRate: rentMonthlyRate ?? null,
     reason: 'Demo converted to rental (kept)', actorUserId, actorName });
 
-const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorName }) =>
-  transitionAsset(db, { serialId, toStatus: STATUS.RETURNED, rentEndDate: toDateStr(rentEndDate),
+const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, { ...rest, serialId, toStatus: STATUS.RETURNED, rentEndDate: toDateStr(rentEndDate),
     reason: reason || 'Returned by customer', actorUserId, actorName });
 
 /**
@@ -443,8 +474,8 @@ const markSoldInPlace = (db, serialId, {
     actorName,
   });
 
-const backToStock = (db, serialId, { reason, actorUserId, actorName }) =>
-  transitionAsset(db, { serialId, toStatus: STATUS.IN_STOCK,
+const backToStock = (db, serialId, { reason, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, { ...rest, serialId, toStatus: STATUS.IN_STOCK,
     reason: reason || 'Returned to available stock', actorUserId, actorName });
 
 /** Look up the authoritative serial row by TTSPL code or vendor serial number. */
@@ -512,6 +543,7 @@ async function bridgeSupportReplacement(db, {
 }
 
 module.exports = {
+  TransitionRefused,
   STATUS,
   ALLOWED,
   isAllowed,

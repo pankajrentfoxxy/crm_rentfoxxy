@@ -23,19 +23,22 @@ Scripts under `backend/scripts/` are excluded from the checklists below and list
 
 ## A. The nine catch-block bypasses — do these first
 
+> **All nine closed.** Part 2.2 section A, commit below. Verified: no
+> `inventory_status = '...'` write remains in any of the six files.
+
 These are the reason the state machine is advisory rather than enforcing. The pattern in each: call `transitionAsset` (or a wrapper), catch the refusal, log it, then perform the raw write anyway. Validation never actually stops anything.
 
 **Fix pattern for all nine, identically:** attempt the transition; on refusal, **fail the request** and log at error level with the serial, the attempted transition and the caller. Do not write. If the refused transition turns out to be a legitimate business event, add it to `ALLOWED` in `inventoryStateMachine.js` — do not reopen the bypass.
 
-- [ ] `backend/controllers/salesManagementController.js:3210` — `catch (rErr)` → `dispatch_ready` + `current_dc_number`, `dispatch_mode`, `rent_monthly_rate`. DC create.
-- [ ] `backend/controllers/salesManagementController.js:3666` — same, second DC-create path (`createDcsByAddress`).
-- [ ] `backend/controllers/salesManagementController.js:5658` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch. *(was `:5579`; +79 since Part 0 landed)*
-- [ ] `backend/controllers/salesManagementController.js:5937` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log. *(was `:5858`; +79 since Part 0 landed)*
-- [ ] `backend/services/guardGateValidationService.js:2443` — `catch (dispErr)` → `in_transit`. Guard gate outward. **Part 3 rewrites this path entirely; close the bypass here anyway so the two parts do not fight.**
-- [ ] `backend/services/productionAssetService.js:941` — `catch (e)` → `in_stock` + `qc_status='passed'`. Pending-inventory receive.
-- [ ] `backend/services/supportServiceDcService.js:563` — `catch (dispErr)` → `dispatch_ready`. Support service DC.
-- [ ] `backend/services/inventoryAssetMovementService.js:325, :335` — catch swallows the transition, then writes `qc_status` and `inventory_status` plus a whole-object `extra` replace. Two lines, one site.
-- [ ] `backend/services/dispatchQcCaptureService.js:330-331` — the raw UPDATE runs *before* the transition attempt, so the catch at `:342` is decorative. Both writes must go.
+- [x] `backend/controllers/salesManagementController.js:3210` — `catch (rErr)` → `dispatch_ready` + `current_dc_number`, `dispatch_mode`, `rent_monthly_rate`. DC create.
+- [x] `backend/controllers/salesManagementController.js:3666` — same, second DC-create path (`createDcsByAddress`).
+- [x] `backend/controllers/salesManagementController.js:5658` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch. *(was `:5579`; +79 since Part 0 landed)*
+- [x] `backend/controllers/salesManagementController.js:5937` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log. *(was `:5858`; +79 since Part 0 landed)*
+- [x] `backend/services/guardGateValidationService.js:2443` — `catch (dispErr)` → `in_transit`. Guard gate outward. **Part 3 rewrites this path entirely; close the bypass here anyway so the two parts do not fight.**
+- [x] `backend/services/productionAssetService.js:941` — `catch (e)` → `in_stock` + `qc_status='passed'`. Pending-inventory receive.
+- [x] `backend/services/supportServiceDcService.js:563` — `catch (dispErr)` → `dispatch_ready`. Support service DC.
+- [x] `backend/services/inventoryAssetMovementService.js:325, :335` — catch swallows the transition, then writes `qc_status` and `inventory_status` plus a whole-object `extra` replace. Two lines, one site.
+- [x] `backend/services/dispatchQcCaptureService.js:330-331` — the raw UPDATE runs *before* the transition attempt, so the catch at `:342` is decorative. Both writes must go.
 
 ---
 

@@ -2426,31 +2426,24 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   for (const row of rows) {
     if (!row.serial_id) continue;
     const rentMonthlyRate = await resolveSerialRentRate(db, row.serial_id, dcNumber);
-    try {
-      await inventorySM.markDispatched(db, row.serial_id, {
-        dcNumber,
-        customerId: ctx.customer_id || null,
-        entityCode: ctx.entity_code || null,
-        dispatchMode: ctx.dispatch_mode || null,
-        rentMonthlyRate,
-        actorUserId: actor.userId,
-        actorName: actor.name,
-      });
-    } catch (dispErr) {
-      console.error('guardGate.markDispatched', dispErr.message);
-      await db.query(
-        `UPDATE vendor_serial_numbers
-            SET inventory_status = 'in_transit',
-                current_dc_number = $2,
-                dispatch_mode = COALESCE($3, dispatch_mode),
-                rent_monthly_rate = COALESCE($4, rent_monthly_rate),
-                dispatched_at = NOW(),
-                status_changed_at = NOW(),
-                updated_at = NOW()
-          WHERE serial_id = $1`,
-        [row.serial_id, dcNumber, ctx.dispatch_mode || null, rentMonthlyRate]
-      );
-    }
+    // Part 2.2, bypass-register A. The catch logged and then forced the write
+    // anyway, which meant the gate could put a unit in_transit from any state
+    // at all — including one already delivered to someone else.
+    //
+    // Part 3 rewrites this path into a gate that can refuse, with a pre-flight
+    // and a recorded refusal. Closing the bypass now so the two parts do not
+    // fight: Part 3 adds the checks, this makes the existing check binding.
+    await inventorySM.markDispatched(db, row.serial_id, {
+      dcNumber,
+      customerId: ctx.customer_id || null,
+      entityCode: ctx.entity_code || null,
+      dispatchMode: ctx.dispatch_mode || null,
+      rentMonthlyRate,
+      actorUserId: actor.userId,
+      actorName: actor.name,
+      correlationId: actor.correlationId || null,
+      caller: 'guardGateValidationService.applyOutwardGateInventory',
+    });
   }
 
   await db.query(

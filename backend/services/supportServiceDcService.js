@@ -547,29 +547,21 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     );
     itemIdsStamped.push(row.item.id);
 
-    try {
-      await inventorySM.markDispatchReady(db, row.serial.serial_id, {
-        dcNumber: sdcNumber,
-        customerId: ticket.customer_id,
-        entityCode,
-        dispatchMode: dispatchInfo.dcDispatchMode,
-        actorUserId: actor?.user_id,
-        actorName: actor?.name,
-      });
-    } catch (dispErr) {
-      console.error('serviceDc.markDispatchReady', dispErr.message);
-      await db.query(
-        `UPDATE vendor_serial_numbers
-            SET inventory_status = 'dispatch_ready',
-                current_dc_number = $2,
-                dispatch_mode = COALESCE($3, dispatch_mode),
-                current_customer_id = COALESCE($4, current_customer_id),
-                status_changed_at = NOW(),
-                updated_at = NOW()
-          WHERE serial_id = $1`,
-        [row.serial.serial_id, sdcNumber, dispatchInfo.dcDispatchMode || null, ticket.customer_id || null]
-      );
-    }
+    // Part 2.2, bypass-register A. A repaired unit going back to its customer
+    // on a Service DC is a real, frequent move — but forcing dispatch_ready
+    // when the map refuses it hid the cases where the unit was not actually in
+    // the building, which is how a Service DC gets raised for a laptop nobody
+    // has. The refusal now propagates and the caller's transaction rolls back.
+    await inventorySM.markDispatchReady(db, row.serial.serial_id, {
+      dcNumber: sdcNumber,
+      customerId: ticket.customer_id,
+      entityCode,
+      dispatchMode: dispatchInfo.dcDispatchMode,
+      actorUserId: actor?.user_id,
+      actorName: actor?.name,
+      correlationId: actor?.correlationId || null,
+      caller: 'supportServiceDcService.createServiceDc',
+    });
 
     try {
       await db.query(
