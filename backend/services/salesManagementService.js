@@ -177,13 +177,59 @@ function entityDocType(base, entityCode) {
   return DOC_TYPES[docType] ? docType : base; // fall back to shared sequence if unknown
 }
 
-async function nextDocumentNumber(docType) {
+/**
+ * Allocate the next flat-counter document number.
+ *
+ * Pass the caller's `client` whenever one exists. Run on its own connection the
+ * increment autocommits, so a caller that later rolls back still consumed the
+ * number — leaving gaps in a series that a GST audit expects to be consecutive.
+ * With the caller's client the FOR UPDATE below is held until they commit, so
+ * concurrent callers serialise and a rollback returns the number.
+ */
+/**
+ * Highest sequence number already present in live data for a flat-counter
+ * prefix. Used to stop a lagging sm_document_sequences row reissuing numbers
+ * that exist — the 'EST-' prefix is served by two different counters.
+ * Unknown prefixes return 0, so this can only ever push a counter forward.
+ */
+async function maxFlatSeqFromData(db, prefix, pad) {
+  const SOURCES = {
+    'EST-': [{ table: 'sales_quotations', column: 'quotation_number' }],
+    'GEST-': [{ table: 'sales_quotations', column: 'quotation_number' }],
+    'SO-': [{ table: 'sales_order_lines', column: 'sales_order_number' }],
+    'GSO-': [{ table: 'sales_order_lines', column: 'sales_order_number' }],
+    'DC-': [{ table: 'delivery_challan_lines', column: 'dc_number' }],
+  };
+  const sources = SOURCES[prefix];
+  if (!sources) return 0;
+  let max = 0;
+  for (const { table, column } of sources) {
+    try {
+      const { rows } = await db.query(
+        `SELECT MAX(NULLIF(regexp_replace(${column}, '^' || $1, ''), '')::bigint) AS mx
+           FROM ${table}
+          WHERE ${column} LIKE $1 || '%'
+            AND regexp_replace(${column}, '^' || $1, '') ~ '^[0-9]+$'`,
+        [prefix]
+      );
+      const mx = Number(rows[0]?.mx || 0);
+      if (mx > max) max = mx;
+    } catch (e) {
+      // A missing table must not block document creation.
+      console.warn(`maxFlatSeqFromData(${prefix}) on ${table}:`, e.message);
+    }
+  }
+  return max;
+}
+
+async function nextDocumentNumber(docType, callerClient = null) {
   const meta = DOC_TYPES[docType];
   if (!meta) throw new Error(`Unknown document type: ${docType}`);
 
-  const client = await pool.connect();
+  const ownTx = !callerClient;
+  const client = callerClient || (await pool.connect());
   try {
-    await client.query('BEGIN');
+    if (ownTx) await client.query('BEGIN');
     const seq = await client.query(
       `SELECT last_value, prefix FROM sm_document_sequences WHERE doc_type = $1 FOR UPDATE`,
       [docType]
@@ -191,8 +237,15 @@ async function nextDocumentNumber(docType) {
     let lastValue = 1;
     let prefix = meta.prefix;
     if (seq.rows.length) {
-      lastValue = Number(seq.rows[0].last_value) + 1;
       prefix = seq.rows[0].prefix || meta.prefix;
+      // Reconcile against live data before incrementing, the way
+      // nextFinancialYearNumber already does. Two sequences share the 'EST-'
+      // prefix — the legacy `quotation` counter and `quote_rentfoxxy` — and they
+      // drifted apart (81 vs 2), so allocating from the lagging one would have
+      // reissued numbers that already exist. Taking MAX(stored, live) makes the
+      // counters self-healing whichever one a caller happens to use.
+      const dataMax = await maxFlatSeqFromData(client, prefix, meta.pad);
+      lastValue = Math.max(Number(seq.rows[0].last_value), dataMax) + 1;
       await client.query(
         `UPDATE sm_document_sequences SET last_value = $1, updated_at = NOW() WHERE doc_type = $2`,
         [lastValue, docType]
@@ -203,14 +256,15 @@ async function nextDocumentNumber(docType) {
         [docType, meta.prefix]
       );
     }
-    await client.query('COMMIT');
+    if (ownTx) await client.query('COMMIT');
     const padded = String(lastValue).padStart(meta.pad, '0');
     return docType === 'return_dc' ? `${prefix}${padded}` : `${prefix}${padded}`;
   } catch (e) {
-    await client.query('ROLLBACK');
+    // Only unwind our own transaction; the caller owns theirs and will roll back.
+    if (ownTx) await client.query('ROLLBACK');
     throw e;
   } finally {
-    client.release();
+    if (ownTx) client.release();
   }
 }
 

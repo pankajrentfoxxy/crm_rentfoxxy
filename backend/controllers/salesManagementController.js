@@ -496,8 +496,12 @@ exports.storeQuotation = async (req, res) => {
     }
 
     const quoteEntity = entityForQuotationType(body.quotation_type || 'rental');
-    const quotationNumber = body.quotation_number
-      || (await nextDocumentNumber(entityDocType('quotation', quoteEntity)));
+    // Allocated inside the transaction below, never taken from the request. A
+    // client-supplied quotation_number was accepted verbatim with no existence
+    // check, so a POST could append line items to another customer's live
+    // quotation — and regenerateQuotationPdf would then rewrite the PDF they had
+    // already received.
+    let quotationNumber = null;
     const token = generateToken();
     const shipping = parseJsonField(body.customer_shipping_address);
     let billing = parseJsonField(body.customer_billing_address);
@@ -540,6 +544,9 @@ exports.storeQuotation = async (req, res) => {
     }
 
     await client.query('BEGIN');
+    // On the caller's client so the counter is locked until commit and a rollback
+    // returns the number to the series instead of burning it.
+    quotationNumber = await nextDocumentNumber(entityDocType('quotation', quoteEntity), client);
     for (const item of lineItems) {
       await client.query(
         `INSERT INTO sales_quotations (
@@ -1519,8 +1526,12 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       `SELECT dc_number FROM delivery_challan_lines WHERE sales_order_number = $1 LIMIT 1`,
       [salesOrderNumber]
     );
+    // Preview only — never posted back. The real number is allocated inside the
+    // save transaction. Returning the SO's existing dc_number here also made a
+    // second shipment reuse the first DC's number, so a 20-unit SO shipped in
+    // two batches produced one DC showing 20 units dated to the first shipment.
     const [dcNumber, deliveryPersons, deliveryTechnicians, catalog] = await Promise.all([
-      existingDc.rows[0]?.dc_number || peekFinancialYearNumber('delivery_challan'),
+      peekFinancialYearNumber('delivery_challan'),
       pool.query(`SELECT user_id, name, email FROM users WHERE status = 'active' ORDER BY name ASC LIMIT 100`),
       pool.query(`SELECT technician_id, user_id, first_name, last_name, phone, email, is_active
                     FROM delivery_technicians WHERE is_active = TRUE
@@ -2941,8 +2952,16 @@ exports.storeDeliveryChallan = async (req, res) => {
       if (err) return res.status(400).json({ success: false, message: err });
     }
 
-    const dcNumber = body.challan_number || body.dc_number
-      || (await nextFinancialYearNumber('delivery_challan'));
+    // The DC number is allocated inside the transaction below — never taken from
+    // the request. It used to be `body.challan_number || body.dc_number || ...`,
+    // so the client's value won. The Add-DC form was handed a *peeked* number
+    // (a plain SELECT, no lock, no increment) and posted it straight back, so two
+    // users who opened the form before either saved were both given the same
+    // number and both saved it. delivery_challan_lines is one row per line item
+    // with no unique constraint, so nothing caught the collision: two shipments
+    // merged into one legal delivery challan, and cancelling it cancelled both
+    // customers' shipments.
+    let dcNumber = null;
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
     let supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
@@ -3024,6 +3043,11 @@ exports.storeDeliveryChallan = async (req, res) => {
     }
 
     await client.query('BEGIN');
+    // Allocate on the caller's client so the sequence row stays locked FOR UPDATE
+    // until this transaction commits. Two concurrent saves now serialise instead
+    // of both reading the same value, and a rollback returns the number to the
+    // series rather than burning it.
+    dcNumber = await nextFinancialYearNumber('delivery_challan', client);
     let inserted = 0;
     for (let i = 0; i < count; i++) {
       const qty = Number((body.quantity || [])[i] || 0);
