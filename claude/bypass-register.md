@@ -1,5 +1,14 @@
 # Asset status bypass register
 
+> **Re-verified 20 Sep 2026 at `4df9654f`, after Parts 0 and 1 merged.** Two of
+> the nine section A line numbers moved: `salesManagementController.js:5579 →
+> :5658` and `:5858 → :5937`, both +79, because Part 0 extracted
+> `performDcDelivery` and expanded `submitDeliveryRegister` above them. The
+> other seven sites, and every entry in sections B and C, are unchanged — Part 0
+> touched only this controller plus the two billing files, and Part 1 touched no
+> backend file but `constants/statuses.js`. The list below carries the corrected
+> numbers.
+
 **Verified against `new_stagging_crm` at `10c2778a`** on 20 Sep 2026 — the branch you work on — by walking every `UPDATE vendor_serial_numbers` in `backend/controllers` and `backend/services` and taking every line that assigns `inventory_status` or `qc_status`.
 
 Every line number below was re-run on staging after it diverged from production. They happen to match production for these particular sites, because staging's four extra commits touch billing and add lines *below* them — but do not rely on that holding. Re-run the enumeration at the start of Part 2.2 and reconcile.
@@ -20,8 +29,8 @@ These are the reason the state machine is advisory rather than enforcing. The pa
 
 - [ ] `backend/controllers/salesManagementController.js:3210` — `catch (rErr)` → `dispatch_ready` + `current_dc_number`, `dispatch_mode`, `rent_monthly_rate`. DC create.
 - [ ] `backend/controllers/salesManagementController.js:3666` — same, second DC-create path (`createDcsByAddress`).
-- [ ] `backend/controllers/salesManagementController.js:5579` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch.
-- [ ] `backend/controllers/salesManagementController.js:5858` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log.
+- [ ] `backend/controllers/salesManagementController.js:5658` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch. *(was `:5579`; +79 since Part 0 landed)*
+- [ ] `backend/controllers/salesManagementController.js:5937` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log. *(was `:5858`; +79 since Part 0 landed)*
 - [ ] `backend/services/guardGateValidationService.js:2443` — `catch (dispErr)` → `in_transit`. Guard gate outward. **Part 3 rewrites this path entirely; close the bypass here anyway so the two parts do not fight.**
 - [ ] `backend/services/productionAssetService.js:941` — `catch (e)` → `in_stock` + `qc_status='passed'`. Pending-inventory receive.
 - [ ] `backend/services/supportServiceDcService.js:563` — `catch (dispErr)` → `dispatch_ready`. Support service DC.
