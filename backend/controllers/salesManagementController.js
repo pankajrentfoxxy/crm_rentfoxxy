@@ -1,3 +1,4 @@
+const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
@@ -68,7 +69,7 @@ const {
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
 } = require('../services/saleDcComplianceService');
-const { validateSaleVehicleOnCreate } = require('../controllers/saleDcComplianceController');
+const { validateSaleVehicleOnCreate, validateEwayVehicleOnCreate } = require('../controllers/saleDcComplianceController');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
@@ -2921,6 +2922,24 @@ exports.storeDeliveryChallan = async (req, res) => {
         : shipBy === 'by_courier' ? 'courier'
           : (body.dispatch_mode || 'courier');
 
+    // An inhouse / porter run at or above the e-way threshold needs the vehicle
+    // for Part B, whatever the order type. Checked before any write.
+    {
+      const ids = [];
+      for (let i = 0; i < count; i += 1) {
+        const raw = (body.serial_number || [])[i];
+        const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        for (const entry of list) {
+          const first = String(entry).split('|')[0];
+          if (/^\d+$/.test(first)) ids.push(Number(first));
+        }
+      }
+      const err = await validateEwayVehicleOnCreate(pool, {
+        shipBy, dispatchMode, serialIds: ids, vehicleNumber: body.vehicle_number,
+      });
+      if (err) return res.status(400).json({ success: false, message: err });
+    }
+
     const dcNumber = body.challan_number || body.dc_number
       || (await nextFinancialYearNumber('delivery_challan'));
     const shipping = parseJsonField(body.customer_shipping_address);
@@ -3429,7 +3448,13 @@ exports.createDcsByAddress = async (req, res) => {
       const vehicleErr = validateSaleVehicleOnCreate(entityCode, ship_by, {
         ...group,
         vehicle_number: groupVehicleNumber,
-      });
+      })
+        || await validateEwayVehicleOnCreate(client, {
+          shipBy: ship_by,
+          dispatchMode,
+          serialIds: groupSerials.map((sr) => sr.serial_id),
+          vehicleNumber: groupVehicleNumber,
+        });
       if (vehicleErr) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: vehicleErr });
@@ -3804,24 +3829,27 @@ exports.sendDeliveryOtp = async (req, res) => {
       try {
         await emailDocument({
           to: customerEmail,
+          cc: deliveryNotifyCc(),
           subject: `Delivery OTP for ${dcNumber}`,
           text: `Your delivery OTP is ${otp}`,
           pdfRelativePath: null,
+          mailer: 'dispatch',
         });
       } catch (mailErr) {
         console.error('Customer OTP email failed:', mailErr.message);
       }
     }
 
-    const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (salesEmail) {
+    const notifyEmail = deliveryNotifyTo();
+    if (notifyEmail) {
       try {
         const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
         const shipping = normalizeDeliveryAddress(first.customer_shipping_address) || {};
         const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode || shipping.zip_code]
           .filter(Boolean).join(', ');
         await emailDocument({
-          to: salesEmail,
+          to: notifyEmail,
+          cc: deliveryNotifyCc(),
           subject: `Delivery OTP — ${dcNumber} — ${first.customer_name || ''}`.trim(),
           text:
             `DC: ${dcNumber}\n`
@@ -3830,6 +3858,7 @@ exports.sendDeliveryOtp = async (req, res) => {
             + `OTP: ${otp}\n\n`
             + `(Share this OTP verbally with the customer at delivery.)`,
           pdfRelativePath: null,
+          mailer: 'dispatch',
         });
       } catch (mailErr) {
         console.error('Sales OTP email failed:', mailErr.message);
@@ -4233,7 +4262,7 @@ exports.generateReturnDc = async (req, res) => {
     let itemsRes = await client.query(
       `SELECT * FROM support_ticket_items
         WHERE ticket_id = $1 AND item_type = 'pickup'
-          AND status NOT IN ('resolved','closed','inventory_updated')
+          AND status NOT IN ('resolved','closed','inventory_updated','cancelled')
           AND return_dc_number IS NULL
         ORDER BY id ASC`,
       [ticketId]
@@ -4244,6 +4273,7 @@ exports.generateReturnDc = async (req, res) => {
         `SELECT * FROM support_ticket_items
           WHERE ticket_id = $1 AND item_type = 'pickup'
             AND return_dc_number IS NULL
+            AND COALESCE(status, '') <> 'cancelled'
           ORDER BY id ASC`,
         [ticketId]
       );
@@ -4417,6 +4447,10 @@ exports.ensureSalesManagementSchema = async () => {
     '061_phase4_sales_pipeline.sql',
     '065_quotation_lead_link.sql',
     '066_quotation_sent_status.sql',
+    // Order matters: 066 re-creates sales_quotations_status_check without
+    // 'accepted', so replaying it on every boot silently reverted 200 and broke
+    // customer accept with a check-constraint violation. 200 must follow it.
+    '200_sales_quotation_accept.sql',
     '149_so_dc_line_hsn.sql',
   ]) {
     const sqlPath = path.join(__dirname, '../migrations', file);

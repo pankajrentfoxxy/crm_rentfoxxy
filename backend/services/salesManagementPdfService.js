@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
+const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -24,6 +25,8 @@ const C = {
 function ensureUploadDir() {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
+
+const mailTransport = require('./mailTransport');
 
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
@@ -278,7 +281,7 @@ async function resolveQuotationType(docType, header) {
   return qt;
 }
 
-async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [] }) {
+async function generateDocumentPdf({ docType, docNumber, header = {}, lines = [], sender = null, acceptUrl = null }) {
   ensureUploadDir();
   const fileName = `${String(docNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
@@ -366,25 +369,29 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code, L, y + 4);
     }
     // Doc numbers (right cluster)
+    // Only the numbers this document actually has — a quotation has no DC or SO
+    // yet, and three "N/A" captions in the header read as broken.
     const num = (label, value, x, color) => {
-      doc.font('Helvetica-Bold').fontSize(13).fillColor(color || C.ink).text(value || 'N/A', x, y, { width: 150, align: 'center' });
+      if (!value) return;
+      doc.font('Helvetica-Bold').fontSize(13).fillColor(color || C.ink).text(value, x, y, { width: 150, align: 'center' });
       doc.font('Helvetica').fontSize(7).fillColor(C.sub).text(label, x, y + 18, { width: 150, align: 'center' });
     };
-    num('DC Number', docType === 'delivery_challan' ? docNumber : (header.dc_number || 'N/A'), 250, C.docNum);
-    num('Sales Order Number', docType === 'sales_order' ? docNumber : (header.sales_order_number || 'N/A'), 360, C.ink);
+    num('DC Number', docType === 'delivery_challan' ? docNumber : header.dc_number, 250, C.docNum);
+    num('Sales Order Number', docType === 'sales_order' ? docNumber : header.sales_order_number, 360, C.ink);
     if (gateQrPng) {
       const { drawGateQr } = require('./gateQrService');
       drawGateQr(doc, gateQrPng, { x: R - 40, y: 38, size: 36, caption: 'Gate scan' });
     } else {
-      num('Quotation Number', docType === 'quotation' ? docNumber : (header.quotation_number || 'N/A'), 470, C.ink);
+      num('Quotation Number', docType === 'quotation' ? docNumber : header.quotation_number, 470, C.ink);
     }
     y += 50;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
 
     // ── Seller block + type/dispatch ─────────────────────────────────────
-    const docDate = formatPdfDateIst(header.dc_date || header.created_at) || formatPdfNowIst();
-    const dispatchDate = formatPdfDateIst(header.dispatched_at || header.dispatch_date, { fallback: null });
+    const docDate = formatPdfDateIst(header.dc_date || header.created_at, { withLabel: false })
+      || formatPdfNowIst({ withLabel: false });
+    const dispatchDate = formatPdfDateIst(header.dispatched_at || header.dispatch_date, { fallback: null, withLabel: false });
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
       .text(`Date: ${docDate}`, L, y);
     y += 14;
@@ -392,12 +399,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.text(`Dispatch Date: ${dispatchDate}`, L, y);
       y += 14;
     }
-    const estimatedDelivery = formatPdfDateIst(header.estimated_delivery, { fallback: null });
+    const estimatedDelivery = formatPdfDateIst(header.estimated_delivery, { fallback: null, withLabel: false });
     if (estimatedDelivery) {
       doc.text(`Estimated Delivery: ${estimatedDelivery}`, L, y);
       y += 14;
     }
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(accent).text(company.legal_name, L, y);
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(C.ink).text(company.legal_name, L, y);
     y += 18;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
     if (company.email) { doc.text(`Email: ${company.email}`, L, y); y += 12; }
@@ -589,6 +596,68 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.text(`• ${rk || '—'}`, L + 6, y); y += 13;
     }
     y += 14;
+
+    // ── Quotation close: tax note, terms, and who to reply to ─────────────
+    // A quotation is an offer, not a handover, so it carries no acknowledgement
+    // or signature block — it ends with the terms and the sender's details.
+    if (docType === 'quotation') {
+      if (y > 620) { doc.addPage(); y = 40; }
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(QUOTATION_TAX_NOTE, L, y);
+      y += 20;
+
+      // Accept button — a real PDF link annotation, so the customer can confirm
+      // straight from the attachment instead of going back to the email.
+      if (acceptUrl) {
+        const bw = 190; const bh = 30; const bx = L;
+        doc.roundedRect(bx, y, bw, bh, 6).fill(accent);
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(C.white)
+          .text('Accept this quotation', bx, y + 9, { width: bw, align: 'center' });
+        doc.link(bx, y, bw, bh, acceptUrl);
+        doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+          .text('Opens a secure page — no login required.', bx + bw + 12, y + 11);
+        y += bh + 16;
+      }
+
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Terms and Conditions', L, y);
+      y += 15;
+      doc.font('Helvetica').fontSize(8).fillColor(C.ink);
+      for (const term of QUOTATION_TERMS) {
+        if (y > 770) { doc.addPage(); y = 40; }
+        doc.text(term, L + 6, y, { width: W - 12 });
+        y = doc.y + 3;
+      }
+      y += 12;
+
+      if (y > 720) { doc.addPage(); y = 40; }
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text('Regards,', L, y);
+      y += 13;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(sender?.name || company.legal_name, L, y);
+      y += 12;
+      // Phone and email are tap-to-call / tap-to-mail on a phone or in a reader.
+      if (sender?.phone) {
+        const tel = String(sender.phone).replace(/[^\d+]/g, '');
+        const w = doc.font('Helvetica').fontSize(9).widthOfString(sender.phone);
+        doc.fillColor(C.ink).text(sender.phone, L, y);
+        if (tel) doc.link(L, y - 1, w, 11, `tel:${tel}`);
+        y += 12;
+      }
+      if (sender?.email) {
+        const w = doc.font('Helvetica').fontSize(9).widthOfString(sender.email);
+        doc.fillColor(C.teal).text(sender.email, L, y);
+        doc.link(L, y - 1, w, 11, `mailto:${sender.email}`);
+        y += 14;
+      }
+
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+        .text('rentfoxxy.com', L, y);
+      doc.link(L, y - 1, doc.widthOfString('rentfoxxy.com'), 10, 'https://rentfoxxy.com/');
+
+      doc.end();
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+      return;
+    }
 
     // ── Acknowledgement / e-sign area (future tracking) ──────────────────
     if (y > 720) { doc.addPage(); y = 40; }
@@ -979,11 +1048,19 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
   return relativePath;
 }
 
-async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo }) {
-  const transport = getMailTransport();
+/**
+ * `mailer` picks the sending identity from mailTransport's named chains:
+ * 'dispatch' is the no-reply mailbox, used for OTP and delivery notifications so
+ * they no longer leave (and land in) the sales inbox. Omitted = the general CRM
+ * mailer, which is what invoices and e-invoices still use.
+ */
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer }) {
+  const named = mailer ? mailTransport.getTransport(mailer) : null;
+  const transport = named || getMailTransport();
   if (!transport || !to) return false;
   const abs = pdfRelativePath ? path.join(__dirname, '..', pdfRelativePath) : null;
-  const fromAddress = process.env.SMTP_FROM
+  const fromAddress = (named && mailTransport.getFromAddress(mailer))
+    || process.env.SMTP_FROM
     || process.env.FROM_EMAIL
     || process.env.EMAIL_FROM
     || process.env.SMTP_USER;

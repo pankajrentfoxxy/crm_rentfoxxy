@@ -1,5 +1,5 @@
 /**
- * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> threshold).
+ * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (>= threshold).
  * New-customer Demo DCs use a separate e-way-only lock (see requiresDemoEwayCompliance).
  * A new customer's first DC is covered too; their later rental DCs are unaffected.
  */
@@ -87,6 +87,12 @@ function buildDemoEwayCompliance(head, totals, userRole, {
     eway_bill_pdf_path: head?.eway_bill_pdf_path || null,
     eway_bill_uploaded_at: head?.eway_bill_uploaded_at || null,
     eway_bill_uploaded_by: head?.eway_bill_uploaded_by || null,
+    ship_by: head?.ship_by || null,
+    dispatch_mode: head?.dispatch_mode || null,
+    vehicle_number: head?.vehicle_number || null,
+    requires_vehicle_number: requiresVehicleNumber(head, needsEway),
+    vehicle_number_missing: requiresVehicleNumber(head, needsEway)
+      && !normalizeVehicleNumber(head?.vehicle_number),
     lock_message: needsEway && !ewayComplete && !(isSuperAdmin || canUpload)
       ? 'E-Way Bill is required for this DC. Accounts must add the E-Way Bill before download or dispatch.'
       : (needsEway && !ewayComplete && (isSuperAdmin || canUpload)
@@ -176,7 +182,7 @@ function requiresDemoEwayCompliance(quotationType, isFirstOrder, productValue) {
   return isDemoDc(quotationType) && Boolean(isFirstOrder) && requiresEwayBill(productValue);
 }
 
-/** Any outbound DC whose billed laptop value (ex. GST) is above the e-way threshold. */
+/** Any outbound DC whose laptop value (ex. GST) reaches the e-way threshold. */
 function requiresOutboundEway(head, productValue) {
   const movement = String(head?.movement_type || 'outbound').toLowerCase();
   if (movement === 'return') return false;
@@ -215,8 +221,53 @@ function accountsMailBlockedReason(lines = []) {
   return `Mail to Accounts is not sent for a DC that is ${blocked.map((s) => s.replace(/_/g, ' ')).join('/')}.`;
 }
 
+/**
+ * Inclusive of the threshold: a consignment valued at exactly ₹50,000 needs an
+ * e-way bill. DC/26-27/1342 (2 × i5 11th Gen at ₹25,000) landed on the boundary
+ * and shipped unlocked while the value was strictly compared.
+ */
 function requiresEwayBill(grandTotal) {
-  return Number(grandTotal) > EWAY_VALUE_THRESHOLD;
+  return Number(grandTotal) >= EWAY_VALUE_THRESHOLD;
+}
+
+/**
+ * Dispatches where we move the goods ourselves. The e-way bill's Part B needs the
+ * vehicle number for these; a courier/BlueDart consignment carries the AWB instead.
+ */
+function isOwnVehicleDispatch(shipBy, dispatchMode) {
+  const s = String(shipBy || '').toLowerCase();
+  const d = String(dispatchMode || '').toLowerCase();
+  return s === 'by_hand' || s === 'by_porter' || d === 'inhouse' || d === 'porter';
+}
+
+/** Vehicle number is mandatory once an e-way bill is due and we carry the goods. */
+function requiresVehicleNumber(head, needsEway) {
+  if (!needsEway) return false;
+  return isOwnVehicleDispatch(head?.ship_by, head?.dispatch_mode);
+}
+
+/**
+ * Declared asset value for serials that are not on a DC yet (DC-create validation).
+ * Same processor + generation matrix the DC e-way check uses.
+ */
+async function assetValueForSerialIds(db, serialIds = []) {
+  const ids = [...new Set(serialIds.map((n) => Number(n)).filter((n) => n > 0))];
+  if (!ids.length) return 0;
+  const { lookupDeclaredValueForUnit } = require('../constants/bluedartDeclaredValue');
+  const { rows } = await db.query(
+    `SELECT extra->>'processor' AS processor,
+            extra->>'generation' AS generation,
+            COALESCE(extra->>'model', extra->>'model_name') AS model_name
+       FROM vendor_serial_numbers
+      WHERE deleted_at IS NULL AND serial_id = ANY($1::int[])`,
+    [ids]
+  );
+  let total = 0;
+  for (const row of rows) {
+    const amount = await lookupDeclaredValueForUnit(row.processor, row.generation, row.model_name);
+    if (amount != null && Number(amount) > 0) total += Number(amount);
+  }
+  return +total.toFixed(2);
 }
 
 function isEinvoiceComplete(head) {
@@ -508,10 +559,17 @@ function buildAccountsSaleDcEmailHtml({
   portalUrl,
   brandLabel,
   hasLogo,
+  needsVehicle = false,
+  vehicleNumber = null,
 }) {
+  const vehicleRow = needsVehicle
+    ? `<tr><td style="padding:8px 0;color:#64748b;">Vehicle number</td><td style="padding:8px 0;font-weight:600;">${vehicleNumber
+      ? escapeHtml(vehicleNumber)
+      : '<span style="color:#b45309;">Not captured</span>'}</td></tr>`
+    : '';
   const ewayBlock = needsEway
     ? `<p style="margin:0 0 12px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
-         DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}
+         DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more
          (value <strong>₹${escapeHtml(valueStr)}</strong>, exclusive of GST) so <strong>e-way bill is mandatory</strong>.
          Please upload the waybill also.
        </p>`
@@ -542,6 +600,7 @@ function buildAccountsSaleDcEmailHtml({
         <tr><td style="padding:8px 0;color:#64748b;">Customer</td><td style="padding:8px 0;">${escapeHtml(customerName || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Laptops</td><td style="padding:8px 0;">${escapeHtml(laptopCount)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">DC Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)} <span style="font-weight:400;color:#64748b;">(exclusive of GST)</span></td></tr>
+        ${vehicleRow}
       </table>
       ${ewayBlock}
       <p style="margin:0 0 20px;line-height:1.6;">
@@ -572,6 +631,9 @@ async function sendAccountsSaleDcEmail({
   laptopCount,
   isSale = false,
   isFirstCustomerOrder = false,
+  shipBy = null,
+  dispatchMode = null,
+  vehicleNumber = null,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -581,6 +643,9 @@ async function sendAccountsSaleDcEmail({
 
   const value = Number(productValue ?? grandTotal ?? 0);
   const needsEway = requiresEwayBill(value);
+  // Porter / inhouse: Accounts needs the vehicle for E-Way Bill Part B.
+  const needsVehicle = isOwnVehicleDispatch(shipBy, dispatchMode);
+  const vehicle = normalizeVehicleNumber(vehicleNumber) || null;
   const portalUrl = `${FRONTEND_URL}/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
   const valueStr = value.toLocaleString('en-IN');
   const fromAddress = getDispatchFromAddress();
@@ -599,6 +664,8 @@ async function sendAccountsSaleDcEmail({
     portalUrl,
     brandLabel,
     hasLogo: Boolean(logo),
+    needsVehicle,
+    vehicleNumber: vehicle,
   });
 
   const text = [
@@ -611,9 +678,10 @@ async function sendAccountsSaleDcEmail({
     `Customer: ${customerName || '—'}`,
     `Laptops: ${laptopCount}`,
     `DC value (exclusive of GST): ₹${valueStr}`,
+    needsVehicle ? `Vehicle number: ${vehicle || 'not captured'}` : '',
     '',
     needsEway
-      ? `DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} — e-way bill is mandatory. Please upload the waybill also.`
+      ? `DC laptop value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more — e-way bill is mandatory. Please upload the waybill also.`
       : 'E-Way Bill is not required for this value.',
     '',
     'Upload in CRM (Finance → DC Invoice or DC E-Invoice tab):',
@@ -672,6 +740,8 @@ async function sendAccountsDemoEwayEmail({
   billedValue = null,
   laptops = [],
   pdfPath = null,
+  vehicleNumber = null,
+  needsVehicle = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -708,7 +778,7 @@ async function sendAccountsDemoEwayEmail({
     <div style="padding:24px;">
       <p style="margin:0 0 16px;font-size:15px;">Hi Accounts Team,</p>
       <p style="margin:0 0 16px;line-height:1.6;">
-        A delivery challan has <strong>asset value</strong> above ₹${escapeHtml(thresholdStr)}
+        A delivery challan has <strong>asset value</strong> of ₹${escapeHtml(thresholdStr)} or more
         (processor + generation matrix — not rental charges) and needs an E-Way Bill.
       </p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px;">
@@ -717,6 +787,9 @@ async function sendAccountsDemoEwayEmail({
         <tr><td style="padding:8px 0;color:#64748b;">Delivery Challan</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(dcNumber)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Asset / E-Way Value</td><td style="padding:8px 0;font-weight:700;">₹${escapeHtml(valueStr)}</td></tr>
         ${billedStr ? `<tr><td style="padding:8px 0;color:#64748b;">Rental / billed amount</td><td style="padding:8px 0;">₹${escapeHtml(billedStr)} <span style="color:#64748b;">(not used for E-Way)</span></td></tr>` : ''}
+        ${needsVehicle ? `<tr><td style="padding:8px 0;color:#64748b;">Vehicle number</td><td style="padding:8px 0;font-weight:600;">${vehicleNumber
+          ? escapeHtml(vehicleNumber)
+          : '<span style="color:#9a3412;">Not captured — dispatch must add it before Part B</span>'}</td></tr>` : ''}
       </table>
       <p style="margin:0 0 8px;font-weight:600;">Laptops — use these values on the GST portal</p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px;">
@@ -756,6 +829,9 @@ async function sendAccountsDemoEwayEmail({
     `Delivery Challan: ${dcNumber}`,
     `Asset / E-Way value (processor + generation): ₹${valueStr}`,
     billedStr ? `Rental / billed amount (not used for E-Way): ₹${billedStr}` : '',
+    needsVehicle
+      ? `Vehicle number: ${vehicleNumber || 'not captured — dispatch must add it before Part B'}`
+      : '',
     '',
     'Laptops:',
     laptopText,
@@ -885,6 +961,9 @@ module.exports = {
   requiresInvoiceCompliance,
   requiresDemoEwayCompliance,
   requiresEwayBill,
+  requiresVehicleNumber,
+  isOwnVehicleDispatch,
+  assetValueForSerialIds,
   isEinvoiceComplete,
   isEwayComplete,
   buildSaleCompliance,

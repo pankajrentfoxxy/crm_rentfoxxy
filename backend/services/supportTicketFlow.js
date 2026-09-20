@@ -43,6 +43,7 @@ const deriveComplaintStep = (item) => {
 };
 
 const derivePickupStep = (item) => {
+  if (item.status === 'cancelled') return 'cancelled';
   const pickupType = item.pickup_type || (item.source_item_id ? 'repair' : 'return');
   const isRepair = pickupType === 'repair';
   // Phase 20: redesigned pickup flow is the default for every pickup item.

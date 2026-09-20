@@ -1,3 +1,4 @@
+const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 /**
  * PHASE 13 — End-to-end delivery flow.
  * Technician bucket (admin) + technician's own deliveries (dispatch role) +
@@ -517,11 +518,13 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
     const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode || shipping.zip_code]
       .filter(Boolean).join(', ');
 
-    const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (salesEmail) {
+    const notifyEmail = deliveryNotifyTo();
+    if (notifyEmail) {
       try {
         await emailDocument({
-          to: salesEmail,
+          to: notifyEmail,
+          cc: deliveryNotifyCc(),
+          mailer: 'dispatch',
           subject: `Delivery OTP — ${dcNumber} — ${first.customer_name || ''}`.trim(),
           text:
             `DC: ${dcNumber}\n`
@@ -659,11 +662,13 @@ exports.submitDeliveryWithPod = async (req, res) => {
     // Signature section.
     await regenerateDcPdfSafe(dcNumber);
 
-    const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (salesEmail) {
+    const notifyEmail = deliveryNotifyTo();
+    if (notifyEmail) {
       const podLink = podPhotoUrl || esignUrl;
       emailDocument({
-        to: salesEmail,
+        to: notifyEmail,
+        cc: deliveryNotifyCc(),
+        mailer: 'dispatch',
         subject: `Delivery confirmed — ${dcNumber}`,
         text:
           `Delivery confirmed for ${dcNumber}\n`

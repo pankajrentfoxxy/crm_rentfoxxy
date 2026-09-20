@@ -418,14 +418,14 @@ async function tryCloseReplacementTicket(client, ticketId) {
             resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
             updated_at = CURRENT_TIMESTAMP
       WHERE ticket_id = $1 AND item_type = 'complaint'
-        AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
+        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')`,
     [ticketId]
   );
   await client.query(
     `UPDATE support_ticket_items
         SET status = 'inventory_updated', updated_at = CURRENT_TIMESTAMP
       WHERE ticket_id = $1 AND item_type = 'replacement'
-        AND status NOT IN ('inventory_updated', 'closed')`,
+        AND status NOT IN ('inventory_updated', 'closed', 'cancelled')`,
     [ticketId]
   );
   await client.query(

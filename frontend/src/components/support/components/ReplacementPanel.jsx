@@ -38,6 +38,9 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
   const [deliveryDefaults, setDeliveryDefaults] = useState(null);
   const [appendMode, setAppendMode] = useState(false);
   const [activeOrder, setActiveOrder] = useState(null);
+  // Pickup Return DC already on the ticket: reuse it, or cancel it and raise a new one
+  const [openReturnDc, setOpenReturnDc] = useState(null);
+  const [existingRdcAction, setExistingRdcAction] = useState('reuse');
 
   useEffect(() => {
     setLoading(true);
@@ -48,6 +51,9 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         setSelectedIds(new Set(items.map((i) => String(i.id))));
         setDeliveryDefaults(r.data.delivery_defaults || null);
         setActiveOrder(r.data.active_order || null);
+        const openRdc = r.data.open_return_dc || null;
+        setOpenReturnDc(openRdc);
+        setExistingRdcAction('reuse');
         setAppendMode(!!(ticket?.return_dc_number && r.data.active_order?.sales_order_number));
         setReason(items[0]?.replacement_flag_reason || '');
         setRdcRemarks(buildReplacementRdcRemarks(items));
@@ -90,6 +96,7 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
     try {
       const addr = pickupForm.pickup_address || {};
       const res = await api.post(`/support/tickets/${ticketId}/replacements`, {
+        existing_rdc_action: openReturnDc ? existingRdcAction : undefined,
         source_item_ids: ids,
         reason,
         remarks: rdcRemarks,
@@ -107,7 +114,9 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
       toast.success(
         appendMode
           ? `Added ${ids.length} laptop(s) to ${d.sales_order_number} · Return DC ${d.return_dc_number}`
-          : `Sales order ${d.sales_order_number} created · Return DC ${d.return_dc_number}`
+          : d.reused_return_dc
+            ? `Sales order ${d.sales_order_number} created · using existing Return DC ${d.return_dc_number}`
+            : `Sales order ${d.sales_order_number} created · Return DC ${d.return_dc_number}`
       );
       if (d.customer_otp_visible) {
         toast(`Pickup OTP: ${d.customer_otp_visible}`, { duration: 12000, icon: '🔑' });
@@ -165,6 +174,51 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
           )}
         </p>
       </div>
+
+      {openReturnDc && !appendMode ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+          <p className="text-sm text-amber-900">
+            Return DC{' '}
+            <ReturnDcNumberLink rdcNumber={openReturnDc.return_dc_number} className="font-mono" />
+            {' '}is already open on this ticket.
+          </p>
+          <label className="flex gap-2 items-start text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="existing-rdc-action"
+              className="mt-1"
+              checked={existingRdcAction === 'reuse'}
+              onChange={() => setExistingRdcAction('reuse')}
+            />
+            <span>
+              <span className="font-semibold">Use this Return DC for the replacement</span>
+              <span className="block text-xs text-slate-600">
+                Keeps the current pickup assignment; laptops not on it are added.
+              </span>
+            </span>
+          </label>
+          <label
+            className={`flex gap-2 items-start text-sm ${openReturnDc.pickup_started ? 'opacity-50' : 'cursor-pointer'}`}
+          >
+            <input
+              type="radio"
+              name="existing-rdc-action"
+              className="mt-1"
+              disabled={openReturnDc.pickup_started}
+              checked={existingRdcAction === 'cancel'}
+              onChange={() => setExistingRdcAction('cancel')}
+            />
+            <span>
+              <span className="font-semibold">Cancel it and create a new Return DC</span>
+              <span className="block text-xs text-slate-600">
+                {openReturnDc.pickup_started
+                  ? 'Not available — pickup on this Return DC has already started.'
+                  : 'Voids the current Return DC and pickup, then raises a fresh replacement Return DC.'}
+              </span>
+            </span>
+          </label>
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Laptops to replace</p>
@@ -243,7 +297,9 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         submitLabel={
           appendMode
             ? `Add to sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
-            : `Create sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
+            : openReturnDc && existingRdcAction === 'reuse'
+              ? `Create sales order + use ${openReturnDc.return_dc_number} (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
+              : `Create sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
         }
         onSubmit={submitReplacement}
       />

@@ -4,6 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
 const { authMiddleware } = require('../middleware/auth');
+const { rejectCancelledPickupItem } = require('../middleware/cancelledPickupGuard');
 const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 const { requireSupportAccess, requireSupportLead, requireTicketLead, requireSupportTicketClose, requireSupportTicketCancel } = require('../middleware/supportAccess');
 const {
@@ -133,6 +134,8 @@ const uploadPodFile = (req, res, next) => {
 
 router.use(authMiddleware);
 router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
+// Cancelled pickups are frozen: no reached / POD / OTP / e-sign / receive on them.
+router.use('/items/:itemId', rejectCancelledPickupItem);
 
 // Warehouse receipt confirmation must be reachable by the warehouse / manager
 // roles too (they are not "support" roles), so it is registered before the

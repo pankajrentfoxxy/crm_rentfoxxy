@@ -99,8 +99,10 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const { user } = useAuth();
   const { canView } = usePermission();
   const canViewOtp = canView('delivery_register_otp');
-  const canWarehouseSign = RETURN_DC_WAREHOUSE_ROLES.has(String(user?.role || '').toLowerCase());
+  const roleCanWarehouseSign = RETURN_DC_WAREHOUSE_ROLES.has(String(user?.role || '').toLowerCase());
   const [detail, setDetail] = useState(null);
+  const isCancelled = String(detail?.status || '').toLowerCase() === 'cancelled';
+  const canWarehouseSign = roleCanWarehouseSign && !isCancelled;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
@@ -182,6 +184,14 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
             <p className="text-center text-gray-500 py-8">Not found</p>
           ) : (
             <>
+              {isCancelled ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  <p className="font-semibold">This Return DC is cancelled</p>
+                  <p className="text-xs mt-1">
+                    It is kept for record only. No pickup, receipt or dispatch action can be done on it.
+                  </p>
+                </div>
+              ) : null}
               <div className="flex flex-wrap gap-3 text-sm">
                 <span className="px-2 py-1 rounded-full bg-gray-100">{formatDate(detail.created_at)}</span>
                 {detail.original_dc_number && (

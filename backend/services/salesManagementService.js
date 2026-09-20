@@ -1153,6 +1153,10 @@ async function ensureReturnDcPickupItems(db, dcl) {
   const rdcNumber = dcl.dc_number;
   const ticketId = dcl.support_ticket_id;
 
+  // A voided Return DC must never regain a live pickup — that row would block the
+  // ticket's next pickup / replacement ("active pickup already exists").
+  if (String(dcl.status || '').toLowerCase() === 'cancelled') return [];
+
   if (ticketId) {
     await db.query(
       `UPDATE support_ticket_items
@@ -1955,8 +1959,13 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
   const dcl = dclRes.rows[0];
   if (!dcl) return null;
 
-  let pickupItems = await queryReturnDcPickupItems(rdcNumber, dcl.support_ticket_id);
-  if (!pickupItems.length) {
+  const rdcCancelled = String(dcl.status || '').toLowerCase() === 'cancelled';
+  let pickupItems = rdcCancelled
+    ? []
+    : await queryReturnDcPickupItems(rdcNumber, dcl.support_ticket_id);
+  if (rdcCancelled) {
+    // Voided RDC: show it read-only; never link or create pickup rows for it.
+  } else if (!pickupItems.length) {
     await ensureReturnDcPickupItems(pool, dcl);
     pickupItems = await queryReturnDcPickupItems(rdcNumber, dcl.support_ticket_id);
   } else if (pickupItems.some((i) => !i.return_dc_number) && dcl.support_ticket_id) {

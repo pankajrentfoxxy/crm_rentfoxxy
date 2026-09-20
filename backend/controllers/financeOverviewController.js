@@ -35,7 +35,7 @@ const PENDING_DC_INVOICE_WHERE = `
       AND NULLIF(TRIM(COALESCE(dcl.qr_code_url, '')), '') IS NULL
     )
     OR (
-      COALESCE(dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
+      COALESCE(dcl_amt.amount, 0) >= ${EWAY_VALUE_THRESHOLD}
       AND (
         NULLIF(TRIM(COALESCE(dcl.eway_bill_number, '')), '') IS NULL
         OR NULLIF(TRIM(COALESCE(dcl.eway_bill_pdf_path, '')), '') IS NULL
@@ -85,7 +85,7 @@ const DEMO_EWAY_WHERE = `
            AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
            AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
       )
-      AND COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
+      AND COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) >= ${EWAY_VALUE_THRESHOLD}
     )
   )
 `;
@@ -314,7 +314,7 @@ exports.getDcInvoiceQueue = async (req, res) => {
            COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            (
              COALESCE(dcl.eway_required, FALSE) = TRUE
-             OR COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) > $1
+             OR COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) >= $1
            ) AS requires_eway_bill
          ${DC_INVOICE_FROM}
          WHERE ${PENDING_DC_INVOICE_WHERE}
@@ -338,6 +338,9 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.eway_bill_date,
            dcl.eway_bill_pdf_path,
            dcl.accounts_notified_at,
+           dcl.ship_by,
+           dcl.dispatch_mode,
+           dcl.vehicle_number,
            COALESCE(dcq.dc_qty, 0) AS quantity,
            COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            CASE

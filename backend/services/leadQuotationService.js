@@ -46,15 +46,7 @@ const BRAND_CELL_HEADER_BG = '#FFF7ED';
 const BRAND_HEADER_TEXT = '#FFFFFF';
 const BRAND_LABEL = '#C2410C';
 
-const TERMS = [
-  '1-The quotation is valid for 10 days from the date of issuance.',
-  '2-Delivery within 3-4 working days after order confirmation.',
-  '3-In case of damage or Non-Return by employees, Rent continues until full payment or recovery.',
-  '4-Hidden damages will be assessed upon technical inspection after return.',
-  '5-Clients will be updated on every item post-return.',
-  '6-All rented equipment remains the property of Rentfoxxy',
-  '7-All disputes are subject to the jurisdiction of Gurgaon Courts only.'
-];
+const { QUOTATION_TERMS: TERMS } = require('../constants/quotationTerms');
 
 function numberToIndianRupeesWords(n) {
   const num = Math.round(Number(n));
@@ -185,11 +177,22 @@ function buildQuotationEmailHtml({
   const hasC2 = isConfigTwoActive(config2);
   const unitLabel = priceLabel || (isSale ? 'Unit Price' : 'Monthly Unit Rental Price');
   const introLine = isSale
-    ? 'Please find below the details of the laptop pricing for the configuration below:'
-    : 'Please find below the details of the laptop rental pricing for the configuration below:';
-  const thMain = `padding:10px 12px;text-align:left;font-size:13px;border:1px solid ${BRAND_PRIMARY};background:${BRAND_PRIMARY};color:#ffffff;font-weight:bold;`;
-  const td = `padding:10px 12px;font-size:13px;border:1px solid ${BRAND_BORDER};color:#1f2937;vertical-align:top;background:#ffffff;`;
-  const tdSpec = `padding:10px 12px;font-size:13px;border:1px solid ${BRAND_BORDER};background:${BRAND_CELL_HEADER_BG};color:${BRAND_PRIMARY};font-weight:700;width:34%;`;
+    ? 'Please find below the pricing for the configuration you asked about.'
+    : 'Please find below the rental pricing for the configuration you asked about.';
+
+  // One accent, spent on the Accept button and a hairline rule — the rest is ink
+  // on white so the numbers read first.
+  const INK = '#111827';
+  const BODY = '#374151';
+  const MUTED = '#6b7280';
+  const LINE = '#e5e7eb';
+  const HEAD_BG = '#f9fafb';
+
+  const th = `padding:11px 14px;text-align:left;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;`
+    + `border-bottom:2px solid ${LINE};color:${MUTED};font-weight:600;background:${HEAD_BG};`;
+  const tdSpec = `padding:12px 14px;font-size:14px;border-bottom:1px solid ${LINE};color:${MUTED};width:34%;`;
+  const td = `padding:12px 14px;font-size:14px;border-bottom:1px solid ${LINE};color:${INK};font-weight:500;`;
+  const tdPrice = `padding:14px;font-size:17px;border-bottom:1px solid ${LINE};color:${INK};font-weight:700;`;
 
   const c1p = escapeHtml(config1.processor);
   const c1r = escapeHtml(config1.ram);
@@ -202,61 +205,85 @@ function buildQuotationEmailHtml({
   const c2m = hasC2 ? escapeHtml(formatRsIndian(config2.monthlyRate)) : '';
 
   const headerCols = hasC2
-    ? `<th style="${thMain}">Specification</th><th style="${thMain}">Configuration 1</th><th style="${thMain}">Configuration 2</th>`
-    : `<th style="${thMain}">Specification</th><th style="${thMain}">Configuration</th>`;
+    ? `<th style="${th}">Specification</th><th style="${th}">Configuration 1</th><th style="${th}">Configuration 2</th>`
+    : `<th style="${th}">Specification</th><th style="${th}">Configuration</th>`;
+  const row = (label, a, b, styleA) => (hasC2
+    ? `<tr><td style="${tdSpec}">${label}</td><td style="${styleA}">${a}</td><td style="${styleA}">${b}</td></tr>`
+    : `<tr><td style="${tdSpec}">${label}</td><td style="${styleA}">${a}</td></tr>`);
 
-  const rowProcessor = hasC2
-    ? `<tr><td style="${tdSpec}">Processor</td><td style="${td}">${c1p}</td><td style="${td}">${c2p}</td></tr>`
-    : `<tr><td style="${tdSpec}">Processor</td><td style="${td}">${c1p}</td></tr>`;
-  const rowRam = hasC2
-    ? `<tr><td style="${tdSpec}">RAM</td><td style="${td}">${c1r}</td><td style="${td}">${c2r}</td></tr>`
-    : `<tr><td style="${tdSpec}">RAM</td><td style="${td}">${c1r}</td></tr>`;
-  const rowStorage = hasC2
-    ? `<tr><td style="${tdSpec}">Storage</td><td style="${td}">${c1s}</td><td style="${td}">${c2s}</td></tr>`
-    : `<tr><td style="${tdSpec}">Storage</td><td style="${td}">${c1s}</td></tr>`;
-  const rowPrice = hasC2
-    ? `<tr><td style="${tdSpec}">${escapeHtml(unitLabel)}</td><td style="${td}"><strong>${c1m}</strong></td><td style="${td}"><strong>${c2m}</strong></td></tr>`
-    : `<tr><td style="${tdSpec}">${escapeHtml(unitLabel)}</td><td style="${td}"><strong>${c1m}</strong></td></tr>`;
+  const rows = row('Processor', c1p, c2p, td)
+    + row('RAM', c1r, c2r, td)
+    + row('Storage', c1s, c2s, td)
+    + row(escapeHtml(unitLabel), c1m, c2m, tdPrice);
 
   const phoneLine = escapeHtml(senderPhone || '');
+  const termsItems = TERMS
+    .map((t) => `<li style="margin-bottom:7px;">${escapeHtml(String(t).replace(/^\d+[.\-]\s*/, ''))}</li>`)
+    .join('');
 
+  // Bulletproof-ish button: a padded anchor, no background image, so it survives
+  // Outlook and still looks like a button in Gmail and Apple Mail.
   const acceptBlock = acceptUrl
-    ? `<p style="margin:20px 0 8px;text-align:center;">
-        <a href="${escapeHtml(acceptUrl)}" style="display:inline-block;background:${BRAND_PRIMARY};color:#ffffff;text-decoration:none;font-weight:700;padding:12px 28px;border-radius:8px;font-size:15px;">Accept</a>
-      </p>
-      <p style="margin:0 0 16px;font-size:12px;color:#64748b;text-align:center;">Click Accept to confirm this quotation.</p>`
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:26px auto 10px;">
+        <tr><td style="border-radius:8px;background:${BRAND_PRIMARY};">
+          <a href="${escapeHtml(acceptUrl)}"
+             style="display:inline-block;padding:14px 38px;font-size:15px;font-weight:700;color:#ffffff;
+                    text-decoration:none;border-radius:8px;letter-spacing:0.01em;">Accept this quotation</a>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 22px;font-size:12px;color:${MUTED};text-align:center;">
+        One click confirms the quotation — no login needed.</p>`
     : '';
 
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head>
-<body style="margin:0;padding:0;background:#FFF7ED;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-  <div style="max-width:640px;margin:0 auto;padding:24px 16px 32px;">
-    <div style="border-radius:12px;border:1px solid ${BRAND_BORDER};overflow:hidden;background:#ffffff;">
-      <div style="background:${BRAND_PRIMARY};padding:18px 22px;">
-        <div style="font-size:22px;font-weight:700;letter-spacing:0.02em;color:#ffffff;">Rentfoxxy</div>
-        <div style="font-size:13px;color:#ffffff;opacity:0.95;margin-top:6px;">Quotation • ${escapeHtml(
-          estimateNo
-        )}${sentAtLine ? ` • ${escapeHtml(sentAtLine)}` : ''}</div>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" /></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:620px;margin:0 auto;padding:24px 12px 36px;">
+    <div style="border-radius:14px;border:1px solid ${LINE};overflow:hidden;background:#ffffff;">
+
+      <div style="padding:22px 26px 18px;border-bottom:3px solid ${BRAND_PRIMARY};">
+        <div style="font-size:21px;font-weight:700;letter-spacing:-0.01em;color:${INK};">Rentfoxxy</div>
+        <div style="font-size:12px;color:${MUTED};margin-top:5px;">
+          Quotation ${escapeHtml(estimateNo)}${sentAtLine ? ` &nbsp;·&nbsp; ${escapeHtml(sentAtLine)}` : ''}
+        </div>
       </div>
-      <div style="padding:22px 20px;color:#1f2937;line-height:1.55;font-size:14px;">
-        <p style="margin:0 0 14px;"><strong>Dear Sir,</strong></p>
-        <p style="margin:0 0 14px;">Thank you for your invaluable time today. ${introLine}</p>
-        <p style="margin:0 0 16px;font-size:13px;color:#57534e;"><em>Models can vary as per Stock availability but configuration will be the same.</em></p>
-        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 16px;">
+
+      <div style="padding:24px 26px 8px;color:${BODY};line-height:1.6;font-size:14.5px;">
+        <p style="margin:0 0 14px;color:${INK};"><strong>Dear Sir,</strong></p>
+        <p style="margin:0 0 14px;">Thank you for your time today. ${introLine}</p>
+
+        <table role="presentation" cellpadding="0" cellspacing="0"
+               style="width:100%;border-collapse:collapse;margin:18px 0 12px;border:1px solid ${LINE};border-radius:10px;">
           <thead><tr>${headerCols}</tr></thead>
-          <tbody>${rowProcessor}${rowRam}${rowStorage}${rowPrice}</tbody>
+          <tbody>${rows}</tbody>
         </table>
-        <p style="margin:0 0 14px;font-size:13px;color:${BRAND_PRIMARY};font-weight:700;">Note: Prices are exclusive of taxes.</p>
-        <p style="margin:0 0 6px;font-weight:700;color:${BRAND_PRIMARY};font-size:14px;">Terms &amp; Conditions</p>
-        <ul style="margin:0 0 8px;padding-left:20px;color:#44403c;font-size:13px;">
-          <li style="margin-bottom:6px;">The quotation is valid for 10 days from the date of issuance.</li>
-          <li style="margin-bottom:6px;">All rented equipment remains the property of Rentfoxxy.</li>
-        </ul>
+
+        <p style="margin:0 0 6px;font-size:13px;color:${INK};font-weight:600;">Note: Prices are exclusive of taxes.</p>
+        <p style="margin:0 0 20px;font-size:13px;color:${MUTED};">
+          Models can vary with stock availability, but the configuration stays the same.</p>
+
         ${acceptBlock}
-        <p style="margin:0 0 20px;font-size:14px;">Please feel free to contact or revert for any clarification required.</p>
-        <p style="margin:0;font-size:14px;"><strong>Regards</strong><br/>
-        ${escapeHtml(senderName || 'Team')}${phoneLine ? ` (${phoneLine})` : ''}<br/>
-        <span style="color:${BRAND_PRIMARY};font-weight:700;">Team Rentfoxxy</span></p>
+
+        <div style="border-top:1px solid ${LINE};padding-top:18px;">
+          <p style="margin:0 0 9px;font-weight:600;color:${INK};font-size:13.5px;">Terms &amp; Conditions</p>
+          <ol style="margin:0 0 6px;padding-left:20px;color:${BODY};font-size:13px;line-height:1.55;">${termsItems}</ol>
+        </div>
+
+        <p style="margin:20px 0 20px;font-size:14px;">Please feel free to contact me for any clarification.</p>
+
+        <p style="margin:0 0 24px;font-size:14px;color:${INK};">
+          Regards,<br/>
+          <strong>${escapeHtml(senderName || 'Team')}</strong>${phoneLine ? `<br/>${phoneLine}` : ''}
+        </p>
       </div>
+
+      <div style="padding:14px 26px 18px;background:${HEAD_BG};border-top:1px solid ${LINE};">
+        <p style="margin:0;font-size:11.5px;color:${MUTED};line-height:1.5;">
+          TRUETECH SERVICES PRIVATE LIMITED &nbsp;·&nbsp; GSTIN 06AAHCT0310N1ZG<br/>
+          The full quotation is attached as a PDF.
+        </p>
+      </div>
+
     </div>
   </div>
 </body></html>`;
@@ -303,15 +330,13 @@ ${table}
 Note: Prices are exclusive of taxes.
 
 Terms & Conditions
-- The quotation is valid for 10 days from the date of issuance.
-- All rented equipment remains the property of Rentfoxxy.
+${TERMS.map((t) => `- ${String(t).replace(/^\d+[.\-]\s*/, '')}`).join('\n')}
 
-Please feel free to contact or revert for any clarification required.
-${acceptUrl ? `\nAccept: ${acceptUrl}\n` : ''}
+Please feel free to contact me for any clarification.
+${acceptUrl ? `\nAccept this quotation: ${acceptUrl}\n` : ''}
 
-Regards
-${senderName || 'Team'} (${senderPhone || '—'})
-Team Rentfoxxy
+Regards,
+${senderName || 'Team'}${senderPhone ? `\n${senderPhone}` : ''}
 
 --
 ${estimateNo}${sentAtLine ? ` · ${sentAtLine}` : ''}

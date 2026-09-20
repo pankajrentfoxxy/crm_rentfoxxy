@@ -293,10 +293,7 @@ function DispatchFields({
         value={fields.porter_order_id || ''} onChange={set('porter_order_id')} />
       <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Booking URL (optional)"
         value={fields.porter_booking_url || ''} onChange={set('porter_booking_url')} />
-      {requireVehicle && (
-        <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Vehicle number* (E-Way Bill)"
-          value={fields.vehicle_number || ''} onChange={set('vehicle_number')} />
-      )}
+      <VehicleNumberInput required={requireVehicle} value={fields.vehicle_number} onChange={set('vehicle_number')} />
     </div>
   );
   if (shipBy === 'by_hand') return (
@@ -315,13 +312,28 @@ function DispatchFields({
           No delivery technicians found. Add via Sales Pipeline → Delivery Technicians.
         </p>
       )}
-      {requireVehicle && (
-        <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Vehicle number* (E-Way Bill)"
-          value={fields.vehicle_number || ''} onChange={set('vehicle_number')} />
-      )}
+      <VehicleNumberInput required={requireVehicle} value={fields.vehicle_number} onChange={set('vehicle_number')} />
     </div>
   );
   return null;
+}
+
+// Porter / inhouse carry the goods in our own vehicle, so the E-Way Bill (Part B)
+// needs its number. Always mandatory for sale DCs; for rental/demo the server
+// requires it once the DC's asset value reaches ₹50,000.
+function VehicleNumberInput({ required, value, onChange }) {
+  return (
+    <div>
+      <input className="w-full border rounded-lg px-3 py-2 text-sm uppercase"
+        placeholder={required ? 'Vehicle number* (E-Way Bill)' : 'Vehicle number (E-Way Bill)'}
+        value={value || ''} onChange={onChange} />
+      {!required && (
+        <p className="text-xs text-gray-500 mt-1">
+          Required when the DC value is ₹50,000 or more — Accounts uses it for the E-Way Bill.
+        </p>
+      )}
+    </div>
+  );
 }
 
 // ── DcGroup card ─────────────────────────────────────────────────────────────
@@ -817,7 +829,7 @@ export default function DCForm({ open, onClose, onSaved, prefillSo, soScope, ret
                 {isSale && (
                   <p className="text-xs text-indigo-700 mt-2">
                     Sale order: DC will be created now. Accounts will be emailed to prepare E-Invoice.
-                    If DC value exceeds ₹50,000, E-Way Bill is required on upload. Vehicle number is required for Porter / Inhouse.
+                    If DC value is ₹50,000 or more, E-Way Bill is required on upload. Vehicle number is required for Porter / Inhouse.
                   </p>
                 )}
                         </div>
