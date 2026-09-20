@@ -667,6 +667,26 @@ async function buildCustomerInvoiceLines(client, {
     if (billStart > billEnd) continue;
 
     const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
+
+    // BL3: with no rate this used to write a Rs 0 line and then advance
+    // rent_billed_until anyway, at the bottom of this loop. The watermark moving
+    // is what does the damage — the next run starts from billEnd + 1, so that
+    // month is skipped permanently and nothing ever revisits it. Six Rs 0 lines
+    // were already written this way, TTSPL1942 in July, August and September.
+    //
+    // Skip the unit entirely instead. No line, and no watermark advance, so the
+    // whole outstanding span is still owed and bills in full as soon as someone
+    // sets the rate.
+    if (!(monthlyRate > 0)) {
+      console.warn(
+        `[billing] SKIPPED ${row.ttspl_id || `serial ${row.serial_id}`} for customer ${customerId}:`
+        + ` no rent_monthly_rate. Nothing billed and rent_billed_until left at`
+        + ` ${row.rent_billed_until ? toLocalYmd(new Date(row.rent_billed_until)) : 'NULL'}`
+        + ' so the period is preserved. Set the rate on the asset to bill it.'
+      );
+      continue;
+    }
+
     for (const seg of monthSegments(billStart, billEnd)) {
       const days = daysInclusive(seg.segStart, seg.segEnd);
       const dailyRate = monthlyRate / seg.daysInMonth;
@@ -3204,6 +3224,16 @@ async function generateVendorBill(vendorId, month, year) {
                IN ('rental_purchase','rent_to_own')
          AND vsn.deleted_at IS NULL
          AND vpo.deleted_at IS NULL
+         -- BL1: inventory_status was SELECTed but never filtered, so the only
+         -- thing that stopped a vendor line was vendor_rent_end_date. A unit we
+         -- sold or scrapped kept billing the vendor every month while the asset
+         -- was no longer ours to rent. Measured at the time of the fix: 6 'sold'
+         -- units still billing Rs 5,300/month.
+         --
+         -- Only 'sold' and 'scrapped' stop the clock. 'returned', 'in_stock' and
+         -- 'in_repair' must KEEP billing — we still physically hold the vendor's
+         -- unit in those states and the rent is genuinely owed.
+         AND COALESCE(vsn.inventory_status, '') NOT IN ('sold', 'scrapped')
          AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
          AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date
          AND (vsn.vendor_rent_end_date IS NULL OR vsn.vendor_rent_end_date >= $3::date)`,
