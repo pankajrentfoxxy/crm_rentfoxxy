@@ -23,6 +23,7 @@
  */
 const pool = require('../config/db');
 const { logTtsplEvent } = require('./ttsplAuditService');
+const { recordAssetEvent } = require('./eventService');
 
 const STATUS = Object.freeze({
   IN_STOCK: 'in_stock',
@@ -43,8 +44,19 @@ const STATUS = Object.freeze({
 const ALLOWED = {
   in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'],
   reserved:        ['dispatch_ready', 'in_transit', 'in_stock'],
-  dispatch_ready:  ['in_transit', 'in_stock'],
-  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock'],
+  // I6: dispatch_ready -> qc_failed. A unit on a challan that fails Dispatch QC
+  // happens every week and the map did not permit it, so the code went round
+  // the map instead (bypass-register A, dispatchQcCaptureService).
+  dispatch_ready:  ['in_transit', 'in_stock', 'qc_failed'],
+  // I6: in_transit -> returned. Support warehouse receive takes a unit straight
+  // from in_transit to returned, which the map forbade — which is exactly why
+  // supportController:3048 writes the column raw (bypass-register B).
+  //
+  // Both were missing because the map was written from the happy path. Adding
+  // them is a prerequisite for closing those two bypasses, not a loosening:
+  // close the bypass without adding these and support warehouse receive and
+  // Dispatch QC failure both break.
+  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock', 'returned'],
   on_demo:         ['rented', 'returned'],
   rented:          ['returned', 'sold'],   // 'sold' = sale in place (see markSoldInPlace)
   sold:            ['returned'],
@@ -68,11 +80,28 @@ function isAllowed(from, to) {
 }
 
 async function loadSerial(db, serialId) {
+  // FOR UPDATE — finding I5, register section D.
+  //
+  // Without the lock two concurrent transitions read the same "from" state and
+  // both pass validation, so a unit can go reserved -> dispatch_ready twice on
+  // two different challans and the second silently wins. The row stays locked
+  // until the caller's transaction ends, which serialises them.
+  //
+  // NOWAIT is deliberately NOT used: the second caller should wait its turn and
+  // then be refused by isAllowed() on the state the first one left behind,
+  // which is a correct 409. Failing immediately would turn an ordinary race
+  // into an error the user cannot act on.
+  //
+  // When db is the pool rather than a client there is no surrounding
+  // transaction, so the lock is released at once and buys nothing. Callers are
+  // expected to pass their client; the ones that do not are the concurrency
+  // bugs this part is closing.
   const r = await db.query(
     `SELECT serial_id, serial_number, inventory_status, current_dc_number,
             COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id
        FROM vendor_serial_numbers
-      WHERE serial_id = $1 AND deleted_at IS NULL`,
+      WHERE serial_id = $1 AND deleted_at IS NULL
+      FOR UPDATE`,
     [serialId]
   );
   return r.rows[0] || null;
@@ -97,6 +126,9 @@ async function transitionAsset(db, {
   actorUserId = null,
   actorName = null,
   allowOverride = false,
+  // Part 2.1: the caller passes req.correlationId so every event one
+  // request writes shares an id. Null is honest for a worker with no request.
+  correlationId = null,
 }) {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
@@ -206,6 +238,40 @@ async function transitionAsset(db, {
     actorUserId,
     actorName,
     db: client,
+  });
+
+  // Part 2.1: the third write, and the one that will outlive the other two.
+  //
+  // The two above are the trails that already disagree (finding I15) — the
+  // super-admin override writes one, support cancel writes the other, and they
+  // cannot be joined. All three are written here for one release so the event
+  // spine can be checked against them; Decision 5 then drops the older pair.
+  //
+  // On the caller's client on purpose: the event commits or rolls back WITH the
+  // status change it describes. An event recording a transition that was rolled
+  // back is worse than no event.
+  //
+  // reason is NOT truncated here. inventory_status_transitions.reason is
+  // varchar(255) and cuts a 2,000-character Dispatch QC failure down to the
+  // part before the detail (finding I16); events.payload is jsonb and keeps it.
+  await recordAssetEvent(client, {
+    serialId,
+    ttsplId: serial.ttspl_id,
+    eventType: 'status_changed',
+    fromState: from,
+    toState: toStatus,
+    payload: {
+      reason: reason || null,
+      dc_number: dcNumber,
+      customer_id: customerId,
+      entity_code: entityCode,
+      dispatch_mode: dispatchMode,
+    },
+    correlationId,
+    source: 'inventoryStateMachine.transitionAsset',
+    actor: actorUserId || actorName
+      ? { actor_type: 'user', actor_id: actorUserId, actor_name: actorName || `user ${actorUserId}` }
+      : null,
   });
 
   return { ok: true, from, to: toStatus, ttspl_id: serial.ttspl_id };

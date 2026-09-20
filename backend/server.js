@@ -85,6 +85,10 @@ try {
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
 
+// One request, one correlation id, on every event that request writes (Part
+// 2.1). Mounted before the routes so no handler has to thread it through.
+app.use(require('./middleware/correlationId'));
+
 try {
   // Needed to read the /uploads access cookie. Nothing else uses cookies.
   app.use(require('cookie-parser')());
