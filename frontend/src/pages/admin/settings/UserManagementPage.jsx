@@ -255,13 +255,15 @@ export default function UserManagementPage() {
         showToast('User updated', 'success');
       } else {
         const generated = form.autoPassword ? generatePassword() : form.password;
-        const data = await createUser({
+        await createUser({
           ...payload,
           password: generated,
         });
         showToast('User created', 'success');
-        if (data.remember_pass) {
-          setCreatedPassword({ name: form.name.trim(), password: data.remember_pass });
+        // Show the password we just sent, not one echoed back by the server —
+        // the API no longer returns it, and this is the only moment it is visible.
+        if (generated) {
+          setCreatedPassword({ name: form.name.trim(), password: generated });
         }
       }
       closeDrawer();

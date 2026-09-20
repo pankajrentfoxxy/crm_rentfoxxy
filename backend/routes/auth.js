@@ -16,7 +16,6 @@ const {
   updateUser,
   updateUserStatus,
   resetUserPassword,
-  backfillUserRememberPass,
   loginAsUser,
   registerCustomer,
   registerVendor,
@@ -164,11 +163,6 @@ router.post('/users/:id/login-as', authMiddleware, loginAsUser);
 // @desc    Reset user password (admin only)
 // @access  Private (Admin)
 router.post('/users/:id/reset-password', authMiddleware, resetUserPassword);
-
-// @route   POST /api/auth/users/backfill-remember-pass
-// @desc    Match bcrypt hashes to known passwords and store viewable copy (admin)
-// @access  Private (Admin)
-router.post('/users/backfill-remember-pass', authMiddleware, backfillUserRememberPass);
 
 // @route   PUT /api/auth/users/:id/permissions
 // @desc    Update user permissions

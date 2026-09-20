@@ -95,8 +95,35 @@ function buildEInvoicePayload({
   };
 }
 
+/**
+ * Sandbox mode fabricates IRN / e-way-bill numbers and the callers persist them
+ * to einvoice_records, eway_bill_records and delivery_challan_lines.irn. Nothing
+ * downstream distinguishes them from a number issued by NIC, so the CRM reports
+ * a document as e-invoiced while NIC has no record of it, and the customer's PDF
+ * carries a QR code that scans to nothing.
+ *
+ * Production has no ZOHO_GSP_* configuration at all, so `isSandbox` is true there
+ * by default — fixing any other bug in this module would immediately start
+ * minting fake statutory numbers. Refuse unless a test environment opts in
+ * explicitly.
+ */
+function assertGspUsable(isSandbox, what) {
+  if (isSandbox && process.env.ZOHO_GSP_ALLOW_SANDBOX_IRN !== 'true') {
+    throw new Error(
+      `E-invoicing is not configured, so no real ${what} can be obtained from NIC, and a `
+      + 'placeholder will not be issued. Set ZOHO_GSP_CLIENT_ID, ZOHO_GSP_CLIENT_SECRET, '
+      + 'COMPANY_GSTIN and ZOHO_GSP_SANDBOX=false to go live. To permit fabricated numbers '
+      + 'in a non-production environment, set ZOHO_GSP_ALLOW_SANDBOX_IRN=true.'
+    );
+  }
+  if (!isSandbox && !process.env.COMPANY_GSTIN) {
+    throw new Error('COMPANY_GSTIN is not set — refusing to submit an e-invoice payload without a seller GSTIN.');
+  }
+}
+
 async function generateEInvoice({ dcNumber, customer, lineItems, totalAmount, userId }) {
   const isSandbox = process.env.ZOHO_GSP_SANDBOX !== 'false';
+  assertGspUsable(isSandbox, 'IRN');
 
   const invoiceNumber = dcNumber;
   const now = new Date();
@@ -249,6 +276,7 @@ async function cancelEInvoice({ irn, cancelReason }) {
 
 async function generateEWayBill({ dcNumber, ewbData, userId }) {
   const isSandbox = process.env.ZOHO_GSP_SANDBOX !== 'false';
+  assertGspUsable(isSandbox, 'e-way bill number');
 
   let ewbResult;
 

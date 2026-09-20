@@ -189,9 +189,11 @@ async function resetPasswordWithOtp(rawEmail, rawOtp, rawPassword) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Self-service reset: the user chose this password. Keeping a cleartext copy
+    // makes a password only they should know readable by any admin or DB reader.
     await client.query(
-      'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
-      [passwordHash, passwordCheck.value, user.user_id]
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      [passwordHash, user.user_id]
     );
     try {
       const { upsertCredential } = require('./authCredentialsService');

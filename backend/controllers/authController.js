@@ -201,15 +201,18 @@ exports.register = async (req, res) => {
     }
     const mobileNo = mobileParsed.value;
     const result = await pool.query(
+      // remember_pass_plain is deliberately not written: storing the cleartext
+      // password alongside the hash turns any single read of this table into a
+      // full credential dump. The bcrypt hash is the only copy we keep.
       `INSERT INTO users (
-         name, email, password_hash, remember_pass_plain, role, team_id, active, permissions, mobile_no,
+         name, email, password_hash, role, team_id, active, permissions, mobile_no,
          designation, department, employee_id, joining_date, notes, status
        )
-       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11, $12::date, $13, 'active')
+       VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11::date, $12, 'active')
        RETURNING user_id, name, email, role, team_id, mobile_no, designation, department,
          employee_id, joining_date, notes, status, created_at`,
       [
-        name, email, password_hash, String(password), normalizedRole, primaryTeamId, permissions, mobileNo || null,
+        name, email, password_hash, normalizedRole, primaryTeamId, permissions, mobileNo || null,
         designation || null, department || null, employee_id || null, joining_date || null, notes || null,
       ]
     );
@@ -251,7 +254,6 @@ exports.register = async (req, res) => {
       success: true,
       message: 'User registered successfully',
       user: { ...user, team_ids: resolvedTeamIds },
-      remember_pass: String(password),
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -543,15 +545,6 @@ exports.getAllUsers = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    if (['admin', 'super_admin'].includes(req.user.role)) {
-      const { ensureRememberPassColumn } = require('../services/userPasswordRememberService');
-      try {
-        await ensureRememberPassColumn();
-      } catch (ensureErr) {
-        console.warn('ensureRememberPassColumn:', ensureErr.message);
-      }
-    }
-
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const offset = (page - 1) * limit;
@@ -573,8 +566,10 @@ exports.getAllUsers = async (req, res) => {
       params
     );
 
-    const canSeePasswords = ['admin', 'super_admin'].includes(req.user.role);
-    const passSelect = canSeePasswords ? ', u.remember_pass_plain' : '';
+    // Cleartext passwords are never returned, to anyone. An admin account is a
+    // single point of compromise for every employee credential otherwise, and
+    // staff reuse passwords well beyond this CRM.
+    const passSelect = '';
 
     const listParams = [...params, limit, offset];
     const result = await pool.query(
@@ -592,10 +587,6 @@ exports.getAllUsers = async (req, res) => {
     );
 
     for (const u of result.rows) {
-      if (canSeePasswords) {
-        u.remember_pass = u.remember_pass_plain || null;
-        delete u.remember_pass_plain;
-      }
       try {
         const utRes = await pool.query(
           'SELECT team_id FROM user_teams WHERE user_id = $1 ORDER BY team_id',
@@ -633,22 +624,12 @@ exports.exportUsersCsv = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const canSeePasswords = ['admin', 'super_admin'].includes(req.user.role);
-    if (canSeePasswords) {
-      const { ensureRememberPassColumn, backfillRememberPassPlain } = require('../services/userPasswordRememberService');
-      try {
-        await ensureRememberPassColumn();
-        await backfillRememberPassPlain({ limit: 5000 });
-      } catch (ensureErr) {
-        console.warn('exportUsersCsv remember_pass:', ensureErr.message);
-      }
-    }
-
+    // No password column, and no backfill sweep. The old export ran a dictionary
+    // attack over every user's hash and wrote the matches back as cleartext.
     const { whereClause, params } = buildUserListFilter(req);
-    const passSelect = canSeePasswords ? ', u.remember_pass_plain' : '';
 
     const result = await pool.query(
-      `SELECT u.name, u.email, u.mobile_no, u.role${passSelect},
+      `SELECT u.name, u.email, u.mobile_no, u.role,
               (SELECT string_agg(DISTINCT t2.team_name, ', ' ORDER BY t2.team_name)
                  FROM (
                    SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = u.user_id
@@ -664,24 +645,13 @@ exports.exportUsersCsv = async (req, res) => {
       params
     );
 
-    const header = canSeePasswords
-      ? ['Name', 'Email', 'Password', 'Role', 'Mobile', 'Team Name']
-      : ['Name', 'Email', 'Role', 'Mobile', 'Team Name'];
+    const header = ['Name', 'Email', 'Role', 'Mobile', 'Team Name'];
     const lines = [header.map(csvEscape).join(',')];
 
     for (const row of result.rows) {
       const roleLabel = ROLE_DISPLAY_NAMES[row.role] || row.role || '';
       const teamName = row.team_names || '';
-      const cells = canSeePasswords
-        ? [
-          row.name,
-          row.email,
-          row.remember_pass_plain || 'Not stored',
-          roleLabel,
-          row.mobile_no || '',
-          teamName,
-        ]
-        : [row.name, row.email, roleLabel, row.mobile_no || '', teamName];
+      const cells = [row.name, row.email, roleLabel, row.mobile_no || '', teamName];
       lines.push(cells.map(csvEscape).join(','));
     }
 
@@ -705,7 +675,7 @@ exports.exportUsersExcel = async (req, res) => {
     const { whereClause, params } = buildUserListFilter(req);
 
     const result = await pool.query(
-      `SELECT u.name, u.email, u.mobile_no, u.role, u.password_hash,
+      `SELECT u.name, u.email, u.mobile_no, u.role,
               (SELECT string_agg(DISTINCT t2.team_name, ', ' ORDER BY t2.team_name)
                  FROM (
                    SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = u.user_id
@@ -725,7 +695,8 @@ exports.exportUsersExcel = async (req, res) => {
     const sheetRows = result.rows.map((row) => ({
       Name: row.name || '',
       Email: row.email || '',
-      'Encrypted Password': row.password_hash || '',
+      // The bcrypt hash was previously exported here as "Encrypted Password".
+      // A hash in a spreadsheet is an offline cracking target, not a safe field.
       Role: ROLE_DISPLAY_NAMES[row.role] || row.role || '',
       Mobile: row.mobile_no || '',
       'Team Name': row.team_names || '',
@@ -1013,9 +984,11 @@ exports.resetUserPassword = async (req, res) => {
     const plain = new_password || generatePassword();
     const hash = await bcrypt.hash(plain, 10);
 
+    // Store the hash only. `plain` is still returned once below so the admin can
+    // pass it to the user; it is never persisted.
     await pool.query(
-      'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
-      [hash, String(plain), req.params.id]
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      [hash, req.params.id]
     );
 
     try {
@@ -1045,27 +1018,11 @@ exports.resetUserPassword = async (req, res) => {
   }
 };
 
-exports.backfillUserRememberPass = async (req, res) => {
-  try {
-    if (!['admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: 'Admin only' });
-    }
-    const { backfillRememberPassPlain } = require('../services/userPasswordRememberService');
-    const userId = parseInt(req.body?.user_id, 10);
-    const userIds = Number.isFinite(userId) && userId > 0 ? [userId] : null;
-    const result = await backfillRememberPassPlain({ userIds });
-    res.json({
-      success: true,
-      message: result.updated
-        ? `Recovered ${result.updated} existing password(s) without changing logins.`
-        : 'No matching known passwords found. Users who changed their password need a reset to store a viewable copy.',
-      ...result,
-    });
-  } catch (error) {
-    console.error('backfillUserRememberPass error:', error);
-    res.status(500).json({ success: false, message: 'Failed to recover passwords' });
-  }
-};
+// Removed: backfillUserRememberPass. It bcrypt-compared a built-in list of common
+// passwords against every user's hash, wrote each match back as cleartext and
+// returned the {user_id, password} pairs in the HTTP response — a password
+// cracker shipped as an admin feature. Recovering a password is not a supported
+// operation; use POST /api/auth/users/:id/reset-password instead.
 
 // Update User Teams (Admin/Manager) - multi-team assignment for team_member/team_lead
 exports.updateUserTeams = async (req, res) => {

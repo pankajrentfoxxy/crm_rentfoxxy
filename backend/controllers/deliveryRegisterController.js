@@ -224,6 +224,8 @@ exports.submitPod = [
       else if (rejectedSerials.length && !deliveredSerials.length) nextStatus = 'rejected';
       else if (deliveredSerials.length && rejectedSerials.length) nextStatus = 'delivered';
 
+      let outboundFinalized = false;
+
       await client.query('BEGIN');
 
       for (const line of linesR.rows) {
@@ -246,6 +248,9 @@ exports.submitPod = [
              file_path = COALESCE($11::text, file_path),
              status = $12::varchar,
              delivery_completed_at = CASE WHEN $12::varchar = 'delivered' THEN NOW() ELSE delivery_completed_at END,
+             -- The billing catch-up only counts a DC as delivered when delivered_at
+             -- is stamped; without it the pre-month span is silently never billed.
+             delivered_at = CASE WHEN $12::varchar = 'delivered' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
              updated_at = NOW()
            WHERE id = $13`,
           [
@@ -288,6 +293,20 @@ exports.submitPod = [
             actorUserId: req.user?.user_id || null,
             actorName: req.user?.name || null,
           });
+        } else if (!rejectedSerials.length) {
+          // Outbound DC delivered through the Delivery Register (porter / manual POD).
+          // Without this the unit stays 'in_transit' forever: no rented state, no
+          // rent_start_date, no delivered_at, and therefore no rental invoice —
+          // silent revenue leakage. deliveryFlowController and bluedartAwbSyncService
+          // both already call this on their own delivery paths.
+          //
+          // Full deliveries only: finalizeDeliveryInventory works from the DC's own
+          // serial list, not from `deliveredSerials`, so on a partial delivery it
+          // would also mark the rejected units delivered and start billing them.
+          // Partial PODs keep the existing behaviour and are finalised elsewhere.
+          const sm = require('./salesManagementController');
+          await sm.finalizeDeliveryInventory(client, dcNumber, req.user || {});
+          outboundFinalized = true;
         }
       }
 
@@ -301,6 +320,31 @@ exports.submitPod = [
           const { notifySupportServiceDeliveredAsync } = require('../services/supportWhatsApp');
           notifySupportServiceDeliveredAsync({ dcNumber });
         } catch (_) { /* WhatsApp must never block delivery */ }
+        if (outboundFinalized) {
+          // Post-commit, best-effort: raise the rental invoice for the newly
+          // delivered unit, matching deliveryFlowController's delivery paths.
+          try {
+            const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
+            const ctxRes = await pool.query(
+              `SELECT dcl.customer_id,
+                      COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
+                 FROM delivery_challan_lines dcl
+                 LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+                 LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
+                WHERE dcl.dc_number = $1
+                LIMIT 1`,
+              [dcNumber]
+            );
+            const ctx = ctxRes.rows[0] || {};
+            await maybeInvoiceOnRentalDelivery({
+              dcNumber,
+              customerId: ctx.customer_id,
+              quotationType: ctx.quotation_type,
+            });
+          } catch (invErr) {
+            console.error('[deliveryRegister] rental invoice on delivery failed:', invErr.message);
+          }
+        }
       }
       res.json({ success: true, message: 'Delivery status updated successfully' });
     } catch (e) {

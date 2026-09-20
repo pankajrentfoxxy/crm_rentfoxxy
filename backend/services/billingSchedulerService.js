@@ -100,9 +100,23 @@ async function isFirstOutboundDcForSo(db, dcNumber) {
   return { ok: true, soNumber, firstDc };
 }
 
-async function nextInvoiceNumber(entity = 'rentfoxxy') {
+/**
+ * Allocate the next invoice number.
+ *
+ * `db` MUST be the caller's transaction client whenever one exists. Running the
+ * UPDATE on the module pool put the increment in its own autocommitted
+ * transaction, so when the caller rolled back — most often on the
+ * UNIQUE(customer_id, invoice_month, invoice_year) collision — the number was
+ * consumed anyway. That is how 625 of 1,193 numbers went missing from a series
+ * that Rule 46 CGST requires to be consecutive.
+ *
+ * Using the caller's client also makes concurrent allocation safer, not less
+ * safe: the UPDATE takes a row lock that is now held until the caller commits,
+ * so two overlapping invoice runs serialise instead of interleaving.
+ */
+async function nextInvoiceNumber(entity = 'rentfoxxy', db = pool) {
   const docType = entity === 'gorefurbo' ? 'invoice_gorefurbo' : 'invoice_rentfoxxy';
-  const res = await pool.query(
+  const res = await db.query(
     `UPDATE sm_document_sequences
      SET last_value = last_value + 1
      WHERE doc_type = $1
@@ -110,7 +124,7 @@ async function nextInvoiceNumber(entity = 'rentfoxxy') {
     [docType]
   );
   if (res.rows.length) return res.rows[0].number;
-  const fb = await pool.query(
+  const fb = await db.query(
     `UPDATE sm_document_sequences SET last_value = last_value + 1
      WHERE doc_type = 'customer_invoice'
      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
@@ -118,8 +132,9 @@ async function nextInvoiceNumber(entity = 'rentfoxxy') {
   return fb.rows[0].number;
 }
 
-async function nextVendorBillNumber() {
-  const res = await pool.query(
+/** See nextInvoiceNumber — `db` must be the caller's transaction client. */
+async function nextVendorBillNumber(db = pool) {
+  const res = await db.query(
     `UPDATE sm_document_sequences
      SET last_value = last_value + 1
      WHERE doc_type = 'vendor_bill'
@@ -949,7 +964,7 @@ async function generatePostpaidCustomerInvoice(customerId, month, year) {
     }
 
     const entityCode = 'rentfoxxy';
-    const invoiceNumber = await nextInvoiceNumber(entityCode);
+    const invoiceNumber = await nextInvoiceNumber(entityCode, client);
     const insertRes = await client.query(
       `INSERT INTO customer_invoices
         (invoice_number, customer_id, invoice_month, invoice_year,
@@ -2620,7 +2635,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
     const { gstAmount, grandTotal } = invoiceMoneyTotals(subtotal, gstPercent, 0);
 
     const entityCode = 'rentfoxxy';
-    const invoiceNumber = await nextInvoiceNumber(entityCode);
+    const invoiceNumber = await nextInvoiceNumber(entityCode, client);
 
     const insertRes = await client.query(
       `INSERT INTO customer_invoices
@@ -3244,7 +3259,7 @@ async function generateVendorBill(vendorId, month, year) {
     const gstAmount = parseFloat((subtotal * 0.18).toFixed(2));
     const totalPayable = Math.max(0, parseFloat((subtotal + gstAmount - debitAdjustment).toFixed(2)));
 
-    const billNumber = await nextVendorBillNumber();
+    const billNumber = await nextVendorBillNumber(client);
 
     const insertRes = await client.query(
       `INSERT INTO vendor_monthly_bills

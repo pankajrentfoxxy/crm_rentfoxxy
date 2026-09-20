@@ -102,9 +102,41 @@ const scanAndQueueFollowUpReminderEmails = async () => {
   }
 };
 
+// How long a row may sit in 'processing' before we assume the worker that
+// claimed it died.
+const STALE_PROCESSING_MINUTES = 15;
+
+/**
+ * Rows are set to 'processing' and committed *before* the send is attempted, so
+ * a restart mid-batch strands up to BATCH_SIZE of them forever: 'processing' is
+ * never re-picked, and `attempts` is still 0, so they do not even show up as
+ * failed. Put them back on the queue, counting the attempt so a message that
+ * reliably kills the worker still exhausts max_attempts instead of looping.
+ */
+const reclaimStaleProcessing = async () => {
+  const res = await pool.query(
+    `UPDATE email_queue
+        SET status = 'pending',
+            attempts = attempts + 1,
+            last_error = 'Reclaimed: worker restarted while sending'
+      WHERE status = 'processing'
+        AND scheduled_at < CURRENT_TIMESTAMP - make_interval(mins => $1)`,
+    [STALE_PROCESSING_MINUTES]
+  );
+  if (res.rowCount) {
+    console.warn(`[emailQueue] reclaimed ${res.rowCount} stale 'processing' row(s)`);
+  }
+};
+
 const processQueue = async () => {
   const transporter = getTransporter();
   if (!transporter) return;
+
+  try {
+    await reclaimStaleProcessing();
+  } catch (error) {
+    console.error('[emailQueue] stale reclaim failed:', error.message);
+  }
 
   const client = await pool.connect();
   try {
@@ -121,7 +153,8 @@ const processQueue = async () => {
          FOR UPDATE SKIP LOCKED
        )
        UPDATE email_queue q
-       SET status = 'processing'
+       -- Re-stamp scheduled_at so it doubles as "claimed at" for the reaper above.
+       SET status = 'processing', scheduled_at = CURRENT_TIMESTAMP
        FROM picked
        WHERE q.email_id = picked.email_id
        RETURNING q.*`,

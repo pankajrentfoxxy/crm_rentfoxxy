@@ -915,10 +915,32 @@ const recomputeTicketStatus = async (client, ticketId, manualCloseUserId = null)
     );
 };
 
+/**
+ * Constant-shape OTP comparison.
+ *
+ * A stored OTP of NULL must never verify. The old code compared
+ * `String(item.otp_code) !== supplied`, and String(null) is the string "null",
+ * which is also truthy — so posting the literal "null" to an item that had no
+ * OTP issued passed the check, closed the item, marked the asset returned and
+ * raised a return credit note.
+ *
+ * Returns true only when a non-empty OTP is stored and the supplied value
+ * matches it exactly after trimming.
+ */
+const otpMatches = (stored, supplied) => {
+    if (stored === null || stored === undefined || String(stored).trim() === '') return false;
+    if (supplied === null || supplied === undefined) return false;
+    return String(stored).trim() === String(supplied).trim();
+};
+
 const mapItemRow = (row, { showOtp, showWarehouseOtp }) => {
     const base = { ...row };
     if (!showOtp) {
         delete base.otp_code;
+        // customer_otp_code is a copy of otp_code handed to the customer. Leaving
+        // it in the payload let an assigned technician read the customer's pickup
+        // OTP and post it back without ever meeting them.
+        delete base.customer_otp_code;
     }
     if (!showWarehouseOtp) {
         delete base.warehouse_otp_code;
@@ -1893,14 +1915,15 @@ exports.verifyOtp = async (req, res) => {
     if (!item.pod_image_path) {
         return res.status(400).json({ success: false, message: 'Upload POD before closing with OTP' });
     }
-    const trimmed = String(otp).trim();
     const useWarehouse = item.item_type === 'pickup' && item.warehouse_otp_code;
-    if (useWarehouse) {
-        if (String(item.warehouse_otp_code) !== trimmed) {
-            return res.status(400).json({ success: false, message: 'Invalid warehouse OTP' });
-        }
-    } else if (String(item.otp_code) !== trimmed) {
-        return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    const storedOtp = useWarehouse ? item.warehouse_otp_code : item.otp_code;
+    if (!otpMatches(storedOtp, otp)) {
+        return res.status(400).json({
+            success: false,
+            message: storedOtp
+                ? (useWarehouse ? 'Invalid warehouse OTP' : 'Invalid OTP')
+                : 'No OTP has been generated for this item',
+        });
     }
 
     const client = await pool.connect();
@@ -6001,3 +6024,6 @@ exports.ensureSupportSchema = async () => {
         }
     }
 };
+
+// Exported for unit tests (see test/supportOtp.test.js).
+exports.otpMatches = otpMatches;
