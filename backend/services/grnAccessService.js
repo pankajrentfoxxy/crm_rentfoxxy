@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { secureAccessNumber } = require('../utils/secureRandom');
 
 /**
  * GRN Access Numbers — short numeric codes that map to a GRN capture URL.
@@ -15,7 +16,7 @@ async function expireStale(db = pool) {
 
 /** Random 6-digit code (100000–999999). */
 function random6Digit() {
-  return Math.floor(100000 + Math.random() * 900000);
+  return Number(secureAccessNumber());
 }
 
 /**

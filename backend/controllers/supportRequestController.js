@@ -7,6 +7,7 @@ const {
   checkSerialEligibleForSupportTicket,
 } = require('../services/supportSerialEligibility');
 const { resolveSupportAssigneeId } = require('../middleware/supportAccess');
+const { secureOtp } = require('../utils/secureRandom');
 
 /** Match Support CRM create form address display (shipping preferred). */
 function formatTicketAddress(value) {
@@ -1159,7 +1160,7 @@ exports.convertToTicket = async (req, res) => {
         category,
         'QR support request',
         issueRemarks,
-        String(Math.floor(100000 + Math.random() * 900000)),
+        secureOtp(),
         assignedTo,
         specs.brand,
         specs.model,

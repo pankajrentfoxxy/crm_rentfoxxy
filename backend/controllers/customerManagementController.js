@@ -44,6 +44,7 @@ const {
   invalidateCustomerLaptopsCache,
 } = require('../services/customerLaptopsCache');
 const { lookupGstin, sanitizeGstin, isValidGstin } = require('../services/gstinLookupService');
+const { secureInt } = require('../utils/secureRandom');
 const {
   normalizeDeliveryAddress,
   formatDeliveryAddressLine,
@@ -201,7 +202,7 @@ function validateCustomerPhoneFields(body, { requirePrimary = false } = {}) {
 function generatePassword(length = 10) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   let out = '';
-  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < length; i++) out += chars[secureInt(0, chars.length - 1)];
   return out;
 }
 

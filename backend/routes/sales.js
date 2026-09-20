@@ -132,9 +132,25 @@ const requireDispatchAccess = (req, res, next) => {
 
 const customerUploadDir = 'uploads/customers';
 if (!fs.existsSync(customerUploadDir)) fs.mkdirSync(customerUploadDir, { recursive: true });
+// See routes/leads.js — uploads/customers is publicly served, so an unfiltered
+// upload here is stored XSS on our own origin.
 const upload = multer({
     dest: customerUploadDir,
-    limits: multerLimits()
+    limits: multerLimits(),
+    fileFilter: (_req, file, cb) => {
+        const mime = String(file.mimetype || '').toLowerCase();
+        const ext = require('path').extname(file.originalname || '').toLowerCase();
+        if (['.html', '.htm', '.svg', '.js', '.mjs', '.xhtml', '.php'].includes(ext)) {
+            return cb(new Error('This file type is not allowed'));
+        }
+        const allowed = [
+            'text/csv', 'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/pdf',
+        ];
+        if (allowed.includes(mime) || mime.startsWith('image/')) return cb(null, true);
+        return cb(new Error('Only CSV, Excel, PDF or image files are allowed'));
+    },
 });
 
 router.post('/customers', authMiddleware, (req, res, next) => {

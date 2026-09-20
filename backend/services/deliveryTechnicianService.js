@@ -3,6 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { parseIndianMobile } = require('../utils/phoneValidation');
+const { secureInt } = require('../utils/secureRandom');
 
 const UPLOAD_SUBDIR = 'delivery-man';
 const uploadRoot = path.join(__dirname, '..', '..', 'uploads', UPLOAD_SUBDIR);
@@ -14,7 +15,7 @@ function ensureUploadDir() {
 function generatePassword(length = 10) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   let out = '';
-  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < length; i++) out += chars[secureInt(0, chars.length - 1)];
   return out;
 }
 

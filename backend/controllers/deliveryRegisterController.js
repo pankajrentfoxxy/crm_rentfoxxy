@@ -16,6 +16,7 @@ const {
 } = require('../services/deliveryRegisterService');
 const technicianService = require('../services/deliveryTechnicianService');
 const { loginAsTechnician } = require('../services/technicianAuthService');
+const { secureOtp } = require('../utils/secureRandom');
 
 const podUploadDir = path.join(__dirname, '..', '..', 'uploads', 'pod_files');
 if (!fs.existsSync(podUploadDir)) {
@@ -129,7 +130,7 @@ exports.sendOtp = async (req, res) => {
     const { dcNumber } = req.params;
     const { email, name } = req.body;
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = secureOtp();
     await pool.query(
       `UPDATE delivery_challan_lines SET d_otp = $1, d_customer_email = $2, d_customer_name = $3, updated_at = NOW()
        WHERE dc_number = $4`,

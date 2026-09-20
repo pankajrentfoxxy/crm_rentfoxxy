@@ -8,6 +8,7 @@ const portalSvc = require('../services/customerPortalService');
 const supportRequestCtrl = require('./supportRequestController');
 const { generateCustomerInvoicePdf, invoicePdfDownloadName } = require('../services/customerInvoicePdfService');
 const { normalizeInvoiceFormat } = require('../services/customerInvoiceHtmlService');
+const { secureOtp } = require('../utils/secureRandom');
 
 /**
  * Document numbers arrive percent-encoded (SO%2F26-27%2F1023) and are sometimes
@@ -614,7 +615,7 @@ exports.raiseTicket = async (req, res) => {
         category,
         ticket_type || subject,
         description,
-        Math.floor(100000 + Math.random() * 900000).toString(),
+        secureOtp(),
         specs.brand, specs.model, specs.ram, specs.storage, specs.generation,
       ]
     );

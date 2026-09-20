@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/customerPortalController');
 const { customerPortalAuth, blockImpersonatedWrites } = require('../middleware/customerPortalAuth');
+const { loginLimiter } = require('../middleware/rateLimit');
 
-router.post('/login', ctrl.login);
+router.post('/login', loginLimiter, ctrl.login);
 router.post('/logout', customerPortalAuth, ctrl.logout);
 
 router.use(customerPortalAuth);

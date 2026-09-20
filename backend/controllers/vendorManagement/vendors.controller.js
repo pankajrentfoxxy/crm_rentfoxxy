@@ -10,6 +10,7 @@ const {
   displayDeployedStatus,
 } = require('../../services/customerDeployedAssets');
 const { normalizeIndianMobile } = require('../../utils/phoneValidation');
+const { secureInt } = require('../../utils/secureRandom');
 
 /** PO bulk receive + TTSPL: `purchaseOrders.controller` (`receivePoLineBulk`). Spare PO bulk: `sparePartsOrders.controller` (`receiveSpareLineBulk`). */
 
@@ -677,13 +678,18 @@ function generatePortalPassword(length = 10) {
   const lower = 'abcdefghijkmnopqrstuvwxyz';
   const digits = '23456789';
   const all = upper + lower + digits;
-  const pick = (s) => s[Math.floor(Math.random() * s.length)];
+  // crypto, not Math.random: this is a live portal credential. The shuffle was
+  // also biased — Array.sort with a random comparator does not produce a uniform
+  // permutation — so it used a Fisher-Yates shuffle over secureInt instead.
+  const pick = (s) => s[secureInt(0, s.length - 1)];
   let out = pick(upper) + pick(lower) + pick(digits);
   for (let i = out.length; i < length; i += 1) out += pick(all);
-  return out
-    .split('')
-    .sort(() => Math.random() - 0.5)
-    .join('');
+  const chars = out.split('');
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = secureInt(0, i);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
 }
 
 const portalAccessValidators = [

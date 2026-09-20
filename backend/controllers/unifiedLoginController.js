@@ -75,6 +75,9 @@ async function completeCrmLogin(userId, req) {
       team_id: user.team_id,
       team_ids: teamIds,
       permissions: user.permissions || [],
+      // Checked by authMiddleware on every request; bumping users.token_version
+      // invalidates this token immediately.
+      tv: user.token_version ?? 1,
     },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }

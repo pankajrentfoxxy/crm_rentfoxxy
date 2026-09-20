@@ -14,9 +14,47 @@ const authMiddleware = async (req, res, next) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Signature alone is not enough: tokens live 30 days and there is no session
+    // store, so without this check deactivating or demoting a user took up to a
+    // month to bite. One indexed read per request against users.token_version.
+    // Portal and technician tokens carry their own auth_type and are verified by
+    // their own middleware, so they are not subject to this check.
+    if (!decoded.auth_type && decoded.user_id) {
+      const pool = require('../config/db');
+      const { rows } = await pool.query(
+        `SELECT token_version, active, COALESCE(status, 'active') AS status
+           FROM users WHERE user_id = $1`,
+        [decoded.user_id]
+      );
+      const row = rows[0];
+      if (!row) {
+        return res.status(401).json({ success: false, message: 'Account no longer exists' });
+      }
+      if (row.active === false || row.status !== 'active') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is no longer active. Contact your administrator.',
+        });
+      }
+      // A token minted before this feature has no tv claim and is rejected, which
+      // is why everyone signs in once after the rollout.
+      if (Number(decoded.tv || 0) !== Number(row.token_version)) {
+        return res.status(401).json({
+          success: false,
+          message: 'Your session has expired. Please sign in again.',
+        });
+      }
+    }
+
     req.user = decoded;
     next();
   } catch (error) {
+    // A DB fault must not read as a bad token, and must not fail open either.
+    if (error?.name !== 'JsonWebTokenError' && error?.name !== 'TokenExpiredError') {
+      console.error('authMiddleware error:', error.message);
+      return res.status(503).json({ success: false, message: 'Authentication temporarily unavailable' });
+    }
     res.status(401).json({
       success: false,
       message: 'Token is not valid'

@@ -11,9 +11,10 @@ const {
 } = require('./grnSerialCaptureService');
 const { verifyConfigurationAgainst } = require('./grnConfigService');
 const { getInventoryExpectedConfig } = require('./productionAssetService');
+const { secureAccessNumber } = require('../utils/secureRandom');
 
 function randomAccessNumber() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return secureAccessNumber();
 }
 
 function expectedShape(raw) {

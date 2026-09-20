@@ -11,6 +11,7 @@ const {
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
+const { secureOtp } = require('../utils/secureRandom');
 const {
   appendColumnFilters: appendReturnDcColumnFilters,
   getColumnDistinctValues: getReturnDcColumnDistinctValues,
@@ -1201,7 +1202,7 @@ async function ensureReturnDcPickupItems(db, dcl) {
   const units = await buildUnitsForRdc(db, dcl, []);
   const inserted = [];
   for (const unit of units) {
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = secureOtp();
     const ins = await db.query(
       `INSERT INTO support_ticket_items (
           ticket_id, serial_number, unique_serial_number, ttspl_id,

@@ -12,6 +12,7 @@ const {
 const { verifyConfigurationAgainst, sizeNum, normBrand } = require('./grnConfigService');
 const { serialMatchesSoLine, configMismatchMessage, enrichSerialSpecs } = require('../utils/soInventorySpecMatch');
 const { getSalesOrderLines } = require('./salesManagementService');
+const { secureAccessNumber } = require('../utils/secureRandom');
 const {
   ensureTables,
   getByVendorSerial,
@@ -52,7 +53,7 @@ async function ensureDispatchQcTokenTable(db = pool) {
 }
 
 function randomAccessNumber() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return secureAccessNumber();
 }
 
 async function expireStaleTokens(db = pool) {

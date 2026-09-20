@@ -46,6 +46,7 @@ const { regenerateServiceDcPdfByNumber, regenerateServiceDcDocumentPdf } = requi
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
 const { syncPartRequestsTechForItem } = require('./supportPartsController');
+const { secureOtp } = require('../utils/secureRandom');
 
 function normalizeSupportPhoneFields(body) {
     const out = { ...body };
@@ -65,7 +66,7 @@ const TICKET_IN_PROGRESS = 'in_progress';
 const TICKET_CLOSED = 'closed';
 const TICKET_CANCELLED = 'cancelled';
 
-const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+const generateOtp = () => secureOtp();
 
 function fireSupportWa(fn) {
     try { fn(); } catch (_) { /* WhatsApp must never block CRM writes */ }

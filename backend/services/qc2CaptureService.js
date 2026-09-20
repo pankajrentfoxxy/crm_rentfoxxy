@@ -10,6 +10,7 @@ const {
   resolvePublicFrontendUrl,
 } = require('./grnSerialCaptureService');
 const { verifyConfigurationAgainst } = require('./grnConfigService');
+const { secureAccessNumber } = require('../utils/secureRandom');
 const {
   ensureTables,
   getByTicket,
@@ -47,7 +48,7 @@ async function ensureQc2TokenTable(db = pool) {
 }
 
 function randomAccessNumber() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return secureAccessNumber();
 }
 
 async function expireStaleTokens(db = pool) {
