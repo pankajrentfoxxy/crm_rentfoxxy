@@ -24,7 +24,11 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "check:tokens": "node scripts/check-tokens.js",
+    "check:statuses": "node scripts/check-statuses.js",
+    "check:routes": "node scripts/check-routes.js",
+    "check:carret": "npm run check:tokens && npm run check:statuses && npm run check:routes"
   },
   "eslintConfig": {
     "extends": [
