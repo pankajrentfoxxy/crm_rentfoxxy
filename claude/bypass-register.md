@@ -23,43 +23,52 @@ Scripts under `backend/scripts/` are excluded from the checklists below and list
 
 ## A. The nine catch-block bypasses — do these first
 
+> **All nine closed.** Part 2.2 section A, commit below. Verified: no
+> `inventory_status = '...'` write remains in any of the six files.
+
 These are the reason the state machine is advisory rather than enforcing. The pattern in each: call `transitionAsset` (or a wrapper), catch the refusal, log it, then perform the raw write anyway. Validation never actually stops anything.
 
 **Fix pattern for all nine, identically:** attempt the transition; on refusal, **fail the request** and log at error level with the serial, the attempted transition and the caller. Do not write. If the refused transition turns out to be a legitimate business event, add it to `ALLOWED` in `inventoryStateMachine.js` — do not reopen the bypass.
 
-- [ ] `backend/controllers/salesManagementController.js:3210` — `catch (rErr)` → `dispatch_ready` + `current_dc_number`, `dispatch_mode`, `rent_monthly_rate`. DC create.
-- [ ] `backend/controllers/salesManagementController.js:3666` — same, second DC-create path (`createDcsByAddress`).
-- [ ] `backend/controllers/salesManagementController.js:5658` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch. *(was `:5579`; +79 since Part 0 landed)*
-- [ ] `backend/controllers/salesManagementController.js:5937` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log. *(was `:5858`; +79 since Part 0 landed)*
-- [ ] `backend/services/guardGateValidationService.js:2443` — `catch (dispErr)` → `in_transit`. Guard gate outward. **Part 3 rewrites this path entirely; close the bypass here anyway so the two parts do not fight.**
-- [ ] `backend/services/productionAssetService.js:941` — `catch (e)` → `in_stock` + `qc_status='passed'`. Pending-inventory receive.
-- [ ] `backend/services/supportServiceDcService.js:563` — `catch (dispErr)` → `dispatch_ready`. Support service DC.
-- [ ] `backend/services/inventoryAssetMovementService.js:325, :335` — catch swallows the transition, then writes `qc_status` and `inventory_status` plus a whole-object `extra` replace. Two lines, one site.
-- [ ] `backend/services/dispatchQcCaptureService.js:330-331` — the raw UPDATE runs *before* the transition attempt, so the catch at `:342` is decorative. Both writes must go.
+- [x] `backend/controllers/salesManagementController.js:3210` — `catch (rErr)` → `dispatch_ready` + `current_dc_number`, `dispatch_mode`, `rent_monthly_rate`. DC create.
+- [x] `backend/controllers/salesManagementController.js:3666` — same, second DC-create path (`createDcsByAddress`).
+- [x] `backend/controllers/salesManagementController.js:5658` — `catch` → `in_transit` + `dispatched_at`. Gate dispatch. *(was `:5579`; +79 since Part 0 landed)*
+- [x] `backend/controllers/salesManagementController.js:5937` — `backToStock` then `catch (_)` → `in_stock`, clears customer / DC / entity. DC cancel. Note the bare `catch (_)` — it does not even log. *(was `:5858`; +79 since Part 0 landed)*
+- [x] `backend/services/guardGateValidationService.js:2443` — `catch (dispErr)` → `in_transit`. Guard gate outward. **Part 3 rewrites this path entirely; close the bypass here anyway so the two parts do not fight.**
+- [x] `backend/services/productionAssetService.js:941` — `catch (e)` → `in_stock` + `qc_status='passed'`. Pending-inventory receive.
+- [x] `backend/services/supportServiceDcService.js:563` — `catch (dispErr)` → `dispatch_ready`. Support service DC.
+- [x] `backend/services/inventoryAssetMovementService.js:325, :335` — catch swallows the transition, then writes `qc_status` and `inventory_status` plus a whole-object `extra` replace. Two lines, one site.
+- [x] `backend/services/dispatchQcCaptureService.js:330-331` — the raw UPDATE runs *before* the transition attempt, so the catch at `:342` is decorative. Both writes must go.
 
 ---
 
 ## B. Unconditional `inventory_status` writers — no transition attempted at all
 
+> **All closed except the two bulk heals**, which are deliberately held for
+> Part 2.5 — the register says removing them before the single availability
+> predicate exists will surface units that stop appearing in search, and that
+> the surfacing is the point. Landing them together avoids a visible gap on a
+> publicly reachable QA instance.
+
 Ordered by damage.
 
-- [ ] `backend/controllers/qcManagement/orders.controller.js:530` — writes the request body's `selected_value` **straight into the column**. Largest single source of non-canonical values in production (`out_for_repare`, `out_for_return`, `repared`, `replace`, `qc_reject`). Map QC outcomes to canonical statuses; reject anything else with a 400.
-- [ ] `backend/controllers/qcManagement/orders.controller.js:408` — `require_for_parts` into both columns. Non-canonical.
-- [ ] `backend/controllers/qcManagement/orders.controller.js:326` — `in_stock` on QC order pass.
-- [ ] `backend/services/grnTicketService.js:340` — `in_stock` + `qc_status='passed'`. **This is the asset's first entry into stock and it is entirely unaudited.**
-- [ ] `backend/services/grnTicketService.js:359` — `markVendorSerialReadyForRent`: `in_stock` + `passed` after QC2.
-- [ ] `backend/services/qcProcessIntakeService.js:800` — unconditional `in_stock` on dead/failed re-evaluation. **Resurrects `scrapped` units, which `ALLOWED.scrapped = []` forbids.**
-- [ ] `backend/services/qcProcessIntakeService.js:722` — unconditional `in_stock`, QC Pending → QC Process.
-- [ ] `backend/services/qcProcessIntakeService.js:619` — CASE → `in_stock` for anything not in a deployed list.
-- [ ] `backend/services/qcProcessIntakeService.js:41` — CASE `qc_failed|in_repair` → `in_stock`.
-- [ ] `backend/controllers/supportController.js:3048` — `returned` + clears `current_customer_id`. Support warehouse receive. Source state is usually `in_transit`, a transition the map forbids — see I6 below.
-- [ ] `backend/controllers/supportController.js:3661` — `returned`, conditional customer detach.
-- [ ] `backend/controllers/qcController.js:552` — `reserved`, pre-dispatch QC pass, guarded only by a `NOT IN` list.
-- [ ] `backend/controllers/ticketPhase2Controller.js:611` — `reserved`. **Byte-identical duplicate of the line above.** Collapse both into one helper rather than fixing them twice.
-- [ ] `backend/services/inventoryStatusOverrideService.js:109` — super-admin override. `inventoryStatusForQc()` has `default: return qcStatus`, so **any** qc string lands verbatim in `inventory_status`. Keep the override as a capability, but constrain it to the canonical list and write an event.
-- [ ] `backend/services/qcCheckService.js:264` — `COALESCE($3, inventory_status)` where `$3` is the caller's `selected` value → `require_for_parts`, `send_to_qc_check`.
-- [ ] `backend/services/supportCancelInventoryService.js:100` — `inventory_status = $2` + `qc_status='passed'`, clears `returned_at` / `rent_end_date`. Hand-rolls an `inventory_status_transitions` insert but writes no TTSPL event — one of the two logs that disagree (I15).
-- [ ] `backend/controllers/inventoryManagement/inventoryList.controller.js:387` — CASE self-heal → `in_stock`.
+- [x] `backend/controllers/qcManagement/orders.controller.js:530` — writes the request body's `selected_value` **straight into the column**. Largest single source of non-canonical values in production (`out_for_repare`, `out_for_return`, `repared`, `replace`, `qc_reject`). Map QC outcomes to canonical statuses; reject anything else with a 400.
+- [x] `backend/controllers/qcManagement/orders.controller.js:408` — `require_for_parts` into both columns. Non-canonical.
+- [x] `backend/controllers/qcManagement/orders.controller.js:326` — `in_stock` on QC order pass.
+- [x] `backend/services/grnTicketService.js:340` — `in_stock` + `qc_status='passed'`. **This is the asset's first entry into stock and it is entirely unaudited.**
+- [x] `backend/services/grnTicketService.js:359` — `markVendorSerialReadyForRent`: `in_stock` + `passed` after QC2.
+- [x] `backend/services/qcProcessIntakeService.js:800` — unconditional `in_stock` on dead/failed re-evaluation. **Resurrects `scrapped` units, which `ALLOWED.scrapped = []` forbids.**
+- [x] `backend/services/qcProcessIntakeService.js:722` — unconditional `in_stock`, QC Pending → QC Process.
+- [x] `backend/services/qcProcessIntakeService.js:619` — CASE → `in_stock` for anything not in a deployed list.
+- [x] `backend/services/qcProcessIntakeService.js:41` — CASE `qc_failed|in_repair` → `in_stock`.
+- [x] `backend/controllers/supportController.js:3048` — `returned` + clears `current_customer_id`. Support warehouse receive. Source state is usually `in_transit`, a transition the map forbids — see I6 below.
+- [x] `backend/controllers/supportController.js:3661` — `returned`, conditional customer detach.
+- [x] `backend/controllers/qcController.js:552` — `reserved`, pre-dispatch QC pass, guarded only by a `NOT IN` list.
+- [x] `backend/controllers/ticketPhase2Controller.js:611` — `reserved`. **Byte-identical duplicate of the line above.** Collapse both into one helper rather than fixing them twice.
+- [x] `backend/services/inventoryStatusOverrideService.js:109` — super-admin override. `inventoryStatusForQc()` has `default: return qcStatus`, so **any** qc string lands verbatim in `inventory_status`. Keep the override as a capability, but constrain it to the canonical list and write an event.
+- [x] `backend/services/qcCheckService.js:264` — `COALESCE($3, inventory_status)` where `$3` is the caller's `selected` value → `require_for_parts`, `send_to_qc_check`.
+- [x] `backend/services/supportCancelInventoryService.js:100` — `inventory_status = $2` + `qc_status='passed'`, clears `returned_at` / `rent_end_date`. Hand-rolls an `inventory_status_transitions` insert but writes no TTSPL event — one of the two logs that disagree (I15).
+- [x] `backend/controllers/inventoryManagement/inventoryList.controller.js:387` — CASE self-heal → `in_stock`.
 - [ ] `backend/services/salesManagementService.js:2283` — `healStaleReturnedPassedSerials`: bulk `returned → in_stock`, unbounded, **on every SO-attach search**. Delete rather than fix — see note below.
 - [ ] `backend/services/salesManagementService.js:2303` — `healStaleReservedPassedSerials`: bulk `reserved → in_stock`. Same.
 
@@ -68,6 +77,12 @@ Ordered by damage.
 ---
 
 ## C. `qc_status`-only writers
+
+> **Deferred to Part 5 by decision D2.** Part 1 defines no canonical list for
+> `qc_status`, and its main writer — qcManagement/orders.controller.js — is
+> rewritten in Part 5. Constraining the column before its writer is fixed turns
+> a data-quality problem into 500s at the QC bench. The boxes below stay open
+> on purpose.
 
 Same rule applies — `qc_status` is a canonical vocabulary too, and Part 2.3 puts a CHECK on it.
 

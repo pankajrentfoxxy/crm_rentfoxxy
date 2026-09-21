@@ -189,6 +189,7 @@ async function applyDispatchQcFailure(client, {
   tokenId = null,
   actorUserId = null,
   actorName = null,
+  correlationId = null,
   moveTicketToDiagnosis = true,
 }) {
   const { logTtsplEvent } = require('./ttsplAuditService');
@@ -325,13 +326,46 @@ async function applyDispatchQcFailure(client, {
   // the ticket is not returning to the floor pipeline.
   if (alloc.serial_id) {
     if (moveTicketToDiagnosis) {
+      // Part 2.2, bypass-register A — and the clearest example in the set.
+      //
+      // The raw UPDATE used to run BEFORE the transition attempt, setting
+      // inventory_status through a CASE. By the time transitionAsset was
+      // called the status had already changed, so the catch below it was
+      // decorative: it could only ever report on a write that had already
+      // happened. Order matters as much as the try/catch did.
+      //
+      // Now the transition runs first and owns inventory_status, and the raw
+      // UPDATE that follows touches only qc_status and extra — the columns the
+      // machine does not govern (decision D2 defers qc_status out of 2.3).
+      //
+      // The CASE encoded which source states may rework back to stock. That
+      // condition is preserved here rather than dropped: a unit that is
+      // already in_stock, sold or scrapped must not be dragged back by a QC
+      // failure on a challan.
+      const REWORKABLE = ['qc_failed', 'reserved', 'in_transit', 'dispatch_ready'];
+      const cur = await client.query(
+        `SELECT inventory_status FROM vendor_serial_numbers
+          WHERE serial_id = $1 AND deleted_at IS NULL`,
+        [alloc.serial_id]
+      );
+      if (REWORKABLE.includes(String(cur.rows[0]?.inventory_status || ''))) {
+        await inventorySM.transitionAsset(client, {
+          serialId: alloc.serial_id,
+          toStatus: 'in_stock',
+          // Not truncated here. transitionAsset trims what the varchar(255)
+          // column needs and the event keeps the full text (I16).
+          reason: `Dispatch QC failed on ${soNumber} — rework`,
+          actorUserId: actorUserId || null,
+          actorName: actorName || null,
+          allowOverride: true,
+          correlationId,
+          caller: 'dispatchQcCaptureService.applyDispatchQcFailure(rework)',
+        });
+      }
+
       await client.query(
         `UPDATE vendor_serial_numbers
             SET qc_status = 'pending',
-                inventory_status = CASE
-                  WHEN inventory_status IN ('qc_failed', 'reserved', 'in_transit') THEN 'in_stock'
-                  ELSE inventory_status
-                END,
                 current_customer_id = NULL,
                 current_dc_number = NULL,
                 extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive' - 'dispatch_qc_failed_at')
@@ -340,26 +374,20 @@ async function applyDispatchQcFailure(client, {
           WHERE serial_id = $1 AND deleted_at IS NULL`,
         [alloc.serial_id]
       );
-      try {
-        await inventorySM.transitionAsset(client, {
-          serialId: alloc.serial_id,
-          toStatus: 'in_stock',
-          reason: `Dispatch QC failed on ${soNumber} — rework`.slice(0, 255),
-          actorUserId: actorUserId || null,
-          actorName: actorName || null,
-          allowOverride: true,
-        });
-      } catch (invErr) {
-        console.warn(`applyDispatchQcFailure: inventory transition skipped: ${invErr.message}`);
-      }
     } else {
       await inventorySM.transitionAsset(client, {
         serialId: alloc.serial_id,
         toStatus: 'qc_failed',
-        reason: `Dispatch QC failed on ${soNumber}: ${failReason}`.slice(0, 255),
+        // Dispatch QC builds a reason up to 2,000 characters and this used to
+        // cut it to 255 before the machine ever saw it, so the detail the
+        // technician typed was the part that got lost (I16). The event keeps
+        // all of it now.
+        reason: `Dispatch QC failed on ${soNumber}: ${failReason}`,
         actorUserId: actorUserId || null,
         actorName: actorName || null,
         allowOverride: true,
+        correlationId,
+        caller: 'dispatchQcCaptureService.applyDispatchQcFailure(hard)',
       });
       await client.query(
         `UPDATE vendor_serial_numbers

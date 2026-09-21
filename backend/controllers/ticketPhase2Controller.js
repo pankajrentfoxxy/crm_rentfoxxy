@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { reserveOnQcPass } = require('../services/qcPassReservation');
 const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
@@ -607,12 +608,13 @@ exports.moveToStage = async (req, res) => {
             [ticket.ticket_id]
           );
           if (ticket.vendor_serial_id) {
-            await client.query(
-              `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
-               WHERE serial_id = $1
-                 AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
-              [ticket.vendor_serial_id]
-            );
+            // Part 2.2 / D7 — the other half of the duplicate. Same routine.
+            await reserveOnQcPass(client, ticket.vendor_serial_id, {
+              actorUserId: req.user?.user_id || null,
+              actorName: req.user?.name || null,
+              correlationId: req.correlationId,
+              caller: 'ticketPhase2Controller.moveToStage',
+            });
             await vacateWarehouseLocation(client, ticket.vendor_serial_id);
           }
         }

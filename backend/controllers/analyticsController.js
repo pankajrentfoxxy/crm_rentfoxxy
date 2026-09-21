@@ -182,18 +182,39 @@ exports.getManagerDashboard = async (req, res) => {
          ORDER BY invoice_year, invoice_month`
       ),
       pool.query(
+        // Part 2.6, finding I11 — this dashboard has been wrong for a year and
+        // it was not a display bug.
+        //
+        // It filtered on qc_status='qc_passed', inventory_status='out_stock'
+        // and qc_status IN ('qc1','qc2','in_qc'). NO current code writes any of
+        // those values, so the tiles counted only rows imported from the old
+        // ERP and fell as the business grew. Measured before this change:
+        // "Ready stock" 0, "Currently rented" 0, "In QC" 0 — against a real
+        // fleet of 1,693 available and 3,132 rented.
+        //
+        // Every count below is now either a canonical status (Part 2.3) or the
+        // single availability predicate (Part 2.5), so each one is traceable to
+        // a value some code actually writes.
         `SELECT COUNT(*)::int AS total,
-          COUNT(*) FILTER (WHERE qc_status = 'qc_passed' AND inventory_status = 'in_stock')::int AS qc_passed_available,
-          COUNT(*) FILTER (WHERE inventory_status = 'out_stock')::int AS currently_rented,
+          (SELECT COUNT(*)::int FROM asset_available) AS qc_passed_available,
+          COUNT(*) FILTER (WHERE inventory_status IN ('rented', 'on_demo'))::int AS currently_rented,
           COUNT(*) FILTER (WHERE inventory_status = 'sold')::int AS sold,
-          COUNT(*) FILTER (WHERE qc_status IN ('qc1', 'qc2', 'in_qc'))::int AS in_qc,
+          -- On the floor: an open production ticket is the only thing that
+          -- means "being worked on". The three qc_status values this used are
+          -- written by nothing.
           COUNT(*) FILTER (
-            WHERE serial_number IN (
-              SELECT serial_number FROM tickets
-              WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
+            WHERE EXISTS (
+              SELECT 1 FROM tickets t
+               WHERE t.vendor_serial_id = vendor_serial_numbers.serial_id
+                 AND t.status IN ('in_progress', 'on_hold')
             )
-          )::int AS in_repair,
-          COUNT(*) FILTER (WHERE qc_status = 'qc_failed_return_vendor')::int AS qc_failed
+          )::int AS in_qc,
+          COUNT(*) FILTER (WHERE inventory_status = 'in_repair')::int AS in_repair,
+          COUNT(*) FILTER (WHERE inventory_status = 'qc_failed')::int AS qc_failed,
+          -- New, and the reason the other tiles were believable while wrong:
+          -- 1,345 laptops that never went through GRN (decision D1). They are
+          -- not available, not deployed, and were previously counted nowhere.
+          COUNT(*) FILTER (WHERE inventory_status IS NULL)::int AS awaiting_grn
          FROM vendor_serial_numbers
          WHERE deleted_at IS NULL`
       ),

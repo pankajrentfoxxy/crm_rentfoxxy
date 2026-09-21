@@ -126,6 +126,13 @@ router.post(
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);
+// Part 2.7 — the asset timeline, reading the event spine from 2.1.
+// Guarded on (inventory_management, view), the same section the Stock screens
+// carry. Hard rule 8: every route declares its section and action.
+const assetTimeline = require('../controllers/inventoryManagement/assetTimeline.controller');
+router.get('/assets/:ttspl/timeline', invView, assetTimeline.getAssetTimeline);
+router.get('/events/correlation/:correlationId', invView, assetTimeline.getCorrelatedSet);
+
 router.get('/master-data/kpis', masterDataView, masterData.getMasterDataKpis);
 router.get('/master-data/export.xlsx', masterDataView, masterData.exportMasterDataExcel);
 router.get('/master-data/laptops/column-values', masterDataView, masterData.getLaptopColumnValues);

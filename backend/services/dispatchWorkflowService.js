@@ -327,8 +327,10 @@ async function findAvailableSerialForSo(client, salesOrderNumber) {
          FROM vendor_serial_numbers vsn
          LEFT JOIN inventory inv ON inv.machine_number = vsn.inventory_asset_code OR inv.serial_number = vsn.serial_number
         WHERE vsn.deleted_at IS NULL
-          AND LOWER(COALESCE(vsn.qc_status, '')) = 'passed'
-          AND LOWER(COALESCE(vsn.inventory_status, 'in_stock')) IN ('in_stock', 'passed')
+          -- Part 2.5 / I10. This one accepted inventory_status='passed', which
+          -- is a qc_status value that never belonged in the lifecycle column,
+          -- and COALESCEd NULL to in_stock — the default decision D1 rules out.
+          AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vsn.serial_id)
           AND (vsn.current_entity IS NULL OR vsn.current_entity = $1)
         ORDER BY vsn.serial_id ASC
         LIMIT 200`,

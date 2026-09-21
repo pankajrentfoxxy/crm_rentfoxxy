@@ -91,7 +91,58 @@ function statusFamily(status) {
   return FAMILY.CLOSED;
 }
 
+/**
+ * QC outcome → canonical asset status (Part 2.2, finding I4).
+ *
+ * QC Management offers the operator a dropdown and wrote the chosen string
+ * STRAIGHT into inventory_status. That is the largest single source of
+ * non-canonical values in production: out_for_repare, out_for_return, repared,
+ * replace and qc_reject are all QC outcomes that leaked into the lifecycle
+ * column, where nothing downstream understands them.
+ *
+ * A QC outcome and a lifecycle status are different vocabularies. This is the
+ * one place they are translated, and the mapping follows
+ * docs/status-mapping-proposal.md so the runtime and the Part 2.3 migration
+ * cannot disagree.
+ *
+ * `null` means "QC says nothing about where the asset is" — the unit stays
+ * wherever it was and only qc_status changes. That is correct for `pending`:
+ * starting a QC check does not move a laptop.
+ */
+const QC_OUTCOME_TO_STATUS = Object.freeze({
+  // qcCheck vocabulary
+  pending:           null,
+  passed:            ASSET_STATUS.IN_STOCK,
+  failed:            ASSET_STATUS.QC_FAILED,
+  dead:              ASSET_STATUS.SCRAPPED,
+  require_for_parts: ASSET_STATUS.SCRAPPED,   // harvested for parts — terminal
+  send_to_qc_check:  ASSET_STATUS.QC_FAILED,  // pending a QC decision
+
+  // returnAndRepare vocabulary
+  out_for_return:    ASSET_STATUS.RETURNED,
+  out_for_repare:    ASSET_STATUS.IN_REPAIR,  // the misspelling is the live value
+  out_for_repair:    ASSET_STATUS.IN_REPAIR,  // accepted too, so a fix upstream does not break this
+  repared:           ASSET_STATUS.IN_STOCK,   // repair completed, back on the shelf
+  replace:           ASSET_STATUS.RETURNED,   // awaiting replacement handling
+  qc_reject:         ASSET_STATUS.QC_FAILED,
+});
+
+/**
+ * Returns { known, status } rather than a bare value, because "this outcome
+ * maps to no status change" and "I have never heard of this outcome" must not
+ * look the same to a caller — conflating them is how the strays got in.
+ */
+function statusForQcOutcome(outcome) {
+  const key = String(outcome || '').toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(QC_OUTCOME_TO_STATUS, key)) {
+    return { known: false, status: null };
+  }
+  return { known: true, status: QC_OUTCOME_TO_STATUS[key] };
+}
+
 module.exports = {
+  QC_OUTCOME_TO_STATUS,
+  statusForQcOutcome,
   FAMILY,
   ASSET_STATUS,
   ASSET_STATUSES,

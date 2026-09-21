@@ -933,17 +933,24 @@ async function receiveIntoInventory(db, productionAssetId, {
     });
   } catch (e) {
     if (!/not found/i.test(e.message || '')) throw e;
-    console.warn(
-      `receiveIntoInventory: transitionAsset skipped for serial ${pa.vendor_serial_id}: ${e.message}`
-    );
-    await db.query(
-      `UPDATE vendor_serial_numbers
-          SET inventory_status = 'in_stock',
-              qc_status = 'passed',
-              status_changed_at = NOW(),
-              updated_at = NOW()
-        WHERE serial_id = $1`,
-      [pa.vendor_serial_id]
+
+    // Part 2.2, bypass-register A.
+    //
+    // This catch is narrower than the other eight — it re-throws anything that
+    // is not "serial not found" — but the fallback was still wrong. loadSerial
+    // filters `deleted_at IS NULL`, so "not found" means the serial is deleted
+    // or does not exist, and the raw UPDATE then either matched nothing or
+    // resurrected a soft-deleted asset into in_stock with qc_status='passed'.
+    // Bringing a deleted laptop back as QC-passed and attachable is the same
+    // class of defect as qcProcessIntakeService resurrecting scrapped units.
+    //
+    // A production asset pointing at a serial that is not there is a data
+    // problem, not something to paper over. Say so and write nothing; the
+    // production asset itself is still received below.
+    console.error(
+      `[transition] receiveIntoInventory: production asset ${pa.production_asset_id ?? '?'}`
+      + ` references serial ${pa.vendor_serial_id}, which does not exist or is deleted.`
+      + ' No inventory status was written. The asset row needs repointing or the serial restoring.'
     );
   }
 

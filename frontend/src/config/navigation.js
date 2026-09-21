@@ -50,6 +50,10 @@ export const SECTIONS = [
     label: 'Stock',
     items: [
       { to: '/inventory-management/universal-search', label: 'Assets', section: 'inventory_management', action: 'view' },
+      // Part 2.7, behind REACT_APP_CARRET. Sits beside the existing screen
+      // rather than replacing it — nothing is deleted until its replacement is
+      // signed off (hard rule 6).
+      { to: '/carret/stock/assets', label: 'Assets (Carret)', section: 'inventory_management', action: 'view' },
       { to: '/inventory-management/ready-to-rent-or-sell', label: 'Ready to Rent or Sell', section: 'ready_to_rent_location', action: 'view' },
       { to: '/inventory-management/asset-movement', label: 'Asset Movements', section: 'inventory_asset_movement', action: 'view' },
       { to: '/inventory-management/scrap-challans', label: 'Scrapped', section: 'scrap_challans', action: 'view' },
@@ -126,6 +130,7 @@ export const SECTIONS = [
     label: 'Control',
     items: [
       { to: '/dashboard', label: 'Overview', section: 'dashboard', action: 'view' },
+      { to: '/carret', label: 'Operations (Carret)', section: 'dashboard', action: 'view' },
       { to: '/settings/roles', label: 'Roles & Permissions', section: 'roles', action: 'view' },
       { to: '/settings/role-permissions', label: 'Role Permissions', section: 'role_permissions', action: 'view' },
       { to: '/settings/user-permissions', label: 'User Permissions', section: 'user_permissions', action: 'view' },

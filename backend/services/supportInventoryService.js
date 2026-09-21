@@ -66,9 +66,10 @@ const getAvailableAssets = async (/* customerId */ _customerId, _excludeItemIds 
                 vsn.inventory_status AS asset_bucket
          FROM vendor_serial_numbers vsn
          WHERE vsn.deleted_at IS NULL
-           AND vsn.inventory_status = 'in_stock'
-           AND vsn.qc_status IN ('passed', 'qc_passed')
-           AND vsn.current_customer_id IS NULL
+           -- Part 2.5 / I10: this was the strictest of the six predicates and
+           -- still differed from the others (it had no allocation or open-ticket
+           -- check). One definition now.
+           AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vsn.serial_id)
          ORDER BY COALESCE(vsn.inventory_asset_code, vsn.serial_number)
          LIMIT 300`
     );

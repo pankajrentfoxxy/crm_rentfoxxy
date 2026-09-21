@@ -2,6 +2,7 @@ const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRec
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { respondIfRefused } = require('../utils/transitionRefusal');
 const inventorySM = require('../services/inventoryStateMachine');
 const {
   nextDocumentNumber,
@@ -632,6 +633,7 @@ exports.storeQuotation = async (req, res) => {
     res.status(201).json({ success: true, message: 'Quotation created', quotation_number: quotationNumber });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (respondIfRefused(error, res)) return;
     console.error('storeQuotation:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -1200,6 +1202,7 @@ exports.storeSalesOrder = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (respondIfRefused(error, res)) return;
     console.error('storeSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -1503,6 +1506,7 @@ exports.updateSalesOrder = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     if (error.status === 403) {
       return res.status(403).json({ success: false, message: error.message });
     }
@@ -3195,26 +3199,25 @@ exports.storeDeliveryChallan = async (req, res) => {
           if (!serialId) continue;
           const { resolveSerialRentRate } = require('../services/serialRentRateService');
           const rentMonthlyRate = await resolveSerialRentRate(client, serialId, dcNumber);
-          try {
-            await inventorySM.markDispatchReady(client, serialId, {
-              dcNumber,
-              customerId: body.customer_id || null,
-              entityCode,
-              dispatchMode,
-              rentMonthlyRate,
-              actorUserId: req.user?.user_id,
-              actorName: req.user?.name,
-            });
-          } catch (rErr) {
-            await client.query(
-              `UPDATE vendor_serial_numbers SET inventory_status = 'dispatch_ready', current_dc_number = $2,
-                      dispatch_mode = $3,
-                      rent_monthly_rate = COALESCE($4, rent_monthly_rate),
-                      updated_at = NOW()
-               WHERE serial_id = $1`,
-              [serialId, dcNumber, dispatchMode, rentMonthlyRate]
-            );
-          }
+          // Part 2.2, bypass-register A. This used to catch the refusal and
+          // force the same write with raw SQL, which is what made the state
+          // machine advisory: validation refused, the catch swallowed it, and
+          // the write went through anyway.
+          //
+          // Now the refusal propagates. The surrounding transaction rolls back,
+          // so a challan is never created half-committed against a unit that
+          // was not eligible for it.
+          await inventorySM.markDispatchReady(client, serialId, {
+            dcNumber,
+            customerId: body.customer_id || null,
+            entityCode,
+            dispatchMode,
+            rentMonthlyRate,
+            actorUserId: req.user?.user_id,
+            actorName: req.user?.name,
+            correlationId: req.correlationId,
+            caller: 'salesManagementController.storeDeliveryChallan',
+          });
         }
       }
     }
@@ -3313,6 +3316,7 @@ exports.storeDeliveryChallan = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (respondIfRefused(error, res)) return;
     console.error('storeDeliveryChallan:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -3654,23 +3658,16 @@ exports.createDcsByAddress = async (req, res) => {
         if (!s.serial_id) continue;
         const { resolveSerialRentRate } = require('../services/serialRentRateService');
         const rentMonthlyRate = await resolveSerialRentRate(client, s.serial_id, dcNumber);
-        try {
-          await inventorySM.markDispatchReady(client, s.serial_id, {
-            dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
-            rentMonthlyRate,
-            actorUserId: req.user?.user_id, actorName: req.user?.name,
-          });
-        } catch (rErr) {
-          await client.query(
-            `UPDATE vendor_serial_numbers
-                SET inventory_status = 'dispatch_ready', current_dc_number = $1,
-                    dispatch_mode = $2,
-                    rent_monthly_rate = COALESCE($4, rent_monthly_rate),
-                    updated_at = NOW()
-              WHERE serial_id = $3`,
-            [dcNumber, dispatchMode, s.serial_id, rentMonthlyRate]
-          );
-        }
+        // Part 2.2, bypass-register A — the sibling of the bypass in
+        // storeDeliveryChallan. Same defect, same fix: the refusal propagates
+        // and the transaction rolls back rather than forcing the write.
+        await inventorySM.markDispatchReady(client, s.serial_id, {
+          dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
+          rentMonthlyRate,
+          actorUserId: req.user?.user_id, actorName: req.user?.name,
+          correlationId: req.correlationId,
+          caller: 'salesManagementController.createDcsByAddress',
+        });
       }
 
       // Mirror QC into dc_qc_tickets so the DC's QC gate reflects done QC.
@@ -3762,6 +3759,7 @@ exports.createDcsByAddress = async (req, res) => {
     }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('createDcsByAddress:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -3829,6 +3827,7 @@ exports.updateDeliveryChallan = async (req, res) => {
     res.json({ success: true, message: 'Delivery challan updated', dc_number: dcNumber, pdf_path: pdfPath });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateDeliveryChallan:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -4607,6 +4606,7 @@ exports.generateReturnDc = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('generateReturnDc:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -5016,6 +5016,7 @@ exports.cancelSalesOrder = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('cancelSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -5103,6 +5104,7 @@ exports.partialCancelSoLine = async (req, res) => {
     }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('partialCancelSoLine:', error);
     res.status(error.status || 500).json({ success: false, message: error.message });
   } finally {
@@ -5424,6 +5426,7 @@ exports.createPreDispatchQcTicket = async (req, res) => {
     res.json({ success: true, tickets_created: created, ticket_ids: ticketIds });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (respondIfRefused(error, res)) return;
     console.error('createPreDispatchQcTicket:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -5644,23 +5647,20 @@ exports.updateDcDispatch = async (req, res) => {
         const serialId = await resolveSerialId(client, s);
         if (!serialId) continue;
         // reserved -> in_transit (mark the asset unavailable the moment it ships).
-        try {
-          await inventorySM.markDispatched(client, serialId, {
-            dcNumber,
-            customerId: ctx.customer_id || null,
-            entityCode: ctx.entity_code || null,
-            dispatchMode,
-            actorUserId: req.user.user_id,
-            actorName: req.user.name,
-          });
-        } catch (rErr) {
-          await client.query(
-            `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
-                    dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW()
-             WHERE serial_id = $1`,
-            [serialId, dcNumber, dispatchMode]
-          );
-        }
+        // Part 2.2, bypass-register A. This is the dispatch event — it is what
+        // makes a unit unavailable and starts the rent clock — and it was the
+        // one most worth refusing, because forcing in_transit on a unit the map
+        // says cannot ship is how a laptop ends up rented to two customers.
+        await inventorySM.markDispatched(client, serialId, {
+          dcNumber,
+          customerId: ctx.customer_id || null,
+          entityCode: ctx.entity_code || null,
+          dispatchMode,
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+          correlationId: req.correlationId,
+          caller: 'salesManagementController.submitGatePass',
+        });
       }
 
       // Reflect dispatch on the SO serial allocations.
@@ -5925,22 +5925,20 @@ exports.cancelDeliveryChallan = async (req, res) => {
       serialIds.push(serialId);
       const sn = s.serialNumber || null;
       if (sn) serialNumbers.push(sn);
-      try {
-        await inventorySM.backToStock(client, serialId, {
-          reason: reason || `DC ${dcNumber} cancelled`,
-          actorUserId: req.user?.user_id,
-          actorName: req.user?.name,
-        });
-      } catch (_) {
-        await client.query(
-          `UPDATE vendor_serial_numbers
-              SET inventory_status = 'in_stock', current_dc_number = NULL, current_customer_id = NULL,
-                  current_entity = NULL, dispatch_mode = NULL, dispatched_at = NULL,
-                  updated_at = NOW(), status_changed_at = NOW()
-            WHERE serial_id = $1`,
-          [serialId]
-        );
-      }
+      // Part 2.2, bypass-register A. This was the worst of the four: a bare
+      // `catch (_)` that did not even log, so a unit being forced back to
+      // in_stock from a state the map forbids left no trace at all.
+      //
+      // Returning a delivered or in-transit unit to stock by cancelling its
+      // challan is exactly the move that should be refused — the laptop is with
+      // a customer, and marking it available is how it gets promised twice.
+      await inventorySM.backToStock(client, serialId, {
+        reason: reason || `DC ${dcNumber} cancelled`,
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name,
+        correlationId: req.correlationId,
+        caller: 'salesManagementController.cancelDeliveryChallan',
+      });
     }
 
     if (serialIds.length) {
@@ -6028,6 +6026,7 @@ exports.cancelDeliveryChallan = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('cancelDeliveryChallan:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -6201,6 +6200,7 @@ exports.markDcDelivered = async (req, res) => {
     res.json({ success: true, message: 'Marked as delivered' });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('markDcDelivered:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -6321,6 +6321,7 @@ exports.updateDcDispatchDate = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateDcDispatchDate:', error);
     res.status(error.status || 500).json({ success: false, message: error.message });
   } finally {
@@ -6426,6 +6427,7 @@ exports.updateDcDeliveryDate = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateDcDeliveryDate:', error);
     res.status(error.status || 500).json({ success: false, message: error.message });
   } finally {
@@ -6657,6 +6659,7 @@ exports.updateSoLineAddress = async (req, res) => {
     }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateSoLineAddress:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -6809,6 +6812,7 @@ exports.updateSoLineConfig = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateSoLineConfig:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -6902,6 +6906,7 @@ exports.updateSoLineRate = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateSoLineRate:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -6998,6 +7003,7 @@ exports.updateSoLineHsn = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateSoLineHsn:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -7064,6 +7070,7 @@ exports.updateDcHsn = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateDcHsn:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -7156,6 +7163,7 @@ exports.updateSalesOrderShippingAddress = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     if (error.status === 403) {
       return res.status(403).json({ success: false, message: error.message });
     }
@@ -7207,6 +7215,7 @@ exports.bulkUpdateSoSerialAddresses = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('bulkUpdateSoSerialAddresses:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -7613,6 +7622,7 @@ exports.updateSoShipping = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (respondIfRefused(error, res)) return;
     console.error('updateSoShipping:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {

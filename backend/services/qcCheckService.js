@@ -209,7 +209,7 @@ async function addToInventory(client, serialId, serialNumber, productId, product
   return r.rows[0];
 }
 
-async function applySerialQcUpdate(client, { serialId, serialNumber, selected, remark, sparePartsIds }) {
+async function applySerialQcUpdate(client, { serialId, serialNumber, selected, remark, sparePartsIds, actorUserId = null, correlationId = null }) {
   const cur = await client.query(
     `SELECT serial_id, extra, qc_status, inventory_status, inventory_asset_code
      FROM vendor_serial_numbers
@@ -247,26 +247,42 @@ async function applySerialQcUpdate(client, { serialId, serialNumber, selected, r
   } else if (selected === 'require_for_parts') {
     extra.status2 = selected;
     extra.require_parts = sparePartsIds ?? '';
-    inventoryStatus = selected;
+    // Part 2.2, bypass-register B: `inventoryStatus = selected` put the QC word
+    // itself into the lifecycle column. Harvested for parts is `scrapped`.
+    inventoryStatus = statusForQcOutcome(selected).status;
     qcStatus = selected;
   } else if (selected === 'send_to_qc_check') {
     qcStatus = 'pending';
     extra.status2 = selected;
-    inventoryStatus = selected;
+    inventoryStatus = statusForQcOutcome(selected).status;
   } else {
     qcStatus = selected;
   }
 
+  // Part 2.2, bypass-register B. inventory_status is no longer written here;
+  // the transition below owns it. COALESCE($3, inventory_status) meant "leave
+  // it alone when null", which the conditional transition reproduces exactly.
   await client.query(
     `UPDATE vendor_serial_numbers
      SET qc_status = $1,
          remark = $2,
-         inventory_status = COALESCE($3, inventory_status),
-         extra = $4::jsonb,
+         extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb,
          updated_at = NOW()
-     WHERE serial_id = $5`,
-    [qcStatus, remark, inventoryStatus, JSON.stringify(extra), serialId]
+     WHERE serial_id = $4`,
+    [qcStatus, remark, JSON.stringify(extra), serialId]
   );
+
+  if (inventoryStatus && inventoryStatus !== row.inventory_status) {
+    await transitionAsset(client, {
+      serialId,
+      toStatus: inventoryStatus,
+      reason: `QC check: ${selected}${remark ? ` — ${remark}` : ''}`,
+      actorUserId,
+      correlationId,
+      allowOverride: true,
+      caller: 'qcCheckService.applySerialQcUpdate',
+    });
+  }
 
   return { ok: true, row, extra };
 }

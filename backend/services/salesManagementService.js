@@ -2273,47 +2273,28 @@ function filterSpecRows(rows, { brand, model_name, processor, generation, ram, s
  * Laravel getAllProductFromInventoryUsingModelIfSaleNew / getAllProductFromInventoryUsingModelNew
  * — vendor_product_inventory (in_stock) + product_details specs + serial_numbers unique code.
  */
-/**
- * Units that finished QC after a customer return can stay inventory_status=returned
- * even when qc_status=passed — heal them so SO attach / Ready to Rent lists work.
+/*
+ * THE TWO BULK HEALS ARE DELETED — Part 2.2 / 2.5, finding I13.
+ *
+ * healStaleReturnedPassedSerials and healStaleReservedPassedSerials ran
+ * table-wide UPDATEs across vendor_serial_numbers, outside any transaction, as
+ * a side effect of a READ endpoint any authenticated user could call. Every
+ * inventory search silently rewrote the status of rows it was not asked about.
+ *
+ * They existed only to paper over the six conflicting availability predicates:
+ * a unit would be invisible on one screen, so a heal was added to force it back
+ * to in_stock. Part 2.5 replaced those six with one definition
+ * (migration 260, asset_available), so there is nothing left to paper over.
+ *
+ * The register is explicit that these are DELETED rather than ported to the
+ * state machine — porting them would keep a table-wide write on a read path,
+ * which is the actual defect. It also warns that removing them surfaces units
+ * that stop appearing in search. That surfacing is the point: those units were
+ * only ever visible because a read endpoint was quietly rewriting them.
+ *
+ * A unit legitimately stuck at `returned` after passing QC now needs a real
+ * transition — asset movement, or QC completion — both of which are audited.
  */
-async function healStaleReturnedPassedSerials(db = pool) {
-  await db.query(
-    `UPDATE vendor_serial_numbers vsn SET
-        inventory_status = 'in_stock',
-        updated_at = NOW()
-      WHERE vsn.deleted_at IS NULL
-        AND COALESCE(NULLIF(TRIM(vsn.qc_status), ''), NULLIF(TRIM(vsn.extra->>'status'), ''), 'pending') = 'passed'
-        AND vsn.inventory_status = 'returned'
-        AND NOT EXISTS (
-          SELECT 1 FROM tickets t
-           WHERE t.vendor_serial_id = vsn.serial_id
-             AND t.status IN ('in_progress', 'on_hold', 'diagnosis_failed', 'out_for_repair')
-        )`
-  );
-}
-
-/**
- * Dispatch QC fail can detach a serial from the SO, but completing the rework ticket
- * used to force inventory_status=reserved anyway — heal those units for attach/search.
- */
-async function healStaleReservedPassedSerials(db = pool) {
-  await db.query(
-    `UPDATE vendor_serial_numbers vsn SET
-        inventory_status = 'in_stock',
-        extra = (COALESCE(vsn.extra, '{}'::jsonb) - 'awaiting_inventory_receive')
-                || jsonb_build_object('status', 'passed'),
-        updated_at = NOW()
-      WHERE vsn.deleted_at IS NULL
-        AND COALESCE(NULLIF(TRIM(vsn.qc_status), ''), NULLIF(TRIM(vsn.extra->>'status'), ''), 'pending') = 'passed'
-        AND vsn.inventory_status = 'reserved'
-        AND NOT EXISTS (
-          SELECT 1 FROM sales_order_serials sos
-           WHERE sos.serial_id = vsn.serial_id
-             AND sos.status = 'attached'
-        )`
-  );
-}
 
 async function searchAvailableInventory({
   brand,
@@ -2336,8 +2317,8 @@ async function searchAvailableInventory({
   // Spec-based SO attach must scan the full QC-passed pool — not only the 500 newest serials.
   const candidateLimit = hasSpecFilter ? 25000 : responseLimit;
 
-  await healStaleReturnedPassedSerials();
-  await healStaleReservedPassedSerials();
+  // The two table-wide heals that used to run here are deleted — see above.
+  // A read endpoint no longer writes.
 
   const params = [];
   let searchSql = '';
@@ -2356,12 +2337,9 @@ async function searchAvailableInventory({
   // status can no longer drift (the legacy vendor_product_inventory is bypassed).
   // Legacy ERP rows may still have inventory_status = in_repair after repair even
   // though qc_status is passed — treat any non-deployed QC-passed unit as pickable.
-  const OFF_SHELF_INVENTORY_STATUSES = [
-    'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold',
-    'returned', 'scrapped', 'out_stock', 'qc_failed',
-    'out_for_repare', 'out_for_return',
-  ];
-  const offShelfList = OFF_SHELF_INVENTORY_STATUSES.map((s) => `'${s}'`).join(', ');
+  // Part 2.5 / I10: the blacklist that used to live here is deleted. It was one
+  // of six mutually inconsistent definitions of "available", and the one that
+  // forgot to exclude in_repair. asset_available is the single definition now.
   // Never offer units already allocated on any SO (even if inventory_status drifted
   // back to in_stock after Dispatch QC pass).
   const notAlreadyAttachedSql = `
@@ -2400,8 +2378,11 @@ async function searchAvailableInventory({
      LEFT JOIN vendor_purchase_orders vpo
        ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
      WHERE vsn.deleted_at IS NULL
-       AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
-       AND COALESCE(vsn.inventory_status, 'in_stock') NOT IN (${offShelfList})
+       -- Part 2.5 / I10: one predicate. This used to carry its own blacklist of
+       -- twelve statuses, which did not exclude in_repair — so a unit on the
+       -- bench could be attached to a sales order. asset_available is now the
+       -- only definition; the blacklist above is gone.
+       AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vsn.serial_id)
        ${notAlreadyAttachedSql}
        ${notOnOpenReturnTicketSql}
        ${searchSql}
@@ -2443,12 +2424,15 @@ async function searchAvailableInventory({
        LEFT JOIN vendor_product_details vpd
          ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
        WHERE vsn.deleted_at IS NULL
-         AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
-         AND COALESCE(vsn.inventory_status, 'in_stock') IN ('in_stock', 'passed')
-         AND NOT EXISTS (
-           SELECT 1 FROM vendor_product_inventory vpi2
-           WHERE vpi2.serial_id = vsn.serial_id AND vpi2.status = 'out_stock'
-         )
+         -- Part 2.5 / 2.4: the single predicate, and the last read of
+         -- vendor_product_inventory.
+         --
+         -- vpi is the THIRD status store (finding I9). It is written only on DC
+         -- create and cancel — never on delivery, return, QC fail or scrap — so
+         -- the status='out_stock' test here was asking a table that stopped
+         -- being told anything the moment a unit was actually delivered.
+         -- Removing the read is what lets the table be dropped.
+         AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vsn.serial_id)
          AND NOT EXISTS (
            SELECT 1 FROM sales_order_serials sos_att
             WHERE sos_att.serial_id = vsn.serial_id
@@ -3127,6 +3111,5 @@ module.exports = {
   RETURN_DC_WAREHOUSE_ROLES,
   getOperationCounts,
   searchAvailableInventory,
-  healStaleReturnedPassedSerials,
   assertSalesOrderVisibleToUser,
 };

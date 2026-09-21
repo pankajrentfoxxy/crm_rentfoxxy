@@ -1,4 +1,5 @@
 const { param, query, body, validationResult } = require('express-validator');
+const { transitionAsset } = require('../../services/inventoryStateMachine');
 const pool = require('../../config/db');
 const { parseExtra } = require('../../services/qcManagementService');
 const { logTtsplEvent } = require('../../services/ttsplAuditService');
@@ -383,23 +384,43 @@ async function updateReadyToRentAction(req, res) {
 
     await pool.query(
       `UPDATE vendor_serial_numbers
-       SET extra = $1::jsonb,
-           inventory_status = CASE
-             WHEN inventory_status IN ('in_repair', 'repared')
-               AND COALESCE(qc_status, extra->>'status', 'pending') = 'passed'
-             THEN 'in_stock'
-             WHEN inventory_status IS NULL
-               OR inventory_status NOT IN (
-                 'reserved','in_transit','rented','on_demo','sold',
-                 'returned','qc_failed','scrapped'
-               )
-             THEN 'in_stock'
-             ELSE inventory_status
-           END,
+       SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
            updated_at = NOW()
        WHERE serial_id = $2`,
       [JSON.stringify(extra), serialId]
     );
+
+    // Part 2.2, bypass-register B. The CASE above used to also write
+    // inventory_status — a self-heal that quietly moved a unit to in_stock
+    // whenever its status was NULL or not one of the deployed values.
+    //
+    // That is the same COALESCE-to-in_stock assumption finding G2 describes,
+    // and after decision D1 it is actively wrong: the 1,345 assets with a NULL
+    // status are laptops that have not been through GRN, and healing them to
+    // in_stock makes uninspected stock attachable.
+    //
+    // The first CASE arm was a real transition (repaired unit back on the
+    // shelf) and is kept, now audited. The second arm — heal anything
+    // unrecognised — is deleted rather than ported.
+    const healRow = await pool.query(
+      `SELECT inventory_status, COALESCE(qc_status, extra->>'status', 'pending') AS qc
+         FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [serialId]
+    );
+    const invNow = String(healRow.rows[0]?.inventory_status || '');
+    if (['in_repair', 'repared'].includes(invNow) && healRow.rows[0]?.qc === 'passed') {
+      await transitionAsset(pool, {
+        serialId,
+        toStatus: 'in_stock',
+        reason: 'Repair complete and QC passed — back to available stock',
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        correlationId: req.correlationId,
+        // 'repared' is a stray value that still exists until Part 2.3 maps it.
+        allowOverride: true,
+        caller: 'inventoryList.controller.updateReadyToRentAction',
+      });
+    }
 
     invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Action taken successfully!' });
