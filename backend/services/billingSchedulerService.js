@@ -117,22 +117,54 @@ async function isFirstOutboundDcForSo(db, dcNumber) {
  * safe: the UPDATE takes a row lock that is now held until the caller commits,
  * so two overlapping invoice runs serialise instead of interleaving.
  */
+/**
+ * Part 6.2 (finding BL8) — the financial-year segment, and a width that holds.
+ *
+ * LPAD(...,4,'0') breaks at 10,000: the number simply gets wider and the
+ * zero-padded series stops being sortable or comparable. At 1,192 issued that
+ * is not hypothetical, it is a date. And unlike every other document in this
+ * system — SO/26-27/0779 and the rest — an invoice number carried no financial
+ * year, which is what GST's consecutive-series requirement is scoped to.
+ *
+ * THE SERIES IS PRESERVED. The counter is untouched and keeps incrementing, so
+ * the next number after INV-1192 is 1193 and no number is skipped or reused.
+ * Only the rendering changes, to INV/26-27/001193. Six digits is a million
+ * invoices; the FY segment says which year's series this belongs to.
+ *
+ * Older numbers are not rewritten. An invoice number is printed on a document a
+ * customer already has.
+ */
+function financialYearCode(date = new Date()) {
+  const d = new Date(date);
+  const y = d.getFullYear();
+  // Indian financial year starts 1 April.
+  const startYear = d.getMonth() >= 3 ? y : y - 1;
+  return `${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`;
+}
+
+function formatDocumentNumber(prefix, seq, date = new Date()) {
+  const clean = String(prefix || '').replace(/[-/]+$/, '');
+  return `${clean}/${financialYearCode(date)}/${String(seq).padStart(6, '0')}`;
+}
+
 async function nextInvoiceNumber(entity = 'rentfoxxy', db = pool) {
   const docType = entity === 'gorefurbo' ? 'invoice_gorefurbo' : 'invoice_rentfoxxy';
   const res = await db.query(
     `UPDATE sm_document_sequences
      SET last_value = last_value + 1
      WHERE doc_type = $1
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`,
+     RETURNING prefix, last_value`,
     [docType]
   );
-  if (res.rows.length) return res.rows[0].number;
+  if (res.rows.length) {
+    return formatDocumentNumber(res.rows[0].prefix, res.rows[0].last_value);
+  }
   const fb = await db.query(
     `UPDATE sm_document_sequences SET last_value = last_value + 1
      WHERE doc_type = 'customer_invoice'
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+     RETURNING prefix, last_value`
   );
-  return fb.rows[0].number;
+  return formatDocumentNumber(fb.rows[0].prefix, fb.rows[0].last_value);
 }
 
 /** See nextInvoiceNumber — `db` must be the caller's transaction client. */
@@ -141,9 +173,9 @@ async function nextVendorBillNumber(db = pool) {
     `UPDATE sm_document_sequences
      SET last_value = last_value + 1
      WHERE doc_type = 'vendor_bill'
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+     RETURNING prefix, last_value`
   );
-  return res.rows[0].number;
+  return formatDocumentNumber(res.rows[0].prefix, res.rows[0].last_value);
 }
 
 async function alertOpsOnBillingFailure(runName, summary) {
@@ -2200,12 +2232,14 @@ async function persistConsolidatedReturnCreditNote(client, {
     return upd.rows[0];
   }
 
+  // BL8 applies here too — a credit note is a statutory document with the same
+  // consecutive-series requirement as the invoice it credits.
   const num = await client.query(
     `UPDATE sm_document_sequences SET last_value = last_value + 1
       WHERE doc_type = 'credit_note'
-      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+      RETURNING prefix, last_value`
   );
-  const cnNumber = num.rows[0].number;
+  const cnNumber = formatDocumentNumber(num.rows[0].prefix, num.rows[0].last_value);
   const ins = await client.query(
     // credit_note_type = 'return': a permanent return, unused prepaid days
     // refunded. Repair-window credits are typed 'repair' so finance can filter
@@ -2331,7 +2365,7 @@ async function createRepairWindowCreditNote(db, {
   const num = await db.query(
     `UPDATE sm_document_sequences SET last_value = last_value + 1
       WHERE doc_type = 'credit_note'
-      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+      RETURNING prefix, last_value`
   );
   const ins = await db.query(
     `INSERT INTO customer_credit_notes
@@ -2341,7 +2375,7 @@ async function createRepairWindowCreditNote(db, {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int)
      RETURNING *`,
     [
-      num.rows[0].number,
+      formatDocumentNumber(num.rows[0].prefix, num.rows[0].last_value),
       customerId,
       REPAIR_CN_REASON,
       `${serial.ttspl_id || `serial ${serialId}`} in warehouse for repair ${fromDate} to ${toDate} (${effective.days} day(s) @ ${effective.dailyRate}/day)`,
@@ -3544,8 +3578,18 @@ async function generateVendorBill(vendorId, month, year) {
       `SELECT COALESCE(SUM(amount), 0) AS total_dn
        FROM vendor_debit_notes
        WHERE vendor_id = $1 AND status = 'approved'
-         AND adjusted_in_bill_id IS NULL`,
-      [vendorId]
+         AND adjusted_in_bill_id IS NULL
+         -- Part 6.2 (BL6): without this bound, EVERY unadjusted note for the
+         -- vendor was swallowed by whichever bill generated first — including a
+         -- backfill of an old month, which over-credited that month and left the
+         -- month the note actually belonged to uncredited.
+         --
+         -- A note cannot be adjusted against a period that ended before it was
+         -- raised. vendor_debit_notes carries no "adjust from" column, so
+         -- created_at is the only honest bound available; it is enough to stop
+         -- the backfill case, which is the one the finding describes.
+         AND created_at::date <= $2::date`,
+      [vendorId, toLocalYmd(monthEnd)]
     );
     const debitAdjustment = parseFloat(dnRes.rows[0].total_dn || 0);
 

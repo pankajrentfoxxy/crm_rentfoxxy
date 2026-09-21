@@ -18,13 +18,30 @@ const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 
 const router = express.Router();
 
-// RBAC driven by the role_permissions matrix (single source of truth) — view
-// access to the Vendor Management module. Write actions are gated by the UI's
-// can_create/can_edit flags; tighten per-action here later if needed.
+// Part 6.1 (findings P1, BL14) — the highest-severity permission item in the audit.
+//
+// `authorize` used to be checkSectionPermission('vendor_management', 'view') and
+// it gated create, edit and delete on purchase orders AND on vendor billing. The
+// comment that stood here said write actions were "gated by the UI's
+// can_create/can_edit flags", which is not a gate: the UI hides a button, the
+// API answers anyone who asks. A vendor_management:view role could delete a
+// vendor bill with one curl.
+//
+// Now every verb declares its own action. `authorize` is reads only, and a write
+// route that reaches for it is a mistake the name no longer hides.
 const authorize = [
   authMiddleware,
   checkSectionPermission('vendor_management', 'view')
 ];
+const authorizeCreate = [authMiddleware, checkSectionPermission('vendor_management', 'create')];
+const authorizeEdit   = [authMiddleware, checkSectionPermission('vendor_management', 'edit')];
+const authorizeDelete = [authMiddleware, checkSectionPermission('vendor_management', 'delete')];
+
+/** Vendor billing is money. It gets its own section, and its own three actions. */
+const billingRead   = [authMiddleware, checkAnySectionPermission(['vendor_billing_mgmt', 'vendor_management'], 'view')];
+const billingCreate = [authMiddleware, checkAnySectionPermission(['vendor_billing_mgmt', 'vendor_management'], 'create')];
+const billingEdit   = [authMiddleware, checkAnySectionPermission(['vendor_billing_mgmt', 'vendor_management'], 'edit')];
+const billingDelete = [authMiddleware, checkAnySectionPermission(['vendor_billing_mgmt', 'vendor_management'], 'delete')];
 
 /** Read-only vendor lookup for Out-for-Repair / Vendor Repair DC (no full Vendor Management). */
 const authorizeVendorRead = [
@@ -40,6 +57,9 @@ const authorizeSpareParts = [
   authMiddleware,
   checkAnySectionPermission(['parts_procurement', 'vendor_management'], 'view'),
 ];
+const spareCreate = [authMiddleware, checkAnySectionPermission(['parts_procurement', 'vendor_management'], 'create')];
+const spareEdit   = [authMiddleware, checkAnySectionPermission(['parts_procurement', 'vendor_management'], 'edit')];
+const spareDelete = [authMiddleware, checkAnySectionPermission(['parts_procurement', 'vendor_management'], 'delete')];
 
 const upload = vendors.buildMulter();
 const vendorFiles = upload.fields([
@@ -57,21 +77,21 @@ router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors
 router.get('/vendors/:id', authorizeVendorRead, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',
-  authorize,
+  authorizeCreate,
   wrapMulter(vendorFiles),
   ...vendors.createValidators(),
   vendors.createVendor
 );
 router.put(
   '/vendors/:id',
-  authorize,
+  authorizeEdit,
   wrapMulter(vendorFiles),
   ...vendors.updateValidatorsFixed(),
   vendors.updateVendor
 );
-router.delete('/vendors/:id', authorize, vendors.getValidators, vendors.deleteVendor);
-router.post('/vendors/login-as', authorize, vendors.loginAsVendor);
-router.patch('/vendors/:id/portal-access', authorize, vendors.portalAccessValidators, vendors.updatePortalAccess);
+router.delete('/vendors/:id', authorizeDelete, vendors.getValidators, vendors.deleteVendor);
+router.post('/vendors/login-as', authorizeEdit, vendors.loginAsVendor);
+router.patch('/vendors/:id/portal-access', authorizeEdit, vendors.portalAccessValidators, vendors.updatePortalAccess);
 
 // Convenience REST aliases (explicit user requirement)
 router.get('/', authorize, (req, res) =>
@@ -93,26 +113,26 @@ router.get(
 );
 router.post(
   '/purchase-orders/:poId/product-received/receive',
-  authorize,
+  authorizeEdit,
   ...purchaseOrders.receiveSerialValidators,
   purchaseOrders.receiveProductSerial
 );
 router.post(
   '/purchase-orders/:poId/product-received/receive-bulk',
-  authorize,
+  authorizeEdit,
   ...purchaseOrders.receivePoLineBulkValidators,
   purchaseOrders.receivePoLineBulk
 );
 router.post(
   '/purchase-orders/:poId/product-received/receive-unit',
-  authorize,
+  authorizeEdit,
   ...purchaseOrders.receivePoLineUnitValidators,
   purchaseOrders.receivePoLineUnit
 );
 const grnCapture = require('../controllers/grnSerialCapture.controller');
 router.post(
   '/purchase-orders/:poId/grn-capture-tokens',
-  authorize,
+  authorizeEdit,
   ...grnCapture.createTokenValidators,
   grnCapture.createGrnCaptureToken
 );
@@ -137,39 +157,39 @@ router.get('/purchase-orders/details', authorize, purchaseOrders.getByNumber);
 router.get('/purchase-orders', authorize, purchaseOrders.listValidators, purchaseOrders.list);
 
 const poBillsUpload = purchaseOrders.createBillsUpload();
-router.patch('/purchase-orders/:id/status', authorize, purchaseOrders.statusValidators, purchaseOrders.updateStatus);
+router.patch('/purchase-orders/:id/status', authorizeEdit, purchaseOrders.statusValidators, purchaseOrders.updateStatus);
 router.post(
   '/purchase-orders/:id/bills',
-  authorize,
+  authorizeEdit,
   wrapMulter(poBillsUpload.array('files', 25)),
   purchaseOrders.uploadBills
 );
 router.delete(
   '/purchase-orders/:id/bills/:fileIndex',
-  authMiddleware,
+  ...authorizeDelete,
   purchaseOrders.deletePoBillFileValidators,
   purchaseOrders.deletePoBillFile
 );
 router.delete(
   '/purchase-orders/:id/bills',
-  authMiddleware,
+  ...authorizeDelete,
   purchaseOrders.removePoBillValidators,
   purchaseOrders.removePoBill
 );
 const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
 router.post(
   '/purchase-orders/:poId/grns/:grnId/bills',
-  authorize,
+  authorizeEdit,
   wrapMulter(grnBillsUpload.array('files', 10)),
   purchaseOrders.grnBillParamValidators,
   purchaseOrders.uploadGrnBill
 );
 
 router.get('/purchase-orders/:poId/activities', authorize, purchaseOrders.listPurchaseOrderActivities);
-router.post('/purchase-orders/:poId/activities', authorize, purchaseOrders.logPurchaseOrderDocumentActivity);
+router.post('/purchase-orders/:poId/activities', authorizeEdit, purchaseOrders.logPurchaseOrderDocumentActivity);
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);
-router.post('/purchase-orders', authorize, ...purchaseOrders.createValidators(), purchaseOrders.create);
-router.put('/purchase-orders/:id', authorize, purchaseOrders.updateValidators, purchaseOrders.update);
+router.post('/purchase-orders', authorizeCreate, ...purchaseOrders.createValidators(), purchaseOrders.create);
+router.put('/purchase-orders/:id', authorizeEdit, purchaseOrders.updateValidators, purchaseOrders.update);
 router.patch(
   '/purchase-orders/:id/line-items/:lineIndex/specs',
   authMiddleware,
@@ -177,19 +197,19 @@ router.patch(
   purchaseOrders.updateLineItemSpecsValidators,
   purchaseOrders.updateLineItemSpecs
 );
-router.delete('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.remove);
+router.delete('/purchase-orders/:id', authorizeDelete, purchaseOrders.getValidators, purchaseOrders.remove);
 
 // GRN + serial numbers (Laravel PurchaseOrderController + serial_numbers table)
 router.get('/purchase-orders/:poId/grns', authorize, serials.grnPoParam, serials.listGrnForPo);
-router.post('/purchase-orders/:poId/grns', authorize, serials.grnPoParam, serials.grnCreateValidators, serials.createGrn);
+router.post('/purchase-orders/:poId/grns', authorizeCreate, serials.grnPoParam, serials.grnCreateValidators, serials.createGrn);
 router.get(
   '/grns/:grnId/purchase-orders/:poId/serial-numbers',
   authorize,
   serials.serialParams,
   serials.listSerials
 );
-router.post('/serial-numbers', authorize, serials.createSerial);
-router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, serials.checkAndUpdate);
+router.post('/serial-numbers', authorizeCreate, serials.createSerial);
+router.put('/serial-numbers/update', authorizeEdit, serials.serialUpdateValidators, serials.checkAndUpdate);
 
 // Vendor buyout of a rented unit sold in place (PHASE 21). Per-serial only:
 // the PO is shared with hundreds of serials and must never be retyped.
@@ -206,25 +226,25 @@ router.post(
 router.get('/spare-parts-orders/next-number', authorizeSpareParts, sparePo.nextNumber);
 router.get('/spare-parts-orders/form-meta', authorizeSpareParts, sparePo.formMeta);
 router.get('/spare-parts-catalog', authorizeSpareParts, spareCatalog.listCatalog);
-router.post('/spare-parts-catalog', authorizeSpareParts, spareCatalog.createValidators, spareCatalog.createCatalogItem);
-router.patch('/spare-parts-catalog/:id', authorizeSpareParts, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
-router.patch('/spare-parts-orders/:id/status', authorizeSpareParts, sparePo.statusValidators, sparePo.updateStatus);
+router.post('/spare-parts-catalog', spareCreate, spareCatalog.createValidators, spareCatalog.createCatalogItem);
+router.patch('/spare-parts-catalog/:id', spareEdit, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
+router.patch('/spare-parts-orders/:id/status', spareEdit, sparePo.statusValidators, sparePo.updateStatus);
 const spoBillsUpload = sparePo.createSpoBillsUpload();
 router.post(
   '/spare-parts-orders/:id/bills',
-  authorizeSpareParts,
+  spareEdit,
   wrapMulter(spoBillsUpload.array('files', 25)),
   sparePo.uploadBills
 );
 router.delete(
   '/spare-parts-orders/:id/bills/:fileIndex',
-  authMiddleware,
+  ...spareDelete,
   sparePo.deleteSpoBillFileValidators,
   sparePo.deleteSpoBillFile
 );
 router.delete(
   '/spare-parts-orders/:id/bills',
-  authMiddleware,
+  ...spareDelete,
   sparePo.removeSpoBillValidators,
   sparePo.removeSpoBill
 );
@@ -236,13 +256,13 @@ router.get(
 );
 router.post(
   '/spare-parts-orders/:spoId/product-received/receive',
-  authorizeSpareParts,
+  spareEdit,
   ...sparePo.receiveSpareSerialValidators,
   sparePo.receiveSpareLineSerial
 );
 router.post(
   '/spare-parts-orders/:spoId/product-received/receive-bulk',
-  authorizeSpareParts,
+  spareEdit,
   ...sparePo.receiveSpareLineBulkValidators,
   sparePo.receiveSpareLineBulk
 );
@@ -260,23 +280,23 @@ router.get(
 );
 router.post(
   '/spare-parts-orders/:spoId/grns',
-  authorizeSpareParts,
+  spareCreate,
   ...sparePo.spareGrnPoParam,
   ...sparePo.spareGrnCreateValidators,
   sparePo.createSpareGrn
 );
 router.get('/spare-parts-orders', authorizeSpareParts, sparePo.listValidators, sparePo.list);
 router.get('/spare-parts-orders/:id', authorizeSpareParts, sparePo.getValidators, sparePo.getOne);
-router.post('/spare-parts-orders', authorizeSpareParts, ...sparePo.createValidators(), sparePo.create);
-router.put('/spare-parts-orders/:id', authorizeSpareParts, sparePo.updateValidators, sparePo.update);
-router.delete('/spare-parts-orders/:id', authorizeSpareParts, sparePo.getValidators, sparePo.remove);
+router.post('/spare-parts-orders', spareCreate, ...sparePo.createValidators(), sparePo.create);
+router.put('/spare-parts-orders/:id', spareEdit, sparePo.updateValidators, sparePo.update);
+router.delete('/spare-parts-orders/:id', spareDelete, sparePo.getValidators, sparePo.remove);
 
 // ---------- Billing (monthly views map to status + period filters) ----------------
 router.get('/billing', authorize, billing.listValidators, billing.list);
 router.get('/billing/:id', authorize, billing.getValidators, billing.getOne);
-router.post('/billing', authorize, ...billing.createValidators(), billing.create);
-router.put('/billing/:id', authorize, billing.updateValidators, billing.update);
-router.delete('/billing/:id', authorize, billing.getValidators, billing.remove);
+router.post('/billing', billingCreate, ...billing.createValidators(), billing.create);
+router.put('/billing/:id', billingEdit, billing.updateValidators, billing.update);
+router.delete('/billing/:id', billingDelete, billing.getValidators, billing.remove);
 
 // ---------- Returns / replacements --------------------------------------------------
 router.get('/replaced-products', authorize, replaced.listValidators, replaced.list);
@@ -287,20 +307,22 @@ router.get(
   replaced.listInventorySerials
 );
 router.get('/replaced-products/:id', authorize, replaced.getValidators, replaced.getOne);
-router.post('/replaced-products', authorize, ...replaced.createValidators, replaced.create);
-router.put('/replaced-products/:id', authorize, replaced.updateValidators, replaced.update);
-router.delete('/replaced-products/:id', authorize, replaced.getValidators, replaced.remove);
+router.post('/replaced-products', authorizeCreate, ...replaced.createValidators, replaced.create);
+router.put('/replaced-products/:id', authorizeEdit, replaced.updateValidators, replaced.update);
+router.delete('/replaced-products/:id', authorizeDelete, replaced.getValidators, replaced.remove);
 
 // ---------- Return laptop to vendor (warehouse → original supplier) -----------------
 const authorizeReturnToVendor = [
   authMiddleware,
   checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'view'),
 ];
+const rtvCreate = [authMiddleware, checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'create')];
+const rtvEdit   = [authMiddleware, checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'edit')];
 
 router.get('/return-to-vendor/eligible-vendors', authorizeReturnToVendor, vendorReturn.listEligibleVendors);
 router.get('/return-to-vendor/eligible-laptops', authorizeReturnToVendor, vendorReturn.listEligible);
 router.get('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.listDcs);
-router.post('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.createDc);
+router.post('/return-to-vendor/dc', rtvCreate, vendorReturn.createDc);
 const vrtdcBase = '/return-to-vendor/dc';
 router.get(...prefixedDcRoute(vrtdcBase, '/pdf', ...authorizeReturnToVendor, vendorReturn.downloadPdf));
 router.post(...prefixedDcRoute(vrtdcBase, '/dispatch', ...authorizeReturnToVendor, vendorReturn.dispatchDc));
@@ -308,19 +330,22 @@ router.post(...prefixedDcRoute(vrtdcBase, '/complete', ...authorizeReturnToVendo
 router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...authorizeReturnToVendor, vendorReturn.cancelDc));
 router.get(...prefixedDcRoute(vrtdcBase, '', ...authorizeReturnToVendor, vendorReturn.getDc));
 router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
-router.post('/return-to-vendor/dc/:dcNumber/dispatch', authorizeReturnToVendor, vendorReturn.dispatchDc);
-router.post('/return-to-vendor/dc/:dcNumber/complete', authorizeReturnToVendor, vendorReturn.completeDc);
-router.post('/return-to-vendor/dc/:dcNumber/cancel', authorizeReturnToVendor, vendorReturn.cancelDc);
+router.post('/return-to-vendor/dc/:dcNumber/dispatch', rtvEdit, vendorReturn.dispatchDc);
+router.post('/return-to-vendor/dc/:dcNumber/complete', rtvEdit, vendorReturn.completeDc);
+router.post('/return-to-vendor/dc/:dcNumber/cancel', rtvEdit, vendorReturn.cancelDc);
 
 // ---------- Vendor rental return ticket (wraps VRTDC; rent stops on notify) ----------
 const authorizeReturnTicket = [
   authMiddleware,
   checkAnySectionPermission(['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], 'view'),
 ];
+const vrtSections = ['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'];
+const vrtCreate = [authMiddleware, checkAnySectionPermission(vrtSections, 'create')];
+const vrtEdit   = [authMiddleware, checkAnySectionPermission(vrtSections, 'edit')];
 router.get('/return-ticket/eligible-vendors', authorizeReturnTicket, vendorReturnTicket.listEligibleVendors);
 router.get('/return-ticket/eligible-laptops', authorizeReturnTicket, vendorReturnTicket.listEligible);
 router.get('/return-ticket', authorizeReturnTicket, vendorReturnTicket.listTickets);
-router.post('/return-ticket', authorizeReturnTicket, vendorReturnTicket.createTicket);
+router.post('/return-ticket', vrtCreate, vendorReturnTicket.createTicket);
 const vrtBase = '/return-ticket';
 router.post(...prefixedDcRoute(vrtBase, '/notify', ...authorizeReturnTicket, vendorReturnTicket.notifyVendor));
 router.post(...prefixedDcRoute(vrtBase, '/dc', ...authorizeReturnTicket, vendorReturnTicket.createDc));
@@ -328,9 +353,9 @@ router.post(...prefixedDcRoute(vrtBase, '/items/cancel', ...authorizeReturnTicke
 router.post(...prefixedDcRoute(vrtBase, '/cancel', ...authorizeReturnTicket, vendorReturnTicket.cancelTicket));
 router.get(...prefixedDcRoute(vrtBase, '', ...authorizeReturnTicket, vendorReturnTicket.getTicket));
 router.get('/return-ticket/:ticketNumber', authorizeReturnTicket, vendorReturnTicket.getTicket);
-router.post('/return-ticket/:ticketNumber/notify', authorizeReturnTicket, vendorReturnTicket.notifyVendor);
-router.post('/return-ticket/:ticketNumber/dc', authorizeReturnTicket, vendorReturnTicket.createDc);
-router.post('/return-ticket/:ticketNumber/items/cancel', authorizeReturnTicket, vendorReturnTicket.cancelItems);
-router.post('/return-ticket/:ticketNumber/cancel', authorizeReturnTicket, vendorReturnTicket.cancelTicket);
+router.post('/return-ticket/:ticketNumber/notify', vrtEdit, vendorReturnTicket.notifyVendor);
+router.post('/return-ticket/:ticketNumber/dc', vrtEdit, vendorReturnTicket.createDc);
+router.post('/return-ticket/:ticketNumber/items/cancel', vrtEdit, vendorReturnTicket.cancelItems);
+router.post('/return-ticket/:ticketNumber/cancel', vrtEdit, vendorReturnTicket.cancelTicket);
 
 module.exports = router;

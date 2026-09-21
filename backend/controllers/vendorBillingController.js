@@ -7,6 +7,20 @@ const {
   recordFullPayment,
   listPayments,
 } = require('../services/paymentLedgerService');
+const {
+  BillingActionError,
+  approveVendorBill: approveVendorBillChecked,
+  cancelVendorBill: cancelVendorBillChecked,
+} = require('../services/invoiceLifecycleService');
+const { timelineFor } = require('../services/eventService');
+const { VENDOR_BILL } = require('../services/billingEventService');
+
+function respondBillingError(res, err) {
+  if (err instanceof BillingActionError) {
+    return res.status(err.status).json({ success: false, message: err.message });
+  }
+  return res.status(500).json({ success: false, message: err.message });
+}
 
 async function nextDebitNoteNumber() {
   const res = await pool.query(
@@ -227,22 +241,49 @@ exports.generateVendorBill = async (req, res) => {
   }
 };
 
+/**
+ * Part 6.2 (BL12) — maker-checker.
+ *
+ * This used to be one UPDATE that set approved_by to whoever asked. It never
+ * looked at generated_by, which was recorded on every bill and read by nothing,
+ * so the person who generated a bill could approve it — and `manager` holds both
+ * rights by default from the seed, so in practice that is what happened.
+ */
 exports.approveVendorBill = async (req, res) => {
   try {
-    const { id } = req.params;
-    const result = await pool.query(
-      `UPDATE vendor_monthly_bills
-       SET status = 'approved', approved_by = $1, updated_at = NOW()
-       WHERE bill_id = $2 AND status = 'generated'
-       RETURNING *`,
-      [req.user?.user_id || null, id]
-    );
-    if (!result.rows.length) {
-      return res.status(404).json({ success: false, message: 'Bill not found or not in generated status' });
-    }
-    res.json({ success: true, bill: result.rows[0] });
+    const bill = await approveVendorBillChecked(pool, {
+      billId: Number(req.params.id),
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.json({ success: true, bill });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    respondBillingError(res, err);
+  }
+};
+
+/** BL13 — cancel a vendor bill with a reason and a trail. */
+exports.cancelVendorBill = async (req, res) => {
+  try {
+    const bill = await cancelVendorBillChecked(pool, {
+      billId: Number(req.params.id),
+      reason: req.body?.reason,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.json({ success: true, bill, message: `Bill ${bill.bill_number} cancelled` });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/** BL11 — the bill's own timeline out of the single events table. */
+exports.getVendorBillTimeline = async (req, res) => {
+  try {
+    const events = await timelineFor(VENDOR_BILL, Number(req.params.billId), { db: pool });
+    res.json({ success: true, events });
+  } catch (err) {
+    respondBillingError(res, err);
   }
 };
 

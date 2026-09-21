@@ -8,6 +8,18 @@ const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
+// Part 6.2 — declared BEFORE /invoices/:invoiceId, or the parameterised route
+// swallows them.
+//
+// BL9: the overdue sweep also runs on a schedule; this is the manual trigger, so
+// finance can force it and see the result instead of waiting a day to find out
+// whether it worked.
+router.post('/invoices/run-overdue-sweep', cp('customer_billing', 'edit'), ctrl.runOverdueSweep);
+// Neither of these views existed. "How much is owed, and how old is it" had no
+// answer anywhere in this system.
+router.get('/ageing', cp('customer_billing', 'view'), ctrl.getAgeing);
+router.get('/customers/:customerId/statement', cp('customer_billing', 'view'), ctrl.getStatementOfAccount);
+
 router.get('/invoices', cp('customer_billing', 'view'), ctrl.listInvoices);
 router.get('/invoices/coverage', cp('customer_billing', 'view'), ctrl.listInvoiceCoverage);
 router.get('/invoices/export.xlsx', cp('customer_billing', 'view'), ctrl.exportInvoiceSerialsExcel);
@@ -21,6 +33,10 @@ router.get('/invoices/:invoiceId', cp('customer_billing', 'view'), ctrl.getInvoi
 router.post('/invoices/:id/send', cp('customer_billing', 'edit'), ctrl.sendInvoice);
 router.post('/invoices/:id/mark-zoho', cp('customer_billing', 'edit'), ctrl.markInvoiceGeneratedOnZoho);
 router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid);
+// BL13: cancelling is a delete-grade action — it withdraws a statutory document.
+router.patch('/invoices/:id/cancel', cp('customer_billing', 'delete'), ctrl.cancelInvoice);
+// BL11: the timeline the audit rows exist for.
+router.get('/invoices/:invoiceId/timeline', cp('customer_billing', 'view'), ctrl.getInvoiceTimeline);
 
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
 router.get('/credit-notes/laptops', cp('credit_notes', 'view'), ctrl.listCreditNoteLaptops);

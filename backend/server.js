@@ -267,6 +267,11 @@ server.listen(PORT, () => {
     startDispatchSlaWorker();
     const { startBluedartAwbSyncWorker } = require('./services/bluedartAwbSyncWorker');
     startBluedartAwbSyncWorker();
+    // Part 6.2 (BL9). Separate from the billing scheduler on purpose: that cron
+    // defaults to OFF, and an invoice ageing past its due date is the passage of
+    // time, not a generation event.
+    const { startOverdueInvoiceWorker } = require('./services/overdueInvoiceWorker');
+    startOverdueInvoiceWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }

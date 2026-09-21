@@ -21,6 +21,9 @@ router.get('/bills/:billId', cp('vendor_billing_mgmt', 'view'), ctrl.getVendorBi
 router.post('/bills/generate', cp('vendor_billing_mgmt', 'create'), ctrl.generateVendorBill);
 router.patch('/bills/:id/approve', cp('vendor_billing_mgmt', 'edit'), ctrl.approveVendorBill);
 router.patch('/bills/:id/paid', cp('vendor_billing_mgmt', 'edit'), ctrl.markVendorBillPaid);
+// Part 6.2 — BL13 (cancel with a reason) and BL11 (the bill's own timeline).
+router.patch('/bills/:id/cancel', cp('vendor_billing_mgmt', 'delete'), ctrl.cancelVendorBill);
+router.get('/bills/:billId/timeline', cp('vendor_billing_mgmt', 'view'), ctrl.getVendorBillTimeline);
 
 router.get('/debit-notes', cp('debit_notes', 'view'), ctrl.listDebitNotes);
 router.post('/debit-notes', cp('debit_notes', 'create'), ctrl.createDebitNote);

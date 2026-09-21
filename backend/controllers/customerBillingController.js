@@ -666,6 +666,10 @@ exports.generateInvoice = async (req, res) => {
     if (result.skipped && !result.invoice_id) {
       return res.status(200).json({ success: true, skipped: true, reason: result.reason });
     }
+    // Part 6.2 — classify the GST heads (BL7), stamp the due date the overdue
+    // sweep needs (BL9), and record that this invoice was generated (BL11).
+    await finaliseGeneratedInvoice(result.invoice_id, req);
+
     const inv = await pool.query(
       `SELECT ci.*, c.company_name AS customer_name FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
@@ -781,10 +785,25 @@ exports.sendInvoice = async (req, res) => {
     if (sent) {
       await pool.query(
         `UPDATE customer_invoices
-         SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW()
+         SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW(),
+             due_date = COALESCE(due_date, (COALESCE(invoice_date, CURRENT_DATE) + INTERVAL '15 days')::date)
          WHERE invoice_id = $2 AND LOWER(COALESCE(status, 'draft')) = 'draft'`,
         [req.user?.user_id || null, id]
       );
+      // Part 6.2 (BL11) — sending an invoice is a financial fact and recorded
+      // nothing. The due date is stamped here too, because an invoice cannot be
+      // overdue against a date it never had (BL9).
+      await invoiceEvent(pool, {
+        invoiceId: Number(id),
+        invoiceNumber: invoice.invoice_number,
+        eventType: BILLING_EVENTS.INVOICE_SENT,
+        fromState: 'draft',
+        toState: 'sent',
+        payload: { to, cc: cc || null, grand_total: invoice.grand_total },
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        source: 'customerBillingController.sendInvoice',
+      });
     }
     if (!sent) {
       return res.status(502).json({
@@ -818,6 +837,16 @@ exports.markPaid = async (req, res) => {
       return res.json({ success: true, invoice: inv.rows[0], message: result.reason });
     }
     const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+    await invoiceEvent(pool, {
+      invoiceId: Number(id),
+      invoiceNumber: inv.rows[0]?.invoice_number,
+      eventType: BILLING_EVENTS.INVOICE_PAID,
+      toState: 'paid',
+      payload: { reference: payment_reference || null, method: method || 'adjustment' },
+      actor: req.user,
+      correlationId: req.correlationId || null,
+      source: 'customerBillingController.markPaid',
+    });
     res.json({ success: true, invoice: inv.rows[0], payment: result.payment });
   } catch (err) {
     res.status(err.message === 'Invoice not found' ? 404 : 500).json({ success: false, message: err.message });
@@ -1852,3 +1881,162 @@ exports.refundSecurityDeposit = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// ── Part 6.2 — the invoice lifecycle that had no endpoints ───────────────
+//
+// BL9 (overdue), BL13 (cancel), plus the ageing and statement views that this
+// system could not produce at all: "how much is owed and how old is it" had no
+// answer anywhere.
+const {
+  BillingActionError,
+  sweepOverdueInvoices,
+  cancelInvoice,
+  ageingBuckets,
+  statementOfAccount,
+} = require('../services/invoiceLifecycleService');
+const { timelineFor, ENTITY } = require('../services/eventService');
+const { invoiceEvent, creditNoteEvent, BILLING_EVENTS } = require('../services/billingEventService');
+const { applyInvoiceGstSplit } = require('../services/billingGstService');
+
+function respondBillingError(res, err) {
+  if (err instanceof BillingActionError) {
+    return res.status(err.status).json({ success: false, message: err.message });
+  }
+  return res.status(500).json({ success: false, message: err.message });
+}
+
+/** BL13 — cancel, with a reason, instead of an UPDATE nobody sees. */
+exports.cancelInvoice = async (req, res) => {
+  try {
+    const invoice = await cancelInvoice(pool, {
+      invoiceId: Number(req.params.id),
+      reason: req.body?.reason,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.json({ success: true, invoice, message: `Invoice ${invoice.invoice_number} cancelled` });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/**
+ * BL9 — move sent invoices past their due date to overdue.
+ *
+ * Also runs on a schedule; this endpoint exists so finance can force it and see
+ * the result, rather than waiting a day to find out whether it worked.
+ */
+exports.runOverdueSweep = async (req, res) => {
+  try {
+    const result = await sweepOverdueInvoices(pool, {
+      asOf: req.body?.as_of || null,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.json({
+      success: true,
+      moved: result.moved,
+      invoices: result.invoices,
+      message: result.moved
+        ? `${result.moved} invoice${result.moved === 1 ? '' : 's'} moved to overdue`
+        : 'No invoices are past their due date',
+    });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/** Ageing buckets — not due, 1-30, 31-60, 61-90, 90+. */
+exports.getAgeing = async (req, res) => {
+  try {
+    const rows = await ageingBuckets(pool, {
+      customerId: req.query.customer_id ? Number(req.query.customer_id) : null,
+      asOf: req.query.as_of || null,
+    });
+    const totals = rows.reduce((acc, r) => {
+      ['outstanding', 'not_due', 'days_1_30', 'days_31_60', 'days_61_90', 'days_90_plus']
+        .forEach((k) => { acc[k] = +(Number(acc[k] || 0) + Number(r[k] || 0)).toFixed(2); });
+      return acc;
+    }, {});
+    res.json({ success: true, rows, totals });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/** Statement of account — invoices, credit notes and payments, running balance. */
+exports.getStatementOfAccount = async (req, res) => {
+  try {
+    const data = await statementOfAccount(pool, {
+      customerId: Number(req.params.customerId),
+      fromDate: req.query.from || null,
+      toDate: req.query.to || null,
+    });
+    res.json({ success: true, ...data });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/**
+ * BL11 — the invoice's own timeline, which is what the audit rows exist for.
+ *
+ * Reads the single events table from Part 2.1. There is no second billing audit
+ * table, deliberately: one trail, or the duplication this programme is about.
+ */
+exports.getInvoiceTimeline = async (req, res) => {
+  try {
+    const events = await timelineFor(ENTITY.INVOICE, Number(req.params.invoiceId), { db: pool });
+    res.json({ success: true, events });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/**
+ * Part 6.2 — everything a freshly generated invoice needs that the generator
+ * does not do.
+ *
+ * Kept out of billingSchedulerService on purpose: that module writes invoices
+ * from seven different paths with slightly different totals, and the safe way to
+ * add a classification to all of them is once, after the row exists, from its
+ * own stored numbers. Never throws — an invoice that generated correctly must
+ * not fail because its GST heads could not be written.
+ */
+async function finaliseGeneratedInvoice(invoiceId, req) {
+  if (!invoiceId) return;
+  try {
+    await pool.query(
+      `UPDATE customer_invoices
+          SET due_date = COALESCE(due_date, (COALESCE(invoice_date, CURRENT_DATE) + INTERVAL '15 days')::date)
+        WHERE invoice_id = $1`,
+      [invoiceId]
+    );
+    const split = await applyInvoiceGstSplit(pool, invoiceId);
+    const { rows } = await pool.query(
+      `SELECT invoice_number, customer_id, grand_total FROM customer_invoices WHERE invoice_id = $1`,
+      [invoiceId]
+    );
+    await invoiceEvent(pool, {
+      invoiceId,
+      invoiceNumber: rows[0]?.invoice_number,
+      eventType: BILLING_EVENTS.INVOICE_GENERATED,
+      toState: 'draft',
+      payload: {
+        customer_id: rows[0]?.customer_id,
+        grand_total: rows[0]?.grand_total,
+        gst: split ? {
+          cgst: split.cgst, sgst: split.sgst, igst: split.igst,
+          place_of_supply: split.place_of_supply, intra_state: split.is_intra_state,
+        } : null,
+      },
+      actor: req?.user,
+      correlationId: req?.correlationId || null,
+      source: 'customerBillingController.generateInvoice',
+    });
+  } catch (err) {
+    console.error(`[billing] finaliseGeneratedInvoice(${invoiceId}):`, err.message);
+  }
+}
+
+exports._finaliseGeneratedInvoice = finaliseGeneratedInvoice;
