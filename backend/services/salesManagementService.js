@@ -112,15 +112,55 @@ const DOC_TYPES = {
 
 // Rental + Demo bill/dispatch under Rentfoxxy; Sales under Gorefurbo.
 // Demo can be tagged to either entity via branch on create (sale-section demo → gorefurbo).
+/**
+ * Which book bills the customer (Part 4.1, finding S1, Decision 1).
+ *
+ * This used to end in a bare `return 'rentfoxxy'`, so EVERY unknown value fell
+ * through to RentFoxxy — 'Sale', 'SALE ', 'rentaal', an empty string, a typo.
+ * A mistake in the order type silently picked the brand, the GSTIN and the
+ * document series, and the first sign of it was an invoice from the wrong
+ * entity.
+ *
+ * Migration 262 stops the bad value being written. This stops it being READ,
+ * which matters more: the constraint catches new writes, but 4,812 existing
+ * rows are read on every invoice run and a defaulting mapper would keep
+ * mis-billing them.
+ *
+ * NULL is still rental, explicitly rather than by falling through — older
+ * ERP-imported lines predate the column and they are genuinely rentals.
+ */
+class UnknownQuotationType extends Error {
+  constructor(value) {
+    super(
+      `"${value}" is not a quotation type. Expected sale, rental or demo. `
+      + 'Refusing rather than defaulting, because the default picks which brand bills the customer.'
+    );
+    this.name = 'UnknownQuotationType';
+    this.code = 'UNKNOWN_QUOTATION_TYPE';
+    this.statusCode = 400;
+    this.value = value;
+  }
+}
+
+const QUOTATION_TYPES = Object.freeze(['sale', 'rental', 'demo']);
+
 function entityForQuotationType(quotationType, branch) {
-  const t = String(quotationType || 'rental').toLowerCase();
+  // NULL / undefined / '' are legacy rows, and they are rentals.
+  if (quotationType === null || quotationType === undefined || String(quotationType).trim() === '') {
+    return 'rentfoxxy';
+  }
+
+  const t = String(quotationType).trim().toLowerCase();
+
   if (t === 'sale' || t === 'sales') return 'gorefurbo';
+  if (t === 'rental') return 'rentfoxxy';
   if (t === 'demo') {
     const b = String(branch || '').toLowerCase();
     if (b === 'gorefurbo' || b === 'rentfoxxy') return b;
     return 'rentfoxxy';
   }
-  return 'rentfoxxy';
+
+  throw new UnknownQuotationType(quotationType);
 }
 
 /** SQL predicate for sale vs rental SO list segregation. */
@@ -3053,6 +3093,8 @@ async function resolveDcBilling(dcNumber, lines) {
 }
 
 module.exports = {
+  UnknownQuotationType,
+  QUOTATION_TYPES,
   nextDocumentNumber,
   nextFinancialYearNumber,
   peekFinancialYearNumber,
