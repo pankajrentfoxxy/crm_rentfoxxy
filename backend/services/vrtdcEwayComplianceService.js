@@ -13,11 +13,17 @@
  *   3. Accounts enters the e-way number, date and document.
  *   4. Only then does the gate let the consignment out.
  *
- * Creating the DC is never blocked; the gate is. That is the opposite way round
- * from VRDC, which locks the PDF download instead — and it is deliberate. A
- * return DC is picked and packed before anyone knows the transporter, so
- * blocking creation would stop the warehouse working, while the thing that
- * actually must not happen without an e-way bill is the lorry leaving.
+ * Two things are withheld above the threshold until the bill exists — the gate,
+ * and the challan PDF. Creating the DC is never blocked: a return is picked and
+ * packed before anyone knows the transporter, so blocking creation would stop
+ * the warehouse working. But the consignment must not leave, and the paperwork
+ * must not circulate, because a challan naming a twelve-lakh consignment with no
+ * e-way number on it is exactly the document someone loads a van on the strength
+ * of.
+ *
+ * super_admin keeps a break-glass path to the PDF. Accounts is not given one:
+ * the request mail carries the challan to them as an attachment, which is how
+ * they raise the bill in the first place.
  */
 const fs = require('fs');
 const path = require('path');
@@ -104,8 +110,14 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
     items_missing_value: missingValues,
     eway_complete: ewayComplete,
     eway_status: !needsEway ? 'not_required' : (ewayComplete ? 'uploaded' : 'pending'),
-    // The gate, not the PDF: a return is packed before the transporter is known.
     can_dispatch_out: !needsEway || ewayComplete,
+    // The challan is also withheld while a bill is required and missing. A
+    // document that names a Rs 12.6 lakh consignment and carries no e-way
+    // number is the one thing that must not be circulating — someone will load
+    // the van on the strength of it. super_admin keeps a break-glass path;
+    // Accounts does not need one, because the request mail delivers the challan
+    // to them as an attachment.
+    can_download_pdf: !needsEway || ewayComplete || isSuperAdmin,
     can_upload_eway: canUpload,
     can_request_eway: isSuperAdmin || REQUESTER_ROLES.has(String(user?.role || '')),
     request_sent: Boolean(head?.accounts_notified_at),
@@ -123,6 +135,33 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
         : `Consignment is ${money(productValue)}. The gate cannot release it until Accounts adds the E-way Bill.`)
       : null,
   };
+}
+
+/**
+ * Throws if the challan must not be handed out yet.
+ *
+ * Separate from the gate check because they answer different questions: the
+ * gate asks "may this leave", this asks "may anyone hold the paperwork". Both
+ * are open once the bill exists.
+ */
+async function assertVrtdcPdfDownloadable(dcNumber, user, db = pool) {
+  if (user?.role === 'super_admin') return { ok: true, override: 'super_admin' };
+  const r = await db.query(
+    `SELECT eway_bill_number FROM vendor_return_delivery_challans WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  const head = r.rows[0];
+  if (!head) throw new Error('Return DC not found');
+  const total = await computeVrtdcTotalValue(dcNumber, db);
+  if (!requiresVrdcEway(total)) return { ok: true, required: false };
+  if (isVrtdcEwayComplete(head, true)) return { ok: true, required: true };
+  const err = new Error(
+    `This challan is locked: declared value ${money(total)} is above ${money(EWAY_VALUE_THRESHOLD)}`
+    + ' and no E-way Bill has been recorded yet. Accounts must add the E-way Bill number,'
+    + ' date and document before the challan can be downloaded.'
+  );
+  err.status = 423; // Locked
+  throw err;
 }
 
 /** Throws if this consignment must not leave the gate yet. */
@@ -375,6 +414,7 @@ module.exports = {
   isVrtdcEwayComplete,
   buildVrtdcEwayCompliance,
   assertVrtdcCanLeaveGate,
+  assertVrtdcPdfDownloadable,
   canUploadVrtdcEwayBill,
   sendAccountsVrtdcEwayEmail,
   saveVrtdcEwayBill,

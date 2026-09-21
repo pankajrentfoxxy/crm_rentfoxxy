@@ -147,6 +147,14 @@ exports.downloadPdf = async (req, res) => {
     const path = require('path');
     const fs = require('fs');
     const dcNumber = req.params.dcNumber;
+
+    // Locked above the e-way threshold until Accounts records the bill. Checked
+    // here rather than only in the UI — the download URL is guessable, and a
+    // challan for a consignment with no e-way number is the document someone
+    // loads a van on.
+    const { assertVrtdcPdfDownloadable } = require('../../services/vrtdcEwayComplianceService');
+    await assertVrtdcPdfDownloadable(dcNumber, req.user);
+
     const { generateVendorReturnDcPdf } = require('../../services/vendorReturnToVendorPdfService');
     const rel = await generateVendorReturnDcPdf(dcNumber);
     if (!rel) return res.status(404).json({ success: false, message: 'Return DC not found' });
@@ -157,7 +165,7 @@ exports.downloadPdf = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="VRTDC_${safe}.pdf"`);
     res.download(abs, `VRTDC_${safe}.pdf`);
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
+    res.status(err.status || 500).json({ success: false, message: err.message || 'PDF download failed' });
   }
 };
 

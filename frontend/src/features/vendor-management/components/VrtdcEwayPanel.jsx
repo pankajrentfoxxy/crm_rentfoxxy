@@ -25,7 +25,7 @@ const money = (n) => `₹${Number(n || 0).toLocaleString('en-IN', {
  * "not required, ₹30,000 is under the ₹50,000 threshold" is what stops someone
  * wondering whether the feature is broken.
  */
-export default function VrtdcEwayPanel({ dcNumber, status, onChange }) {
+export default function VrtdcEwayPanel({ dcNumber, status, onChange, onState }) {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -39,6 +39,7 @@ export default function VrtdcEwayPanel({ dcNumber, status, onChange }) {
       const res = await fetchReturnToVendorEway(dcNumber);
       const c = res.data?.compliance || null;
       setState(c);
+      onState?.(c);
       if (c?.eway_bill_number) setNum(c.eway_bill_number);
       if (c?.eway_bill_date) setDate(String(c.eway_bill_date).slice(0, 10));
     } catch (err) {
@@ -47,7 +48,7 @@ export default function VrtdcEwayPanel({ dcNumber, status, onChange }) {
     } finally {
       setLoading(false);
     }
-  }, [dcNumber]);
+  }, [dcNumber, onState]);
 
   useEffect(() => { load(); }, [load]);
 

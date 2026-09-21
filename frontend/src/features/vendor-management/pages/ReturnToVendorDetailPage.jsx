@@ -48,6 +48,9 @@ export default function ReturnToVendorDetailPage() {
 
   const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
   const [pdfBusy, setPdfBusy] = useState(false);
+  // Mirrors the server's lock so the button explains itself instead of failing
+  // on click. The server still enforces it — the download URL is guessable.
+  const [eway, setEway] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,9 +172,14 @@ export default function ReturnToVendorDetailPage() {
             <Button
               variant="secondary"
               loading={pdfBusy}
+              disabled={eway ? !eway.can_download_pdf : false}
+              title={eway && !eway.can_download_pdf
+                ? 'Locked until Accounts records the E-way Bill'
+                : undefined}
               onClick={handleDownloadPdf}
             >
-              <Download className="w-4 h-4" /> Download PDF
+              <Download className="w-4 h-4" />
+              {eway && !eway.can_download_pdf ? 'PDF locked' : 'Download PDF'}
             </Button>
             <Link to="/vendor-management/return-to-vendor" className="text-sm text-blue-600 inline-flex items-center gap-1">
               <ArrowLeft className="w-4 h-4" /> Back
@@ -333,7 +341,7 @@ export default function ReturnToVendorDetailPage() {
           price the laptops, name the transporter, get the E-way Bill, then the
           gate releases it. Hidden once the consignment has gone. */}
       {dc.status !== 'cancelled' && (
-        <VrtdcEwayPanel dcNumber={dcNumber} status={dc.status} onChange={load} />
+        <VrtdcEwayPanel dcNumber={dcNumber} status={dc.status} onChange={load} onState={setEway} />
       )}
 
       {dc.status === 'draft' && (
