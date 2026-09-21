@@ -14,6 +14,8 @@ const {
   drawDispatchTags,
   resolveSignFile,
   fmtIst,
+  formatVendorBillingFromRow,
+  formatVendorShippingFromRow,
 } = require('./vendorRepairPdfService');
 const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
 
@@ -31,6 +33,11 @@ async function loadReturnDcPdfData(dcNumber) {
             v.business_name AS vendor_business_name,
             v.address AS vendor_reg_address,
             v.shipping_address AS vendor_ship_address,
+            v.first_name AS vendor_first_name, v.last_name AS vendor_last_name,
+            v.city AS vendor_city, v.state AS vendor_state, v.pincode AS vendor_pincode,
+            v.gst_number AS vendor_gst_number, v.shipping_same AS vendor_shipping_same,
+            v.shipping_city AS vendor_shipping_city, v.shipping_state AS vendor_shipping_state,
+            v.shipping_pincode AS vendor_shipping_pincode,
             v.contact_person_name, v.contact_person_phone, v.phone,
             dt.first_name AS delivery_person_first_name,
             dt.last_name AS delivery_person_last_name
@@ -182,10 +189,31 @@ async function generateVendorReturnDcPdf(dcNumber) {
 
   const company = await loadCompany();
   const vendorName = dc.vendor_name || dc.vendor_business_name || '—';
-  const vendorBilling = [vendorName, dc.billing_address || dc.vendor_address || dc.vendor_reg_address]
-    .filter(Boolean).join('\n');
-  const vendorShipping = [vendorName, dc.shipping_address || dc.vendor_ship_address || dc.vendor_address]
-    .filter(Boolean).join('\n');
+  // The stored billing_address used to default to our own TrueTech block, so
+  // older DCs carry our address in the vendor's "Bill to" box. Rebuild both
+  // blocks from the vendor master, and fall back to the stored snapshot only if
+  // the vendor row has gone. formatVendorBillingFromRow already leads with the
+  // vendor's name, so the name is not prepended again — that is what produced
+  // "C PROMPT ... / TRUETECH SERVICES ..." stacked in one box.
+  const vendorRow = {
+    business_name: dc.vendor_business_name,
+    first_name: dc.vendor_first_name,
+    last_name: dc.vendor_last_name,
+    address: dc.vendor_reg_address,
+    city: dc.vendor_city,
+    state: dc.vendor_state,
+    pincode: dc.vendor_pincode,
+    gst_number: dc.vendor_gst_number,
+    shipping_same: dc.vendor_shipping_same,
+    shipping_address: dc.vendor_ship_address,
+    shipping_city: dc.vendor_shipping_city,
+    shipping_state: dc.vendor_shipping_state,
+    shipping_pincode: dc.vendor_shipping_pincode,
+  };
+  const vendorBilling = formatVendorBillingFromRow(vendorRow)
+    || [vendorName, dc.billing_address || dc.vendor_address].filter(Boolean).join('\n');
+  const vendorShipping = formatVendorShippingFromRow(vendorRow)
+    || [vendorName, dc.shipping_address || dc.vendor_address].filter(Boolean).join('\n');
 
   const dir = path.join(__dirname, '../uploads/vendor-return');
   fs.mkdirSync(dir, { recursive: true });

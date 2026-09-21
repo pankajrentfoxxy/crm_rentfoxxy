@@ -4,6 +4,10 @@
  */
 const pool = require('../config/db');
 const { formatCompanyBlock } = require('../utils/companyDefaults');
+const {
+  formatVendorBillingFromRow,
+  formatVendorShippingFromRow,
+} = require('./vendorRepairPdfService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { transitionAsset, STATUS } = require('./inventoryStateMachine');
 const {
@@ -342,8 +346,17 @@ async function createReturnDc(client, {
   const whAddr = warehouseAddress || formatCompanyBlock();
   const vName = (vendorName || vendor.business_name || '').trim();
   const vAddr = (vendorAddress || vendor.address || '').trim();
-  const billAddr = billingAddress || formatCompanyBlock();
-  const shipAddr = (shippingAddress || vendor.shipping_address || vAddr).trim();
+  // Bill to = the VENDOR. This defaulted to formatCompanyBlock(), which is our
+  // own TrueTech block and identical to warehouse_address — so every return DC
+  // carried our address in the vendor's "Bill to" box, and the PDF printed the
+  // vendor's name above our address and GSTIN. On a return the vendor is the
+  // counterparty being billed, so it is their registered address and their
+  // GSTIN that belong here.
+  const billAddr = (billingAddress || formatVendorBillingFromRow(vendor) || vAddr).trim();
+  // Ship to honours shipping_same: a vendor with shipping_same true has no
+  // shipping_address row at all, so falling through to the registered address is
+  // the correct behaviour, not a fallback.
+  const shipAddr = (shippingAddress || formatVendorShippingFromRow(vendor) || vAddr).trim();
   if (!vName) throw new Error('Vendor name is required');
   if (!shipAddr) throw new Error('Vendor shipping address is required');
 
