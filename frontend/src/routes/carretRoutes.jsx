@@ -21,6 +21,9 @@ const SellListPage = React.lazy(() => import('../features/carret/SellListPage'))
 const ProcureListPage = React.lazy(() => import('../features/carret/ProcureListPage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
+const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
+const InvoiceRecordPage = React.lazy(() => import('../features/carret/InvoiceRecordPage'));
+const AgeingPage = React.lazy(() => import('../features/carret/AgeingPage'));
 
 export const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
 
@@ -61,6 +64,13 @@ export const carretRoutes = CARRET_ENABLED
       // QC2 must not move between sections.
       { path: '/carret/produce/pipeline', element: guard('floor_pipeline', 'view', <FloorPipelinePage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
+
+      // Money (Part 6.4). The invoice record is the visible half of 6.2: the
+      // timeline is what BL11's audit rows exist for, and the payments panel is
+      // the first caller the ledger has ever had (BL18).
+      { path: '/carret/money/invoices', element: guard('customer_billing', 'view', <InvoicesListPage />) },
+      { path: '/carret/money/invoices/:invoiceId', element: guard('customer_billing', 'view', <InvoiceRecordPage />) },
+      { path: '/carret/money/ageing', element: guard('customer_billing', 'view', <AgeingPage />) },
     ]
   : [];
 

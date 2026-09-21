@@ -142,6 +142,11 @@ export const SECTIONS = [
       { to: '/finance/vendor-bills', label: 'Vendor Bills', section: 'vendor_billing_mgmt', action: 'view' },
       { to: '/finance/debit-notes', label: 'Debit Notes', section: 'debit_notes', action: 'view' },
       { to: '/finance/payments', label: 'Payments', section: 'payment_records', action: 'view' },
+      // Part 6.4, behind REACT_APP_CARRET. Beside the existing screens (hard
+      // rule 6). Ageing & Outstanding has no old counterpart at all — neither
+      // the buckets nor the due dates they rest on existed before Part 6.2.
+      { to: '/carret/money/invoices', label: 'Customer Invoices (Carret)', section: 'customer_billing', action: 'view' },
+      { to: '/carret/money/ageing', label: 'Ageing & Outstanding (Carret)', section: 'customer_billing', action: 'view' },
       { to: '/finance/dashboard', label: 'Billing Dashboard', section: 'billing_dashboard', action: 'view' },
       { to: '/finance/dc-invoice', label: 'DC Invoice Queue', section: 'customer_billing', action: 'view' },
       { to: '/finance/sale-invoice-queue', label: 'Sale Invoice Queue', section: 'customer_billing', action: 'view' },
