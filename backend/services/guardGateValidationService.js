@@ -2397,6 +2397,10 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
 
   const head = await db.query(
     `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number,
+            -- Part 3.2: the fields the gate pre-flight checks. The gate could
+            -- not refuse anything before because it never asked for them.
+            dcl.status, dcl.awb_number, dcl.eway_required, dcl.eway_bill_number,
+            dcl.eway_asset_value, dcl.ship_by,
             COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
        FROM delivery_challan_lines dcl
        LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
@@ -2406,6 +2410,32 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     [dcNumber]
   );
   const ctx = head.rows[0] || {};
+
+  // Part 3.2 / DC1 / Decision 4 — the gate is now a gate.
+  //
+  // This runs BEFORE any status moves, because the whole defect was that the
+  // gate put stock in transit and started the rent clock having checked only
+  // that the challan was not cancelled. A failure here leaves the challan at
+  // dispatch_ready and writes a gate_refused event saying which check failed,
+  // so the refusal is answerable later without asking the guard.
+  const { runGatePreflight } = require('./gatePreflightService');
+  const preflight = await runGatePreflight(db, {
+    dcNumber,
+    head: ctx,
+    actor: actor?.userId ? { actor_type: 'user', actor_id: actor.userId, actor_name: actor.name } : null,
+    correlationId: actor?.correlationId || null,
+  });
+  if (!preflight.ok) {
+    const err = new Error(
+      `The gate refused ${dcNumber}: ${preflight.failures.map((f) => f.message).join(' ')}`
+    );
+    err.code = 'GATE_REFUSED';
+    err.statusCode = 409;
+    err.failures = preflight.failures;
+    err.dcNumber = dcNumber;
+    throw err;
+  }
+
   let rows = Array.isArray(serialRows) ? serialRows.filter((r) => r.serial_id) : [];
   if (!rows.length) {
     const sos = await db.query(

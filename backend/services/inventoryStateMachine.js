@@ -29,6 +29,12 @@ const STATUS = Object.freeze({
   IN_STOCK: 'in_stock',
   RESERVED: 'reserved',
   DISPATCH_READY: 'dispatch_ready',
+  // Part 3.1 / Decision 4. The guard's custody: a unit that is neither outside
+  // nor in stock, and that somebody is accountable for. Without it, inward
+  // confirm has nowhere to put a laptop between "the guard received it" and
+  // "inventory booked it" — which is why "inventory picks from guard" cannot be
+  // recorded today.
+  AT_GATE: 'at_gate',
   IN_TRANSIT: 'in_transit',
   RENTED: 'rented',
   ON_DEMO: 'on_demo',
@@ -47,6 +53,10 @@ const ALLOWED = {
   // I6: dispatch_ready -> qc_failed. A unit on a challan that fails Dispatch QC
   // happens every week and the map did not permit it, so the code went round
   // the map instead (bypass-register A, dispatchQcCaptureService).
+  // Decision, 21 Sep 2026: units go straight out. The guard scan IS the
+  // departure, so there is no dispatch_ready -> at_gate staging step. at_gate
+  // is inward custody only. Adding the outward two-step later is one entry
+  // here plus a screen change, so nothing is foreclosed.
   dispatch_ready:  ['in_transit', 'in_stock', 'qc_failed'],
   // I6: in_transit -> returned. Support warehouse receive takes a unit straight
   // from in_transit to returned, which the map forbade — which is exactly why
@@ -56,7 +66,15 @@ const ALLOWED = {
   // them is a prerequisite for closing those two bypasses, not a loosening:
   // close the bypass without adding these and support warehouse receive and
   // Dispatch QC failure both break.
-  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock', 'returned'],
+  // in_transit -> at_gate is the arrival scan. The unit is back on site but
+  // inventory has not collected it yet.
+  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock', 'returned', 'at_gate'],
+
+  // Out of the guard's custody. in_stock is "inventory collected it from the
+  // guard" — the second step that is the whole point of the state. returned
+  // and qc_failed cover a unit that arrives already known to be a return or a
+  // reject, and in_transit covers a mistaken inward scan being sent back out.
+  at_gate:         ['in_stock', 'returned', 'qc_failed', 'in_transit'],
   on_demo:         ['rented', 'returned'],
   rented:          ['returned', 'sold'],   // 'sold' = sale in place (see markSoldInPlace)
   sold:            ['returned'],
@@ -474,6 +492,37 @@ const markSoldInPlace = (db, serialId, {
     actorName,
   });
 
+/**
+ * Part 3.1 — the guard has taken custody of an arriving unit.
+ *
+ * This is the state that makes custody recordable. Before it, inward confirm
+ * moved a unit straight to `returned`, which asserted something nobody had
+ * checked yet: that it was a return rather than, say, a refused delivery or a
+ * unit coming back for repair. at_gate says only what is true — it is on site
+ * and the guard is accountable for it.
+ */
+const markAtGate = (db, serialId, { reason, dcNumber, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, {
+    ...rest, serialId, toStatus: STATUS.AT_GATE, dcNumber,
+    reason: reason || `Received at gate${dcNumber ? ` on ${dcNumber}` : ''}`,
+    actorUserId, actorName,
+  });
+
+/**
+ * Part 3.1 — inventory has collected a unit from the guard.
+ *
+ * The second step, and the thing that cannot be recorded today. Deliberately
+ * NOT folded into markAtGate: they are two different people doing two different
+ * things at two different times, and collapsing them is what lost the interval
+ * in the first place.
+ */
+const collectFromGate = (db, serialId, { reason, actorUserId, actorName, ...rest }) =>
+  transitionAsset(db, {
+    ...rest, serialId, toStatus: STATUS.IN_STOCK,
+    reason: reason || 'Collected from the guard into stock',
+    actorUserId, actorName,
+  });
+
 const backToStock = (db, serialId, { reason, actorUserId, actorName, ...rest }) =>
   transitionAsset(db, { ...rest, serialId, toStatus: STATUS.IN_STOCK,
     reason: reason || 'Returned to available stock', actorUserId, actorName });
@@ -544,6 +593,8 @@ async function bridgeSupportReplacement(db, {
 
 module.exports = {
   TransitionRefused,
+  markAtGate,
+  collectFromGate,
   STATUS,
   ALLOWED,
   isAllowed,
