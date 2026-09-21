@@ -116,6 +116,40 @@ false in the way that matters here even though the database is isolated.
 
 ---
 
+## D5 — Availability trusts `inventory_status`, not `qc_status`
+
+**Asked:** Part 2.5, while collapsing the six predicates.
+**Answered by Pankkaj, 21 Sep 2026.**
+
+Collapsing them exposed that they disagreed **69×**: SO attach offered **48**
+units, Ready-to-Rent offered **3,325**. The gap was entirely `qc_status`.
+
+Of 1,930 canonically in-stock laptops, only **48** carry `qc_status='passed'`.
+852 say `pending`, 758 say `in_used`, 271 say `qc_pending` — all created
+Feb–Jun, none touched by the 258 migration, so they are original ERP-import
+values rather than anything this programme wrote.
+
+**Decision: `asset_available` tests `inventory_status = 'in_stock'` and does not
+test `qc_status` at all.**
+
+The reasoning: `in_stock` is *defined* as "on the shelf, QC-passed, attachable"
+(Part 1 §6.2), and Part 2.3 has just made that column canonical and
+constrained. `qc_status` is the column decision D2 formally declared unreliable
+until Part 5 rewrites its writer. Gating the whole fleet's availability on a
+column we have just declared untrustworthy is backwards — and it would have
+meant reporting that the business owns 48 rentable laptops.
+
+**Result: all six call sites now agree at 1,693.** The exclusions are each
+explainable — 126 on open production tickets, 5 still holding a customer, the
+rest on live allocations or awaiting serial-verified receive, plus the 1,372
+NULL rows from D1.
+
+**Watch for:** if a unit turns out to be physically un-QC'd but marked
+`in_stock`, that is a data problem in `inventory_status` and Part 5 is where it
+gets fixed at source. It is now visible rather than masked by a second filter.
+
+---
+
 ## Still outstanding
 
 | # | Question | Blocks |

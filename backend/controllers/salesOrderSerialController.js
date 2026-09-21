@@ -7,7 +7,7 @@ const pool = require('../config/db');
 const inventorySM = require('../services/inventoryStateMachine');
 const saleInPlace = require('../services/saleInPlaceService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
-const { entityForQuotationType, healStaleReturnedPassedSerials } = require('../services/salesManagementService');
+const { entityForQuotationType } = require('../services/salesManagementService');
 const {
   serialMatchesSoLine,
   configMismatchMessage,
@@ -186,7 +186,8 @@ exports.attachSerial = async (req, res) => {
     const serial = sr.rows[0];
     if (!serial) return res.status(404).json({ success: false, message: 'Serial not found' });
 
-    await healStaleReturnedPassedSerials(client);
+    // Part 2.5 / I13: the table-wide heal that ran here is deleted. An
+    // attach check no longer rewrites the status of unrelated rows.
     const sr2 = await client.query(`${SPEC_SELECT} ${cond} LIMIT 1`, [body.serial_id || key]);
     const freshSerial = sr2.rows[0] || serial;
 

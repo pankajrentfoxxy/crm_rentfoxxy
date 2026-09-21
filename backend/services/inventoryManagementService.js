@@ -72,10 +72,17 @@ function effectiveStatusSql(alias) {
   )`;
 }
 
-// Lifecycle statuses that mean a unit has left the "Ready to Rent/Sell" shelf
-// (reserved on an SO, DC created, dispatched, with a customer, or scrapped/returned).
-// Must stay aligned with SO attach (`searchAvailableInventory`) so warehouse
-// does not see units that cannot be attached.
+// Part 2.5 / findings I10 and I18.
+//
+// This list used to say it "must stay aligned with SO attach so warehouse does
+// not see units that cannot be attached". It was not aligned: it omitted
+// qc_failed, out_for_repare and out_for_return, which SO attach excluded — so
+// Ready-to-Rent offered 3,325 units while attach would accept 48 of them. The
+// comment asserting alignment is exactly the kind of claim a shared predicate
+// makes unnecessary.
+//
+// Kept only for the legacy `out_stock` segment label below; nothing filters on
+// it any more.
 const OFF_SHELF_STATUSES = [
   'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold',
   'returned', 'scrapped', 'out_stock',
@@ -91,10 +98,15 @@ function pendingInventoryReceiveFilterSql(alias = 's') {
            )`;
 }
 
-/** QC-passed units on DC or with a customer must not appear in Ready to Rent or Sell. */
+/**
+ * Part 2.5: the one definition. Four call sites use this helper, so pointing it
+ * at asset_available moves all four at once.
+ *
+ * The COALESCE(inventory_status,'in_stock') it replaced is the specific thing
+ * decision D1 rules out — it made 1,345 un-GRN'd laptops read as on the shelf.
+ */
 function offShelfInventoryFilterSql(alias = 's') {
-  const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
-  return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
+  return ` AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = ${alias}.serial_id)`;
 }
 
 /**
@@ -103,16 +115,13 @@ function offShelfInventoryFilterSql(alias = 's') {
  * Keep in sync with buildListWhere('passed', …).
  */
 function readyToRentOrSellMatchSql(alias = 's') {
-  const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
   return `(
     ${alias}.po_id IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM vendor_purchase_orders p
        WHERE p.po_id = ${alias}.po_id AND p.deleted_at IS NULL
     )
-    AND ${effectiveStatusSql(alias)} = 'passed'
-    AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})
-    AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'
+    AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = ${alias}.serial_id)
     AND NOT EXISTS (
       SELECT 1 FROM production_assets pa
        WHERE pa.vendor_serial_id = ${alias}.serial_id
