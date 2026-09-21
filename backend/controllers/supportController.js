@@ -3043,15 +3043,23 @@ exports.warehouseReceivedPickup = async (req, res) => {
                 if (isRepair && vsn.current_customer_id) {
                     await removeRepairPickupFromCustomer(client, item, req.user);
                 } else if (!isRepair) {
-                    await client.query(
-                        `UPDATE vendor_serial_numbers SET
-                            inventory_status = 'returned',
-                            current_customer_id = NULL,
-                            status_changed_at = NOW(),
-                            updated_at = NOW()
-                         WHERE serial_id = $1`,
-                        [vsn.serial_id]
-                    );
+                    // Part 2.2, bypass-register B, finding U12.
+                    //
+                    // Support imported the state machine and then wrote the
+                    // column raw anyway. The source state here is usually
+                    // in_transit, which the map forbade — which is exactly WHY
+                    // this was a raw write. I6 added in_transit -> returned in
+                    // Part 2.1, so the legitimate move is now legal and the
+                    // bypass is no longer needed to make warehouse receive work.
+                    await transitionAsset(client, {
+                        serialId: vsn.serial_id,
+                        toStatus: 'returned',
+                        reason: 'Permanent return received at warehouse',
+                        actorUserId: req.user?.user_id || null,
+                        actorName: req.user?.name || null,
+                        correlationId: req.correlationId,
+                        caller: 'supportController.warehouseReceive',
+                    });
                 }
                 await resetVendorSerialForQcReentry(client, vsn.serial_id);
             }
@@ -3656,12 +3664,25 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
                 const detachOk = await checkSafeToDetach(client, vsn.serial_id, {
                     context: 'support warehouse receive',
                 });
+                // Part 2.2, bypass-register B, finding U12 — the sibling of
+                // the raw write above, on the conditional-detach path.
+                await transitionAsset(client, {
+                    serialId: vsn.serial_id,
+                    toStatus: 'returned',
+                    reason: 'Return received at warehouse',
+                    actorUserId: req.user?.user_id || null,
+                    actorName: req.user?.name || null,
+                    correlationId: req.correlationId,
+                    caller: 'supportController.warehouseReceive(conditional detach)',
+                });
+
+                // The customer link is a separate decision from the lifecycle
+                // state — customerAssetGuard decides whether it is safe to
+                // detach, and that verdict is not the machine's business.
                 await client.query(
                     `UPDATE vendor_serial_numbers SET
-                        inventory_status = 'returned',
                         current_customer_id = CASE WHEN $2 THEN NULL ELSE current_customer_id END,
                         current_dc_number = NULL,
-                        status_changed_at = NOW(),
                         updated_at = NOW()
                      WHERE serial_id = $1`,
                     [vsn.serial_id, detachOk.safe]

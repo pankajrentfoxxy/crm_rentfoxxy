@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { reserveOnQcPass } = require('../services/qcPassReservation');
 const {
     pickNextAssigneeForTeam,
     fetchOrderedMemberIds,
@@ -548,12 +549,16 @@ exports.submitQC = async (req, res) => {
                     [id]
                 );
                 if (ticketMeta.vendor_serial_id) {
-                    await client.query(
-                        `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
-                          WHERE serial_id = $1
-                            AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
-                        [ticketMeta.vendor_serial_id]
-                    );
+                    // Part 2.2 / D7: this was byte-for-byte the same SQL as
+                    // ticketPhase2Controller, so which screen the technician
+                    // used decided whether the change was audited. One routine
+                    // now, shared by both.
+                    await reserveOnQcPass(client, ticketMeta.vendor_serial_id, {
+                        actorUserId: userId || null,
+                        actorName: req.user?.name || null,
+                        correlationId: req.correlationId,
+                        caller: 'qcController.submitQC',
+                    });
                     await vacateWarehouseLocation(client, ticketMeta.vendor_serial_id);
                 }
                 if (ticketMeta.sales_order_number) {

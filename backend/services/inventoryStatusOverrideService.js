@@ -3,6 +3,8 @@
  * Keeps qc_status, inventory_status, and extra.* in sync for list visibility.
  */
 const { parseExtra } = require('./qcManagementService');
+const { transitionAsset } = require('./inventoryStateMachine');
+const { statusForQcOutcome } = require('../constants/statuses');
 const { createProductionTicketForQcSerial } = require('./qcProcessIntakeService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
@@ -18,27 +20,31 @@ const ALLOWED_QC_STATUSES = new Set([
   'missing',
 ]);
 
+/**
+ * QC status -> canonical inventory status, for the super-admin override.
+ *
+ * Part 2.2, bypass-register B. This used to end in `default: return qcStatus`,
+ * so ANY string the caller sent landed verbatim in inventory_status — and
+ * three of its explicit cases returned non-canonical values too
+ * (out_for_repare, out_for_return, missing). A correction tool that can write
+ * an arbitrary lifecycle state is how the strays this part is cleaning up got
+ * there in the first place.
+ *
+ * The translation now comes from constants/statuses.js, the same map the QC
+ * controller uses, so the override cannot invent a vocabulary of its own.
+ *
+ * Returns { known, status }. `missing` is deliberately NOT mapped: it is an
+ * open business question (decision log, still-outstanding #6) with zero rows
+ * today, and defaulting it would be the guess that question exists to prevent.
+ */
 function inventoryStatusForQc(qcStatus) {
-  switch (qcStatus) {
-    case 'out_for_repare':
-      return 'out_for_repare';
-    case 'out_for_return':
-      return 'out_for_return';
-    case 'pending':
-      return 'in_stock';
-    case 'qc_pending':
-      return 'in_stock';
-    case 'passed':
-      return 'in_stock';
-    case 'failed':
-      return 'qc_failed';
-    case 'dead':
-      return 'scrapped';
-    case 'missing':
-      return 'missing';
-    default:
-      return qcStatus;
+  const key = String(qcStatus || '').toLowerCase();
+  if (key === 'qc_pending' || key === 'pending') {
+    // Starting or resetting a QC check puts a unit back on the shelf in this
+    // tool's model; that was the pre-existing behaviour and it is canonical.
+    return { known: true, status: 'in_stock' };
   }
+  return statusForQcOutcome(key);
 }
 
 /**
@@ -84,7 +90,18 @@ async function applySuperAdminSerialStatus(pool, opts) {
     }
 
     const extra = parseExtra(row.extra);
-    const invStatus = inventoryStatusForQc(qcStatus);
+    const { known: qcKnown, status: invStatus } = inventoryStatusForQc(qcStatus);
+    if (!qcKnown) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        status: 400,
+        message: `"${qcStatus}" is not a status this tool can set. `
+          + 'Nothing was changed. Allowed: pending, passed, failed, dead, '
+          + 'require_for_parts, send_to_qc_check, out_for_return, out_for_repare, '
+          + 'repared, replace, qc_reject.',
+      };
+    }
 
     extra.status = qcStatus;
     extra.action_status = qcStatus;
@@ -103,15 +120,30 @@ async function applySuperAdminSerialStatus(pool, opts) {
       extra.came_from = extra.came_from || 'Super admin status correction';
     }
 
+    // The override stays a capability — a super admin correcting a wrong status
+    // is a real need — but it is now an audited, canonical transition rather
+    // than a raw write. This site was also half of finding I15: it wrote a
+    // TTSPL event and no transitions row, while support cancel did the
+    // reverse, so neither log was complete. transitionAsset writes both.
+    if (invStatus) {
+      await transitionAsset(client, {
+        serialId,
+        toStatus: invStatus,
+        reason: `Super admin status correction to ${qcStatus}${remark ? ` — ${remark}` : ''}`,
+        actorUserId,
+        allowOverride: true,
+        caller: 'inventoryStatusOverrideService.applySuperAdminSerialStatus',
+      });
+    }
+
     await client.query(
       `UPDATE vendor_serial_numbers
           SET qc_status = $1,
-              inventory_status = $2,
-              remark = COALESCE(NULLIF($3, ''), remark),
-              extra = $4::jsonb,
+              remark = COALESCE(NULLIF($2, ''), remark),
+              extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb,
               updated_at = NOW()
-        WHERE serial_id = $5`,
-      [qcStatus, invStatus, remark, JSON.stringify(extra), serialId]
+        WHERE serial_id = $4`,
+      [qcStatus, remark, JSON.stringify(extra), serialId]
     );
     await client.query('COMMIT');
 

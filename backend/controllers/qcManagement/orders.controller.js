@@ -1,5 +1,7 @@
 const { param, body, query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
+const { transitionAsset } = require('../../services/inventoryStateMachine');
+const { statusForQcOutcome } = require('../../constants/statuses');
 const {
   EFFECTIVE_STATUS_SQL,
   enrichSerialRow,
@@ -321,12 +323,17 @@ async function qcCheck(req, res) {
           'in_stock',
           details.unique_product_serial
         );
-        await client.query(
-          `UPDATE vendor_serial_numbers
-           SET inventory_status = 'in_stock', updated_at = NOW()
-           WHERE serial_id = $1`,
-          [serialId]
-        );
+        // Part 2.2, bypass-register B. A QC pass putting a unit back on the
+        // shelf is legitimate — it just has to be audited like everything else.
+        await transitionAsset(client, {
+          serialId,
+          toStatus: 'in_stock',
+          reason: `QC passed${remark ? ` — ${remark}` : ''}`,
+          actorUserId: userId || null,
+          allowOverride: true,
+          correlationId: req.correlationId,
+          caller: 'qcManagement/orders.controller.qcCheck(passed)',
+        });
       }
     }
 
@@ -402,23 +409,43 @@ async function hardwareQcCheck(req, res) {
 
     if (req.body.selected_value === 'require_for_parts') {
       extra.require_parts = req.body.sparePartsIds ?? '';
+
+      // Part 2.2, bypass-register B. `require_for_parts` was written into BOTH
+      // columns, and it is not a lifecycle status — a unit harvested for parts
+      // is scrapped, which is terminal and which the map already understands.
+      // Writing the QC word into inventory_status is what made 'scrapped'
+      // unenforceable, because half the scrapped fleet was not spelled that way.
+      await transitionAsset(pool, {
+        serialId,
+        toStatus: 'scrapped',
+        reason: `Harvested for parts${req.body.remark ? ` — ${req.body.remark}` : ''}`,
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        allowOverride: true,
+        correlationId: req.correlationId,
+        caller: 'qcManagement/orders.controller.hardwareAction(require_for_parts)',
+      });
+
+      // qc_status keeps the QC vocabulary — it is that column's own word for
+      // this outcome, and decision D2 leaves qc_status alone until its writer
+      // is rewritten in Part 5.
       await pool.query(
         `UPDATE vendor_serial_numbers
          SET qc_status = 'require_for_parts',
-             inventory_status = 'require_for_parts',
-             extra = $1::jsonb,
+             extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
              updated_at = NOW()
          WHERE serial_id = $2`,
         [JSON.stringify(extra), serialId]
       );
-    } else if (['ready', 'not_ready', 'pending'].includes(req.body.selected_value)) {
-      await pool.query(
-        `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
-        [JSON.stringify(extra), serialId]
-      );
     } else {
+      // 'ready', 'not_ready', 'pending' and anything else recorded the same
+      // way: the two branches were byte-identical, so they are one branch now.
+      // None of them moves the asset, which is correct — a hardware note is not
+      // a lifecycle event.
       await pool.query(
-        `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+        `UPDATE vendor_serial_numbers
+         SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+         WHERE serial_id = $2`,
         [JSON.stringify(extra), serialId]
       );
     }
@@ -523,15 +550,54 @@ async function returnAndRepareCheck(req, res) {
       extra.repair_type = 'out_for_repare';
     }
 
+    // Part 2.2, bypass-register B, finding I4 — the largest single source of
+    // non-canonical values in production.
+    //
+    // `selected` is the operator's dropdown choice and it used to go STRAIGHT
+    // into inventory_status. That is where out_for_repare, out_for_return,
+    // repared, replace and qc_reject came from: QC outcomes sitting in the
+    // lifecycle column, where nothing downstream understands them.
+    //
+    // A QC outcome and a lifecycle status are different vocabularies.
+    // statusForQcOutcome translates one to the other, and an outcome it does
+    // not recognise is refused rather than written — which is the rule that
+    // stops the next stray from appearing.
+    const { known, status: mappedStatus } = statusForQcOutcome(selected);
+    if (!known) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Unknown QC action "${selected}". No asset status was changed.`,
+      });
+    }
+
+    if (mappedStatus) {
+      await transitionAsset(client, {
+        serialId,
+        toStatus: mappedStatus,
+        reason: `QC Management: ${selected}${remark ? ` — ${remark}` : ''}`,
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        // QC is the sanctioned correction point for a unit in almost any state,
+        // so the override stays — but it is now audited and canonical rather
+        // than a raw write of an arbitrary string.
+        allowOverride: true,
+        correlationId: req.correlationId,
+        caller: 'qcManagement/orders.controller.returnAndRepareCheck',
+      });
+    }
+
+    // qc_status, remark and extra are not governed by the state machine
+    // (decision D2 defers qc_status out of Part 2.3). extra is merged rather
+    // than replaced — I12: a whole-object write loses a concurrent writer's keys.
     await client.query(
       `UPDATE vendor_serial_numbers
        SET qc_status = $1,
            remark = $2,
-           inventory_status = $3,
-           extra = $4::jsonb,
+           extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb,
            updated_at = NOW()
-       WHERE serial_id = $5`,
-      [qcStatus, remark, selected, JSON.stringify(extra), serialId]
+       WHERE serial_id = $4`,
+      [qcStatus, remark, JSON.stringify(extra), serialId]
     );
 
     await client.query('COMMIT');

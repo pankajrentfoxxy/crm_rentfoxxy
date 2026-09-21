@@ -95,22 +95,41 @@ async function restoreSerialToCustomer(client, {
     const ttsplId = serial.inventory_asset_code || serial.extra?.ttspl_id || serial.serial_number;
     const reason = `Support ticket #${ticketId} cancelled — unit not received at warehouse; customer assignment preserved`;
 
+    // Part 2.2, bypass-register B — and the other half of finding I15.
+    //
+    // This wrote the status raw, then hand-rolled its own
+    // inventory_status_transitions row, and wrote NO TTSPL event. The
+    // super-admin override did the exact opposite: TTSPL event, no transitions
+    // row. Two partial logs that could not be joined, which is the per-module
+    // audit outcome Decision 5 is a reaction to.
+    //
+    // transitionAsset writes both trails plus the event, so the hand-rolled
+    // INSERT below is deleted rather than kept — keeping it would double the
+    // transitions row.
+    await transitionAsset(client, {
+        serialId: serial.serial_id,
+        toStatus: targetStatus,
+        reason,
+        customerId: serial.current_customer_id,
+        actorUserId,
+        actorName,
+        // The customer assignment is deliberately preserved on this path, so
+        // the move can be from a state the map would not normally allow back.
+        allowOverride: true,
+        caller: 'supportCancelInventoryService.restoreWithoutWarehouseReceipt',
+    });
+
+    // qc_status and the two billing anchors are not the machine's business.
+    // returned_at and rent_end_date are cleared because the unit never came
+    // back — that is the whole point of this path.
     await client.query(
         `UPDATE vendor_serial_numbers
-            SET inventory_status = $2,
-                qc_status = 'passed',
+            SET qc_status = 'passed',
                 returned_at = NULL,
                 rent_end_date = NULL,
                 updated_at = NOW()
           WHERE serial_id = $1`,
-        [serial.serial_id, targetStatus]
-    );
-
-    await client.query(
-        `INSERT INTO inventory_status_transitions
-            (serial_id, ttspl_id, from_status, to_status, reason, customer_id, actor_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [serial.serial_id, ttsplId, from, targetStatus, reason, serial.current_customer_id, actorUserId]
+        [serial.serial_id]
     );
 
     await logTtsplEvent({

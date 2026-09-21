@@ -2,6 +2,7 @@
  * GRN receive → repair ticket (Floor Manager) → ticket completion → vendor QC passed.
  */
 const { startWorkLog } = require('./ticketWorkLogService');
+const { transitionAsset } = require('./inventoryStateMachine');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
@@ -336,8 +337,25 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
     'in_stock',
     details.unique_product_serial
   );
+  // Part 2.2, bypass-register B, finding G1 — this is the asset's FIRST entry
+  // into stock, and it was entirely unaudited: no transitions row, no TTSPL
+  // event, nothing. A laptop's life began with no record of it beginning.
+  //
+  // allowOverride because the source state here is usually NULL (finding G2:
+  // migration 037 added the column with no default and the GRN INSERTs omit
+  // it), and a transition out of NULL is exactly the case the map has no
+  // opinion about.
+  await transitionAsset(db, {
+    serialId: vendorSerialId,
+    toStatus: 'in_stock',
+    reason: 'GRN vendor QC passed — first entry into stock',
+    actorUserId: userId || null,
+    allowOverride: true,
+    caller: 'grnTicketService.applyGrnVendorQcPassOnTicketComplete',
+  });
+
   await db.query(
-    `UPDATE vendor_serial_numbers SET inventory_status = 'in_stock', qc_status = 'passed', updated_at = NOW() WHERE serial_id = $1`,
+    `UPDATE vendor_serial_numbers SET qc_status = 'passed', updated_at = NOW() WHERE serial_id = $1`,
     [vendorSerialId]
   );
 
@@ -353,10 +371,20 @@ async function markVendorSerialReadyForRent(db, ticket, userId) {
   const vendorSerialId = ticket?.vendor_serial_id;
   if (!vendorSerialId) return { applied: false, reason: 'no_vendor_serial' };
 
+  // Part 2.2, bypass-register B. Same defect as the site above, at the other
+  // end of production: QC2 completion put the unit on the shelf with no record.
+  await transitionAsset(db, {
+    serialId: vendorSerialId,
+    toStatus: 'in_stock',
+    reason: 'QC2 complete — ready to rent or sell',
+    actorUserId: userId || null,
+    allowOverride: true,
+    caller: 'grnTicketService.markVendorSerialReadyForRent',
+  });
+
   await db.query(
     `UPDATE vendor_serial_numbers
         SET qc_status = 'passed',
-            inventory_status = 'in_stock',
             updated_at = NOW()
       WHERE serial_id = $1 AND deleted_at IS NULL`,
     [vendorSerialId]

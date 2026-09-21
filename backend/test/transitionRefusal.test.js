@@ -145,3 +145,67 @@ describe('2.2 — the moves the bypasses were forcing are the ones now refused',
     assert.equal(isAllowed('qc_failed', 'in_stock'), true, 'dispatch QC rework');
   });
 });
+
+describe('2.2 section B — QC outcomes are translated, never written raw', () => {
+  const { statusForQcOutcome, QC_OUTCOME_TO_STATUS } = require('../constants/statuses');
+  const { ASSET_STATUS_VALUES } = require('../constants/statuses');
+
+  it('maps every QC outcome to a canonical status or to nothing', () => {
+    for (const [outcome, status] of Object.entries(QC_OUTCOME_TO_STATUS)) {
+      if (status === null) continue;
+      assert.ok(
+        ASSET_STATUS_VALUES.includes(status),
+        `${outcome} maps to "${status}", which is not canonical`
+      );
+    }
+  });
+
+  it('translates the five strays that leaked into the lifecycle column', () => {
+    // These are the values finding I4 says QC Management wrote straight into
+    // inventory_status. None of them is a lifecycle state.
+    assert.equal(statusForQcOutcome('out_for_repare').status, 'in_repair');
+    assert.equal(statusForQcOutcome('out_for_return').status, 'returned');
+    assert.equal(statusForQcOutcome('repared').status, 'in_stock');
+    assert.equal(statusForQcOutcome('replace').status, 'returned');
+    assert.equal(statusForQcOutcome('qc_reject').status, 'qc_failed');
+  });
+
+  it('sends require_for_parts to scrapped, which is terminal', () => {
+    assert.equal(statusForQcOutcome('require_for_parts').status, 'scrapped');
+  });
+
+  it('distinguishes "no status change" from "unknown outcome"', () => {
+    // Conflating these is how the strays got in: pending legitimately moves
+    // nothing, and an unrecognised value must be refused rather than written.
+    assert.deepEqual(statusForQcOutcome('pending'), { known: true, status: null });
+    assert.deepEqual(statusForQcOutcome('nonsense'), { known: false, status: null });
+    assert.deepEqual(statusForQcOutcome(''), { known: false, status: null });
+    assert.deepEqual(statusForQcOutcome(null), { known: false, status: null });
+  });
+
+  it('accepts both spellings of the repair outcome', () => {
+    // out_for_repare (44 rows) and out_for_repair (15) both exist live and
+    // mean the same thing, so fixing the spelling upstream must not break this.
+    assert.equal(statusForQcOutcome('out_for_repare').status, 'in_repair');
+    assert.equal(statusForQcOutcome('out_for_repair').status, 'in_repair');
+  });
+
+  it('does NOT map `missing` — it is an open business question', () => {
+    assert.equal(statusForQcOutcome('missing').known, false);
+  });
+});
+
+describe('2.2 section B — the QC-pass duplicate is one routine', () => {
+  const { NOT_REPLACEABLE } = require('../services/qcPassReservation');
+
+  it('keeps the guard both copies carried', () => {
+    for (const s of ['rented', 'sold', 'on_demo', 'in_transit', 'returned']) {
+      assert.ok(NOT_REPLACEABLE.includes(s), `${s} must not be re-reserved by a stale QC pass`);
+    }
+  });
+
+  it('exports one routine, not two', () => {
+    const mod = require('../services/qcPassReservation');
+    assert.equal(typeof mod.reserveOnQcPass, 'function');
+  });
+});

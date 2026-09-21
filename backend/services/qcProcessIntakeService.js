@@ -2,6 +2,7 @@
  * Admin QC Process intake — add laptop to pending QC + ensure linked floor ticket.
  */
 const { getTotalAmountOfPurchaseOrder } = require('../utils/purchaseOrderGst');
+const { transitionAsset } = require('./inventoryStateMachine');
 const { allocatePurchaseOrderNumber } = require('./vendorNumberService');
 const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
 const { createTicketFromGrnReceive } = require('./grnTicketService');
@@ -35,13 +36,15 @@ const FLOOR_PIPELINE_STAGES = new Set([
 async function reopenQcSerialForActivePipeline(db, { vendorSerialId, ticketId, stageName }) {
   if (!vendorSerialId || !FLOOR_PIPELINE_STAGES.has(stageName)) return { applied: false };
 
+  // Part 2.2, bypass-register B.
+  //
+  // The eligibility filter in the WHERE clause is kept as it was — this only
+  // touches a unit that is genuinely QC-failed — but the status change itself
+  // now goes through the machine instead of a CASE. qc_status and extra are
+  // still written here; only inventory_status moved.
   const r = await db.query(
     `UPDATE vendor_serial_numbers
         SET qc_status = 'pending',
-            inventory_status = CASE
-              WHEN inventory_status IN ('qc_failed', 'in_repair') THEN 'in_stock'
-              ELSE inventory_status
-            END,
             extra = (COALESCE(extra, '{}'::jsonb) - 'dispatch_qc_failed_at')
                     || jsonb_build_object('status', 'pending'),
             updated_at = NOW()
@@ -50,9 +53,22 @@ async function reopenQcSerialForActivePipeline(db, { vendorSerialId, ticketId, s
           COALESCE(NULLIF(TRIM(qc_status), ''), extra->>'status', 'pending') = 'failed'
           OR inventory_status = 'qc_failed'
         )
-      RETURNING serial_id`,
+      RETURNING serial_id, inventory_status`,
     [vendorSerialId]
   );
+
+  // Only qc_failed and in_repair were moved by the old CASE; everything else
+  // was left where it was. Same rule, now audited.
+  const prevInv = String(r.rows[0]?.inventory_status || '');
+  if (r.rows.length && ['qc_failed', 'in_repair'].includes(prevInv)) {
+    await transitionAsset(db, {
+      serialId: vendorSerialId,
+      toStatus: 'in_stock',
+      reason: `Reopened for the floor pipeline at ${stageName}`,
+      ticketId,
+      caller: 'qcProcessIntakeService.reopenQcSerialForActivePipeline',
+    });
+  }
 
   if (ticketId || vendorSerialId) {
     await db.query(
@@ -612,19 +628,43 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
     delete extra.status2;
     extra.status = 'pending';
 
+    // Part 2.2, bypass-register B.
+    //
+    // The CASE meant "put it in stock unless it is somewhere that matters",
+    // which is a transition map written in SQL — and one that disagreed with
+    // the real one. Reading the state and deciding in JS keeps the single
+    // authority single.
+    //
+    // The condition is preserved exactly: only a unit whose status is NULL or
+    // non-canonical is moved. A unit already reserved, in transit, rented, on
+    // demo, sold, returned, in repair, QC-failed or scrapped is left alone.
+    const DEPLOYED = [
+      'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
+      'returned', 'in_repair', 'qc_failed', 'scrapped',
+    ];
+    const curInv = await client.query(
+      `SELECT inventory_status FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [serialId]
+    );
+    const invNow = curInv.rows[0]?.inventory_status || null;
+    if (!invNow || !DEPLOYED.includes(String(invNow))) {
+      await transitionAsset(client, {
+        serialId,
+        toStatus: 'in_stock',
+        reason: 'Moved to QC Process — returned to available stock',
+        actorUserId,
+        // allowOverride because the source here is NULL or a stray value, which
+        // is the case the map has no opinion about. That is also exactly the
+        // 1,345 assets from decision D1.
+        allowOverride: true,
+        caller: 'qcProcessIntakeService.moveReadyToRentToQcProcess',
+      });
+    }
+
     await client.query(
       `UPDATE vendor_serial_numbers
           SET qc_status = 'pending',
-              extra = $1::jsonb,
-              inventory_status = CASE
-                WHEN inventory_status IS NULL
-                  OR inventory_status NOT IN (
-                    'reserved','in_transit','rented','on_demo','sold',
-                    'returned','in_repair','qc_failed','scrapped'
-                  )
-                THEN 'in_stock'
-                ELSE inventory_status
-              END,
+              extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
               updated_at = NOW()
         WHERE serial_id = $2`,
       [JSON.stringify(extra), serialId]
@@ -716,11 +756,33 @@ async function moveQcPendingToQcProcess(db, { serialId, serialNumber }, actorUse
   ex.action_status = 'pending';
   ex.came_from = 'QC Pending';
 
+  // Part 2.2, bypass-register B, finding I7 — the worst write in this file.
+  //
+  // ALLOWED.scrapped = [] says nothing leaves scrapped. This raw UPDATE
+  // resurrected scrapped units straight to in_stock, which is why "scrapped is
+  // terminal" was true in the map and false in the data.
+  //
+  // Re-evaluating a dead laptop is a real thing to want to do — but it is a
+  // decision someone takes, not a side effect. Routing it through the machine
+  // means a resurrection is refused unless the map permits it, and the refusal
+  // surfaces rather than being written anyway.
+  //
+  // NO allowOverride here, deliberately: this is precisely the case the
+  // terminal state exists to stop.
+  await transitionAsset(db, {
+    serialId: row.serial_id,
+    toStatus: 'in_stock',
+    reason: effectiveQc === 'dead'
+      ? 'Dead laptop re-evaluation — returned to QC Process'
+      : 'Failed QC re-evaluation — returned to QC Process',
+    actorUserId,
+    caller: 'qcProcessIntakeService.sendDeadOrFailedToQcProcess',
+  });
+
   await db.query(
     `UPDATE vendor_serial_numbers
         SET qc_status = 'pending',
-            inventory_status = 'in_stock',
-            extra = $1::jsonb,
+            extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
             updated_at = NOW()
       WHERE serial_id = $2`,
     [JSON.stringify(ex), row.serial_id]
@@ -794,11 +856,23 @@ async function moveDeadOrFailedToQcProcess(db, { serialId, serialNumber }, actor
   ex.action_status = 'pending';
   ex.came_from = effectiveQc === 'dead' ? 'Dead Laptop re-evaluation' : 'Failed QC re-evaluation';
 
+  // Part 2.2, bypass-register B, finding I7 — the sibling of the write above.
+  // Same defect, same fix, and no allowOverride for the same reason: this is
+  // the exact path that resurrected scrapped units.
+  await transitionAsset(db, {
+    serialId: row.serial_id,
+    toStatus: 'in_stock',
+    reason: effectiveQc === 'dead'
+      ? 'Dead laptop re-evaluation — returned to QC Process'
+      : 'Failed QC re-evaluation — returned to QC Process',
+    actorUserId,
+    caller: 'qcProcessIntakeService.sendToQcProcess',
+  });
+
   await db.query(
     `UPDATE vendor_serial_numbers
         SET qc_status = 'pending',
-            inventory_status = 'in_stock',
-            extra = $1::jsonb,
+            extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
             updated_at = NOW()
       WHERE serial_id = $2`,
     [JSON.stringify(ex), row.serial_id]
