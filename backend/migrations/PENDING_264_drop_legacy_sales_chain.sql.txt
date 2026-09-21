@@ -1,0 +1,87 @@
+-- Part 4.2 — retire the legacy sales chain.
+--
+-- ⚠️  THIS MIGRATION IS DELIBERATELY NOT RUNNABLE YET.
+--
+-- It carries a .txt extension so scripts/run-all-migrations.js cannot pick it
+-- up. Rename it to 264_drop_legacy_sales_chain.sql when the two conditions
+-- below are met, and deploy it ON ITS OWN.
+--
+-- The master prompt is explicit that dropping tables is "a separate, announced
+-- change, never bundled into a feature commit", and hard rule 6 is that nothing
+-- is deleted until its replacement has been signed off. Neither is true yet, so
+-- this waits.
+--
+-- ===========================================================================
+-- WHAT THE VERIFICATION FOUND (21 Sep 2026)
+-- ===========================================================================
+--
+-- The chain is dormant, which is the good news:
+--
+--   orders                 32 rows, newest 15 Jun 2026, 0 in the last 30 days
+--   order_items           129 rows, newest 15 Jun 2026, 0 in the last 30 days
+--   procurement_requests    0 rows
+--
+-- Three months with no writes. 4.2's "verify no live row is younger than the
+-- redirect" is satisfied.
+--
+-- ===========================================================================
+-- WHAT BLOCKS IT, AND WHY 4.2 CANNOT BE DONE EXACTLY AS WRITTEN
+-- ===========================================================================
+--
+-- 1. controllers/salesController.js CANNOT simply be deleted.
+--
+--    routes/salesPipeline.js imports getQcPipelineOrders and
+--    getDispatchPipelineOrders from it, and salesPipeline is part of the
+--    MODERN chain — it serves /sales-pipeline/*, which is live and in the
+--    menu. Deleting the controller would break the very chain 4.2 is
+--    consolidating onto.
+--
+--    Those two functions need extracting into a service first. They are the
+--    only legacy-chain code the modern chain depends on.
+--
+-- 2. The four screens have replacements, but they are not signed off.
+--
+--    Part 4.5 built Quotations, Sales Orders and Customers in the Carret
+--    system, behind REACT_APP_CARRET, beside the existing ones. Rule 6 says
+--    the old ones keep working until the new ones are accepted. Orders.jsx,
+--    Sales.jsx, QCOrders.jsx and Dispatch.jsx still call /api/sales.
+--
+-- ===========================================================================
+-- THE ORDER TO DO IT IN
+-- ===========================================================================
+--
+--   1. Sign off the Part 4.5 screens.
+--   2. Extract getQcPipelineOrders and getDispatchPipelineOrders out of
+--      salesController into a service; repoint routes/salesPipeline.js.
+--   3. Delete the four legacy screens and their routes.
+--   4. Unmount app.use('/api/sales', ...) in server.js and delete
+--      routes/sales.js and controllers/salesController.js.
+--   5. Run this file, announced, on its own.
+--
+-- Steps 1-4 are code and reversible. Step 5 is not.
+--
+-- ===========================================================================
+-- BEFORE RUNNING
+-- ===========================================================================
+--
+--   pg_dump -t orders -t order_items -t procurement_requests \
+--     laptop_refurbishment_qa > backups/legacy_sales_chain_$(date +%F).sql
+--
+--   Record the row counts in the PR, per the promotion rules.
+--
+-- Re-verify dormancy first — three months quiet in September is not three
+-- months quiet in December:
+--
+--   SELECT max(created_at) FROM orders;
+--   SELECT max(created_at) FROM order_items;
+--
+-- ===========================================================================
+
+BEGIN;
+
+-- order_items references orders, so it goes first.
+DROP TABLE IF EXISTS public.order_items;
+DROP TABLE IF EXISTS public.orders;
+DROP TABLE IF EXISTS public.procurement_requests;
+
+COMMIT;

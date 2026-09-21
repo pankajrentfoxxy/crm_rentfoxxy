@@ -182,19 +182,40 @@ exports.attachSerial = async (req, res) => {
     const key = body.serial_id || body.serial_number || body.ttspl_id;
     if (!key) return res.status(400).json({ success: false, message: 'serial_id or serial_number required' });
     const cond = body.serial_id ? 'vsn.serial_id = $1' : '(vsn.serial_number = $1 OR vsn.inventory_asset_code = $1)';
-    const sr = await client.query(`${SPEC_SELECT} ${cond} LIMIT 1`, [body.serial_id || key]);
+
+    // Part 4.4, finding S3 — the transaction opens HERE, not two hundred lines
+    // below. Every eligibility check ran before BEGIN, so two concurrent
+    // attaches both read "available" and both inserted. Checking outside the
+    // transaction you then write in is the definition of the race.
+    await client.query('BEGIN');
+
+    const sr = await client.query(
+      `${SPEC_SELECT} ${cond} LIMIT 1 FOR UPDATE OF vsn`,
+      [body.serial_id || key]
+    );
     const serial = sr.rows[0];
-    if (!serial) return res.status(404).json({ success: false, message: 'Serial not found' });
+    if (!serial) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
 
     // Part 2.5 / I13: the table-wide heal that ran here is deleted. An
     // attach check no longer rewrites the status of unrelated rows.
-    const sr2 = await client.query(`${SPEC_SELECT} ${cond} LIMIT 1`, [body.serial_id || key]);
-    const freshSerial = sr2.rows[0] || serial;
+    const freshSerial = serial;
 
-    // Must be QC-passed (from GRN) and available on shelf.
-    if (String(freshSerial.qc_status || '').toLowerCase() !== 'passed') {
-      return res.status(400).json({ success: false, message: 'Serial has not passed GRN QC yet' });
-    }
+    // Part 4.4 / I18 — eligibility comes from asset_available, the one
+    // predicate, rather than a fourth hand-rolled rule.
+    //
+    // This check required qc_status='passed'. Only 48 of 1,930 in-stock units
+    // carry that value, so the Ready-to-Rent list offered 1,800 laptops and
+    // attach refused all but 48 of them — which is finding I18 surviving in
+    // the per-serial path that Part 2.5 did not reach. Decision D5 settled
+    // this: in_stock IS the QC-passed state, and qc_status is unreliable until
+    // Part 5 rewrites its writer.
+    const eligible = await client.query(
+      'SELECT 1 FROM asset_available WHERE serial_id = $1',
+      [freshSerial.serial_id]
+    );
     const shelfStatus = String(freshSerial.inventory_status || 'in_stock').toLowerCase();
 
     // Sale in place: the customer keeps a unit they already hold on rent, so it is
@@ -214,13 +235,19 @@ exports.attachSerial = async (req, res) => {
           + 'that have an open lost / damaged / buyout case.',
       });
     }
-    if (!saleInPlaceOk && !['in_stock', 'passed'].includes(shelfStatus)) {
-      return res.status(400).json({
+    // Sale-in-place is the narrow exception: the customer already holds the
+    // unit, so it is legitimately NOT on the shelf and the view will not list
+    // it. Everything else must be in asset_available.
+    if (!saleInPlaceOk && !eligible.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
         success: false,
-        message: `Serial is not available (status: ${freshSerial.inventory_status}). Complete production QC or release from return first.`,
+        code: 'SERIAL_NOT_AVAILABLE',
+        message: `${freshSerial.inventory_asset_code || freshSerial.serial_number} is not available to attach `
+          + `(status: ${freshSerial.inventory_status || 'awaiting GRN'}). `
+          + 'It may be on another order, out on a ticket, or not yet through GRN.',
       });
     }
-
     const serialForAttach = freshSerial;
 
     // Already attached somewhere active?
@@ -271,7 +298,8 @@ exports.attachSerial = async (req, res) => {
 
     const entityCode = header.entity_code || entityForQuotationType(header.quotation_type);
 
-    await client.query('BEGIN');
+    // BEGIN moved to the top of the handler (S3) — the transaction is already
+    // open, and the eligibility checks above ran inside it under a row lock.
 
     // Reserve the unit (in_stock -> reserved). Skipped for a sale in place: the unit
     // is already with the customer and stays 'rented' until the sale is confirmed.

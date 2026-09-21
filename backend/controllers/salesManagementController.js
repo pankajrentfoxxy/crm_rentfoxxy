@@ -964,8 +964,57 @@ exports.storeSalesOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Shipping charges cannot be negative' });
     }
 
-    const salesOrderNumber = await nextFinancialYearNumber('sales_order');
-    const quotationNumber = body.is_without_quotation ? 'N/A' : (body.quotation_number || 'N/A');
+    // Part 4.3, finding Q1 — the quotation gate.
+    //
+    // storeSalesOrder never queried sales_quotations AT ALL, so a rejected
+    // quote, a pending quote, a number that does not exist and the literal
+    // string 'N/A' all produced a valid sales order. The whole accept-token
+    // mechanism was decorative.
+    //
+    // What this does NOT do is require a quotation on every order. The data
+    // says that would be wrong: 4,827 of 4,828 existing orders reference 'N/A',
+    // so quotation-less ordering is the normal path here, not the exception the
+    // plan assumes. Blocking it would stop essentially all order creation.
+    //
+    // What it closes is the real hole: a quotation number that IS supplied must
+    // be a quotation that exists and has been accepted. A rejected quote can no
+    // longer produce a valid order.
+    const suppliedQuotation = String(body.quotation_number || '').trim();
+    const isPlaceholder = !suppliedQuotation
+      || ['N/A', 'NA', 'NONE', '-'].includes(suppliedQuotation.toUpperCase());
+
+    let quotationNumber = 'N/A';
+
+    if (!body.is_without_quotation && !isPlaceholder) {
+      const q = await client.query(
+        `SELECT quotation_number, status, accepted_at
+           FROM sales_quotations
+          WHERE quotation_number = $1
+          LIMIT 1`,
+        [suppliedQuotation]
+      );
+
+      if (!q.rows.length) {
+        return res.status(400).json({
+          success: false,
+          message: `Quotation ${suppliedQuotation} does not exist. `
+            + 'Create the quotation first, or raise this order without one.',
+        });
+      }
+
+      const status = String(q.rows[0].status || '').toLowerCase();
+      if (status !== 'accepted') {
+        return res.status(409).json({
+          success: false,
+          code: 'QUOTATION_NOT_ACCEPTED',
+          message: `Quotation ${suppliedQuotation} is "${status}". `
+            + 'An order can only be raised against an accepted quotation.',
+        });
+      }
+
+      quotationNumber = q.rows[0].quotation_number;
+    }
+
     const shipping = parseJsonField(body.customer_shipping_address);
     let billing = parseJsonField(body.customer_billing_address);
     if (billing && body.customer_name) {
@@ -1057,6 +1106,21 @@ exports.storeSalesOrder = async (req, res) => {
     }
 
     await client.query('BEGIN');
+
+    // Part 4.4, finding S2 — allocate the SO number INSIDE the transaction, on
+    // this client.
+    //
+    // nextFinancialYearNumber was called without the client, so it committed
+    // and released the sequence lock immediately. Any rollback after that point
+    // burned the number permanently, leaving a gap in a series that is supposed
+    // to be consecutive for tax purposes. Every other document in the chain
+    // passes the client correctly; SO create and Return DC did not.
+    //
+    // It also has to come AFTER BEGIN, not just take the client — passing a
+    // client with no open transaction changes nothing, which is the trap this
+    // was already in.
+    const salesOrderNumber = await nextFinancialYearNumber('sales_order', client);
+
     const soQuotationTypeForHsn = body.quotation_type || 'rental';
     for (const item of lineItems) {
       const lineHsn = resolveHsnForPersist({
@@ -3116,11 +3180,42 @@ exports.storeDeliveryChallan = async (req, res) => {
       const generation = (body.Generation || body.generation || [])[i];
       const brand = (body.brand || [])[i] || '';
 
-      await client.query(
+      // Part 4.4, finding DC3 — decrement ONE line, by id.
+      //
+      // This matched on sales_order_number + model + processor + generation, so
+      // two order lines with the same configuration BOTH got decremented by the
+      // full quantity of one shipment. An order for 5 Dell i5s split across two
+      // lines of 3 and 2 lost 3 from each when 3 shipped.
+      //
+      // GREATEST(0, …) hid it: the second line silently floored at zero instead
+      // of going negative, so the only symptom was a line that could no longer
+      // be dispatched.
+      //
+      // The subquery picks the oldest line that still has capacity AND matches
+      // the configuration, which is the behaviour the config match was reaching
+      // for — but it decrements exactly one row.
+      const decremented = await client.query(
         `UPDATE sales_order_lines SET quantity = GREATEST(0, quantity - $1), updated_at = NOW()
-         WHERE sales_order_number = $2 AND model_name = $3 AND processor = $4 AND generation = $5`,
+          WHERE id = (
+            SELECT id FROM sales_order_lines
+             WHERE sales_order_number = $2
+               AND model_name = $3 AND processor = $4 AND generation = $5
+               AND quantity >= $1
+             ORDER BY id
+             LIMIT 1
+          )
+          RETURNING id`,
         [qty, body.sales_order_number, model, processor, generation]
       );
+      if (!decremented.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          code: 'NO_LINE_CAPACITY',
+          message: `No line on ${body.sales_order_number} matching ${[brand, model, processor, generation].filter(Boolean).join(' ')} `
+            + `has ${qty} unit(s) remaining.`,
+        });
+      }
 
       const dcLineHsn = await resolveHsnFromSalesOrder(client, body.sales_order_number, {
         role: req.user?.role,
@@ -3634,12 +3729,33 @@ exports.createDcsByAddress = async (req, res) => {
       }
 
       // Commit the SO allocations to this DC.
-      await client.query(
+      const claimed = await client.query(
+        // Part 4.4, finding DC2 — guard on the state the caller validated.
+        //
+        // This had no `AND status = 'attached'` and no rowCount check, so two
+        // concurrent calls could BOTH create a challan: the second silently
+        // repointed dc_number on allocations the first had already claimed,
+        // leaving the first challan referencing serials that now belong to
+        // another one. There is no unique constraint on dc_number to catch it
+        // either.
+        //
+        // With the guard, the second call updates zero rows and is refused,
+        // which is the correct answer rather than a silent overwrite.
         `UPDATE sales_order_serials
             SET status = 'dispatched', dc_number = $1, updated_at = NOW()
-          WHERE allocation_id = ANY($2::int[])`,
+          WHERE allocation_id = ANY($2::int[])
+            AND status = 'attached'`,
         [dcNumber, ids]
       );
+      if (claimed.rowCount !== ids.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          code: 'ALLOCATIONS_TAKEN',
+          message: `${ids.length - claimed.rowCount} of ${ids.length} unit(s) were claimed by another challan `
+            + 'while this one was being created. Nothing was changed — reload and try again.',
+        });
+      }
 
       // Reflect dispatch in legacy product inventory view.
       const groupSerialIds = groupSerials.map((s) => s.serial_id).filter(Boolean);
@@ -4109,23 +4225,35 @@ exports.submitDeliveryRegister = async (req, res) => {
 };
 
 exports.assignReturnDcNumber = async (req, res) => {
+  // Part 4.4 / S2, third site. The number was allocated and committed, then the
+  // ticket UPDATE ran separately — so a ticket that did not exist burned a
+  // Return DC number and left a gap in a consecutive series.
+  //
+  // One transaction: allocate and assign together, or neither.
+  const client = await pool.connect();
   try {
     const ticketId = parseInt(req.params.ticketId, 10);
-    const returnDcNumber = await nextDocumentNumber('return_dc');
-    const result = await pool.query(
+    await client.query('BEGIN');
+    const returnDcNumber = await nextDocumentNumber('return_dc', client);
+    const result = await client.query(
       `UPDATE support_tickets SET return_dc_number = $1, complaint_type = COALESCE(complaint_type, 'pickup'), updated_at = NOW()
        WHERE id = $2 RETURNING id, return_dc_number`,
       [returnDcNumber, ticketId]
     );
     if (!result.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
+    await client.query('COMMIT');
     try {
       require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
     } catch { /* ignore */ }
     res.json({ success: true, return_dc_number: returnDcNumber, ticket: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 };
 
@@ -4495,7 +4623,7 @@ exports.generateReturnDc = async (req, res) => {
     if (!entries.length) return res.status(400).json({ success: false, message: 'No serials resolved for pickup' });
 
     const firstItem = itemsRes.rows[0];
-    const rdc = await nextDocumentNumber('return_dc');
+
     const pickupAddr = (typeof t.pickup_address === 'string' ? JSON.parse(t.pickup_address) : t.pickup_address) || {};
     const rawDeliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
       ? parseInt(technician_user_id, 10)
@@ -4525,6 +4653,10 @@ exports.generateReturnDc = async (req, res) => {
       : dispatchMode;
 
     await client.query('BEGIN');
+
+    // Part 4.4 / S2, the other half. Same defect as SO create: the Return DC
+    // number was allocated outside the transaction, so a rollback burned it.
+    const rdc = await nextDocumentNumber('return_dc', client);
     await client.query(
       `INSERT INTO delivery_challan_lines
          (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,

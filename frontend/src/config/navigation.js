@@ -72,6 +72,11 @@ export const SECTIONS = [
       { to: '/lead-crm/follow-ups', label: 'Follow-ups', section: 'lead_follow_ups', action: 'view' },
       { to: '/sales-pipeline/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
       { to: '/sales-pipeline/sales-orders', label: 'Sales Orders', section: 'sales_orders_doc', action: 'view' },
+      // Part 4.5, behind REACT_APP_CARRET. Beside the existing screens; the
+      // legacy chain is retired only once these are signed off (hard rule 6).
+      { to: '/carret/sell/quotations', label: 'Quotations (Carret)', section: 'sales_quotations', action: 'view' },
+      { to: '/carret/sell/sales-orders', label: 'Sales Orders (Carret)', section: 'sales_orders_doc', action: 'view' },
+      { to: '/carret/sell/customers', label: 'Customers (Carret)', section: 'customer_management', action: 'view' },
       { to: '/customer-management/customers', label: 'Customers', section: 'customer_management', action: 'view' },
       { to: '/sales-pipeline/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
       { to: '/sales-pipeline/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
