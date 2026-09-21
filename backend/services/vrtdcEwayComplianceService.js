@@ -19,6 +19,8 @@
  * blocking creation would stop the warehouse working, while the thing that
  * actually must not happen without an e-way bill is the lorry leaving.
  */
+const fs = require('fs');
+const path = require('path');
 const pool = require('../config/db');
 const { sendDispatchMail, isDispatchMailConfigured, getDispatchFromAddress } = require('./dispatchEmailService');
 const { escapeHtml } = require('../utils/escapeHtml');
@@ -250,12 +252,38 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
     'Team Rentfoxxy',
   ].join('\n');
 
+  // Accounts raises the bill off the challan, so the PDF has to travel with the
+  // request. Generated fresh rather than reusing a stored path: the laptops and
+  // their declared values are usually set minutes before this is sent, and a
+  // stale PDF would show the wrong consignment value.
+  //
+  // Hard-fail if it cannot be produced. sendDispatchMail drops a missing
+  // attachment silently and still reports success, so without this check the
+  // request would arrive with no challan and nobody would know until Accounts
+  // asked for it.
+  let pdfRel = null;
+  try {
+    const { generateVendorReturnDcPdf } = require('./vendorReturnToVendorPdfService');
+    pdfRel = await generateVendorReturnDcPdf(dcNumber);
+  } catch (pdfErr) {
+    console.error('[vrtdcEway] VRTDC PDF generation failed:', pdfErr.message);
+  }
+  if (!pdfRel) {
+    throw new Error('Could not generate the Return DC PDF to attach for Accounts');
+  }
+  const pdfRelativePath = `uploads/${String(pdfRel).replace(/^uploads\//, '')}`;
+  const pdfAbs = path.join(__dirname, '..', pdfRelativePath);
+  if (!fs.existsSync(pdfAbs)) {
+    throw new Error(`Return DC PDF is missing at ${pdfRelativePath} — not sending a request without the challan`);
+  }
+
   const sent = await sendDispatchMail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${vendorName} : E-way Bill required (${money(productValue)})`,
     html,
     text,
+    pdfRelativePath,
   });
   if (!sent) throw new Error('Failed to send mail — check DISPATCH_SMTP settings');
 
