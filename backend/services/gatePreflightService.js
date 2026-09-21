@@ -114,7 +114,14 @@ function checkChallanState(head) {
  * `ok` is the answer the gate acts on. `failures` is what the screen shows —
  * all of them, so the guard makes one phone call rather than three.
  */
-async function runGatePreflight(db, { dcNumber, head, actor = null, correlationId = null }) {
+async function runGatePreflight(db, {
+  dcNumber, head, actor = null, correlationId = null,
+  // The guard screen asks this question BEFORE scanning, to show which check
+  // would fail. Nothing has been refused at that point, so a preview must not
+  // write a gate_refused event — an audit trail full of refusals that never
+  // happened is worse than none.
+  record = true,
+}) {
   const failures = [];
 
   const state = checkChallanState(head);
@@ -131,7 +138,7 @@ async function runGatePreflight(db, { dcNumber, head, actor = null, correlationI
 
   const ok = failures.length === 0;
 
-  if (!ok) {
+  if (!ok && record) {
     // THE POINT OF THE PART. A refusal leaves a record, so "the gate would not
     // let it out" is answerable afterwards without asking the guard.
     await recordEvent(db, {

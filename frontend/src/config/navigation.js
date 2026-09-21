@@ -84,6 +84,11 @@ export const SECTIONS = [
       { to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
       { to: '/sales-pipeline/return-dc', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { to: '/guard', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
+      // Part 3.7, behind REACT_APP_CARRET — beside the existing screens, not
+      // replacing them (hard rule 6).
+      { to: '/carret/move/gate', label: 'Guard Gate (Carret)', section: 'guard_gate_checking', action: 'view' },
+      { to: '/carret/move/challans', label: 'Challans (Carret)', section: 'delivery_challans', action: 'view' },
+      { to: '/carret/move/return-challans', label: 'Return Challans (Carret)', section: 'return_dc', action: 'view' },
       { to: '/guard/scanner', label: 'Gate Scanner', section: 'gate_dashboard', action: 'view' },
       { to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
       { to: '/sales-pipeline/delivery-register', label: 'Delivery Register', section: 'delivery_register_management', action: 'view' },
