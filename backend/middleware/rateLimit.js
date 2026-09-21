@@ -81,4 +81,35 @@ const captureLimiter = build({
   skipSuccessfulRequests: true,
 });
 
-module.exports = { loginLimiter, otpLimiter, otpSendLimiter, captureLimiter };
+/**
+ * Part 6.3 (finding U24) — the public support endpoints.
+ *
+ * /api/support-public has no auth by design: it is the QR-code intake a
+ * customer scans on a laptop. But the TTSPL lookup took any code and, for a
+ * valid one, returned the customer id and company name — unauthenticated fleet
+ * enumeration, one guess at a time, with no throttle at all. TTSPL codes are
+ * sequential, so walking the fleet was a for-loop.
+ *
+ * Lookups count every request, successful or not: a legitimate customer looks
+ * up the one laptop in front of them, so a budget of 30 in fifteen minutes is
+ * generous for them and useless for a scan.
+ */
+const publicLookupLimiter = build({
+  max: 30,
+  message: 'Too many lookups. Please wait a few minutes and try again.',
+});
+
+/** Raising a support request is heavier and rarer — a tighter budget. */
+const publicIntakeLimiter = build({
+  max: 10,
+  message: 'Too many requests. Please wait 15 minutes before submitting another.',
+});
+
+module.exports = {
+  loginLimiter,
+  otpLimiter,
+  otpSendLimiter,
+  captureLimiter,
+  publicLookupLimiter,
+  publicIntakeLimiter,
+};

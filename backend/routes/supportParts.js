@@ -105,11 +105,20 @@ router.patch('/requests/:requestId/resolve-reassign', requireWarehouseEdit,     
 router.get('/history',                             requireWarehouse, ctrl.getPartsHistory);
 
 // Challans
-router.get('/challans/:challanId',                 ctrl.getChallan);
+// Part 6.3 (finding U21) — this route carried no permission guard whatsoever.
+// Authenticated was treated as authorised, and the handler had no ownership
+// check either, so any logged-in user could read any challan: customer name,
+// ticket, the parts on it and the e-sign names.
+router.get('/challans/:challanId',                 requireWarehouse, ctrl.getChallan);
 router.post('/challans/:challanId/sign-and-issue', requireSupportOrWarehouse, ctrl.signAndIssueChallan);
 
 // Bucket
-router.get('/bucket',                              ctrl.getTechnicianBucket);
+// Part 6.3 (finding U22) — no permission guard, and the handler self-filtered
+// only when the caller's role was exactly 'support_tech'. Every other role,
+// including ones with no support rights at all, saw every technician's held
+// parts. The guard is here; the handler now also filters by assignment for
+// anyone who is not a supervisor (see getTechnicianBucket).
+router.get('/bucket',                              requireWarehouse, ctrl.getTechnicianBucket);
 
 // Warehouse queue
 router.get('/warehouse-queue',                     requireWarehouse, ctrl.getWarehouseQueue);

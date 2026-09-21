@@ -483,11 +483,21 @@ exports.lookupPublicTtspl = async (req, res) => {
         ticket_id: openTicket.id,
       });
     }
+    // Part 6.3 (finding U24) — the second half. A rate limit slows enumeration
+    // down; it does not stop this endpoint HANDING OUT the answer. An
+    // unauthenticated caller with a valid TTSPL code was told which company
+    // holds that laptop, and codes are sequential.
+    //
+    // The intake flow needs to know the code is valid and to carry the customer
+    // forward. It does not need the customer's identity on the wire — the
+    // customer_id is kept because createPublicRequest binds the ticket to it
+    // server-side, and the NAME, which is the part that identifies a company to
+    // a stranger, is no longer returned. A person scanning the QR code on their
+    // own laptop already knows who they work for.
     return res.json({
       success: true,
       ttspl_id: ttsplCode,
       customer_id: deployed.customer_id,
-      customer_name: deployed.company_name || deployed.customer_name || null,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || 'Could not validate TTSPL' });

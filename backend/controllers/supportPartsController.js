@@ -1225,12 +1225,27 @@ exports.acceptReturn = async (req, res) => {
 
 // ── TECHNICIAN BUCKET ─────────────────────────────────────────────────────────
 
+/**
+ * Part 6.3 (finding U22) — whose held parts you can see.
+ *
+ * This used to widen to EVERY technician's bucket unless the caller's role was
+ * the exact string 'support_tech'. So a role that was merely not that string —
+ * including one with no support rights — saw the whole floor's held parts.
+ *
+ * Inverted: you see your own bucket unless you are explicitly a supervisor.
+ * A new technician role added later now defaults to seeing only its own, which
+ * is the safe direction for a default to fail in.
+ */
+const BUCKET_SUPERVISOR_ROLES = new Set([
+  'super_admin', 'admin', 'manager', 'support_lead', 'warehouse',
+]);
+
 exports.getTechnicianBucket = async (req, res) => {
   try {
-    const isTech = req.user.role === 'support_tech';
+    const isSupervisor = BUCKET_SUPERVISOR_ROLES.has(req.user.role);
     const params = [];
     let techFilter = '';
-    if (isTech) {
+    if (!isSupervisor) {
       params.push(req.user.user_id);
       techFilter = `AND spr.assigned_to_tech = $1`;
     }

@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, checkAnySectionPermission } = require('../middleware/auth');
 const { rejectCancelledPickupItem } = require('../middleware/cancelledPickupGuard');
 const { prefixedDcRoute } = require('../middleware/dcNumberRoutes');
 const { requireSupportAccess, requireSupportLead, requireTicketLead, requireSupportTicketClose, requireSupportTicketCancel } = require('../middleware/supportAccess');
@@ -139,8 +139,24 @@ router.use('/items/:itemId', rejectCancelledPickupItem);
 
 // Warehouse receipt confirmation must be reachable by the warehouse / manager
 // roles too (they are not "support" roles), so it is registered before the
-// support-access gate. The controller enforces the allowed roles itself.
-router.post('/items/:itemId/warehouse-confirm', confirmWarehouseReceipt);
+// support-access gate.
+//
+// Part 6.3 (finding U23) — "the controller enforces the allowed roles itself"
+// was the whole guard, and it is a hardcoded role list, not the permission
+// matrix. Being mounted above requireSupportAccess meant any authenticated user
+// reached the handler; only that list stood in the way, and a role array is
+// exactly what Decision 6 is retiring.
+//
+// A declared (section, action) now sits in front of it. The controller's list
+// stays as the narrower rule until Decision 6 retires it wholesale.
+router.post(
+  '/items/:itemId/warehouse-confirm',
+  checkAnySectionPermission(
+    ['support_part_challan', 'support_tickets', 'warehouse', 'floor_pipeline'],
+    'edit'
+  ),
+  confirmWarehouseReceipt
+);
 
 router.use(requireSupportAccess);
 
