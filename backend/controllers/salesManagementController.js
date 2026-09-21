@@ -6061,6 +6061,9 @@ async function performDcDelivery(client, {
   deliveredSerialNumbers = null,
   rejectedSerialNumbers = null,
   submittedRemark = null,
+  // Part 3.3: passed through to the one completion service.
+  correlationId = null,
+  reason = null,
 }) {
   // FOR UPDATE so two clicks serialise: without it a double-click re-ran the
   // whole routine, re-stamping delivered_at and potentially invoicing twice.
@@ -6088,41 +6091,35 @@ async function performDcDelivery(client, {
     };
   }
 
-  const writesRegister = deliveredSerialNumbers !== null || rejectedSerialNumbers !== null;
-  const upd = await client.query(
-    `UPDATE delivery_challan_lines SET
-      status = 'delivered', delivered_at = NOW(), delivered_by = $1,
-      delivery_location = $2, pod_image_url = $3, delivery_completed_at = NOW(),
-      delivered_serial_numbers = CASE WHEN $5::boolean THEN $6::jsonb ELSE delivered_serial_numbers END,
-      rejected_serial_numbers  = CASE WHEN $5::boolean THEN $7::jsonb ELSE rejected_serial_numbers END,
-      submitted_remark = COALESCE($8, submitted_remark),
-      updated_at = NOW()
-     WHERE dc_number = $4
-       AND LOWER(COALESCE(status, '')) NOT IN ('delivered', 'cancelled')`,
-    [
-      user?.user_id || null,
-      deliveryLocation,
+  // Part 3.3: the body of this routine has MOVED to
+  // services/deliveryCompletionService. Part 0 extracted it here to stop
+  // submitDeliveryRegister being a sixth variation; Part 3 finishes the job by
+  // making it the only one, shared with the technician, override and courier
+  // paths too.
+  //
+  // The state checks above are kept so this wrapper's callers keep their
+  // existing 404/409 shapes, and the service repeats them under its own row
+  // lock — the duplication is deliberate and cheap, and removing the lock from
+  // either side would reopen V8.
+  const { completeDelivery, MODE } = require('../services/deliveryCompletionService');
+  return completeDelivery(client, {
+    dcNumber,
+    // These callers are admin-side challan edits, which is the override mode.
+    mode: MODE.ADMIN_OVERRIDE,
+    proof: {
       podImageUrl,
-      dcNumber,
-      writesRegister,
-      JSON.stringify(deliveredSerialNumbers || []),
-      JSON.stringify(rejectedSerialNumbers || []),
-      submittedRemark,
-    ]
-  );
-  if (!upd.rowCount) {
-    return {
-      ok: false,
-      statusCode: 409,
-      message: 'No deliverable lines on this challan — nothing was changed.',
-    };
-  }
-
-  // The step submitDeliveryRegister never took: move the serials out of
-  // in_transit and set rent_start_date.
-  await exports.finalizeDeliveryInventory(client, dcNumber, user);
-
-  return { ok: true };
+      // The register's remark is the reason an override needs; markDcDelivered
+      // passes its own.
+      reason: submittedRemark || reason || 'Marked delivered from the challan screen',
+    },
+    actor: user,
+    correlationId,
+    deliveredSerialNumbers,
+    rejectedSerialNumbers,
+    submittedRemark,
+    deliveryLocation,
+    source: 'salesManagementController.performDcDelivery',
+  });
 }
 
 /**

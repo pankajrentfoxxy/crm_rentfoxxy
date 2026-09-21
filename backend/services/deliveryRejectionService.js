@@ -14,7 +14,14 @@ const { getDeliveryChallanLines } = require('./salesManagementService');
 const { LEGACY_OTP_ROLES } = require('./deliveryOtpAccess');
 const { ACTIVITY_TYPES, safeLogSalesOrderActivity } = require('./salesOrderActivityService');
 
-const REJECTABLE_STATUSES = new Set(['in_transit', 'reached', 'shipped', 'processing', 'pending']);
+// Part 3.6, finding DC7. `dispatch_ready` was missing, so a challan created
+// but not yet gated out could NOT be rejected — it had to be cancelled by a
+// super admin instead, which is a different code path with different inventory
+// effects. A challan that never left the warehouse is the easiest possible
+// thing to reject.
+const REJECTABLE_STATUSES = new Set([
+  'dispatch_ready', 'in_transit', 'reached', 'shipped', 'processing', 'pending',
+]);
 
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 
@@ -229,8 +236,26 @@ async function resetSoSerialForReject(client, { serialId, salesOrderNumber, newQ
   );
 }
 
-/** On reject only — release the SO line from this DC without touching inventory (still in_transit). */
-async function releaseSoAllocationOnReject(client, dcNumber) {
+/**
+ * Release the SO line AND put the unit somewhere real (Part 3.6, findings I17
+ * and T1).
+ *
+ * This used to deliberately leave the asset `in_transit` with no DC — the
+ * comment said so — which meant no DC, no owner, and no next step until a human
+ * noticed. Worse, the cancel-eligibility check counts such a unit as awaiting
+ * warehouse receipt forever, so the sales order could never be cancelled.
+ *
+ * Where the unit goes depends on where it actually is, which is knowable:
+ *   never left the gate (dispatch_ready)  -> back to stock, it is still here
+ *   out on the road (in_transit, reached) -> at_gate, because a refused
+ *                                            delivery comes back to the gate
+ *                                            and someone takes custody of it
+ *
+ * at_gate is exactly the state Part 3.1 added for this: on site, not yet
+ * booked in, somebody accountable. Before it existed there was no honest
+ * answer, which is part of why the unit was left nowhere.
+ */
+async function releaseSoAllocationOnReject(client, dcNumber, { actorUserId = null, actorName = null, correlationId = null } = {}) {
   await client.query(
     `UPDATE sales_order_serials SET
         status = 'attached',
@@ -239,6 +264,39 @@ async function releaseSoAllocationOnReject(client, dcNumber) {
       WHERE dc_number = $1 AND status = 'dispatched'`,
     [dcNumber]
   );
+
+  const { rows } = await client.query(
+    `SELECT DISTINCT vsn.serial_id, vsn.inventory_status
+       FROM sales_order_serials sos
+       JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+      WHERE sos.dc_number IS NULL
+        AND vsn.deleted_at IS NULL
+        AND vsn.current_dc_number = $1`,
+    [dcNumber]
+  );
+
+  const { transitionAsset } = require('./inventoryStateMachine');
+  for (const r of rows) {
+    const from = String(r.inventory_status || '');
+    const to = from === 'dispatch_ready' ? 'in_stock' : 'at_gate';
+    try {
+      await transitionAsset(client, {
+        serialId: r.serial_id,
+        toStatus: to,
+        reason: `Delivery rejected on ${dcNumber} — unit ${to === 'in_stock' ? 'never left the warehouse' : 'returned to the gate'}`,
+        actorUserId,
+        actorName,
+        correlationId,
+        caller: 'deliveryRejectionService.releaseSoAllocationOnReject',
+      });
+    } catch (err) {
+      // A unit already delivered or scrapped is not this function's to move.
+      // Log rather than force: forcing is what Part 2.2 spent its time undoing.
+      console.error(
+        `[reject] could not move serial ${r.serial_id} from ${from} to ${to} on ${dcNumber}: ${err.message}`
+      );
+    }
+  }
 }
 
 async function processSerialsToQc(client, {

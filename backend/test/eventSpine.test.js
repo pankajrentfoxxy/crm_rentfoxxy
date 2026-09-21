@@ -155,8 +155,11 @@ describe('2.1 — the canonical status list agrees with the state machine', () =
     }
   });
 
-  it('does not yet know at_gate — Part 3 adds it', () => {
-    // Asserted so Part 3 has a test that fails before its own change.
-    assert.equal(Object.values(STATUS).includes('at_gate'), false);
+  it('knows at_gate — Part 3 added it', () => {
+    // This asserted `false` when Part 2.1 wrote it, deliberately, so Part 3
+    // would have a test that failed before its own change and passed after.
+    // It did exactly that. Flipped rather than deleted, so the state stays
+    // covered.
+    assert.equal(Object.values(STATUS).includes('at_gate'), true);
   });
 });

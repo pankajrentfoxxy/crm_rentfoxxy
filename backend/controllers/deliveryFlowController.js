@@ -1,4 +1,5 @@
 const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
+const { completeDelivery, MODE: DELIVERY_MODE, ProofRejected } = require('../services/deliveryCompletionService');
 /**
  * PHASE 13 — End-to-end delivery flow.
  * Technician bucket (admin) + technician's own deliveries (dispatch role) +
@@ -633,19 +634,34 @@ exports.submitDeliveryWithPod = async (req, res) => {
     const podType = body.pod_type || (esignUrl ? 'esign' : podPhotoUrl ? 'photo' : 'none');
 
     await client.query('BEGIN');
-    await client.query(
-      `UPDATE delivery_challan_lines
-          SET status = 'delivered', delivered_at = NOW(), delivery_completed_at = NOW(),
-              otp_verified_at = NOW(),
-              pod_type = $1, pod_photo_url = COALESCE($2, pod_photo_url),
-              esign_url = COALESCE($3, esign_url),
-              pod_submitted_at = NOW(), pod_submitted_by = $4,
-              delivery_notes = $5, delivered_by = $4, updated_at = NOW()
-        WHERE dc_number = $6 AND status <> 'delivered'`,
-      [podType, podPhotoUrl, esignUrl, req.user.user_id, body.notes || null, dcNumber]
-    );
 
-    await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
+    // Part 3.3 — one completion path. This was one of five, and one of the
+    // three that took no row lock (V8), so two submissions could both finalise
+    // inventory and both raise an invoice.
+    //
+    // by_hand is the strictest mode: OTP AND a POD. V4 is that pod_type fell
+    // back to 'none' here and the delivery completed anyway — the admin path
+    // enforced the photo while the primary path did not. The service now
+    // refuses rather than accepting 'none'.
+    const dcResult = await completeDelivery(client, {
+      dcNumber,
+      mode: DELIVERY_MODE.BY_HAND,
+      proof: {
+        otpVerified: true,   // this handler is only reached after OTP verification
+        podPhotoUrl,
+        esignUrl,
+        podType: podType === 'none' ? null : podType,
+        notes: body.notes || null,
+      },
+      actor: req.user,
+      correlationId: req.correlationId,
+      source: 'deliveryFlowController.technicianDeliver',
+    });
+    if (!dcResult.ok) {
+      await client.query('ROLLBACK');
+      return res.status(dcResult.statusCode).json({ success: false, message: dcResult.message });
+    }
+
     await client.query('COMMIT');
 
     try {
@@ -742,18 +758,28 @@ exports.adminDeliverOverride = async (req, res) => {
     }
 
     await client.query('BEGIN');
-    // Only mark the lines that are not yet delivered so already-delivered lines
-    // keep their original POD / timestamps.
-    await client.query(
-      `UPDATE delivery_challan_lines
-          SET status = 'delivered', delivered_at = NOW(), delivery_completed_at = NOW(),
-              pod_type = 'admin_override', pod_photo_url = $1,
-              pod_submitted_at = NOW(), pod_submitted_by = $2, delivered_by = $2,
-              delivery_notes = $3, updated_at = NOW()
-        WHERE dc_number = $4 AND status <> 'delivered'`,
-      [podPhotoUrl, req.user.user_id, [body.reason, body.notes].filter(Boolean).join(' — ') || null, dcNumber]
-    );
-    await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
+
+    // Part 3.3 — the same routine, in override mode. The proof rules require a
+    // POD photo AND a reason, and both are recorded as an event: "always
+    // logged" is the point of an override.
+    const overrideResult = await completeDelivery(client, {
+      dcNumber,
+      mode: DELIVERY_MODE.ADMIN_OVERRIDE,
+      proof: {
+        podPhotoUrl,
+        podType: 'admin_override',
+        reason: body.reason || null,
+        notes: [body.reason, body.notes].filter(Boolean).join(' — ') || null,
+      },
+      actor: req.user,
+      correlationId: req.correlationId,
+      source: 'deliveryFlowController.adminDeliverOverride',
+    });
+    if (!overrideResult.ok) {
+      await client.query('ROLLBACK');
+      return res.status(overrideResult.statusCode).json({ success: false, message: overrideResult.message });
+    }
+
     await client.query('COMMIT');
 
     try {
