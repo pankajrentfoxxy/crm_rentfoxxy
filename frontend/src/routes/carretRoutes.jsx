@@ -18,6 +18,9 @@ const OperationsOverviewPage = React.lazy(() => import('../features/carret/Opera
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
 const SellListPage = React.lazy(() => import('../features/carret/SellListPage'));
+const ProcureListPage = React.lazy(() => import('../features/carret/ProcureListPage'));
+const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
+const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 
 export const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
 
@@ -44,6 +47,20 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/sell/quotations', element: guard('sales_quotations', 'view', <SellListPage kind="quotations" />) },
       { path: '/carret/sell/sales-orders', element: guard('sales_orders_doc', 'view', <SellListPage kind="sales-orders" />) },
       { path: '/carret/sell/customers', element: guard('customer_management', 'view', <SellListPage kind="customers" />) },
+
+      // Procure & Produce (Part 5.7). Five procurement lists are one component,
+      // like Sell, because they are the same shape.
+      { path: '/carret/procure/purchase-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="purchase-orders" />) },
+      { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <ProcureListPage kind="vendors" />) },
+      { path: '/carret/procure/spare-parts-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="spare-parts-orders" />) },
+      { path: '/carret/procure/vendor-returns', element: guard('vendor_return_to_vendor', 'view', <ProcureListPage kind="replaced-products" />) },
+      { path: '/carret/procure/vendor-repair', element: guard('vendor_repair_dc', 'view', <ProcureListPage kind="vendor-repair-dcs" />) },
+
+      // The six stage views are ONE screen with the stage as a filter, for the
+      // same reason the entity split is a filter: a laptop moving from QC1 to
+      // QC2 must not move between sections.
+      { path: '/carret/produce/pipeline', element: guard('floor_pipeline', 'view', <FloorPipelinePage />) },
+      { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
     ]
   : [];
 

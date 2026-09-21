@@ -365,6 +365,11 @@ function usageSql() {
       WHEN s.inventory_status IN (${CUSTOMER_SQL}) THEN 'rental'
       WHEN vr.on_vendor_repair IS NOT NULL
         OR s.inventory_status IN ('in_repair', 'out_for_repare') THEN 'repair'
+      -- Part 5.7: 'returned' had no bucket, so a unit that came back from a
+      -- customer and is waiting for QC re-entry counted as warehouse stock.
+      -- That is what made the Returned column impossible to build: the number
+      -- was folded into another one.
+      WHEN s.inventory_status = 'returned' THEN 'returned'
       ELSE 'warehouse'
     END
   `;
@@ -378,6 +383,7 @@ function locationLabelSql() {
       WHEN vr.on_vendor_repair IS NOT NULL
         OR s.inventory_status IN ('in_repair', 'out_for_repare') THEN 'Vendor Repair'
       WHEN s.inventory_status = 'scrapped' THEN 'Dead / Scrapped'
+      WHEN s.inventory_status = 'returned' THEN 'Returned — awaiting QC'
       WHEN s.inventory_status = 'in_stock'
         AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
         AND ${SQL_IS_SALE} THEN 'Ready to Sell'
@@ -573,6 +579,7 @@ async function getOverview(query = {}) {
           COUNT(*)::int AS purchased_qty,
           COALESCE(SUM(COALESCE(purchase_rate, 0)), 0)::numeric AS purchase_value,
           COUNT(*) FILTER (WHERE usage_bucket = 'warehouse')::int AS warehouse_qty,
+          COUNT(*) FILTER (WHERE usage_bucket = 'returned')::int AS returned_qty,
           COUNT(*) FILTER (WHERE usage_bucket = 'repair')::int AS repair_qty
        FROM (
          SELECT DISTINCT ON (${physicalKey}, p.vendor_id)
@@ -712,6 +719,7 @@ async function getOverview(query = {}) {
     rental_qty: Number(rentalRow?.rental_qty || 0),
     monthly_rental_value: Number(rentalRow?.monthly_rental_value || 0),
     warehouse_qty: Number(row.warehouse_qty || 0),
+    returned_qty: Number(row.returned_qty || 0),
     repair_qty: Number(row.repair_qty || 0),
     current_total: Number(row.purchased_qty || 0),
   };

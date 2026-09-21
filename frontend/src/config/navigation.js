@@ -24,6 +24,13 @@ export const SECTIONS = [
       { to: '/vendor-management/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
       { to: '/vendor-management/vendor-return', label: 'Vendor Returns', section: 'vendor_return_to_vendor', action: 'view' },
       { to: '/vendor-management/vendor-repair', label: 'Vendor Repair', section: 'vendor_repair_dc', action: 'view' },
+      // Part 5.7, behind REACT_APP_CARRET. Beside the existing screens, not
+      // replacing them (hard rule 6).
+      { to: '/carret/procure/purchase-orders', label: 'Purchase Orders (Carret)', section: 'vendor_management', action: 'view' },
+      { to: '/carret/procure/vendors', label: 'Vendors (Carret)', section: 'vendor_management', action: 'view' },
+      { to: '/carret/procure/spare-parts-orders', label: 'Spare Parts Orders (Carret)', section: 'vendor_management', action: 'view' },
+      { to: '/carret/procure/vendor-returns', label: 'Vendor Returns (Carret)', section: 'vendor_return_to_vendor', action: 'view' },
+      { to: '/carret/procure/vendor-repair', label: 'Vendor Repair (Carret)', section: 'vendor_repair_dc', action: 'view' },
     ],
   },
   {
@@ -43,6 +50,13 @@ export const SECTIONS = [
       { to: '/tickets', label: 'Production Tickets', section: 'tickets', action: 'view' },
       { to: '/inventory-management/parts', label: 'Parts', section: 'parts_inventory', action: 'view' },
       { to: '/inventory-management/part-vendor-repair', label: 'Part Repairs', section: 'part_vendor_repair', action: 'view' },
+      // Part 5.7, behind REACT_APP_CARRET. The six stage entries above become
+      // ONE screen with the stage as a filter — the same reasoning as the
+      // entity split in Sell: a laptop moving from QC1 to QC2 must not move
+      // between sections, and "what is on the floor" should be one screen, not
+      // six that have to be added up.
+      { to: '/carret/produce/pipeline', label: 'Floor Pipeline (Carret)', section: 'floor_pipeline', action: 'view' },
+      { to: '/carret/produce/parts', label: 'Parts (Carret)', section: 'parts_inventory', action: 'view' },
     ],
   },
   {

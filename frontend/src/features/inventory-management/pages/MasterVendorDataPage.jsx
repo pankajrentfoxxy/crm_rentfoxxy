@@ -465,6 +465,7 @@ export default function MasterVendorDataPage() {
     rental_qty: acc.rental_qty + Number(v.rental_qty || 0),
     monthly_rental_value: acc.monthly_rental_value + Number(v.monthly_rental_value || 0),
     warehouse_qty: acc.warehouse_qty + Number(v.warehouse_qty || 0),
+    returned_qty: acc.returned_qty + Number(v.returned_qty || 0),
     repair_qty: acc.repair_qty + Number(v.repair_qty || 0),
     current_total: acc.current_total + Number(v.current_total || 0),
   }), {
@@ -475,6 +476,7 @@ export default function MasterVendorDataPage() {
     rental_qty: 0,
     monthly_rental_value: 0,
     warehouse_qty: 0,
+    returned_qty: 0,
     repair_qty: 0,
     current_total: 0,
   }), [vendors]);
@@ -929,6 +931,9 @@ export default function MasterVendorDataPage() {
                 <th className="px-3 py-2 text-right">Rental</th>
                 <th className="px-3 py-2 text-right">Monthly Rental</th>
                 <th className="px-3 py-2 text-right">Warehouse</th>
+                {/* Part 5.7 — Returned has never been a column, so units waiting
+                    for QC re-entry were counted as warehouse stock. */}
+                <th className="px-3 py-2 text-right">Returned</th>
                 <th className="px-3 py-2 text-right">Repair</th>
                 <th className="px-3 py-2 text-right">Current Total</th>
               </tr>
@@ -948,12 +953,13 @@ export default function MasterVendorDataPage() {
                   <td className="px-3 py-2 text-right">{v.rental_qty}</td>
                   <td className="px-3 py-2 text-right">{fmtMoney(v.monthly_rental_value)}</td>
                   <td className="px-3 py-2 text-right">{v.warehouse_qty}</td>
+                  <td className="px-3 py-2 text-right">{v.returned_qty ?? 0}</td>
                   <td className="px-3 py-2 text-right">{v.repair_qty}</td>
                   <td className="px-3 py-2 text-right font-medium">{v.current_total}</td>
                 </tr>
               ))}
               {!overviewLoading && !vendors.length ? (
-                <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-400">No vendors in this purchase period</td></tr>
+                <tr><td colSpan={11} className="px-3 py-8 text-center text-slate-400">No vendors in this purchase period</td></tr>
               ) : null}
             </tbody>
             {vendors.length ? (
@@ -967,6 +973,7 @@ export default function MasterVendorDataPage() {
                   <td className="px-3 py-2.5 text-right">{vendorTotals.rental_qty}</td>
                   <td className="px-3 py-2.5 text-right">{fmtMoney(vendorTotals.monthly_rental_value)}</td>
                   <td className="px-3 py-2.5 text-right">{vendorTotals.warehouse_qty}</td>
+                  <td className="px-3 py-2.5 text-right">{vendorTotals.returned_qty}</td>
                   <td className="px-3 py-2.5 text-right">{vendorTotals.repair_qty}</td>
                   <td className="px-3 py-2.5 text-right">{vendorTotals.current_total}</td>
                 </tr>
