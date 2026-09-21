@@ -343,6 +343,15 @@ export function cancelReturnToVendorDc(dcNumber) {
   return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/cancel`);
 }
 
+/**
+ * Set declared values on a draft VRTDC.
+ * Pass `apply_to_all` for one price across every laptop, or `declared_values`
+ * as a serial_id -> value map. `overwrite` replaces values already set.
+ */
+export function setReturnToVendorItemValues(dcNumber, payload) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/item-values`, payload);
+}
+
 /* ── VRTDC E-way Bill ─────────────────────────────────────────────────────── */
 
 export function fetchReturnToVendorEway(dcNumber) {

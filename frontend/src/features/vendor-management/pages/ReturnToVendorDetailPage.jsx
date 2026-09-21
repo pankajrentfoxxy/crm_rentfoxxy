@@ -11,6 +11,7 @@ import {
   dispatchReturnToVendorDc,
   downloadReturnToVendorDcPdf,
   fetchReturnToVendorDc,
+  setReturnToVendorItemValues,
 } from '../vendorManagementApi';
 import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
 import VrtdcEwayPanel from '../components/VrtdcEwayPanel';
@@ -42,6 +43,9 @@ export default function ReturnToVendorDetailPage() {
   // the Rs 50,000 e-way threshold is measured against, so it is captured at
   // dispatch while the dispatcher is still on the screen.
   const [declaredValues, setDeclaredValues] = useState({});
+  const [bulkValue, setBulkValue] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
   const [pdfBusy, setPdfBusy] = useState(false);
 
@@ -58,6 +62,30 @@ export default function ReturnToVendorDetailPage() {
   }, [dcNumber]);
 
   useEffect(() => { load(); }, [load]);
+
+  // One price across the whole DC. A return is usually one model at one price,
+  // and typing the same figure sixty-three times is how a wrong total is entered.
+  const applyBulkValue = async (overwrite) => {
+    const v = Number(bulkValue);
+    if (!Number.isFinite(v) || v < 0) {
+      toast.error('Enter a value of 0 or more');
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const res = await setReturnToVendorItemValues(dcNumber, {
+        apply_to_all: v,
+        overwrite,
+      });
+      toast.success(`${res.data?.updated ?? 0} laptop(s) set to ₹${v.toLocaleString('en-IN')}`);
+      setDeclaredValues({});
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Could not apply the value');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetchDeliveryTechnicians({ limit: 200 })
@@ -204,6 +232,47 @@ export default function ReturnToVendorDetailPage() {
 
         <div className="rounded-xl border bg-white p-4 shadow-sm md:col-span-2">
           <h3 className="font-semibold text-slate-900 mb-2">Laptops on this return</h3>
+
+          {dc.status === 'draft' && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mb-3 flex flex-wrap items-end gap-2">
+              <label className="text-sm">
+                <span className="block text-xs font-semibold uppercase text-slate-500 mb-1">
+                  Same value for every laptop
+                </span>
+                <input
+                  id="vrtdc-bulk-value"
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="w-40 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right"
+                  placeholder="e.g. 18000"
+                  value={bulkValue}
+                  onChange={(e) => setBulkValue(e.target.value)}
+                />
+              </label>
+              <Button
+                loading={bulkBusy}
+                disabled={!String(bulkValue).trim()}
+                onClick={() => applyBulkValue(false)}
+              >
+                Fill the blanks
+              </Button>
+              <Button
+                variant="secondary"
+                loading={bulkBusy}
+                disabled={!String(bulkValue).trim()}
+                onClick={() => applyBulkValue(true)}
+              >
+                Overwrite all {dc.items?.length || 0}
+              </Button>
+              <p className="text-xs text-slate-500 basis-full">
+                <strong>Fill the blanks</strong> prices only the laptops with no value yet, so
+                anything you have already typed is kept. <strong>Overwrite all</strong> replaces
+                every value on the DC.
+              </p>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-xs uppercase text-slate-500 bg-slate-50">

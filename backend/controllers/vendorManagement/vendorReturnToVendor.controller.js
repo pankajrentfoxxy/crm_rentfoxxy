@@ -264,6 +264,68 @@ exports.saveEwayBill = async (req, res) => {
   }
 };
 
+/**
+ * Set declared values on a draft VRTDC's laptops.
+ *
+ * Takes either a per-serial map or `apply_to_all`, which is what the warehouse
+ * actually needs: a return is usually one model at one price, and typing the
+ * same figure sixty-three times is how a wrong total gets entered. apply_to_all
+ * fills every laptop that has no value yet; `overwrite` makes it replace values
+ * already set, so a corrected price can be pushed across the whole DC.
+ */
+exports.setItemValues = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    requireWarehouseRole(req.user?.role);
+    const dcNumber = req.params.dcNumber;
+    const head = await client.query(
+      `SELECT status FROM vendor_return_delivery_challans WHERE dc_number = $1`,
+      [dcNumber]
+    );
+    if (!head.rows.length) {
+      return res.status(404).json({ success: false, message: 'Return DC not found' });
+    }
+    if (head.rows[0].status !== 'draft') {
+      return res.status(409).json({
+        success: false,
+        message: `Values can only be changed while the DC is a draft — this one is ${head.rows[0].status}`,
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const applyToAll = req.body.apply_to_all;
+    if (applyToAll !== undefined && applyToAll !== null && applyToAll !== '') {
+      const v = Number(applyToAll);
+      if (!Number.isFinite(v) || v < 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Value must be a number of 0 or more' });
+      }
+      const overwrite = req.body.overwrite === true || req.body.overwrite === 'true';
+      const r = await client.query(
+        `UPDATE vendor_return_dc_items
+            SET declared_value = $2
+          WHERE dc_number = $1
+            AND COALESCE(item_status, '') <> 'cancelled'
+            AND ($3::boolean OR declared_value IS NULL)`,
+        [dcNumber, v, overwrite]
+      );
+      await client.query('COMMIT');
+      return res.json({ success: true, updated: r.rowCount, applied_value: v, overwrite });
+    }
+
+    const { saveDeclaredValues } = require('../../services/vrtdcEwayComplianceService');
+    const updated = await saveDeclaredValues(client, dcNumber, req.body.declared_values || {});
+    await client.query('COMMIT');
+    res.json({ success: true, updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    handleError(res, err);
+  } finally {
+    client.release();
+  }
+};
+
 /** Multer for the E-way Bill document. Built here so the route file stays declarative. */
 exports.createEwayUpload = () => {
   const multer = require('multer');
