@@ -363,6 +363,20 @@ export function requestReturnToVendorEway(dcNumber) {
   return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/request-eway`);
 }
 
+/** Download the E-way Bill document Accounts uploaded, for the gate/transporter. */
+export async function downloadReturnToVendorEwayPdf(dcNumber) {
+  try {
+    const response = await api.get(
+      `${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/eway-pdf`,
+      { responseType: 'blob' }
+    );
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    downloadBlobResponse(response, `EWAY_${safe}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
 /** Accounts saves the bill. Multipart because the document is attached. */
 export function saveReturnToVendorEway(dcNumber, { eway_bill_number, eway_bill_date, file }) {
   const form = new FormData();

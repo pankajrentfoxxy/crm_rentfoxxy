@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FileCheck2, Send, ShieldAlert, Upload } from 'lucide-react';
+import { Download, FileCheck2, Send, ShieldAlert, Upload } from 'lucide-react';
 import { Button } from '../../../components/ui/primitives';
 import {
+  downloadReturnToVendorEwayPdf,
   fetchReturnToVendorEway,
   requestReturnToVendorEway,
   saveReturnToVendorEway,
@@ -32,6 +33,20 @@ export default function VrtdcEwayPanel({ dcNumber, status, onChange, onState }) 
   const [num, setNum] = useState('');
   const [date, setDate] = useState('');
   const [file, setFile] = useState(null);
+  const [dlBusy, setDlBusy] = useState(false);
+
+  // The warehouse and the driver need the bill itself at the gate, not just its
+  // number — without this the document Accounts uploads is write-only.
+  const downloadEway = async () => {
+    setDlBusy(true);
+    try {
+      await downloadReturnToVendorEwayPdf(dcNumber);
+    } catch (err) {
+      toast.error(err.message || 'Could not download the E-way Bill');
+    } finally {
+      setDlBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,12 +160,19 @@ export default function VrtdcEwayPanel({ dcNumber, status, onChange, onState }) 
       )}
 
       {done && (
-        <div className="text-sm text-slate-700 rounded-lg bg-white border p-3">
-          <span className="font-mono font-semibold">{state.eway_bill_number}</span>
-          {state.eway_bill_date ? ` · dated ${String(state.eway_bill_date).slice(0, 10)}` : ''}
-          {state.eway_bill_uploaded_at
-            ? <span className="text-slate-500"> · recorded {String(state.eway_bill_uploaded_at).slice(0, 10)}</span>
-            : null}
+        <div className="text-sm text-slate-700 rounded-lg bg-white border p-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <span className="font-mono font-semibold">{state.eway_bill_number}</span>
+            {state.eway_bill_date ? ` · dated ${String(state.eway_bill_date).slice(0, 10)}` : ''}
+            {state.eway_bill_uploaded_at
+              ? <span className="text-slate-500"> · recorded {String(state.eway_bill_uploaded_at).slice(0, 10)}</span>
+              : null}
+          </div>
+          {state.eway_bill_pdf_path && (
+            <Button variant="secondary" loading={dlBusy} onClick={downloadEway}>
+              <Download className="w-4 h-4" /> E-Way Bill document
+            </Button>
+          )}
         </div>
       )}
 

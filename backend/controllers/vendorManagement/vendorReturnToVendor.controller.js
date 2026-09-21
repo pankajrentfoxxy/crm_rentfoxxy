@@ -334,6 +334,54 @@ exports.setItemValues = async (req, res) => {
   }
 };
 
+/**
+ * Stream the E-way Bill document Accounts uploaded.
+ *
+ * The warehouse and the transporter need this in hand at the gate, and the file
+ * lives under /uploads behind uploadsAuth — reachable only with a browser cookie
+ * that a download from a react app cannot rely on. Serving it through the API
+ * uses the bearer token the rest of the page already uses, and lets the file
+ * come back with a name that says which DC it belongs to.
+ *
+ * No e-way lock here: this IS the e-way bill. It only exists once Accounts has
+ * recorded it, and whoever is moving the consignment has to be able to show it.
+ */
+exports.downloadEwayPdf = async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const dcNumber = req.params.dcNumber;
+    const r = await pool.query(
+      `SELECT eway_bill_number, eway_bill_pdf_path
+         FROM vendor_return_delivery_challans WHERE dc_number = $1`,
+      [dcNumber]
+    );
+    const head = r.rows[0];
+    if (!head) return res.status(404).json({ success: false, message: 'Return DC not found' });
+    if (!head.eway_bill_pdf_path) {
+      return res.status(404).json({
+        success: false,
+        message: 'No E-way Bill document has been uploaded for this DC yet',
+      });
+    }
+    const rel = String(head.eway_bill_pdf_path).replace(/^\/?uploads\//, '');
+    const abs = path.join(__dirname, '../../uploads', rel);
+    // The stored path is ours, but resolve and confirm it stayed inside uploads.
+    const root = path.join(__dirname, '../../uploads');
+    if (!path.resolve(abs).startsWith(path.resolve(root))) {
+      return res.status(400).json({ success: false, message: 'Invalid document path' });
+    }
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ success: false, message: 'E-way Bill document is missing from disk' });
+    }
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    const ext = path.extname(abs) || '.pdf';
+    res.download(abs, `EWAY_${safe}${ext}`);
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || 'Download failed' });
+  }
+};
+
 /** Multer for the E-way Bill document. Built here so the route file stays declarative. */
 exports.createEwayUpload = () => {
   const multer = require('multer');

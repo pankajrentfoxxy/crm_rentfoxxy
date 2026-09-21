@@ -31,6 +31,7 @@ const DC_ACTION_SUFFIXES = [
   '/request-demo-eway',
   '/demo-eway',
   '/request-eway',
+  '/eway-pdf',
   '/eway',
 ];
 

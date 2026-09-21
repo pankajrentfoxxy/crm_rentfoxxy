@@ -318,6 +318,7 @@ router.post(...prefixedDcRoute(
   vendorReturn.saveEwayBill
 ));
 router.post(...prefixedDcRoute(vrtdcBase, '/item-values', ...authorizeReturnToVendor, vendorReturn.setItemValues));
+router.get(...prefixedDcRoute(vrtdcBase, '/eway-pdf', ...authorizeReturnToVendor, vendorReturn.downloadEwayPdf));
 
 router.get(...prefixedDcRoute(vrtdcBase, '', ...authorizeReturnToVendor, vendorReturn.getDc));
 router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
