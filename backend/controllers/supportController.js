@@ -965,12 +965,41 @@ const getTicketWithItems = async (ticketId, user) => {
     if (ticketRes.rows.length === 0) return null;
     const ticket = ticketRes.rows[0];
 
+    // Specs come from customer_inventory when the item is linked to an ERP
+    // inventory row, and from the asset itself when it is not.
+    //
+    // customer_inventory_id is null on most items — it is only set for the ERP
+    // rental path, and no sold asset has a row there at all — so every inv_*
+    // field came back empty and support saw whatever partial spec the pickup
+    // form happened to post. TTSPL7427 arrived with no processor and no
+    // generation, and GPU and screen size cannot even be stored: those two
+    // columns do not exist on support_ticket_items.
+    //
+    // vendor_serial_numbers holds the real configuration, captured at GRN and
+    // corrected since, so it is joined as the fallback. COALESCE order is
+    // deliberate: the item's own value wins where it has one (someone may have
+    // corrected it on the ticket), then the ERP row, then the asset.
     let itemsSql = `
         SELECT i.*, u.name AS assigned_to_name, c.name AS issue_category_name,
-               ci.processor AS inv_processor, ci.model_name AS inv_model_name,
-               ci.ram AS inv_ram, ci.storage AS inv_storage, ci.generation AS inv_generation,
-               ci.gpu AS inv_gpu, ci.screen_size AS inv_screen_size,
-               ci.asset_bucket AS inv_asset_bucket, ci.customer_id AS inv_customer_id,
+               COALESCE(ci.processor,   vsn.extra->>'processor',
+                        vsn.grn_received_config->>'processor')            AS inv_processor,
+               COALESCE(ci.model_name,  vsn.extra->>'model',
+                        vsn.extra->>'model_name')                          AS inv_model_name,
+               COALESCE(ci.ram,         vsn.extra->>'ram',
+                        vsn.grn_received_config->>'ram')                   AS inv_ram,
+               COALESCE(ci.storage,     vsn.extra->>'storage', vsn.extra->>'ssd',
+                        vsn.grn_received_config->>'storage')               AS inv_storage,
+               COALESCE(ci.generation,  vsn.extra->>'generation',
+                        vsn.grn_received_config->>'generation')            AS inv_generation,
+               COALESCE(ci.gpu,         vsn.extra->>'gpu',
+                        vsn.grn_received_config->>'gpu')                   AS inv_gpu,
+               COALESCE(ci.screen_size, vsn.extra->>'screen_size',
+                        vsn.grn_received_config->>'screen_size')           AS inv_screen_size,
+               COALESCE(vsn.extra->>'brand',
+                        vsn.grn_received_config->>'brand')                 AS inv_brand,
+               vsn.inventory_status                                        AS inv_inventory_status,
+               COALESCE(ci.asset_bucket, vsn.inventory_status) AS inv_asset_bucket,
+               COALESCE(ci.customer_id, vsn.current_customer_id) AS inv_customer_id,
                rdc.pdf_path AS return_dc_pdf_path,
                rdc.sales_order_number AS return_so_number,
                rdc.original_dc_number AS original_dc_number,
@@ -981,6 +1010,19 @@ const getTicketWithItems = async (ticketId, user) => {
         LEFT JOIN users u ON u.user_id = i.assigned_to
         LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
         LEFT JOIN customer_inventory ci ON ci.id = i.customer_inventory_id
+        LEFT JOIN LATERAL (
+            SELECT v.extra, v.grn_received_config, v.inventory_status, v.current_customer_id
+              FROM vendor_serial_numbers v
+             WHERE v.deleted_at IS NULL
+               AND (
+                 v.inventory_asset_code = i.ttspl_id
+                 OR v.inventory_asset_code = i.unique_serial_number
+                 OR v.serial_number = i.serial_number
+                 OR v.extra->>'ttspl_id' = i.ttspl_id
+               )
+             ORDER BY v.serial_id DESC
+             LIMIT 1
+        ) vsn ON TRUE
         LEFT JOIN LATERAL (
             SELECT pdf_path, sales_order_number, original_dc_number,
                    dispatch_mode AS return_dc_dispatch_mode,
