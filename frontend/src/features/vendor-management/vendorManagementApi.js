@@ -238,6 +238,14 @@ export function uploadSparePartsOrderBills(id, formData) {
   return api.post(`${base}/spare-parts-orders/${id}/bills`, formData);
 }
 
+export function deleteSparePartsOrderBillFile(id, fileIndex) {
+  return api.delete(`${base}/spare-parts-orders/${id}/bills/${fileIndex}`);
+}
+
+export function removeSparePartsOrderBill(id) {
+  return api.delete(`${base}/spare-parts-orders/${id}/bills`);
+}
+
 export function createSparePartsOrder(body) {
   return api.post(`${base}/spare-parts-orders`, body);
 }

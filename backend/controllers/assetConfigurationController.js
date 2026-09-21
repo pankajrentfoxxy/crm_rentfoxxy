@@ -34,6 +34,12 @@ const {
   listCascadeProcessorsForBrand,
   listCascadeGenerationsForBrand,
   listCascadeGenerationsForBrandProcessor,
+  getSpareSpecMappingTree,
+  bulkAddSpareModelsToBrand,
+  bulkDeleteSpareBrandModels,
+  bulkSetSpareBrandModelStatus,
+  listCascadeSpareBrands,
+  listCascadeSpareModelsForBrand,
 } = require('../services/assetConfigurationService');
 
 // Mapping view types -> the child entity whose parent relationship is managed.
@@ -139,6 +145,13 @@ exports.createSpareBrand = handlers['spare-brands'].create;
 exports.updateSpareBrand = handlers['spare-brands'].update;
 exports.deleteSpareBrand = handlers['spare-brands'].remove;
 exports.setSpareBrandStatus = handlers['spare-brands'].setStatus;
+
+exports.listSpareModels = handlers['spare-models'].list;
+exports.getSpareModel = handlers['spare-models'].get;
+exports.createSpareModel = handlers['spare-models'].create;
+exports.updateSpareModel = handlers['spare-models'].update;
+exports.deleteSpareModel = handlers['spare-models'].remove;
+exports.setSpareModelStatus = handlers['spare-models'].setStatus;
 
 exports.listModels = handlers.models.list;
 exports.getModel = handlers.models.get;
@@ -335,6 +348,64 @@ exports.getLaptopSpecMapping = async (req, res) => {
   try {
     const brands = await getLaptopSpecMappingTree();
     res.json({ success: true, brands });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.getSpareSpecMapping = async (req, res) => {
+  try {
+    const brands = await getSpareSpecMappingTree();
+    res.json({ success: true, brands });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeSpareBrands = async (req, res) => {
+  try {
+    const brands = await listCascadeSpareBrands();
+    res.json({ success: true, brands });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeSpareModelsForBrand = async (req, res) => {
+  try {
+    const data = await listCascadeSpareModelsForBrand(decodeURIComponent(req.params.brandName || ''));
+    res.json({ success: true, ...data });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkAddSpareBrandModels = async (req, res) => {
+  try {
+    const result = await bulkAddSpareModelsToBrand(
+      req.body.brand_id,
+      req.body.model_ids,
+      req.user.user_id
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteSpareBrandModels = async (req, res) => {
+  try {
+    const result = await bulkDeleteSpareBrandModels(req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusSpareBrandModels = async (req, res) => {
+  try {
+    const result = await bulkSetSpareBrandModelStatus(req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
   } catch (e) {
     res.status(e.status || 500).json({ success: false, message: e.message });
   }

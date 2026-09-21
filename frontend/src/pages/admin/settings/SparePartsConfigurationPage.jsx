@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import ConfigEntityPanel from './components/ConfigEntityPanel';
+import SpareMappingPanel from './components/SpareMappingPanel';
 import SparePartsCatalogPanel from '../../../features/vendor-management/components/SparePartsCatalogPanel';
 import {
   listSpareBrands,
@@ -8,6 +9,11 @@ import {
   updateSpareBrand,
   deleteSpareBrand,
   setSpareBrandStatus,
+  listSpareModels,
+  createSpareModel,
+  updateSpareModel,
+  deleteSpareModel,
+  setSpareModelStatus,
 } from '../../../utils/assetConfigurationApi';
 
 const SECTION_LINKS = [
@@ -26,6 +32,17 @@ const ENTITY_TABS = [
     deleteFn: deleteSpareBrand,
     setStatusFn: setSpareBrandStatus,
   },
+  {
+    id: 'models',
+    label: 'Model',
+    labelSingular: 'Spare Part Model',
+    listFn: listSpareModels,
+    createFn: createSpareModel,
+    updateFn: updateSpareModel,
+    deleteFn: deleteSpareModel,
+    setStatusFn: setSpareModelStatus,
+  },
+  { id: 'mapping', label: 'Mapping' },
   { id: 'catalog', label: 'Catalog' },
 ];
 
@@ -39,7 +56,7 @@ export default function SparePartsConfigurationPage() {
         <div>
           <h1 className="text-2xl font-bold mb-1">Asset Configuration · Spare Parts</h1>
           <p className="text-gray-500 text-sm">
-            Manage spare part brands and catalog masters independently from laptop configuration.
+            Manage spare brands, models, Brand → Model mapping, and catalog — separate from laptop configuration.
           </p>
         </div>
         <div className="inline-flex p-1 bg-gray-100 rounded-lg">
@@ -84,6 +101,8 @@ export default function SparePartsConfigurationPage() {
           deleteFn={entityTab.deleteFn}
           setStatusFn={entityTab.setStatusFn}
         />
+      ) : tab === 'mapping' ? (
+        <SpareMappingPanel />
       ) : (
         <SparePartsCatalogPanel />
       )}

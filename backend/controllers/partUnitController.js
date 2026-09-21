@@ -27,14 +27,25 @@ const UNIT_SELECT = `
          pi.removed_from_ttspl_id, pi.removed_from_ticket_id, pi.condition_on_removal,
          pi.scrap_challan_number, pi.vendor_repair_dc_number, pi.updated_at,
          pi.received_at, pi.created_at, pi.label_print_count, pi.label_last_printed_at,
+         pi.brand, pi.model,
          p.part_name, p.category, p.part_type, p.model_number, p.pin_size,
-         p.quantity AS catalog_stock,
+         p.default_brand, p.default_model, p.quantity AS catalog_stock,
          vsn.serial_number AS procurement_serial,
          vsn.inventory_asset_code,
          spo.purchase_order_number, spo.purchase_order_date,
          COALESCE(NULLIF(TRIM(vend.business_name), ''), NULLIF(TRIM(vend.first_name), '')) AS vendor_name,
          COALESCE(pi.vendor_id, spo.vendor_id) AS resolved_vendor_id,
-         t.ttspl_id AS installed_on_ttspl, t.brand AS laptop_brand, t.model AS laptop_model
+         t.ttspl_id AS installed_on_ttspl, t.brand AS laptop_brand, t.model AS laptop_model,
+         COALESCE(
+           NULLIF(TRIM(pi.brand), ''),
+           NULLIF(TRIM(vsn.extra->>'brand_name'), ''),
+           NULLIF(TRIM(p.default_brand), '')
+         ) AS brand_name,
+         COALESCE(
+           NULLIF(TRIM(pi.model), ''),
+           NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+           NULLIF(TRIM(p.default_model), '')
+         ) AS model_name
     FROM part_instances pi
     JOIN parts p                              ON p.part_id = pi.part_id
     LEFT JOIN vendor_serial_numbers vsn       ON vsn.serial_id = pi.vendor_serial_id
@@ -57,7 +68,8 @@ async function attachPoLine(unit) {
   const line = idx >= 0 ? lines[idx] : lines.find((l) => String(l?.spare_part_name || l?.name || '').toLowerCase() === String(unit.part_name || '').toLowerCase());
   if (!line) return null;
   return {
-    brand_name: line.brand_name || null,
+    brand_name: line.brand_name || line.brand || null,
+    model_name: line.model_name || line.model || null,
     part_type: line.part_type || null,
     specifications: line.specifications || null,
     warranty_months: line.warranty_months ?? null,

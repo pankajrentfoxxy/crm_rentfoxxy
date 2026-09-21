@@ -299,8 +299,11 @@ function InstancesTab() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
   const [category, setCategory] = useState('');
+  const [brand, setBrand] = useState('');
+  const [model, setModel] = useState('');
   const [search, setSearch] = useState('');
   const [labelFor, setLabelFor] = useState(null);
+  const [filterOpts, setFilterOpts] = useState({ brands: [], models: [], models_by_brand: {} });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -308,16 +311,33 @@ function InstancesTab() {
       const params = { limit: 500 };
       if (status) params.status = status;
       if (category) params.category = category;
+      if (brand) params.brand = brand;
+      if (model) params.model = model;
       const { data } = await listPartInstances(params);
       setInstances(data.instances || []);
+      if (data.filters) {
+        setFilterOpts({
+          brands: data.filters.brands || [],
+          models: data.filters.models || [],
+          models_by_brand: data.filters.models_by_brand || {},
+        });
+      }
     } catch {
       toast.error('Failed to load part instances');
     } finally {
       setLoading(false);
     }
-  }, [status, category]);
+  }, [status, category, brand, model]);
 
   useEffect(() => { load(); }, [load]);
+
+  const modelOptions = useMemo(() => {
+    if (brand && filterOpts.models_by_brand[brand]?.length) {
+      return filterOpts.models_by_brand[brand];
+    }
+    if (brand) return [];
+    return filterOpts.models || [];
+  }, [brand, filterOpts]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -327,6 +347,8 @@ function InstancesTab() {
         String(r.prt_id || '').toLowerCase().includes(q) ||
         String(r.serial_number || '').toLowerCase().includes(q) ||
         String(r.part_name || '').toLowerCase().includes(q) ||
+        String(r.brand_name || r.brand || '').toLowerCase().includes(q) ||
+        String(r.model_name || r.model || '').toLowerCase().includes(q) ||
         String(r.installed_ttspl_id || '').toLowerCase().includes(q) ||
         String(r.asset_code || '').toLowerCase().includes(q) ||
         String(r.purchase_order_number || '').toLowerCase().includes(q) ||
@@ -346,12 +368,56 @@ function InstancesTab() {
     [labelFor]
   );
 
+  const clearFilters = () => {
+    setStatus('');
+    setCategory('');
+    setBrand('');
+    setModel('');
+    setSearch('');
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <label className="text-sm flex-1 min-w-[180px]">
           <span className="block text-gray-500 text-xs mb-1">Search</span>
-          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Serial, PRT-ID, part, TTSPL, PO no., vendor" />
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Serial, PRT-ID, part, brand, model, TTSPL, PO, vendor" />
+        </label>
+        <label className="text-sm">
+          <span className="block text-gray-500 text-xs mb-1">Category</span>
+          <select className="border rounded-lg px-3 py-2 text-sm min-w-[150px]" value={category} onChange={(e) => setCategory(e.target.value)}>
+            {CATEGORIES.map((c) => <option key={c.value || 'all'} value={c.value}>{c.label}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="block text-gray-500 text-xs mb-1">Brand</span>
+          <select
+            className="border rounded-lg px-3 py-2 text-sm min-w-[140px]"
+            value={brand}
+            onChange={(e) => {
+              setBrand(e.target.value);
+              setModel('');
+            }}
+          >
+            <option value="">All brands</option>
+            {filterOpts.brands.map((b) => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="block text-gray-500 text-xs mb-1">Model</span>
+          <select
+            className="border rounded-lg px-3 py-2 text-sm min-w-[160px]"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={brand && modelOptions.length === 0}
+          >
+            <option value="">{brand ? (modelOptions.length ? 'All models' : 'No models') : 'All models'}</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
         </label>
         <label className="text-sm">
           <span className="block text-gray-500 text-xs mb-1">Status</span>
@@ -360,12 +426,15 @@ function InstancesTab() {
             {Object.keys(INSTANCE_STATUS_COLORS).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
-        <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">Category</span>
-          <select className="border rounded-lg px-3 py-2 text-sm min-w-[140px]" value={category} onChange={(e) => setCategory(e.target.value)}>
-            {CATEGORIES.map((c) => <option key={c.value || 'all'} value={c.value}>{c.label}</option>)}
-          </select>
-        </label>
+        {(status || category || brand || model || search) ? (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-x-auto">
@@ -380,6 +449,8 @@ function InstancesTab() {
                 <th className="p-3">PRT-ID</th>
                 <th className="p-3">Serial No.</th>
                 <th className="p-3">Part Name</th>
+                <th className="p-3">Brand</th>
+                <th className="p-3">Model</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">PO No.</th>
@@ -398,6 +469,8 @@ function InstancesTab() {
                   <td className="p-3 font-mono text-blue-600 whitespace-nowrap">{r.prt_id}</td>
                   <td className="p-3 font-mono">{r.serial_number || '—'}</td>
                   <td className="p-3">{r.part_name}</td>
+                  <td className="p-3">{r.brand_name || r.brand || '—'}</td>
+                  <td className="p-3">{r.model_name || r.model || '—'}</td>
                   <td className="p-3">{CAT_LABEL[partCategory(r)] || r.category || '—'}</td>
                   <td className="p-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${INSTANCE_STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}`}>
@@ -455,11 +528,13 @@ function InstancesTab() {
 }
 
 export default function PartsPage() {
-  const [tab, setTab] = useState('catalog');
+  const [tab, setTab] = useState('instances');
   const [parts, setParts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  const [brandFilter, setBrandFilter] = useState('');
+  const [modelFilter, setModelFilter] = useState('');
   const [stockFilter, setStockFilter] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editPart, setEditPart] = useState(null);
@@ -495,16 +570,33 @@ export default function PartsPage() {
       };
     }), [parts]);
 
+  const catalogBrandOptions = useMemo(() => (
+    [...new Set(enriched.map((p) => p.default_brand).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  ), [enriched]);
+
+  const catalogModelOptions = useMemo(() => {
+    const rows = brandFilter
+      ? enriched.filter((p) => String(p.default_brand || '') === brandFilter)
+      : enriched;
+    return [...new Set(rows.map((p) => p.default_model).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [enriched, brandFilter]);
+
   const filtered = useMemo(() => enriched.filter((p) => {
     const q = search.toLowerCase();
     const stock = availableStock(p);
-    if (q && !p.part_name.toLowerCase().includes(q)) return false;
+    if (q && !(
+      p.part_name.toLowerCase().includes(q) ||
+      String(p.default_brand || '').toLowerCase().includes(q) ||
+      String(p.default_model || '').toLowerCase().includes(q)
+    )) return false;
     if (category && p.cat !== category) return false;
+    if (brandFilter && String(p.default_brand || '') !== brandFilter) return false;
+    if (modelFilter && String(p.default_model || '') !== modelFilter) return false;
     if (stockFilter === 'in_stock' && stock <= 10) return false;
     if (stockFilter === 'low' && (stock >= getThreshold(p) || stock === 0)) return false;
     if (stockFilter === 'out' && stock !== 0) return false;
     return true;
-  }), [enriched, search, category, stockFilter]);
+  }), [enriched, search, category, brandFilter, modelFilter, stockFilter]);
 
   const lowCount = enriched.filter((p) => {
     const stock = availableStock(p);
@@ -566,6 +658,16 @@ export default function PartsPage() {
   const columns = [
     { key: 'part_name', label: 'Part Name', sortable: true },
     { key: 'category_label', label: 'Category' },
+    {
+      key: 'default_brand',
+      label: 'Brand',
+      render: (r) => r.default_brand || '—',
+    },
+    {
+      key: 'default_model',
+      label: 'Model',
+      render: (r) => r.default_model || '—',
+    },
     { key: 'description', label: 'Specifications', render: (r) => r.description || '—' },
     {
       key: 'compatible_brands',
@@ -622,17 +724,19 @@ export default function PartsPage() {
       </div>
 
       <div className="flex gap-1 border-b">
-        <button type="button" onClick={() => setTab('catalog')}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 flex items-center gap-2 ${tab === 'catalog' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          <Package className="w-4 h-4" /> Parts Catalog
-        </button>
         <button type="button" onClick={() => setTab('instances')}
           className={`px-4 py-2.5 text-sm font-medium border-b-2 flex items-center gap-2 ${tab === 'instances' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
           <Boxes className="w-4 h-4" /> Part Instances
         </button>
+        <button type="button" onClick={() => setTab('catalog')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 flex items-center gap-2 ${tab === 'catalog' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          <Package className="w-4 h-4" /> Parts Catalog
+        </button>
       </div>
 
-      {tab === 'catalog' ? (
+      {tab === 'instances' ? (
+        <InstancesTab />
+      ) : (
         <>
           {lowCount > 0 && (
             <button
@@ -655,12 +759,41 @@ export default function PartsPage() {
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
             <label className="text-sm flex-1 min-w-[180px]">
               <span className="block text-gray-500 text-xs mb-1">Search</span>
-              <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Part name" />
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Part name, brand, model" />
             </label>
             <label className="text-sm">
               <span className="block text-gray-500 text-xs mb-1">Category</span>
-              <select className="border rounded-lg px-3 py-2 text-sm min-w-[140px]" value={category} onChange={(e) => setCategory(e.target.value)}>
+              <select className="border rounded-lg px-3 py-2 text-sm min-w-[150px]" value={category} onChange={(e) => setCategory(e.target.value)}>
                 {CATEGORIES.map((c) => <option key={c.value || 'all'} value={c.value}>{c.label}</option>)}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-gray-500 text-xs mb-1">Brand</span>
+              <select
+                className="border rounded-lg px-3 py-2 text-sm min-w-[140px]"
+                value={brandFilter}
+                onChange={(e) => {
+                  setBrandFilter(e.target.value);
+                  setModelFilter('');
+                }}
+              >
+                <option value="">All brands</option>
+                {catalogBrandOptions.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-gray-500 text-xs mb-1">Model</span>
+              <select
+                className="border rounded-lg px-3 py-2 text-sm min-w-[160px]"
+                value={modelFilter}
+                onChange={(e) => setModelFilter(e.target.value)}
+              >
+                <option value="">All models</option>
+                {catalogModelOptions.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
               </select>
             </label>
             <label className="text-sm">
@@ -672,15 +805,23 @@ export default function PartsPage() {
                 <option value="out">Out of Stock</option>
               </select>
             </label>
-            <button type="button" onClick={() => { setSearch(''); setCategory(''); setStockFilter(''); }} className="text-sm text-blue-600 hover:underline pb-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setCategory('');
+                setBrandFilter('');
+                setModelFilter('');
+                setStockFilter('');
+              }}
+              className="text-sm text-blue-600 hover:underline pb-2"
+            >
               Clear filters
             </button>
           </div>
 
           <DataTable columns={columns} rows={filtered} loading={loading} emptyText="No parts match your filters" />
         </>
-      ) : (
-        <InstancesTab />
       )}
 
       <AddPartDrawer open={drawerOpen} onClose={() => { setDrawerOpen(false); setEditPart(null); }} onSave={savePart} initial={editPart} />

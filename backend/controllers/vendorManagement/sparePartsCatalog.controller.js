@@ -1,6 +1,9 @@
 const { param, query, body, validationResult } = require('express-validator');
 const pool = require('../../config/db');
-const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
+const {
+  listActiveSpareBrandsForDropdown,
+  resolveSpareBrandModelPair,
+} = require('../../services/assetConfigurationService');
 const { PART_CATEGORIES: CATEGORIES } = require('../../constants/laptopConditions');
 
 function toBrandArray(val) {
@@ -9,18 +12,27 @@ function toBrandArray(val) {
   return String(val).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-async function ensureFloorPart(client, { name, category, part_type, specifications, default_brand }) {
+async function ensureFloorPart(client, { name, category, part_type, specifications, default_brand, default_model }) {
   const existing = await client.query(
     `SELECT part_id FROM parts WHERE LOWER(part_name) = LOWER($1) LIMIT 1`,
     [name]
   );
-  if (existing.rows.length) return existing.rows[0].part_id;
+  if (existing.rows.length) {
+    await client.query(
+      `UPDATE parts SET
+         default_brand = COALESCE($2, default_brand),
+         default_model = COALESCE($3, default_model)
+       WHERE part_id = $1`,
+      [existing.rows[0].part_id, default_brand || null, default_model || null]
+    ).catch(() => {});
+    return existing.rows[0].part_id;
+  }
 
   const brands = default_brand ? [default_brand] : null;
   const ins = await client.query(
-    `INSERT INTO parts (part_name, part_type, category, quantity, min_threshold, description, compatible_brands)
-     VALUES ($1, $2, $3, 0, 5, $4, $5) RETURNING part_id`,
-    [name, part_type || category, category, specifications || name, brands]
+    `INSERT INTO parts (part_name, part_type, category, quantity, min_threshold, description, compatible_brands, default_brand, default_model)
+     VALUES ($1, $2, $3, 0, 5, $4, $5, $6, $7) RETURNING part_id`,
+    [name, part_type || category, category, specifications || name, brands, default_brand || null, default_model || null]
   );
   return ins.rows[0].part_id;
 }
@@ -43,6 +55,7 @@ function mapCatalogRow(row) {
     category_label: cat?.label || row.category,
     part_type: row.part_type || null,
     default_brand: row.default_brand || null,
+    default_model: row.default_model || null,
     specifications: row.specifications || null,
     compatible_brands: row.compatible_brands || [],
     floor_part_id: row.floor_part_id,
@@ -67,7 +80,7 @@ async function listCatalog(req, res) {
     if (search) {
       params.push(`%${search}%`);
       const i = params.length;
-      where += ` AND (v.name ILIKE $${i} OR COALESCE(v.part_type,'') ILIKE $${i} OR COALESCE(v.default_brand,'') ILIKE $${i})`;
+      where += ` AND (v.name ILIKE $${i} OR COALESCE(v.part_type,'') ILIKE $${i} OR COALESCE(v.default_brand,'') ILIKE $${i} OR COALESCE(v.default_model,'') ILIKE $${i})`;
     }
     const { rows } = await pool.query(
       `SELECT v.*, p.quantity AS stock_qty, p.cost AS unit_cost, p.location_code
@@ -97,6 +110,7 @@ const createValidators = [
   body('category').isIn(CATEGORIES.map((c) => c.value)),
   body('part_type').optional({ nullable: true }).isString().trim(),
   body('default_brand').optional({ nullable: true }).isString().trim(),
+  body('default_model').optional({ nullable: true }).isString().trim(),
   body('specifications').optional({ nullable: true }).isString().trim(),
   body('compatible_brands').optional(),
 ];
@@ -105,7 +119,19 @@ async function createCatalogItem(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
-  const { name, category, part_type, default_brand, specifications, compatible_brands } = req.body;
+  const { name, category, part_type, specifications, compatible_brands } = req.body;
+  let default_brand = req.body.default_brand || null;
+  let default_model = req.body.default_model || null;
+  try {
+    if (default_brand || default_model) {
+      const resolved = await resolveSpareBrandModelPair(default_brand, default_model, { requireModel: false });
+      default_brand = resolved.brand;
+      default_model = resolved.model;
+    }
+  } catch (e) {
+    return res.status(e.status || 400).json({ success: false, message: e.message || 'Invalid brand/model' });
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -119,18 +145,19 @@ async function createCatalogItem(req, res) {
     }
 
     const floorPartId = await ensureFloorPart(client, {
-      name, category, part_type, specifications, default_brand,
+      name, category, part_type, specifications, default_brand, default_model,
     });
 
     const ins = await client.query(
       `INSERT INTO vendor_spare_parts_catalog
-         (name, category, part_type, default_brand, specifications, compatible_brands, floor_part_id, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE) RETURNING *`,
+         (name, category, part_type, default_brand, default_model, specifications, compatible_brands, floor_part_id, active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE) RETURNING *`,
       [
         name.trim(),
         category,
         part_type || null,
         default_brand || null,
+        default_model || null,
         specifications || null,
         toBrandArray(compatible_brands) || (default_brand ? [default_brand] : null),
         floorPartId,
@@ -163,6 +190,7 @@ const updateValidators = [
   body('category').optional().isIn(CATEGORIES.map((c) => c.value)),
   body('part_type').optional({ nullable: true }).isString().trim(),
   body('default_brand').optional({ nullable: true }).isString().trim(),
+  body('default_model').optional({ nullable: true }).isString().trim(),
   body('specifications').optional({ nullable: true }).isString().trim(),
   body('active').optional().isBoolean(),
 ];
@@ -184,28 +212,49 @@ async function updateCatalogItem(req, res) {
     const name = req.body.name != null ? String(req.body.name).trim() : row.name;
     const category = req.body.category || row.category;
     const part_type = req.body.part_type !== undefined ? (req.body.part_type || null) : row.part_type;
-    const default_brand = req.body.default_brand !== undefined ? (req.body.default_brand || null) : row.default_brand;
+    let default_brand = req.body.default_brand !== undefined ? (req.body.default_brand || null) : row.default_brand;
+    let default_model = req.body.default_model !== undefined ? (req.body.default_model || null) : row.default_model;
     const specifications = req.body.specifications !== undefined ? (req.body.specifications || null) : row.specifications;
     const active = req.body.active !== undefined ? !!req.body.active : row.active;
 
+    if (default_brand || default_model) {
+      try {
+        const resolved = await resolveSpareBrandModelPair(default_brand, default_model, { requireModel: false });
+        default_brand = resolved.brand;
+        default_model = resolved.model;
+      } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Invalid brand/model' });
+      }
+    } else {
+      default_brand = null;
+      default_model = null;
+    }
+
     let floorPartId = row.floor_part_id;
     if (!floorPartId) {
-      floorPartId = await ensureFloorPart(client, { name, category, part_type, specifications, default_brand });
+      floorPartId = await ensureFloorPart(client, {
+        name, category, part_type, specifications, default_brand, default_model,
+      });
     } else {
       await client.query(
         `UPDATE parts SET part_name = $2, category = $3, part_type = $4, description = COALESCE($5, description),
-                compatible_brands = COALESCE($6, compatible_brands)
+                compatible_brands = COALESCE($6, compatible_brands),
+                default_brand = $7, default_model = $8
           WHERE part_id = $1`,
-        [floorPartId, name, category, part_type || category, specifications, default_brand ? [default_brand] : null]
+        [
+          floorPartId, name, category, part_type || category, specifications,
+          default_brand ? [default_brand] : null, default_brand || null, default_model || null,
+        ]
       );
     }
 
     await client.query(
       `UPDATE vendor_spare_parts_catalog SET
-          name = $2, category = $3, part_type = $4, default_brand = $5,
-          specifications = $6, floor_part_id = $7, active = $8, updated_at = NOW()
+          name = $2, category = $3, part_type = $4, default_brand = $5, default_model = $6,
+          specifications = $7, floor_part_id = $8, active = $9, updated_at = NOW()
        WHERE part_id = $1`,
-      [id, name, category, part_type, default_brand, specifications, floorPartId, active]
+      [id, name, category, part_type, default_brand, default_model, specifications, floorPartId, active]
     );
     await syncSparePartsMirror(client, id, name, active);
     await client.query('COMMIT');

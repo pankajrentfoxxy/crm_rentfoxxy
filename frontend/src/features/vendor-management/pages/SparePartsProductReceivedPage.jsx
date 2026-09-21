@@ -58,12 +58,13 @@ function formatDateTime(po) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** Laravel spare row: brand + spare part title */
+/** Laravel spare row: brand + model + spare part title */
 function SpareItemCard({ line }) {
   const brand = line.brand_name ?? line.brand ?? '';
+  const model = line.model_name ?? line.model ?? '';
   const part = line.spare_part_name ?? line.part_name ?? line.name ?? '';
   const partType = line.part_type ? String(line.part_type) : '';
-  const title = [brand, part].filter(Boolean).join(' — ') || 'Spare item';
+  const title = [brand, model, part].filter(Boolean).join(' — ') || 'Spare item';
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
       <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
@@ -309,7 +310,11 @@ export default function SparePartsProductReceivedPage() {
     .filter((u) => u.prt_id)
     .map((u) => ({
       code: u.prt_id,
-      title: [activeLine?.brand_name, activeLine?.spare_part_name || activeLine?.part_name || activeLine?.name]
+      title: [
+        activeLine?.brand_name,
+        activeLine?.model_name,
+        activeLine?.spare_part_name || activeLine?.part_name || activeLine?.name,
+      ]
         .filter(Boolean).join(' — '),
       subtitle: u.physical_serial ? `Serial ${u.physical_serial}` : 'No serial on this part',
       poNumber: po?.purchase_order_number || '',

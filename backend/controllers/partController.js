@@ -21,6 +21,7 @@ exports.getAllParts = async (req, res) => {
     const result = await pool.query(
       `SELECT p.part_id, p.part_name, p.part_type, p.category, p.quantity, p.vendor, p.cost,
               p.location_code, p.model_number, p.pin_size, p.part_sku, p.description,
+              p.compatible_brands, p.default_brand, p.default_model,
               COALESCE(st.in_stock_count, 0)::int AS in_stock_count,
               COALESCE(st.reserved_count, 0)::int AS reserved_count
          FROM parts p

@@ -42,6 +42,16 @@ const ENTITIES = {
     listSelect: 't.*',
     orderBy: 't.name ASC',
   },
+  'spare-models': {
+    table: 'asset_config_spare_models',
+    label: 'Spare Part Model',
+    parentKey: null,
+    parentTable: null,
+    joinSelect: '',
+    joinClause: '',
+    listSelect: 't.*',
+    orderBy: 't.name ASC',
+  },
   models: {
     table: 'asset_config_models',
     label: 'Model',
@@ -1449,6 +1459,191 @@ async function listActiveSpareBrandsForDropdown() {
   }
 }
 
+async function getActiveSpareBrandByName(brandName) {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM asset_config_spare_brands
+      WHERE deleted_at IS NULL AND status = 'active' AND LOWER(TRIM(name)) = LOWER(TRIM($1))
+      LIMIT 1`,
+    [brandName]
+  );
+  return rows[0] || null;
+}
+
+async function getSpareSpecMappingTree() {
+  const [brands, modelRows] = await Promise.all([
+    pool.query(
+      `SELECT id, name, status FROM asset_config_spare_brands WHERE deleted_at IS NULL ORDER BY name ASC`
+    ),
+    pool.query(
+      `SELECT bm.id, bm.brand_id, bm.model_id, bm.status, m.name AS item_name
+         FROM asset_config_spare_brand_models bm
+         JOIN asset_config_spare_models m ON m.id = bm.model_id AND m.deleted_at IS NULL
+        WHERE bm.deleted_at IS NULL
+        ORDER BY m.name ASC`
+    ).catch(() => ({ rows: [] })),
+  ]);
+
+  const modelsByBrand = new Map();
+  for (const row of modelRows.rows) {
+    if (!modelsByBrand.has(row.brand_id)) modelsByBrand.set(row.brand_id, []);
+    modelsByBrand.get(row.brand_id).push({
+      id: row.id,
+      model_id: row.model_id,
+      name: row.item_name,
+      status: row.status,
+    });
+  }
+
+  return brands.rows.map((brand) => ({
+    id: brand.id,
+    name: brand.name,
+    status: brand.status,
+    models: modelsByBrand.get(brand.id) || [],
+  }));
+}
+
+async function bulkAddSpareModelsToBrand(brandId, modelIds, userId) {
+  const brand = parseInt(brandId, 10);
+  if (!brand) {
+    const err = new Error('Spare brand is required');
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive('asset_config_spare_brands', brand);
+
+  const ids = [...new Set((Array.isArray(modelIds) ? modelIds : [])
+    .map((n) => parseInt(n, 10)).filter(Boolean))];
+  const created = [];
+  const skipped = [];
+  for (const modelId of ids) {
+    try {
+      await assertParentActive('asset_config_spare_models', modelId);
+    } catch {
+      skipped.push(modelId);
+      continue;
+    }
+    const existing = await pool.query(
+      `SELECT id FROM asset_config_spare_brand_models
+        WHERE brand_id = $1 AND model_id = $2 AND deleted_at IS NULL`,
+      [brand, modelId]
+    );
+    if (existing.rows.length) {
+      skipped.push(modelId);
+      continue;
+    }
+    const r = await pool.query(
+      `INSERT INTO asset_config_spare_brand_models (brand_id, model_id, status, created_by, updated_by)
+       VALUES ($1, $2, 'active', $3, $3)
+       RETURNING id, model_id, status`,
+      [brand, modelId, userId]
+    );
+    const model = await pool.query(`SELECT name FROM asset_config_spare_models WHERE id = $1`, [modelId]);
+    created.push({ ...r.rows[0], name: model.rows[0]?.name || '' });
+  }
+  return { created, skipped };
+}
+
+async function bulkDeleteSpareBrandModels(ids, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { deleted: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_spare_brand_models
+        SET deleted_at = NOW(), updated_by = $1, updated_at = NOW()
+      WHERE id = ANY($2::int[]) AND deleted_at IS NULL`,
+    [userId, idList]
+  );
+  return { deleted: r.rowCount };
+}
+
+async function bulkSetSpareBrandModelStatus(ids, status, userId) {
+  const s = status === 'inactive' ? 'inactive' : 'active';
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { updated: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_spare_brand_models SET status = $1, updated_by = $2, updated_at = NOW()
+      WHERE id = ANY($3::int[]) AND deleted_at IS NULL`,
+    [s, userId, idList]
+  );
+  return { updated: r.rowCount };
+}
+
+async function listCascadeSpareBrands() {
+  return listActiveSpareBrandsForDropdown();
+}
+
+async function listCascadeSpareModelsForBrand(brandName) {
+  const brand = await getActiveSpareBrandByName(brandName);
+  if (!brand) {
+    return { brand: brandName, models: [], has_mapping: false };
+  }
+  const mapped = await listMappedNamesForBrand(
+    brand.id,
+    'asset_config_spare_brand_models',
+    'asset_config_spare_models',
+    'model_id'
+  ).catch(() => []);
+  return {
+    brand: brand.name,
+    models: mapped,
+    has_mapping: mapped.length > 0,
+  };
+}
+
+/**
+ * Resolve canonical spare brand + model names when a mapping exists.
+ * - Empty brand and model → { brand: null, model: null }
+ * - Brand without model is allowed (legacy / optional model)
+ * - Model without brand → 400
+ * - Brand+model must be mapped when both present
+ */
+async function resolveSpareBrandModelPair(brandRaw, modelRaw, { requireModel = false } = {}) {
+  const brandName = String(brandRaw || '').trim() || null;
+  const modelName = String(modelRaw || '').trim() || null;
+
+  if (!brandName && !modelName) {
+    if (requireModel) {
+      const err = new Error('Brand and Model are required');
+      err.status = 400;
+      throw err;
+    }
+    return { brand: null, model: null };
+  }
+  if (!brandName && modelName) {
+    const err = new Error('Select a Brand before Model');
+    err.status = 400;
+    throw err;
+  }
+
+  const brand = await getActiveSpareBrandByName(brandName);
+  if (!brand) {
+    const err = new Error(`Brand "${brandName}" is not in the spare part brand master`);
+    err.status = 400;
+    throw err;
+  }
+
+  if (!modelName) {
+    if (requireModel) {
+      const err = new Error('Model is required');
+      err.status = 400;
+      throw err;
+    }
+    return { brand: brand.name, model: null };
+  }
+
+  const mapped = await listCascadeSpareModelsForBrand(brand.name);
+  const hit = (mapped.models || []).find(
+    (n) => String(n).trim().toLowerCase() === modelName.toLowerCase()
+  );
+  if (!hit) {
+    const err = new Error(
+      `Model "${modelName}" is not mapped to brand "${brand.name}" in spare part configuration`
+    );
+    err.status = 400;
+    throw err;
+  }
+  return { brand: brand.name, model: hit };
+}
+
 async function ensureAssetConfigurationSchema() {
   const fs = require('fs');
   const path = require('path');
@@ -1456,6 +1651,7 @@ async function ensureAssetConfigurationSchema() {
     '123_asset_config_laptop_spec_mapping.sql',
     '126_asset_config_brand_flat_mapping.sql',
     '127_asset_config_spare_brands.sql',
+    '266_spare_brand_model_mapping.sql',
   ]) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(migrationPath)) continue;
@@ -1503,6 +1699,13 @@ module.exports = {
   listCascadeGenerationsForBrand,
   listCascadeGenerationsForBrandProcessor,
   listActiveSpareBrandsForDropdown,
+  getSpareSpecMappingTree,
+  bulkAddSpareModelsToBrand,
+  bulkDeleteSpareBrandModels,
+  bulkSetSpareBrandModelStatus,
+  listCascadeSpareBrands,
+  listCascadeSpareModelsForBrand,
+  resolveSpareBrandModelPair,
   validateLaptopSpecForEdit,
   normalizeLaptopSpecForEdit,
 };

@@ -258,6 +258,7 @@ function normalizeScreenSize(name) {
 const NORMALIZERS = {
   brands: normalizeBrand,
   'spare-brands': normalizeBrand,
+  'spare-models': normalizeModel,
   models: normalizeModel,
   processors: normalizeProcessor,
   generations: normalizeGeneration,
@@ -270,7 +271,7 @@ const NORMALIZERS = {
 function normalizeEntityName(entityKey, name, context = {}) {
   const fn = NORMALIZERS[entityKey];
   if (!fn) return collapseSpaces(name);
-  if (entityKey === 'models') return fn(name, context.brandName || '');
+  if (entityKey === 'models' || entityKey === 'spare-models') return fn(name, context.brandName || '');
   return fn(name);
 }
 

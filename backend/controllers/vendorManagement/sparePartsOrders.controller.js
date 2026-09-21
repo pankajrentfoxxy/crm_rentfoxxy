@@ -8,7 +8,11 @@ const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst'
 const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const { allocatePartAssetCodes } = require('../../services/partIdService');
-const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
+const {
+  listActiveSpareBrandsForDropdown,
+  resolveSpareBrandModelPair,
+  listCascadeSpareModelsForBrand,
+} = require('../../services/assetConfigurationService');
 const {
   resolveFloorPartId,
   resolveOrCreateFloorPartId,
@@ -70,6 +74,8 @@ async function trackReceivedUnits(client, { line, units, spoId, grnId, lineIndex
     batchNumber: line.batch_number || null,
     receivedBy: user?.user_id || null,
     actorName: user?.name || null,
+    brand: line.brand_name || line.brand || null,
+    model: line.model_name || line.model || null,
   });
 
   await autoLinkOpenRequests(client, {
@@ -314,7 +320,7 @@ async function formMeta(req, res) {
     let parts = [];
     try {
       const pr = await pool.query(
-        `SELECT v.part_id AS id, v.name, v.category, v.part_type, v.default_brand, v.specifications,
+        `SELECT v.part_id AS id, v.name, v.category, v.part_type, v.default_brand, v.default_model, v.specifications,
                 v.floor_part_id, p.quantity AS stock_qty, p.cost AS unit_cost,
                 p.location_code, v.compatible_brands
          FROM vendor_spare_parts_catalog v
@@ -396,8 +402,8 @@ async function create(req, res) {
   const b = req.body;
   const line_items_raw = Array.isArray(b.line_items) ? b.line_items : [];
 
-  /** Normalize Laravel-style rows: brand/part, warranty_months, quantity, rate */
-  const line_items = line_items_raw.map((row) => {
+  /** Normalize Laravel-style rows: brand/model/part, warranty_months, quantity, rate */
+  const line_items_raw_norm = line_items_raw.map((row) => {
     const qty = Number(row.quantity);
     const rate = Number(row.rate);
     const warranty = Number(row.warranty_months ?? row.warranty ?? row.warranty_in_month ?? 0);
@@ -405,6 +411,7 @@ async function create(req, res) {
       ...row,
       brand_id: row.brand_id != null ? Number(row.brand_id) || row.brand_id : null,
       brand_name: row.brand_name != null ? String(row.brand_name) : row.brand != null ? String(row.brand) : '',
+      model_name: row.model_name != null ? String(row.model_name) : row.model != null ? String(row.model) : '',
       part_id: row.part_id != null ? Number(row.part_id) || row.part_id : null,
       spare_part_name: row.spare_part_name != null ? String(row.spare_part_name) : row.part_name != null ? String(row.part_name) : '',
       warranty_months: Number.isFinite(warranty) ? warranty : 0,
@@ -413,6 +420,40 @@ async function create(req, res) {
       receivedQty: 0
     };
   });
+
+  const line_items = [];
+  for (let i = 0; i < line_items_raw_norm.length; i += 1) {
+    const row = line_items_raw_norm[i];
+    try {
+      const resolved = await resolveSpareBrandModelPair(row.brand_name, row.model_name, {
+        requireModel: Boolean(String(row.model_name || '').trim()),
+      });
+      if (!resolved.brand) {
+        return res.status(400).json({
+          success: false,
+          message: `Line ${i + 1}: brand is required`,
+        });
+      }
+      // If brand has mapped models, require one
+      const mapped = await listCascadeSpareModelsForBrand(resolved.brand);
+      if (mapped.has_mapping && !resolved.model) {
+        return res.status(400).json({
+          success: false,
+          message: `Line ${i + 1}: model is required for brand "${resolved.brand}"`,
+        });
+      }
+      line_items.push({
+        ...row,
+        brand_name: resolved.brand,
+        model_name: resolved.model || null,
+      });
+    } catch (e) {
+      return res.status(e.status || 400).json({
+        success: false,
+        message: `Line ${i + 1}: ${e.message || 'Invalid brand/model'}`,
+      });
+    }
+  }
 
   const badIdx = line_items.findIndex((l) => !l.quantity || l.quantity <= 0 || !l.rate || l.rate < 0);
   if (badIdx !== -1) {
@@ -663,6 +704,148 @@ async function uploadBills(req, res) {
   }
 }
 
+function isSuperAdminUser(user) {
+  if (!user) return false;
+  if (user.is_superadmin === true) return true;
+  return String(user.role || '').toLowerCase() === 'super_admin';
+}
+
+function normalizeSpoBillFilesJson(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function spoBillFileEntryPath(entry) {
+  if (!entry) return '';
+  if (typeof entry === 'string') return entry;
+  return String(entry.path || entry.url || entry.file || '');
+}
+
+function unlinkSpoBillFileQuietly(webPath) {
+  const p = String(webPath || '').trim();
+  if (!p.startsWith('/uploads/')) return;
+  const abs = path.join(__dirname, '..', '..', p.replace(/^\//, ''));
+  try {
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  } catch (err) {
+    console.warn('unlinkSpoBillFileQuietly:', abs, err.message);
+  }
+}
+
+const deleteSpoBillFileValidators = [
+  param('id').isInt().toInt(),
+  param('fileIndex').isInt({ min: 0 }).toInt(),
+];
+
+async function deleteSpoBillFile(req, res) {
+  try {
+    if (!isSuperAdminUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only super admin can remove bill files' });
+    }
+    const id = Number(req.params.id);
+    const fileIndex = Number(req.params.fileIndex);
+    const cur = await pool.query(
+      `SELECT spo_id, purchase_order_number, vendor_id, bill_name, bill_files
+         FROM vendor_spare_parts_purchase_orders
+        WHERE spo_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Spare parts PO not found' });
+
+    const spo = cur.rows[0];
+    const files = normalizeSpoBillFilesJson(spo.bill_files);
+    if (fileIndex >= files.length) {
+      return res.status(400).json({ success: false, message: 'Invalid bill file index' });
+    }
+
+    const removed = files[fileIndex];
+    const remaining = files.filter((_, idx) => idx !== fileIndex);
+    unlinkSpoBillFileQuietly(spoBillFileEntryPath(removed));
+
+    const nextBillName = remaining.length ? spo.bill_name : null;
+    await pool.query(
+      `UPDATE vendor_spare_parts_purchase_orders
+          SET bill_name = $1, bill_files = $2::jsonb, updated_at = NOW()
+        WHERE spo_id = $3 AND deleted_at IS NULL`,
+      [nextBillName, JSON.stringify(remaining), id]
+    );
+
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: spo.vendor_id || null,
+      entityType: 'spare_parts_po',
+      entityId: String(id),
+      action: 'bill_file_removed',
+      payload: { bill_name: spo.bill_name, file_index: fileIndex, file: spoBillFileEntryPath(removed) },
+    });
+
+    res.json({
+      success: true,
+      message: remaining.length ? 'Bill file removed' : 'Bill file removed — bill cleared',
+      bill_name: nextBillName,
+      bill_files: remaining,
+    });
+  } catch (e) {
+    console.error('deleteSpoBillFile:', e);
+    res.status(500).json({ success: false, message: e.message || 'Remove failed' });
+  }
+}
+
+const removeSpoBillValidators = [param('id').isInt().toInt()];
+
+async function removeSpoBill(req, res) {
+  try {
+    if (!isSuperAdminUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only super admin can remove bills' });
+    }
+    const id = Number(req.params.id);
+    const cur = await pool.query(
+      `SELECT spo_id, purchase_order_number, vendor_id, bill_name, bill_files
+         FROM vendor_spare_parts_purchase_orders
+        WHERE spo_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Spare parts PO not found' });
+
+    const spo = cur.rows[0];
+    const files = normalizeSpoBillFilesJson(spo.bill_files);
+    if (!spo.bill_name && !files.length) {
+      return res.status(400).json({ success: false, message: 'No bill on this spare parts PO' });
+    }
+    files.forEach((entry) => unlinkSpoBillFileQuietly(spoBillFileEntryPath(entry)));
+
+    await pool.query(
+      `UPDATE vendor_spare_parts_purchase_orders
+          SET bill_name = NULL, bill_files = '[]'::jsonb, updated_at = NOW()
+        WHERE spo_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: spo.vendor_id || null,
+      entityType: 'spare_parts_po',
+      entityId: String(id),
+      action: 'bill_removed',
+      payload: { bill_name: spo.bill_name, files_removed: files.length },
+    });
+
+    res.json({ success: true, message: 'Bill removed', bill_name: null, bill_files: [] });
+  } catch (e) {
+    console.error('removeSpoBill:', e);
+    res.status(500).json({ success: false, message: e.message || 'Remove failed' });
+  }
+}
+
 const spareProductReceivedValidators = [param('spoId').isInt().toInt()];
 
 async function getSpareProductReceivedContext(req, res) {
@@ -795,6 +978,9 @@ async function receiveSpareLineSerial(req, res) {
   const partName = await resolveSpareLinePartName(line);
   const extra = { line_index: lineIndex };
   if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
+  if (line.brand_name || line.brand) extra.brand_name = String(line.brand_name || line.brand);
+  if (line.model_name || line.model) extra.model_name = String(line.model_name || line.model);
+  if (partName) extra.spare_part_name = partName;
 
   const client = await pool.connect();
   let finalGrnId;
@@ -1039,6 +1225,9 @@ async function receiveSpareLineBulk(req, res) {
         has_physical_serial: Boolean(physicalSerial),
       };
       if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
+      if (line.brand_name || line.brand) extra.brand_name = String(line.brand_name || line.brand);
+      if (line.model_name || line.model) extra.model_name = String(line.model_name || line.model);
+      if (partName) extra.spare_part_name = partName;
 
       const insS = await client.query(
         `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, qc_status, extra)
@@ -1279,7 +1468,8 @@ async function getSpareGrnReceivedProducts(req, res) {
       is_replaced: rep ? 1 : 0,
       is_repaired: repa ? 1 : 0,
       brand: line.brand_name ?? line.brand ?? null,
-      model: line.spare_part_name ?? line.part_name ?? line.name ?? null,
+      model: line.model_name ?? line.model ?? null,
+      part_name: line.spare_part_name ?? line.part_name ?? line.name ?? null,
       processor: null,
       generation: null,
       ram: null,
@@ -1340,6 +1530,10 @@ module.exports = {
   updateStatus,
   createSpoBillsUpload,
   uploadBills,
+  deleteSpoBillFileValidators,
+  deleteSpoBillFile,
+  removeSpoBillValidators,
+  removeSpoBill,
   remove,
   resolveFloorPartsId,
 };

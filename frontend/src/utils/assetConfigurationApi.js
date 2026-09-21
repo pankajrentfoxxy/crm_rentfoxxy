@@ -29,6 +29,23 @@ export const updateSpareBrand = (id, d) => api.put(`${base}/spare-brands/${id}`,
 export const deleteSpareBrand = (id) => api.delete(`${base}/spare-brands/${id}`);
 export const setSpareBrandStatus = (id, status) => api.patch(`${base}/spare-brands/${id}/status`, { status });
 
+export const listSpareModels = (p) => api.get(`${base}/spare-models`, { params: p });
+export const createSpareModel = (d) => api.post(`${base}/spare-models`, d);
+export const updateSpareModel = (id, d) => api.put(`${base}/spare-models/${id}`, d);
+export const deleteSpareModel = (id) => api.delete(`${base}/spare-models/${id}`);
+export const setSpareModelStatus = (id, status) => api.patch(`${base}/spare-models/${id}/status`, { status });
+
+export const fetchCascadeSpareBrands = () => api.get(`${base}/spare-cascade/brands`);
+export const fetchCascadeSpareModels = (brandName) =>
+  api.get(`${base}/spare-cascade/brands/${encodeURIComponent(brandName)}/models`);
+export const fetchSpareSpecMapping = () => api.get(`${base}/mappings/spare-spec/tree`);
+export const bulkAddSpareBrandModels = (brandId, modelIds) =>
+  api.post(`${base}/mappings/spare-spec/models/bulk-add`, { brand_id: brandId, model_ids: modelIds });
+export const bulkDeleteSpareBrandModels = (ids) =>
+  api.post(`${base}/mappings/spare-spec/models/bulk-delete`, { ids });
+export const bulkStatusSpareBrandModels = (ids, status) =>
+  api.post(`${base}/mappings/spare-spec/models/bulk-status`, { ids, status });
+
 export const listModels = (p) => api.get(`${base}/models`, { params: p });
 export const createModel = (d) => api.post(`${base}/models`, d);
 export const updateModel = (id, d) => api.put(`${base}/models/${id}`, d);

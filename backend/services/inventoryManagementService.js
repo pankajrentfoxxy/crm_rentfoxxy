@@ -295,10 +295,12 @@ function computeSpareWarranty(serialCreatedAt, line) {
 function enrichSparePartRow(row) {
   const ex = parseExtra(row.extra);
   const line = resolveSpareLineItem(row.line_items, ex);
-  const brand = line?.brand_name ?? line?.brand ?? '';
+  const brand = line?.brand_name ?? line?.brand ?? ex.brand_name ?? ex.brand ?? '';
+  const modelName = line?.model_name ?? line?.model ?? ex.model_name ?? ex.model ?? '';
   const partName =
     ex.part_name ||
     ex.spare_part_name ||
+    line?.spare_part_name ||
     line?.part_name ||
     line?.name ||
     row.catalog_name ||
@@ -319,9 +321,12 @@ function enrichSparePartRow(row) {
     vendor_email: row.vendor_email || '',
     vendor_phone: row.vendor_phone || '',
     part_name: partName,
+    brand: brand || null,
+    model_name: modelName || null,
     item_description: {
       brand,
-      model: partName,
+      model: modelName || null,
+      model_name: modelName || null,
       part_name: partName
     },
     warranty: computeSpareWarranty(row.created_at, line),

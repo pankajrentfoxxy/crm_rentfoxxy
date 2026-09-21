@@ -24,11 +24,17 @@ function TimeBadge({ label }) {
 function ItemDescriptionCard({ item }) {
   if (!item) return <span className="text-slate-400">—</span>;
   const brand = item.brand || '';
-  const part = item.part_name || item.model || '';
-  const title = [brand, part].filter(Boolean).join(' - ');
+  const model = item.model_name || item.model || '';
+  const part = item.part_name || '';
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm text-sm min-w-[160px]">
-      <h5 className="font-semibold text-slate-900 leading-snug">{title || '—'}</h5>
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm text-sm min-w-[180px]">
+      <h5 className="font-semibold text-slate-900 leading-snug">{part || '—'}</h5>
+      <p className="text-xs text-slate-600 mt-1">
+        <span className="font-medium text-slate-700">Brand:</span> {brand || '—'}
+      </p>
+      <p className="text-xs text-slate-600">
+        <span className="font-medium text-slate-700">Model:</span> {model || '—'}
+      </p>
     </div>
   );
 }

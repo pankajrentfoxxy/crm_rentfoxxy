@@ -216,6 +216,18 @@ router.post(
   wrapMulter(spoBillsUpload.array('files', 25)),
   sparePo.uploadBills
 );
+router.delete(
+  '/spare-parts-orders/:id/bills/:fileIndex',
+  authMiddleware,
+  sparePo.deleteSpoBillFileValidators,
+  sparePo.deleteSpoBillFile
+);
+router.delete(
+  '/spare-parts-orders/:id/bills',
+  authMiddleware,
+  sparePo.removeSpoBillValidators,
+  sparePo.removeSpoBill
+);
 router.get(
   '/spare-parts-orders/:spoId/product-received',
   authorizeSpareParts,

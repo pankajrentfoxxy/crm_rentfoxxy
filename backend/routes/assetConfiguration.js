@@ -21,8 +21,12 @@ router.get('/cascade/brands/:brandName/processors', ctrl.listCascadeProcessorsFo
 router.get('/cascade/brands/:brandName/models', ctrl.listCascadeModelsForBrand);
 router.get('/cascade/brands/:brandName/generations', ctrl.listCascadeGenerationsForBrand);
 router.get('/cascade/brands/:brandName/processors/:processorName/generations', ctrl.listCascadeGenerationsForBrandProcessor);
+// Spare part cascade (any authenticated user)
+router.get('/spare-cascade/brands', ctrl.listCascadeSpareBrands);
+router.get('/spare-cascade/brands/:brandName/models', ctrl.listCascadeSpareModelsForBrand);
 // Read-only spec tree — floor pipeline filters, QC, SO forms (any authenticated user)
 router.get('/mappings/laptop-spec/tree', ctrl.getLaptopSpecMapping);
+router.get('/mappings/spare-spec/tree', ctrl.getSpareSpecMapping);
 
 // BlueDart declared-value matrix — active rows for AWB autofill (any auth)
 router.get('/bluedart-declared-values/active', bdCtrl.getActiveBluedartDeclaredValueMatrix);
@@ -48,6 +52,10 @@ router.post('/mappings/laptop-spec/models/bulk-status', edit, ctrl.bulkStatusBra
 router.post('/mappings/laptop-spec/processors/bulk-status', edit, ctrl.bulkStatusBrandProcessors);
 router.post('/mappings/laptop-spec/generations/bulk-status', edit, ctrl.bulkStatusBrandGenerations);
 
+router.post('/mappings/spare-spec/models/bulk-add', create, ctrl.bulkAddSpareBrandModels);
+router.post('/mappings/spare-spec/models/bulk-delete', del, ctrl.bulkDeleteSpareBrandModels);
+router.post('/mappings/spare-spec/models/bulk-status', edit, ctrl.bulkStatusSpareBrandModels);
+
 router.get('/mappings/:type', view, ctrl.getMapping);
 router.post('/mappings/:type/bulk-create', create, ctrl.bulkCreateMapping);
 router.post('/mappings/:type/reassign', edit, ctrl.reassignMapping);
@@ -65,6 +73,7 @@ function crudRoutes(path, list, get, post, put, remove, patchStatus) {
 
 crudRoutes('brands', ctrl.listBrands, ctrl.getBrand, ctrl.createBrand, ctrl.updateBrand, ctrl.deleteBrand, ctrl.setBrandStatus);
 crudRoutes('spare-brands', ctrl.listSpareBrands, ctrl.getSpareBrand, ctrl.createSpareBrand, ctrl.updateSpareBrand, ctrl.deleteSpareBrand, ctrl.setSpareBrandStatus);
+crudRoutes('spare-models', ctrl.listSpareModels, ctrl.getSpareModel, ctrl.createSpareModel, ctrl.updateSpareModel, ctrl.deleteSpareModel, ctrl.setSpareModelStatus);
 crudRoutes('models', ctrl.listModels, ctrl.getModel, ctrl.createModel, ctrl.updateModel, ctrl.deleteModel, ctrl.setModelStatus);
 crudRoutes('processors', ctrl.listProcessors, ctrl.getProcessor, ctrl.createProcessor, ctrl.updateProcessor, ctrl.deleteProcessor, ctrl.setProcessorStatus);
 crudRoutes('generations', ctrl.listGenerations, ctrl.getGeneration, ctrl.createGeneration, ctrl.updateGeneration, ctrl.deleteGeneration, ctrl.setGenerationStatus);

@@ -1462,22 +1462,43 @@ exports.getPartCostSummary = async (req, res) => {
   }
 };
 
-// GET /api/part-requests/instances?status=&part_id=&category=&search=&limit=
+// GET /api/part-requests/instances?status=&part_id=&category=&brand=&model=&search=&limit=
 exports.listPartInstances = async (req, res) => {
   try {
     await ensurePartInstanceSerialColumn(pool);
-    const { status, part_id, category, search, limit = 200 } = req.query;
+    const { status, part_id, category, brand, model, search, limit = 200 } = req.query;
     const conditions = [];
     const params = [];
     if (status) { params.push(status); conditions.push(`pi.status = $${params.length}`); }
     if (part_id) { params.push(Number(part_id)); conditions.push(`pi.part_id = $${params.length}`); }
     if (category) { params.push(category); conditions.push(`p.category = $${params.length}`); }
+
+    const brandExpr = `COALESCE(
+      NULLIF(TRIM(pi.brand), ''),
+      NULLIF(TRIM(vsn.extra->>'brand_name'), ''),
+      NULLIF(TRIM(p.default_brand), '')
+    )`;
+    const modelExpr = `COALESCE(
+      NULLIF(TRIM(pi.model), ''),
+      NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+      NULLIF(TRIM(p.default_model), '')
+    )`;
+
+    if (brand && String(brand).trim()) {
+      params.push(String(brand).trim().toLowerCase());
+      conditions.push(`LOWER(${brandExpr}) = $${params.length}`);
+    }
+    if (model && String(model).trim()) {
+      params.push(String(model).trim().toLowerCase());
+      conditions.push(`LOWER(${modelExpr}) = $${params.length}`);
+    }
     if (search && String(search).trim()) {
       params.push(`%${String(search).trim()}%`);
       const i = params.length;
       conditions.push(`(pi.prt_id ILIKE $${i} OR pi.serial_number ILIKE $${i}
         OR p.part_name ILIKE $${i} OR pi.installed_ttspl_id ILIKE $${i}
         OR pi.location_code ILIKE $${i} OR pi.asset_code ILIKE $${i}
+        OR COALESCE(pi.brand, '') ILIKE $${i} OR COALESCE(pi.model, '') ILIKE $${i}
         OR spo.purchase_order_number ILIKE $${i}
         OR COALESCE(vend.business_name, vend.first_name) ILIKE $${i})`);
     }
@@ -1490,22 +1511,64 @@ exports.listPartInstances = async (req, res) => {
       `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.status, pi.location_code,
               pi.unit_cost, pi.notes, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
               pi.received_at, pi.created_at, pi.asset_code, pi.source, pi.spo_id, pi.grn_id,
-              pi.vendor_repair_dc_number,
+              pi.vendor_repair_dc_number, pi.brand, pi.model, pi.spo_line_index,
               pi.removed_from_ttspl_id, pi.condition_on_removal,
-              p.part_name, p.category, p.part_type,
+              p.part_name, p.category, p.part_type, p.default_brand, p.default_model,
               spo.purchase_order_number, spo.purchase_order_date,
               COALESCE(pi.vendor_id, spo.vendor_id) AS vendor_id,
-              COALESCE(NULLIF(TRIM(vend.business_name), ''), NULLIF(TRIM(vend.first_name), '')) AS vendor_name
+              COALESCE(NULLIF(TRIM(vend.business_name), ''), NULLIF(TRIM(vend.first_name), '')) AS vendor_name,
+              ${brandExpr} AS brand_name,
+              ${modelExpr} AS model_name
          FROM part_instances pi
          JOIN parts p ON p.part_id = pi.part_id
          LEFT JOIN vendor_spare_parts_purchase_orders spo ON spo.spo_id = pi.spo_id
          LEFT JOIN vendors vend ON vend.vendor_id = COALESCE(pi.vendor_id, spo.vendor_id)
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pi.vendor_serial_id
          ${where}
          ORDER BY pi.created_at DESC, pi.instance_id DESC
          LIMIT $${params.length}`,
       params
     );
-    res.json({ success: true, instances: result.rows });
+
+    // Filter dropdown options from full stock (not limited by current brand/model filters)
+    const opts = await pool.query(
+      `SELECT DISTINCT
+         ${brandExpr} AS brand_name,
+         ${modelExpr} AS model_name,
+         p.category
+       FROM part_instances pi
+       JOIN parts p ON p.part_id = pi.part_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pi.vendor_serial_id
+       WHERE ${brandExpr} IS NOT NULL OR ${modelExpr} IS NOT NULL OR p.category IS NOT NULL`
+    );
+    const brands = [...new Set(opts.rows.map((r) => r.brand_name).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+    const modelsByBrand = {};
+    const models = [];
+    for (const row of opts.rows) {
+      if (row.model_name) {
+        models.push(row.model_name);
+        const b = row.brand_name || '';
+        if (!modelsByBrand[b]) modelsByBrand[b] = new Set();
+        modelsByBrand[b].add(row.model_name);
+      }
+    }
+    const modelsUnique = [...new Set(models)].sort((a, b) => a.localeCompare(b));
+    const models_by_brand = Object.fromEntries(
+      Object.entries(modelsByBrand).map(([k, set]) => [k, [...set].sort((a, b) => a.localeCompare(b))])
+    );
+
+    res.json({
+      success: true,
+      instances: result.rows,
+      filters: {
+        brands,
+        models: modelsUnique,
+        models_by_brand,
+        categories: [...new Set(opts.rows.map((r) => r.category).filter(Boolean))].sort(),
+      },
+    });
   } catch (err) {
     console.error('listPartInstances:', err);
     res.status(500).json({ success: false, message: err.message });

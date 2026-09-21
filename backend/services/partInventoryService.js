@@ -86,12 +86,20 @@ async function resolveOrCreateFloorPartId(client, line) {
 
   const name = lineName(line) || `Spare part ${lineRawId(line) ?? ''}`.trim();
   const category = normalizeCategory(line?.category);
-  const brands = line?.brand_name ? [String(line.brand_name).trim()] : null;
+  const brands = line?.brand_name || line?.brand
+    ? [String(line.brand_name || line.brand).trim()]
+    : null;
+  const defaultBrand = line?.brand_name || line?.brand
+    ? String(line.brand_name || line.brand).trim()
+    : null;
+  const defaultModel = line?.model_name || line?.model
+    ? String(line.model_name || line.model).trim()
+    : null;
 
   const ins = await client.query(
     `INSERT INTO parts
-       (part_name, part_type, category, quantity, min_threshold, description, compatible_brands, cost)
-     VALUES ($1, $2, $3, 0, 5, $4, $5, $6)
+       (part_name, part_type, category, quantity, min_threshold, description, compatible_brands, cost, default_brand, default_model)
+     VALUES ($1, $2, $3, 0, 5, $4, $5, $6, $7, $8)
      RETURNING part_id`,
     [
       name,
@@ -100,6 +108,8 @@ async function resolveOrCreateFloorPartId(client, line) {
       line?.specifications || name,
       brands,
       Number(line?.rate ?? line?.unit_price ?? line?.cost ?? 0) || 0,
+      defaultBrand,
+      defaultModel,
     ]
   );
   const partId = ins.rows[0].part_id;
@@ -137,13 +147,15 @@ async function getPartMeta(db, partId) {
  */
 async function receiveUnitsIntoInventory(client, {
   partId, units, unitCost, locationCode, spoId, grnId, spoLineIndex,
-  vendorId, batchNumber, receivedBy, actorName, notes,
+  vendorId, batchNumber, receivedBy, actorName, notes, brand, model,
 }) {
   const list = Array.isArray(units) ? units : [];
   if (!list.length) return [];
 
   const part = await getPartMeta(client, partId);
   const cost = Number(unitCost) || Number(part?.cost) || 0;
+  const brandName = brand != null && String(brand).trim() ? String(brand).trim() : null;
+  const modelName = model != null && String(model).trim() ? String(model).trim() : null;
   const created = [];
   const now = new Date();
 
@@ -157,9 +169,9 @@ async function receiveUnitsIntoInventory(client, {
       `INSERT INTO part_instances
          (prt_id, part_id, spo_id, grn_id, spo_line_index, batch_number, unit_cost,
           location_code, status, notes, serial_number, vendor_serial_id, asset_code,
-          vendor_id, source, received_at, received_by, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_stock',$9,$10,$11,$12,$13,'purchase',NOW(),$14,NOW(),NOW())
-       RETURNING instance_id, prt_id, serial_number, asset_code, unit_cost, status, location_code`,
+          vendor_id, source, brand, model, received_at, received_by, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_stock',$9,$10,$11,$12,$13,'purchase',$14,$15,NOW(),$16,NOW(),NOW())
+       RETURNING instance_id, prt_id, serial_number, asset_code, unit_cost, status, location_code, brand, model`,
       [
         prtId, Number(partId), spoId || null, grnId || null,
         spoLineIndex != null ? Number(spoLineIndex) : null,
@@ -168,6 +180,8 @@ async function receiveUnitsIntoInventory(client, {
         unit?.vendorSerialId != null ? Number(unit.vendorSerialId) : null,
         unit?.assetCode || null,
         vendorId != null ? Number(vendorId) : null,
+        brandName,
+        modelName,
         receivedBy || null,
       ]
     );

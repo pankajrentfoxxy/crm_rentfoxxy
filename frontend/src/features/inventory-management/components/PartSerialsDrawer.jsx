@@ -156,6 +156,14 @@ function UnitRow({ unit, onSaved }) {
           disabled={!editable || busy}
         />
       </div>
+      {(unit.brand_name || unit.brand || unit.model_name || unit.model) ? (
+        <p className="mt-1.5 text-xs text-slate-600">
+          {[
+            (unit.brand_name || unit.brand) && `Brand: ${unit.brand_name || unit.brand}`,
+            (unit.model_name || unit.model) && `Model: ${unit.model_name || unit.model}`,
+          ].filter(Boolean).join(' · ')}
+        </p>
+      ) : null}
       {unit.installed_ttspl_id && (
         <p className="mt-1 text-[11px] text-teal-700 font-mono">Installed on {unit.installed_ttspl_id}</p>
       )}
@@ -267,7 +275,9 @@ export default function PartSerialsDrawer({ open, part, onClose, onChanged }) {
       String(u.serial_number || '').toLowerCase().includes(q) ||
       String(u.prt_id || '').toLowerCase().includes(q) ||
       String(u.location_code || '').toLowerCase().includes(q) ||
-      String(u.status || '').toLowerCase().includes(q)
+      String(u.status || '').toLowerCase().includes(q) ||
+      String(u.brand_name || u.brand || '').toLowerCase().includes(q) ||
+      String(u.model_name || u.model || '').toLowerCase().includes(q)
     );
   }, [units, search]);
 

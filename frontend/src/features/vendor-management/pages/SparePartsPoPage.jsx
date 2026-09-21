@@ -1,16 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, useLocation } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Eye, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, Plus, Trash2, X } from 'lucide-react';
 import {
   fetchSpareOrders,
   fetchSparePartsOrder,
   patchSparePartsOrderStatus,
-  uploadSparePartsOrderBills
+  uploadSparePartsOrderBills,
+  deleteSparePartsOrderBillFile,
+  removeSparePartsOrderBill,
 } from '../vendorManagementApi';
-import { getBackendOrigin } from '../../../utils/api';
+import { useAuth } from '../../../context/AuthContext';
 import SparePartsPoFormModal from '../components/SparePartsPoFormModal';
 import SparePartsCatalogPanel from '../components/SparePartsCatalogPanel';
+import {
+  BillFilesTable,
+  BillLightbox,
+  PendingBillFileCard,
+  filePublicUrl,
+  hasBillOnRow,
+  isImageBillFile,
+  parseBillFiles,
+} from '../components/BillFilesUi';
 
 const LIST_PAGE_SIZE = 25;
 
@@ -27,28 +38,6 @@ function parseLineItems(po) {
     }
   }
   return [];
-}
-
-function parseBillFiles(row) {
-  const raw = row?.bill_files;
-  if (raw == null) return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const p = JSON.parse(raw);
-      return Array.isArray(p) ? p : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-function filePublicUrl(p) {
-  if (!p) return '#';
-  if (p.startsWith('http://') || p.startsWith('https://')) return p;
-  const origin = getBackendOrigin().replace(/\/$/, '');
-  return `${origin}${p.startsWith('/') ? p : `/${p}`}`;
 }
 
 function wordCount(str) {
@@ -102,6 +91,12 @@ function formatBrandLabel(line) {
   return '—';
 }
 
+function formatModelLabel(line) {
+  if (line.model_name) return String(line.model_name);
+  if (line.model) return String(line.model);
+  return '—';
+}
+
 const TABS = [
   { key: 'orders', label: 'Purchase Orders' },
   { key: 'catalog', label: 'Spare Parts Catalog' },
@@ -109,6 +104,8 @@ const TABS = [
 
 export default function SparePartsPoPage() {
   const location = useLocation();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin' || user?.is_superadmin === true;
   const [tab, setTab] = useState('orders');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -121,8 +118,12 @@ export default function SparePartsPoPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [formPrefill, setFormPrefill] = useState(null);
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
-  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], spoId: null });
+  const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], spoId: null, spo: null });
   const [billUpload, setBillUpload] = useState({ open: false, spo: null, bill_name: '' });
+  const [pendingBillFiles, setPendingBillFiles] = useState([]);
+  const [billRemovingIndex, setBillRemovingIndex] = useState(null);
+  const [billRemovingAll, setBillRemovingAll] = useState(false);
+  const [billLightbox, setBillLightbox] = useState({ open: false, items: [], index: 0 });
 
   const loadList = useCallback(async () => {
     try {
@@ -196,41 +197,112 @@ export default function SparePartsPoPage() {
     }
   }
 
+  function closeBillUpload() {
+    setBillUpload({ open: false, spo: null, bill_name: '' });
+    setPendingBillFiles([]);
+  }
+
   function openBillUpload(spo) {
+    setPendingBillFiles([]);
     setBillUpload({ open: true, spo, bill_name: spo.bill_name || '' });
+  }
+
+  function openBillLightbox(files, startIndex = 0) {
+    const items = (files || [])
+      .filter((f) => isImageBillFile(f))
+      .map((f) => ({ href: filePublicUrl(f), name: String(f).split('/').pop() }));
+    if (!items.length) return;
+    setBillLightbox({ open: true, items, index: Math.max(0, startIndex) });
   }
 
   async function submitBillUpload(e) {
     e.preventDefault();
     const { spo, bill_name } = billUpload;
-    const input = document.getElementById('spo-bill-files-input');
-    const files = input?.files;
     if (!spo) return;
     const name = bill_name.trim();
     if (!name) {
       toast.error('Bill number is required');
       return;
     }
-    if (!files?.length) {
+    if (!pendingBillFiles.length) {
       toast.error('Select at least one file');
       return;
     }
     const fd = new FormData();
     fd.append('bill_name', name);
-    for (let i = 0; i < files.length; i += 1) {
-      fd.append('files', files[i]);
-    }
+    pendingBillFiles.forEach((file) => fd.append('files', file));
     try {
       const { data } = await uploadSparePartsOrderBills(spo.spo_id, fd);
       if (!data.success) throw new Error(data.message);
       toast.success(data.message || 'Bill uploaded successfully');
-      setBillUpload({ open: false, spo: null, bill_name: '' });
-      if (input) input.value = '';
+      closeBillUpload();
       await loadList();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Upload failed');
     }
   }
+
+  async function handleRemoveBillFile(spoId, fileIndex) {
+    if (!isSuperAdmin) return;
+    if (!window.confirm('Remove this bill file?')) return;
+    setBillRemovingIndex(fileIndex);
+    try {
+      const { data } = await deleteSparePartsOrderBillFile(spoId, fileIndex);
+      if (!data.success) throw new Error(data.message);
+      toast.success(data.message || 'Bill file removed');
+      const nextFiles = data.bill_files || [];
+      const nextName = data.bill_name || null;
+      if (billView.open && billView.spoId === spoId) {
+        if (!nextName && !nextFiles.length) {
+          setBillView({ open: false, bill_name: '', files: [], spoId: null, spo: null });
+        } else {
+          setBillView((v) => ({
+            ...v,
+            bill_name: nextName || v.bill_name,
+            files: nextFiles,
+            spo: v.spo ? { ...v.spo, bill_name: nextName, bill_files: nextFiles } : v.spo,
+          }));
+        }
+      }
+      if (billUpload.open && billUpload.spo?.spo_id === spoId) {
+        if (!nextName && !nextFiles.length) {
+          closeBillUpload();
+        } else {
+          setBillUpload((b) => ({
+            ...b,
+            bill_name: nextName || b.bill_name,
+            spo: { ...b.spo, bill_name: nextName, bill_files: nextFiles },
+          }));
+        }
+      }
+      await loadList();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Remove failed');
+    } finally {
+      setBillRemovingIndex(null);
+    }
+  }
+
+  async function handleRemoveEntireBill(spoId) {
+    if (!isSuperAdmin) return;
+    if (!window.confirm('Remove the entire bill (number + all files) from this SPO?')) return;
+    setBillRemovingAll(true);
+    try {
+      const { data } = await removeSparePartsOrderBill(spoId);
+      if (!data.success) throw new Error(data.message);
+      toast.success(data.message || 'Bill removed');
+      setBillView({ open: false, bill_name: '', files: [], spoId: null, spo: null });
+      closeBillUpload();
+      await loadList();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Remove failed');
+    } finally {
+      setBillRemovingAll(false);
+    }
+  }
+
+  const billUploadExistingFiles = billUpload.open && billUpload.spo ? parseBillFiles(billUpload.spo) : [];
+  const billUploadHasExistingBill = billUpload.open && billUpload.spo && !!billUpload.spo.bill_name;
 
   const previewLines = useMemo(() => parseLineItems(preview.detail), [preview.detail]);
 
@@ -347,14 +419,31 @@ export default function SparePartsPoPage() {
                 {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
 
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  {r.bill_name ? (
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
-                      onClick={() => setBillView({ open: true, bill_name: r.bill_name, files: parseBillFiles(r), spoId: r.spo_id })}
-                    >
-                      View bill
-                    </button>
+                  {hasBillOnRow(r) ? (
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
+                        onClick={() =>
+                          setBillView({
+                            open: true,
+                            bill_name: r.bill_name,
+                            files: parseBillFiles(r),
+                            spoId: r.spo_id,
+                            spo: r,
+                          })
+                        }
+                      >
+                        View bill
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
+                        onClick={() => openBillUpload(r)}
+                      >
+                        Add files
+                      </button>
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -450,7 +539,8 @@ export default function SparePartsPoPage() {
                               open: true,
                               bill_name: r.bill_name,
                               files: parseBillFiles(r),
-                              spoId: r.spo_id
+                              spoId: r.spo_id,
+                              spo: r,
                             })
                           }
                         >
@@ -461,21 +551,31 @@ export default function SparePartsPoPage() {
                       )}
                     </td>
                     <td className="p-3">
-                      {r.bill_name ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
-                          onClick={() =>
-                            setBillView({
-                              open: true,
-                              bill_name: r.bill_name,
-                              files: parseBillFiles(r),
-                              spoId: r.spo_id
-                            })
-                          }
-                        >
-                          View bill
-                        </button>
+                      {hasBillOnRow(r) ? (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                            onClick={() =>
+                              setBillView({
+                                open: true,
+                                bill_name: r.bill_name,
+                                files: parseBillFiles(r),
+                                spoId: r.spo_id,
+                                spo: r,
+                              })
+                            }
+                          >
+                            View bill
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
+                            onClick={() => openBillUpload(r)}
+                          >
+                            Add files
+                          </button>
+                        </div>
                       ) : (
                         <button
                           type="button"
@@ -637,6 +737,7 @@ export default function SparePartsPoPage() {
                         <tr>
                           <th className="p-2">#</th>
                           <th className="p-2">Brand</th>
+                          <th className="p-2">Model</th>
                           <th className="p-2">Part</th>
                           <th className="p-2">Type</th>
                           <th className="p-2">Warranty (mo)</th>
@@ -650,6 +751,7 @@ export default function SparePartsPoPage() {
                           <tr key={`pv-${idx}`} className="border-t">
                             <td className="p-2">{idx + 1}</td>
                             <td className="p-2">{formatBrandLabel(ln)}</td>
+                            <td className="p-2">{formatModelLabel(ln)}</td>
                             <td className="p-2">{formatPartLabel(ln)}</td>
                             <td className="p-2">{ln.part_type || '—'}</td>
                             <td className="p-2">
@@ -701,83 +803,167 @@ export default function SparePartsPoPage() {
 
       {billView.open && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/45"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setBillView({ open: false, bill_name: '', files: [], spoId: null });
+          className="fixed inset-0 z-[102] flex items-center justify-center p-4 bg-black/50"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setBillView({ open: false, bill_name: '', files: [], spoId: null, spo: null });
+            }
           }}
-          role="presentation"
         >
-          <div className="relative w-full max-w-lg rounded-2xl bg-white shadow-xl p-5 space-y-3">
-            <h3 className="font-bold text-slate-900">Bill #{billView.bill_name}</h3>
-            <ul className="space-y-2 max-h-[50vh] overflow-y-auto">
-              {billView.files?.length ? (
-                billView.files.map((href) => (
-                  <li key={href}>
-                    <a
-                      href={filePublicUrl(href)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-orange-600 font-medium hover:underline break-all text-sm"
-                    >
-                      {href.split('/').pop()}
-                    </a>
-                  </li>
-                ))
-              ) : (
-                <li className="text-sm text-slate-500">No files on record.</li>
-              )}
-            </ul>
-            <button
-              type="button"
-              className="w-full py-2 rounded-lg border border-slate-200 text-sm font-semibold"
-              onClick={() => setBillView({ open: false, bill_name: '', files: [], spoId: null })}
-            >
-              Close
-            </button>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start gap-2">
+              <div>
+                <h3 className="font-bold text-slate-900">Bill #{billView.bill_name}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {billView.files.length} file{billView.files.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {billView.spo ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
+                    onClick={() => {
+                      setBillView((v) => ({ ...v, open: false }));
+                      openBillUpload(billView.spo);
+                    }}
+                  >
+                    Add files
+                  </button>
+                ) : null}
+                {isSuperAdmin && billView.spoId ? (
+                  <button
+                    type="button"
+                    disabled={billRemovingAll}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50 disabled:opacity-50"
+                    onClick={() => handleRemoveEntireBill(billView.spoId)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {billRemovingAll ? 'Removing…' : 'Remove bill'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  aria-label="Close"
+                  onClick={() => setBillView({ open: false, bill_name: '', files: [], spoId: null, spo: null })}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-4">
+              <BillFilesTable
+                billName={null}
+                files={billView.files}
+                canRemove={isSuperAdmin && !!billView.spoId}
+                removingIndex={billRemovingIndex}
+                onPreviewImage={openBillLightbox}
+                onRemoveFile={(idx) => handleRemoveBillFile(billView.spoId, idx)}
+              />
+            </div>
           </div>
         </div>
       )}
 
       {billUpload.open && billUpload.spo && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/45"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setBillUpload({ open: false, spo: null, bill_name: '' });
+          className="fixed inset-0 z-[102] flex items-center justify-center p-4 bg-black/50"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeBillUpload();
           }}
-          role="presentation"
         >
-          <div className="relative w-full max-w-md rounded-2xl bg-white shadow-xl p-6 space-y-4">
-            <h3 className="font-bold text-slate-900">Upload bill / invoice</h3>
-            <p className="text-xs text-slate-600">PO {billUpload.spo.purchase_order_number}</p>
-            <form onSubmit={submitBillUpload} className="space-y-3">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5" onMouseDown={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900">
+              {hasBillOnRow(billUpload.spo) ? 'Add bill files' : 'Upload bill / invoice'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              PO {billUpload.spo.purchase_order_number} — images and PDFs, multiple allowed
+            </p>
+            {billUploadExistingFiles.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-slate-600 mb-2">Already uploaded</p>
+                <BillFilesTable
+                  billName={billUpload.spo.bill_name}
+                  files={billUploadExistingFiles}
+                  compact
+                  canRemove={isSuperAdmin}
+                  removingIndex={billRemovingIndex}
+                  onPreviewImage={openBillLightbox}
+                  onRemoveFile={(idx) => handleRemoveBillFile(billUpload.spo.spo_id, idx)}
+                />
+                {isSuperAdmin ? (
+                  <button
+                    type="button"
+                    disabled={billRemovingAll}
+                    className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                    onClick={() => handleRemoveEntireBill(billUpload.spo.spo_id)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {billRemovingAll ? 'Removing bill…' : 'Remove entire bill'}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <form onSubmit={submitBillUpload} className="mt-4 space-y-3">
               <div>
-                <label className="text-xs font-semibold text-slate-600">Bill number *</label>
+                <label className="text-xs font-semibold text-slate-600">Bill number</label>
                 <input
-                  required
-                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-600"
                   value={billUpload.bill_name}
                   onChange={(e) => setBillUpload((b) => ({ ...b, bill_name: e.target.value }))}
+                  required
+                  readOnly={billUploadHasExistingBill}
+                  title={billUploadHasExistingBill ? 'Bill number is fixed for this PO. Remove the bill to change it.' : undefined}
                 />
+                {billUploadHasExistingBill ? (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Bill number is locked while files exist. Super admin can remove the bill to change it.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Bill numbers must be unique across all POs, GRNs, and spare POs.
+                  </p>
+                )}
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Files *</label>
+                <label className="text-xs font-semibold text-slate-600">Add files (multiple images or PDF)</label>
                 <input
                   id="spo-bill-files-input"
                   type="file"
                   multiple
-                  required
+                  accept="image/*,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp"
                   className="mt-1 w-full text-sm"
+                  onChange={(e) => {
+                    const extra = Array.from(e.target.files || []);
+                    if (extra.length) setPendingBillFiles((prev) => [...prev, ...extra]);
+                    e.target.value = '';
+                  }}
                 />
               </div>
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  className="flex-1 py-2 rounded-lg border border-slate-200 text-sm font-semibold"
-                  onClick={() => setBillUpload({ open: false, spo: null, bill_name: '' })}
-                >
+              {pendingBillFiles.length > 0 ? (
+                <div className="grid grid-cols-3 gap-2">
+                  {pendingBillFiles.map((file, idx) => (
+                    <PendingBillFileCard
+                      key={`${file.name}-${file.size}-${idx}`}
+                      file={file}
+                      onRemove={() => setPendingBillFiles((prev) => prev.filter((_, i) => i !== idx))}
+                      onPreview={(url, name) => setBillLightbox({ open: true, items: [{ href: url, name }], index: 0 })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">Select one or more images to preview them here before upload.</p>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" className="px-3 py-2 rounded-lg border text-sm" onClick={closeBillUpload}>
                   Cancel
                 </button>
-                <button type="submit" className="flex-1 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold">
+                <button type="submit" className="px-4 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold">
                   Upload
                 </button>
               </div>
@@ -785,6 +971,14 @@ export default function SparePartsPoPage() {
           </div>
         </div>
       )}
+
+      <BillLightbox
+        open={billLightbox.open}
+        items={billLightbox.items}
+        index={billLightbox.index}
+        onClose={() => setBillLightbox({ open: false, items: [], index: 0 })}
+        onIndexChange={(next) => setBillLightbox((lb) => ({ ...lb, index: next }))}
+      />
     </div>
   );
 }
