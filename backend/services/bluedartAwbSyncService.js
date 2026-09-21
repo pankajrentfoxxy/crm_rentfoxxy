@@ -46,11 +46,20 @@ async function fetchPendingAwbGroups() {
         AND TRIM(awb_number) <> ''
         AND NOT (COALESCE(status, '') = ANY($1::text[]))
         AND COALESCE(movement_type, 'outbound') <> 'return'
+        -- Part 3.5, finding B1. This used to also match
+        --   courier_name IS NULL OR TRIM(courier_name) = ''
+        -- so a porter or by-hand challan that happened to carry an AWB number
+        -- with no courier name was swept into BlueDart tracking and could be
+        -- auto-marked delivered by an unrelated waybill — full inventory
+        -- finalisation, rent clock and invoice included, for a shipment BlueDart
+        -- never carried.
+        --
+        -- Matching on the courier name ONLY is the fix. A challan with a blank
+        -- courier is a data gap to be reported, not a BlueDart consignment to be
+        -- assumed; listBlankCourierWithAwb below surfaces those instead.
         AND (
           courier_name ILIKE '%bluedart%'
           OR courier_name ILIKE '%blue dart%'
-          OR courier_name IS NULL
-          OR TRIM(courier_name) = ''
         )
       GROUP BY TRIM(awb_number)
       ORDER BY MIN(id)`,
@@ -190,11 +199,12 @@ async function markDcDeliveredFromTracking(dcNumber, shipment) {
 
     await client.query('BEGIN');
     const upd = await client.query(
+      // Part 3.3: this no longer writes status, delivered_at or
+      // delivery_completed_at — completeDelivery below owns the delivery and
+      // is given the courier's real scan time. What stays here is BlueDart's
+      // own tracking detail, which is nobody else's business.
       `UPDATE delivery_challan_lines
-          SET status = 'delivered',
-              delivered_at = COALESCE($2::timestamptz, NOW()),
-              delivery_completed_at = COALESCE($2::timestamptz, NOW()),
-              courier_tracking_status = $3,
+          SET courier_tracking_status = $3,
               courier_tracking_status_type = $4,
               courier_tracking_synced_at = NOW(),
               courier_received_by = COALESCE($5, courier_received_by),
@@ -222,8 +232,38 @@ async function markDcDeliveredFromTracking(dcNumber, shipment) {
       return { skipped: true, reason: 'no_lines_updated' };
     }
 
-    const sm = require('../controllers/salesManagementController');
-    await sm.finalizeDeliveryInventory(client, dcNumber, ACTOR);
+    // Part 3.3 — the fifth delivery path, now the same routine as the other
+    // four. The UPDATE above keeps the courier-specific columns (tracking
+    // status, received-by, the note) because those are BlueDart's own facts;
+    // completeDelivery owns the delivery itself: the lock, the proof rule, the
+    // inventory finalisation and the event.
+    //
+    // courier_auto is the one mode where a carrier's delivered scan IS the
+    // proof, by design (B2). The scan is passed explicitly so the rule is
+    // visible rather than implied by which function was called.
+    const { completeDelivery, MODE } = require('./deliveryCompletionService');
+    const done = await completeDelivery(client, {
+      dcNumber,
+      mode: MODE.COURIER_AUTO,
+      proof: {
+        courierScan: {
+          awb: shipment.awb_number || null,
+          status: shipment.status || null,
+          delivered_at: deliveredAt.toISOString(),
+          received_by: receivedBy || null,
+        },
+      },
+      actor: { actor_type: 'courier', actor_name: 'BlueDart' },
+      deliveredAt: deliveredAt.toISOString(),
+      source: 'bluedartAwbSyncService.markDelivered',
+    });
+    if (!done.ok) {
+      // Already delivered or cancelled: the sweep has nothing to do and must
+      // not roll back the tracking columns it legitimately refreshed.
+      await client.query('COMMIT');
+      return { skipped: true, reason: done.message };
+    }
+
     await client.query('COMMIT');
 
     await fireOnDeliveryRentalInvoice(dcNumber);
