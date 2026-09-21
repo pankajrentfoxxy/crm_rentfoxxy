@@ -47,7 +47,9 @@ async function main() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 
     const nullStatus = await client.query(
-      `SELECT serial_id, ttspl_id, serial_number, inventory_status, status_changed_at, extra
+      `SELECT serial_id,
+              COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id,
+              serial_number, inventory_status, status_changed_at, extra
          FROM vendor_serial_numbers
         WHERE deleted_at IS NULL AND spo_id IS NULL AND inventory_status IS NULL`
     );

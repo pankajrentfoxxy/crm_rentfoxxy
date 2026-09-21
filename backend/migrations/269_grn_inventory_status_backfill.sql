@@ -15,10 +15,16 @@
 -- NULL, so there is nothing to keep, but the inference itself is recorded on the
 -- row (extra.inventory_status_inferred) and in events, so the backfill can be
 -- told apart from a status a human set.
+--
+-- NOTE ON THE TTSPL ID. vendor_serial_numbers has no ttspl_id column; the asset
+-- code lives in inventory_asset_code, with a legacy fallback in extra->>'ttspl_id'.
+-- That COALESCE is the convention inventoryStateMachine.loadSerial already uses,
+-- and it is the one used below. inventory_status_transitions DOES have its own
+-- ttspl_id column, which is what made the mix-up easy.
 
 WITH inferred AS (
   SELECT v.serial_id,
-         v.ttspl_id,
+         COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id') AS ttspl_id,
          st.stage_name,
          'in_repair'::varchar AS new_status
     FROM vendor_serial_numbers v
@@ -48,7 +54,7 @@ stamped AS (
                                ))
     FROM inferred i
    WHERE v.serial_id = i.serial_id
-  RETURNING v.serial_id, v.ttspl_id, i.stage_name, i.new_status
+  RETURNING v.serial_id, i.ttspl_id, i.stage_name, i.new_status
 )
 INSERT INTO events (
   actor_type, actor_id, actor_name,
@@ -66,7 +72,10 @@ SELECT 'migration', NULL, 'migration 269',
 -- Transition rows too, so the asset timeline built in Part 2 does not show a
 -- status appearing from nowhere.
 INSERT INTO inventory_status_transitions (serial_id, ttspl_id, from_status, to_status, reason)
-SELECT v.serial_id, v.ttspl_id, NULL, v.inventory_status,
+SELECT v.serial_id,
+       COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id'),
+       NULL,
+       v.inventory_status,
        'Backfilled by migration 269 from ticket stage'
   FROM vendor_serial_numbers v
  WHERE v.extra ? 'inventory_status_inferred'
