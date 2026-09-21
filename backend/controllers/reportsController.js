@@ -1343,22 +1343,24 @@ exports.getRevenueReport = async (req, res) => {
 async function fetchInventoryUtilisationData() {
     const [summaryRes, brandRes, topCustomersRes] = await Promise.all([
         pool.query(
+            // Part 2.6 / I11: 'out_stock' is written by no current code, so
+            // this tile read 0 against a real 3,132 rented.
             `SELECT COUNT(*)::int AS total_fleet,
-              COUNT(*) FILTER (WHERE inventory_status = 'out_stock')::int AS rented
+              COUNT(*) FILTER (WHERE inventory_status IN ('rented', 'on_demo'))::int AS rented
              FROM vendor_serial_numbers
              WHERE deleted_at IS NULL`
         ),
         pool.query(
             `SELECT COALESCE(NULLIF(TRIM(extra->>'brand'), ''), NULLIF(TRIM(extra->>'brand_name'), ''), 'Unknown') AS brand,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE inventory_status = 'out_stock')::int AS rented,
-              COUNT(*) FILTER (WHERE qc_status = 'qc_passed' AND inventory_status = 'in_stock')::int AS available,
+              COUNT(*) FILTER (WHERE inventory_status IN ('rented', 'on_demo'))::int AS rented,
+              -- Part 2.6 / I11 + I10: the single availability predicate, not a
+              -- fourth hand-rolled one. qc_status='qc_passed' is written by
+              -- nothing, so this column read 0 for every brand.
               COUNT(*) FILTER (
-                WHERE serial_number IN (
-                  SELECT serial_number FROM tickets
-                  WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
-                )
-              )::int AS in_repair
+                WHERE EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vendor_serial_numbers.serial_id)
+              )::int AS available,
+              COUNT(*) FILTER (WHERE inventory_status = 'in_repair')::int AS in_repair
              FROM vendor_serial_numbers
              WHERE deleted_at IS NULL
              GROUP BY COALESCE(NULLIF(TRIM(extra->>'brand'), ''), NULLIF(TRIM(extra->>'brand_name'), ''), 'Unknown')

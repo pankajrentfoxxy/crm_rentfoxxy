@@ -2424,12 +2424,15 @@ async function searchAvailableInventory({
        LEFT JOIN vendor_product_details vpd
          ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
        WHERE vsn.deleted_at IS NULL
-         AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
-         AND COALESCE(vsn.inventory_status, 'in_stock') IN ('in_stock', 'passed')
-         AND NOT EXISTS (
-           SELECT 1 FROM vendor_product_inventory vpi2
-           WHERE vpi2.serial_id = vsn.serial_id AND vpi2.status = 'out_stock'
-         )
+         -- Part 2.5 / 2.4: the single predicate, and the last read of
+         -- vendor_product_inventory.
+         --
+         -- vpi is the THIRD status store (finding I9). It is written only on DC
+         -- create and cancel — never on delivery, return, QC fail or scrap — so
+         -- the status='out_stock' test here was asking a table that stopped
+         -- being told anything the moment a unit was actually delivered.
+         -- Removing the read is what lets the table be dropped.
+         AND EXISTS (SELECT 1 FROM asset_available aa WHERE aa.serial_id = vsn.serial_id)
          AND NOT EXISTS (
            SELECT 1 FROM sales_order_serials sos_att
             WHERE sos_att.serial_id = vsn.serial_id
