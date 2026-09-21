@@ -62,20 +62,29 @@ function productLabel(item) {
   return '—';
 }
 
+const fmtMoney = (n) => Number(n || 0).toLocaleString('en-IN', {
+  minimumFractionDigits: 2, maximumFractionDigits: 2,
+});
+
 function writeReturnItemsTable(doc, y, items) {
   const L = 40;
   const R = 555;
   const W = R - L;
+  let total = 0;
 
   doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text('Laptops returned to vendor', L, y);
   y += 14;
 
+  // Value is on the challan because an e-way bill is raised against it: a
+  // transporter stopped at a checkpoint has to show the declared consignment
+  // value, and a return DC with no value on it is not a defensible document.
   const cols = [
-    { label: 'Asset ID', w: 80 },
-    { label: 'Serial', w: 90 },
-    { label: 'Product', w: 130 },
-    { label: 'PO', w: 70 },
-    { label: 'Reason', w: W - 370 },
+    { label: 'Asset ID', w: 78 },
+    { label: 'Serial', w: 84 },
+    { label: 'Product', w: 118 },
+    { label: 'PO', w: 62 },
+    { label: 'Reason', w: W - 412 },
+    { label: 'Value (Rs)', w: 70, align: 'right' },
   ];
 
   const drawHeader = (yy) => {
@@ -83,7 +92,7 @@ function writeReturnItemsTable(doc, y, items) {
     let cx = L;
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
     for (const c of cols) {
-      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8 });
+      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8, align: c.align || 'left' });
       cx += c.w;
     }
     return yy + 22;
@@ -118,9 +127,25 @@ function writeReturnItemsTable(doc, y, items) {
     x += cols[3].w;
     doc.font('Helvetica').fontSize(7.5)
       .text(reason, x + 4, y + 8, { width: cols[4].w - 8 });
+    x += cols[4].w;
+    const dv = Number(item.declared_value);
+    total += Number.isFinite(dv) ? dv : 0;
+    doc.font('Helvetica').fontSize(8)
+      .text(Number.isFinite(dv) ? fmtMoney(dv) : '—', x + 4, y + 10,
+        { width: cols[5].w - 8, align: 'right' });
 
     y += rowH;
   }
+
+  // Total row — the figure the e-way threshold is measured against.
+  doc.rect(L, y, W, 20).fillColor('#f1f5f9').fill();
+  doc.strokeColor(C.line).lineWidth(0.6).rect(L, y, W, 20).stroke();
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+    .text('Total declared value', L + 4, y + 6, { width: W - cols[5].w - 12, align: 'right' });
+  doc.text(fmtMoney(total), L + W - cols[5].w + 4, y + 6,
+    { width: cols[5].w - 8, align: 'right' });
+  y += 20;
+
   return y + 10;
 }
 
@@ -192,6 +217,23 @@ async function generateVendorReturnDcPdf(dcNumber) {
     doc.text(`Return date: ${formatPdfDateIstOrDash(dc.return_date || dc.created_at)}`, 40, y + 12);
     doc.text(`Dispatched: ${formatPdfDateIstOrDash(dc.dispatched_at)}`, 280, y + 12);
     y += 28;
+
+    // E-way Bill, printed only once it exists. A transporter stopped at a
+    // checkpoint shows this challan, so the number and date belong on the face
+    // of the document rather than only in the CRM.
+    if (dc.eway_bill_number) {
+      doc.rect(40, y, 515, 22).fillColor('#eef6f5').fill();
+      doc.strokeColor(C.line).lineWidth(0.6).rect(40, y, 515, 22).stroke();
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text('E-Way Bill', 46, y + 6, { width: 70 });
+      doc.font('Helvetica').fontSize(9)
+        .text(String(dc.eway_bill_number), 116, y + 6, { width: 200 });
+      if (dc.eway_bill_date) {
+        doc.fillColor(C.sub)
+          .text(`Dated ${formatPdfDateIstOrDash(dc.eway_bill_date)}`, 330, y + 6, { width: 220 });
+      }
+      y += 30;
+    }
 
     y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
     y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);

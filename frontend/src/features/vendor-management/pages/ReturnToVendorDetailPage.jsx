@@ -13,6 +13,7 @@ import {
   fetchReturnToVendorDc,
 } from '../vendorManagementApi';
 import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import VrtdcEwayPanel from '../components/VrtdcEwayPanel';
 import { vendorRepairDispatchModeLabel } from '../../floor-pipeline/vendorRepairUi';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 
@@ -37,6 +38,10 @@ export default function ReturnToVendorDetailPage() {
   const [busy, setBusy] = useState('');
   const [shipBy, setShipBy] = useState('');
   const [dispatchFields, setDispatchFields] = useState({});
+  // serial_id -> declared value, entered alongside the transporter. This is what
+  // the Rs 50,000 e-way threshold is measured against, so it is captured at
+  // dispatch while the dispatcher is still on the screen.
+  const [declaredValues, setDeclaredValues] = useState({});
   const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
   const [pdfBusy, setPdfBusy] = useState(false);
 
@@ -92,6 +97,7 @@ export default function ReturnToVendorDetailPage() {
       vehicle_number: dispatchFields.vehicle_number || undefined,
       vendor_pickup_person: dispatchFields.vendor_pickup_person || undefined,
       vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile || undefined,
+      declared_values: declaredValues,
     }));
   };
 
@@ -208,6 +214,7 @@ export default function ReturnToVendorDetailPage() {
                   <th className="px-2 py-2 text-left">Warehouse</th>
                   <th className="px-2 py-2 text-left">Reason</th>
                   <th className="px-2 py-2 text-left">Item status</th>
+                  <th className="px-2 py-2 text-right">Value (₹)</th>
                 </tr>
               </thead>
               <tbody>
@@ -221,6 +228,30 @@ export default function ReturnToVendorDetailPage() {
                     </td>
                     <td className="px-2 py-2 text-xs">{item.return_reason || '—'}</td>
                     <td className="px-2 py-2 capitalize text-xs">{item.item_status?.replace(/_/g, ' ')}</td>
+                    <td className="px-2 py-2 text-right">
+                      {dc.status === 'draft' ? (
+                        <input
+                          id={`declared-value-${item.serial_id}`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="w-28 border border-slate-200 rounded px-2 py-1 text-sm text-right"
+                          placeholder="0"
+                          value={declaredValues[item.serial_id] ?? (item.declared_value ?? '')}
+                          onChange={(e) => setDeclaredValues((prev) => ({
+                            ...prev, [item.serial_id]: e.target.value,
+                          }))}
+                        />
+                      ) : (
+                        <span className="tabular-nums">
+                          {item.declared_value == null
+                            ? '—'
+                            : Number(item.declared_value).toLocaleString('en-IN', {
+                              minimumFractionDigits: 2, maximumFractionDigits: 2,
+                            })}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -229,9 +260,20 @@ export default function ReturnToVendorDetailPage() {
         </div>
       </div>
 
+      {/* Sits above Send to gate, because that is the order the work happens in:
+          price the laptops, name the transporter, get the E-way Bill, then the
+          gate releases it. Hidden once the consignment has gone. */}
+      {dc.status !== 'cancelled' && (
+        <VrtdcEwayPanel dcNumber={dcNumber} status={dc.status} onChange={load} />
+      )}
+
       {dc.status === 'draft' && (
         <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <h3 className="font-semibold flex items-center gap-2"><Truck className="w-4 h-4" /> Send to gate</h3>
+          <p className="text-xs text-slate-500">
+            Enter a declared value against each laptop in the table above before sending —
+            that total decides whether an E-way Bill is required.
+          </p>
           <div className="max-w-xl">
             <VrdcDispatchFields
               shipBy={shipBy}

@@ -300,6 +300,22 @@ router.post('/return-to-vendor/dc/:dcNumber/dispatch', authorizeReturnToVendor, 
 router.post('/return-to-vendor/dc/:dcNumber/complete', authorizeReturnToVendor, vendorReturn.completeDc);
 router.post('/return-to-vendor/dc/:dcNumber/cancel', authorizeReturnToVendor, vendorReturn.cancelDc);
 
+// ---------- VRTDC E-way Bill ----------
+// The document lands in backend/uploads/vendor-return-eway/<dc>/, which sits
+// behind uploadsAuth like the rest of /uploads, so it is not world-readable.
+// Saving is NOT gated on vendor_return_to_vendor: it is the Accounts team's job,
+// and the controller checks the dc_eway_bill permission itself.
+const vrtdcEwayUpload = vendorReturn.createEwayUpload();
+
+router.get('/return-to-vendor/dc/:dcNumber/eway', authorizeReturnToVendor, vendorReturn.getEwayCompliance);
+router.post('/return-to-vendor/dc/:dcNumber/request-eway', authorizeReturnToVendor, vendorReturn.requestEwayBill);
+router.post(
+  '/return-to-vendor/dc/:dcNumber/eway',
+  authMiddleware,
+  wrapMulter(vrtdcEwayUpload.single('eway_bill_pdf')),
+  vendorReturn.saveEwayBill
+);
+
 // ---------- Vendor rental return ticket (wraps VRTDC; rent stops on notify) ----------
 const authorizeReturnTicket = [
   authMiddleware,

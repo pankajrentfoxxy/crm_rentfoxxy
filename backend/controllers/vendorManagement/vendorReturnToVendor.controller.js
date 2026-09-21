@@ -180,3 +180,113 @@ exports.cancelDc = async (req, res) => {
     client.release();
   }
 };
+
+/* ── E-way Bill ──────────────────────────────────────────────────────────── */
+
+const eway = require('../../services/vrtdcEwayComplianceService');
+
+/** Compliance state for one VRTDC — drives the buttons and the gate warning. */
+exports.getEwayCompliance = async (req, res) => {
+  try {
+    const dc = await getReturnDc(req.params.dcNumber);
+    if (!dc) return res.status(404).json({ success: false, message: 'Return DC not found' });
+    const compliance = await eway.buildVrtdcEwayCompliance(
+      dc, dc.items, req.user, req.permissionCache
+    );
+    res.json({ success: true, compliance });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/** Warehouse asks Accounts for the E-way Bill once the transporter is known. */
+exports.requestEwayBill = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const dc = await getReturnDc(dcNumber);
+    if (!dc) return res.status(404).json({ success: false, message: 'Return DC not found' });
+
+    const compliance = await eway.buildVrtdcEwayCompliance(dc, dc.items, req.user, req.permissionCache);
+    if (!compliance.can_request_eway) {
+      return res.status(403).json({ success: false, message: 'Not allowed to request an E-way Bill' });
+    }
+    if (!compliance.requires_eway_bill) {
+      return res.status(400).json({
+        success: false,
+        message: `Declared value is ${compliance.product_value} — below the `
+          + `${compliance.eway_threshold} threshold, so no E-way Bill is needed. `
+          + 'Enter the declared values on the laptops if that looks wrong.',
+      });
+    }
+    if (!dc.ship_by) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter the delivery partner details before requesting the E-way Bill — '
+          + 'Accounts needs the transporter and vehicle for the GST portal.',
+      });
+    }
+
+    const result = await eway.sendAccountsVrtdcEwayEmail({
+      dcNumber, head: dc, items: dc.items, actorUserId: req.user?.user_id || null,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/** Accounts records the E-way Bill, which releases the consignment to the gate. */
+exports.saveEwayBill = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const allowed = await eway.canUploadVrtdcEwayBill(req.user, req.permissionCache);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the Accounts team can enter the E-way Bill',
+      });
+    }
+    const file = req.file || (req.files?.eway_bill_pdf || [])[0] || null;
+    const rel = file
+      ? `vendor-return-eway/${String(dcNumber).replace(/[^\w-]+/g, '_')}/${file.filename}`
+      : null;
+
+    const saved = await eway.saveVrtdcEwayBill({
+      dcNumber,
+      ewayBillNumber: req.body.eway_bill_number,
+      ewayBillDate: req.body.eway_bill_date,
+      ewayBillPdfPath: rel,
+      userId: req.user?.user_id || null,
+    });
+    res.json({ success: true, ...saved });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/** Multer for the E-way Bill document. Built here so the route file stays declarative. */
+exports.createEwayUpload = () => {
+  const multer = require('multer');
+  const path = require('path');
+  const fs = require('fs');
+  return multer({
+    storage: multer.diskStorage({
+      destination: (req, _file, cb) => {
+        const safeDc = String(req.params.dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+        const dir = path.join(__dirname, '../../uploads/vendor-return-eway', safeDc);
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname) || '.pdf';
+        cb(null, `eway_${Date.now()}${ext}`);
+      },
+    }),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const ok = file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/');
+      if (!ok) return cb(new Error('E-way Bill must be a PDF or an image'));
+      cb(null, true);
+    },
+  });
+};

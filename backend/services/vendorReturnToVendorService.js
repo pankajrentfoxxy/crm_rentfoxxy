@@ -422,6 +422,8 @@ async function dispatchReturnDc(client, {
   vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
+  declared_values,
+  declaredValues,
   actorUserId,
   actorName,
 }) {
@@ -432,6 +434,13 @@ async function dispatchReturnDc(client, {
   const head = headRes.rows[0];
   if (!head) throw new Error('Return DC not found');
   if (head.status !== 'draft') throw new Error(`Cannot send to gate — DC status is ${head.status}`);
+
+  // Declared value per laptop, entered alongside the delivery partner. This is
+  // what the Rs 50,000 e-way threshold is measured against, so it is captured
+  // here rather than asked for later — by the time Accounts sees the request the
+  // dispatcher has gone.
+  const { saveDeclaredValues } = require('./vrtdcEwayComplianceService');
+  await saveDeclaredValues(client, dcNumber, declared_values || declaredValues || {});
 
   const dispatch = dispatchPayloadFromBody({
     ship_by: ship_by || shipBy,
@@ -495,6 +504,13 @@ async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorNam
   if (head.status !== 'dispatch_ready') {
     throw new Error(`Cannot confirm gate outward — DC status is ${head.status}`);
   }
+
+  // The gate is where the e-way bill is enforced, not DC creation: a return is
+  // picked and packed before anyone knows the transporter, and blocking creation
+  // would stop the warehouse working. What must not happen without an e-way bill
+  // is the consignment physically leaving.
+  const { assertVrtdcCanLeaveGate } = require('./vrtdcEwayComplianceService');
+  await assertVrtdcCanLeaveGate(dcNumber, client);
 
   const items = await client.query(
     `SELECT * FROM vendor_return_dc_items WHERE dc_number = $1 FOR UPDATE`,
