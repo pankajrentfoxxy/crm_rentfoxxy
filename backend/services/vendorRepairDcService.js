@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const { closeOpenWorkLogs } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+const { applyStageMove } = require('./stageTransitionService');
 const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 const {
@@ -1559,33 +1560,34 @@ async function receiveItemsFromVendor(client, {
         ? `${condHi.reason} — Floor Manager triage`
         : 'Returned from vendor repair — Floor Manager triage');
 
-    await client.query(
-      `UPDATE tickets SET
-          status = 'in_progress',
-          current_stage_id = COALESCE($2::int, current_stage_id),
-          assigned_user_id = NULL,
-          assigned_team_id = $3::int,
-          current_location = 'Warehouse — Floor Manager',
-          highlighted = TRUE,
-          highlighted_reason = $4::text,
-          priority = 'high',
-          serial_number = COALESCE($5::text, serial_number),
-          ttspl_id = COALESCE($6::text, ttspl_id),
-          vendor_serial_id = COALESCE($7::int, vendor_serial_id),
-          received_condition = $8::text,
-          updated_at = NOW()
-        WHERE ticket_id = $1`,
-      [
-        item.ticket_id,
-        fmStageId,
-        fmTeamId,
+    // Part 5.3 — through the one mover. A unit coming back from a vendor repair
+    // lands on the floor manager's desk; migration 271 enumerates that re-entry
+    // so it is in the map rather than exempt from it.
+    await applyStageMove(client, {
+      ticket: { ticket_id: item.ticket_id },
+      toStageName: 'Floor Manager',
+      conditionHint: null,
+      status: 'in_progress',
+      extraSets: [
+        `current_location = 'Warehouse — Floor Manager'`,
+        'highlighted = TRUE',
+        'highlighted_reason = $1::text',
+        `priority = 'high'`,
+        'serial_number = COALESCE($2::text, serial_number)',
+        'ttspl_id = COALESCE($3::text, ttspl_id)',
+        'vendor_serial_id = COALESCE($4::int, vendor_serial_id)',
+        'received_condition = $5::text',
+      ],
+      extraParams: [
         highlightReason,
         isReplacement ? replacementRow.serial_number : null,
         isReplacement ? replacementRow.inventory_asset_code : null,
         isReplacement ? replacementRow.serial_id : null,
         laptopCondition,
-      ]
-    );
+      ],
+      source: 'vendorRepairDcService.receiveFromVendorRepair',
+      reason: highlightReason,
+    });
 
     if (isReplacement) {
       try {

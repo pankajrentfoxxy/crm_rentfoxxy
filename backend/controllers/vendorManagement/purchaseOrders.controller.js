@@ -39,6 +39,14 @@ const {
 } = require('../../services/purchaseOrderActivityService');
 const { resolveSerialForGrnIntake } = require('../../services/serialReintakeService');
 const {
+  CaptureGateError,
+  assertUnitMayBeReceived,
+  stampGateOutcome,
+  recordWaiverEvent,
+  loadVerificationsForSerials,
+} = require('../../services/grnCaptureGateService');
+const { transitionAsset, STATUS } = require('../../services/inventoryStateMachine');
+const {
   LAPTOP_CONDITIONS,
   PART_CATEGORIES,
   CONDITION_VALUES,
@@ -521,7 +529,13 @@ const receiveSerialValidators = [
   param('poId').isInt().toInt(),
   body('line_index').isInt({ min: 0 }).toInt(),
   body('serial_number').trim().notEmpty(),
-  body('grn_id').optional({ nullable: true }).isInt().toInt()
+  body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  // Part 5.1 — the third receive INSERT. No screen calls it today, which is
+  // exactly why it was the easiest hole to leave open: a route that books a
+  // laptop in with no verification and no status.
+  body('capture_token').optional({ nullable: true }).isUUID(),
+  body('received_condition').optional({ nullable: true }).isIn(CONDITION_VALUES),
+  body('config_capture_waiver_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 })
 ];
 
 async function receiveProductSerial(req, res) {
@@ -573,8 +587,26 @@ async function receiveProductSerial(req, res) {
     });
   }
 
+  const receivedCondition = normalizeCondition(req.body.received_condition);
+  let gate;
+  try {
+    gate = await assertUnitMayBeReceived(pool, {
+      poId,
+      lineIndex,
+      serialNumber: serial_number,
+      receivedCondition,
+      captureToken: req.body.capture_token,
+      waiverReason: req.body.config_capture_waiver_reason,
+    });
+  } catch (gateErr) {
+    if (gateErr instanceof CaptureGateError) {
+      return res.status(gateErr.status || 400).json({ success: false, message: gateErr.message });
+    }
+    throw gateErr;
+  }
+
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
-  const extra = { line_index: lineIndex, ...buildConfigExtraFromLine(line) };
+  const extra = { line_index: lineIndex, received_condition: receivedCondition, ...buildConfigExtraFromLine(line) };
   if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
   const client = await pool.connect();
@@ -633,6 +665,34 @@ async function receiveProductSerial(req, res) {
       grnId: finalGrnId,
       productDetailId: pd,
       config: buildConfigExtraFromLine(line),
+    });
+    await stampGateOutcome(client, {
+      serialId,
+      tokenId: gate.tokenId,
+      waived: gate.waived,
+      waiverReason: gate.waiverReason,
+    });
+    if (gate.waived) {
+      await recordWaiverEvent(client, {
+        serialId,
+        ttsplId: null,
+        poId,
+        lineIndex,
+        serialNumber: serial_number,
+        receivedCondition,
+        waiverReason: gate.waiverReason,
+        actor: req.user,
+        correlationId: req.correlationId || null,
+      });
+    }
+    await transitionAsset(client, {
+      serialId,
+      toStatus: STATUS.IN_REPAIR,
+      reason: 'Received on GRN — enters production',
+      actorUserId: req.user?.user_id || null,
+      actorName: req.user?.name || null,
+      correlationId: req.correlationId || null,
+      caller: 'purchaseOrders.receiveProductSerial',
     });
 
     await client.query('COMMIT');
@@ -733,11 +793,21 @@ const receivePoLineBulkValidators = [
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
   body('bill_status').optional().isIn(['pending', 'received']),
   body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
+  // Part 5.1 (P4) — bulk receive had no token parameter at all, so up to
+  // RECEIVE_PO_BULK_CAP units went in with nothing verified. One token per
+  // serial, positionally matched, same gate as the single path.
+  body('capture_tokens').optional({ nullable: true }).isArray({ max: RECEIVE_PO_BULK_CAP }),
+  body('received_condition').optional({ nullable: true }).isIn(CONDITION_VALUES),
+  body('config_capture_waiver_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
   body().custom((_v, { req }) => {
     const q = Number(req.body.quantity);
     const arr = req.body.serial_numbers;
     if (!Array.isArray(arr) || arr.length !== q) {
       throw new Error('serial_numbers must contain exactly quantity entries');
+    }
+    const tokens = req.body.capture_tokens;
+    if (tokens != null && (!Array.isArray(tokens) || tokens.length !== q)) {
+      throw new Error('capture_tokens, when given, must contain exactly quantity entries');
     }
     const norm = arr.map((s) => String(s || '').trim().toUpperCase());
     const set = new Set(norm);
@@ -800,6 +870,38 @@ async function receivePoLineBulk(req, res) {
       success: false,
       message: `Cannot receive ${quantity} units; only ${remaining} remaining on this line.`
     });
+  }
+
+  // Part 5.1 (P4) — gate every unit in the batch before anything is written.
+  // The condition is checked against the line exactly as the single path does;
+  // bulk receive previously recorded no condition at all.
+  const bulkCondition = normalizeCondition(req.body.received_condition);
+  const allowedBulkConditions = await resolveAllowedConditionsForLine(pool, line);
+  if (!allowedBulkConditions.includes(bulkCondition)) {
+    return res.status(400).json({
+      success: false,
+      message: `This purchase order line does not accept "${conditionLabel(bulkCondition)}" laptops. Allowed: ${allowedBulkConditions.map(conditionLabel).join(', ')}.`
+    });
+  }
+
+  const capturePerUnit = Array.isArray(req.body.capture_tokens) ? req.body.capture_tokens : [];
+  const gates = [];
+  for (let i = 0; i < quantity; i += 1) {
+    try {
+      gates.push(await assertUnitMayBeReceived(pool, {
+        poId,
+        lineIndex,
+        serialNumber: serialsNorm[i],
+        receivedCondition: bulkCondition,
+        captureToken: capturePerUnit[i] || null,
+        waiverReason: req.body.config_capture_waiver_reason,
+      }));
+    } catch (gateErr) {
+      if (gateErr instanceof CaptureGateError) {
+        return res.status(gateErr.status || 400).json({ success: false, message: gateErr.message });
+      }
+      throw gateErr;
+    }
   }
 
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
@@ -884,10 +986,12 @@ async function receivePoLineBulk(req, res) {
       };
       if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
+      extra.received_condition = bulkCondition;
+
       const insS = await client.query(
-        `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
-         VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
-        [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
+        `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra, received_condition)
+         VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb,$7) RETURNING serial_id`,
+        [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra), bulkCondition]
       );
       const serialId = insS.rows[0].serial_id;
       await freezeAcceptedReceiveConfig(client, {
@@ -896,6 +1000,40 @@ async function receivePoLineBulk(req, res) {
         productDetailId: pd,
         config: buildConfigExtraFromLine(line),
       });
+
+      const gate = gates[i];
+      await stampGateOutcome(client, {
+        serialId,
+        tokenId: gate.tokenId,
+        waived: gate.waived,
+        waiverReason: gate.waiverReason,
+      });
+      if (gate.waived) {
+        await recordWaiverEvent(client, {
+          serialId,
+          ttsplId: inventory_asset_code,
+          poId,
+          lineIndex,
+          serialNumber: serial_number,
+          receivedCondition: bulkCondition,
+          waiverReason: gate.waiverReason,
+          actor: req.user,
+          correlationId: req.correlationId || null,
+        });
+      }
+
+      // Part 5.2 (G2) — same as the single path: a received laptop is on the
+      // floor. Never NULL.
+      await transitionAsset(client, {
+        serialId,
+        toStatus: STATUS.IN_REPAIR,
+        reason: 'Received on GRN (bulk) — enters production',
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        correlationId: req.correlationId || null,
+        caller: 'purchaseOrders.receivePoLineBulk',
+      });
+
       createdRows.push({
         serial_id: serialId,
         serial_number,
@@ -1015,7 +1153,12 @@ const receivePoLineUnitValidators = [
   body('bill_status').optional().isIn(['pending', 'received']),
   body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   body('apply_bill_settings').optional().isBoolean().toBoolean(),
+  // Part 5.1: still optional in SHAPE, because a 'not_on' laptop cannot run the
+  // capture script. Whether it is required for THIS unit is decided by
+  // assertUnitMayBeReceived from the received condition — a rule a validator
+  // cannot express, since it depends on the PO line's allowed conditions.
   body('capture_token').optional({ nullable: true }).isUUID(),
+  body('config_capture_waiver_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
   body('physical_damage_remark').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
   body('received_condition').optional({ nullable: true }).isIn(CONDITION_VALUES),
   body('missing_parts').optional({ nullable: true }).isArray({ max: 20 }),
@@ -1090,6 +1233,25 @@ async function receivePoLineUnit(req, res) {
       success: false,
       message: 'Select at least one missing part category for a Part Missing laptop.'
     });
+  }
+
+  // Part 5.1 (P3) — the configuration gate. Before this, capture_token was
+  // optional and unchecked: any UUID, or none at all, booked the unit in.
+  let gate;
+  try {
+    gate = await assertUnitMayBeReceived(pool, {
+      poId,
+      lineIndex,
+      serialNumber: serial_number,
+      receivedCondition,
+      captureToken,
+      waiverReason: req.body.config_capture_waiver_reason,
+    });
+  } catch (gateErr) {
+    if (gateErr instanceof CaptureGateError) {
+      return res.status(gateErr.status || 400).json({ success: false, message: gateErr.message });
+    }
+    throw gateErr;
   }
 
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
@@ -1209,6 +1371,40 @@ async function receivePoLineUnit(req, res) {
       grnId: finalGrnId,
       productDetailId: pd,
       config: receiveConfig,
+    });
+
+    // Part 5.1 — the verification (or the waiver) is now reachable from the unit.
+    await stampGateOutcome(client, {
+      serialId: createdRow.serial_id,
+      tokenId: gate.tokenId,
+      waived: gate.waived,
+      waiverReason: gate.waiverReason,
+    });
+    if (gate.waived) {
+      await recordWaiverEvent(client, {
+        serialId: createdRow.serial_id,
+        ttsplId: inventory_asset_code,
+        poId,
+        lineIndex,
+        serialNumber: serial_number,
+        receivedCondition,
+        waiverReason: gate.waiverReason,
+        actor: req.user,
+        correlationId: req.correlationId || null,
+      });
+    }
+
+    // Part 5.2 (G2) — a received laptop is on the floor, not on the shelf.
+    // Leaving this NULL is what made every availability query COALESCE it to
+    // 'in_stock' and count a unit on the diagnosis bench as sellable.
+    await transitionAsset(client, {
+      serialId: createdRow.serial_id,
+      toStatus: STATUS.IN_REPAIR,
+      reason: 'Received on GRN — enters production',
+      actorUserId: req.user?.user_id || null,
+      actorName: req.user?.name || null,
+      correlationId: req.correlationId || null,
+      caller: 'purchaseOrders.receivePoLineUnit',
     });
 
     await client.query('COMMIT');
@@ -1460,12 +1656,19 @@ async function getGrnReceivedProducts(req, res) {
 
   const serials = await pool.query(
     `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra,
-            grn_received_config, config_locked_at, created_at
+            grn_received_config, config_locked_at, created_at,
+            received_condition, inventory_status
        FROM vendor_serial_numbers
      WHERE po_id = $1 AND grn_id = $2 AND deleted_at IS NULL
      ORDER BY serial_id`,
     [poId, grnId]
   );
+
+  // Part 5.1 (P5) — grn_config_verifications has been written since migration
+  // 092 and read by nothing. This is the read. A check nobody can see is not a
+  // check, and until now the GRN screen could not tell a verified unit from one
+  // booked in blind.
+  const verifications = await loadVerificationsForSerials(pool, serials.rows.map((s) => s.serial_id));
 
   const grn = g.rows[0];
   const items = serials.rows.map((s) => {
@@ -1502,7 +1705,10 @@ async function getGrnReceivedProducts(req, res) {
       gpu: config.gpu ?? null,
       screen_size: config.screen_size ?? null,
       physical_damage_remark: ex.physical_damage_remark ?? null,
+      received_condition: s.received_condition ?? ex.received_condition ?? null,
+      inventory_status: s.inventory_status ?? null,
       config_locked: !!s.config_locked_at,
+      config_verification: verifications.get(s.serial_id) || { state: 'none' },
       grn_date: grn.updated_at ?? grn.created_at
     };
   });

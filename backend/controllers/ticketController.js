@@ -8,6 +8,7 @@ const {
   closeOpenWorkLogsForTickets
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const { applyStageMove, assertTransitionAllowed, StageTransitionRefused } = require('../services/stageTransitionService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const {
   resolvePartConfigUpdate,
@@ -989,28 +990,12 @@ exports.moveToNextStage = async (req, res) => {
       assignedUserIdValue = keepAssignee ? ticket.assigned_user_id : null;
     }
 
-    // Update ticket to next stage
-    // If completed, we also set status='completed' and completed_at
-    let updateQuery = `UPDATE tickets 
-       SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = $4`;
-
-    const updateParams = [nextStage.stage_id, nextStage.team_id, id, assignedUserIdValue];
-
-    if (isCompleted) {
-      updateQuery += `, status = 'completed', completed_at = CURRENT_TIMESTAMP`;
-    } else {
-      // Ensure status is in_progress if we are jumping BACK or moving to active stage
-      updateQuery += `, status = 'in_progress', completed_at = NULL`;
-
-      // Also SYNC Inventory: If completed ticket is moved back, reset inventory status
-      if (ticket.status === 'completed') {
-        // We can't await here easily inside the query builder unless we do it separately.
-        // But we have ticket.serial_number.
-        await pool.query(
-          `UPDATE inventory SET status = 'Floor', stock_type = 'Cooling Period' WHERE serial_number = $1`,
-          [ticket.serial_number]
-        );
-      }
+    if (!isCompleted && ticket.status === 'completed') {
+      // A completed ticket moved back: the legacy inventory table has to follow.
+      await pool.query(
+        `UPDATE inventory SET status = 'Floor', stock_type = 'Cooling Period' WHERE serial_number = $1`,
+        [ticket.serial_number]
+      );
     }
 
     // SYNC Inventory Stage
@@ -1021,9 +1006,28 @@ exports.moveToNextStage = async (req, res) => {
       );
     }
 
-    updateQuery += ` WHERE ticket_id = $3 RETURNING *`;
-
-    const updateResult = await pool.query(updateQuery, updateParams);
+    // Part 5.3 — the generic stage mover now goes through the one mover, which
+    // means it is governed by stage_transition_rules like everything else. This
+    // was the widest hole: a plain POST here moved any ticket to any stage.
+    let updateResult;
+    try {
+      const moved = await applyStageMove(pool, {
+        ticket,
+        toStageName: nextStage.stage_name,
+        assignedUserId: assignedUserIdValue == null ? null : assignedUserIdValue,
+        status: isCompleted ? 'completed' : 'in_progress',
+        source: 'ticketController.updateTicketStage',
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        reason: notes || null,
+      });
+      updateResult = { rows: [moved.ticket] };
+    } catch (moveErr) {
+      if (moveErr instanceof StageTransitionRefused) {
+        return res.status(moveErr.status).json({ success: false, message: moveErr.message });
+      }
+      throw moveErr;
+    }
 
     await syncWorkLogForTicketState(pool, updateResult.rows[0]);
 
@@ -1200,6 +1204,7 @@ exports.assignTicket = async (req, res) => {
     // Stage logic: target_stage_id (priority assign) > user's first stage > team's first stage
     let targetStageId = null;
     let targetTeamId = null;
+    let targetStageName = null;
 
     if (target_stage_id) {
       // Floor manager priority assign: user + stage specified
@@ -1207,6 +1212,7 @@ exports.assignTicket = async (req, res) => {
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
+        targetStageName = stageRes.rows[0].stage_name;
         logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
     } else if (preserveDispatchQcStage || preserveQcStageReassign) {
@@ -1232,6 +1238,7 @@ exports.assignTicket = async (req, res) => {
         if (stageRes.rows.length > 0) {
           targetStageId = stageRes.rows[0].stage_id;
           targetTeamId = stageRes.rows[0].team_id;
+          targetStageName = stageRes.rows[0].stage_name;
           logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
         }
       }
@@ -1244,12 +1251,34 @@ exports.assignTicket = async (req, res) => {
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
+        targetStageName = stageRes.rows[0].stage_name;
         logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
     }
 
-    if (targetStageId != null) {
-      updateQuery += `, current_stage_id = ${targetStageId}`;
+    // Part 5.3 — assignment could move a ticket to any stage, because
+    // target_stage_id came straight from the request body and nothing consulted
+    // stage_transition_rules. The move itself now goes through the one mover;
+    // the assignment columns are written after it, so an explicit assignee or
+    // team still wins over the stage's defaults.
+    if (targetStageId != null && targetStageName) {
+      try {
+        await applyStageMove(pool, {
+          ticket: currentTicket,
+          toStageName: targetStageName,
+          status: 'in_progress',
+          assignedUserId: 'keep',
+          source: 'ticketController.assignTicket',
+          actor: req.user,
+          correlationId: req.correlationId || null,
+          reason: logMessage || null,
+        });
+      } catch (moveErr) {
+        if (moveErr instanceof StageTransitionRefused) {
+          return res.status(moveErr.status).json({ success: false, message: moveErr.message });
+        }
+        throw moveErr;
+      }
       if (targetTeamId != null) updateQuery += `, assigned_team_id = ${targetTeamId}`;
     }
     updateQuery += `, status = 'in_progress', completed_at = NULL WHERE ticket_id = $${paramCount} RETURNING *`;
@@ -2037,26 +2066,47 @@ exports.bulkMoveTickets = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No tickets found in the selected stage' });
     }
 
-    // 3. Perform Bulk Update
-    // We update: stage, team (to target stage's team), unassign user, reset status to in_progress
-    const updateRes = await pool.query(
-      `UPDATE tickets 
-       SET current_stage_id = $1, 
-           assigned_team_id = $2, 
-           assigned_user_id = NULL,
-           status = 'in_progress',
-           updated_at = CURRENT_TIMESTAMP
-       WHERE current_stage_id = $3
-       RETURNING ticket_id`,
-      [targetStage.stage_id, targetStage.team_id, current_stage_id]
-    );
+    // 3. Perform the move — Part 5.3.
+    //
+    // This used to be one UPDATE across every ticket in the stage, which made it
+    // the fastest way in the codebase to put a hundred tickets somewhere the
+    // rules forbid. The transition is checked once (every ticket in the batch
+    // shares a from-stage and a to-stage, so one check settles all of them) and
+    // then each ticket moves through the one mover, so each gets its own event.
+    try {
+      await assertTransitionAllowed(pool, {
+        fromStageName,
+        toStageName: targetStage.stage_name,
+      });
+    } catch (moveErr) {
+      if (moveErr instanceof StageTransitionRefused) {
+        return res.status(moveErr.status).json({
+          success: false,
+          message: `${moveErr.message}. Bulk move refused for all ${tickets.length} ticket(s).`,
+        });
+      }
+      throw moveErr;
+    }
 
-    // 4. Log Activities & Sync Inventory (Iterate helps with granular logging, or we can do bulk insert if performance is key. 
-    // For < 1000 items, iteration is fine and safer for logic).
-
-    // We'll calculate success count based on updateRes
-    const movedCount = updateRes.rowCount;
-    const movedIds = updateRes.rows.map((r) => r.ticket_id);
+    const movedIds = [];
+    for (const t of tickets) {
+      try {
+        await applyStageMove(pool, {
+          ticket: t,
+          toStageName: targetStage.stage_name,
+          status: 'in_progress',
+          source: 'ticketController.bulkMoveStage',
+          actor: req.user,
+          correlationId: req.correlationId || null,
+          reason: 'Bulk stage move',
+        });
+        movedIds.push(t.ticket_id);
+      } catch (moveErr) {
+        // One ticket refusing does not cancel the batch — it is reported.
+        console.warn(`[bulkMoveStage] ticket ${t.ticket_id} not moved: ${moveErr.message}`);
+      }
+    }
+    const movedCount = movedIds.length;
     await closeOpenWorkLogsForTickets(pool, movedIds);
 
     // Async logging (fire and forget to speed up response?) 

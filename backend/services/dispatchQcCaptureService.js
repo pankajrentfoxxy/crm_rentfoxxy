@@ -10,6 +10,8 @@ const {
   resolvePublicFrontendUrl,
 } = require('./grnSerialCaptureService');
 const { verifyConfigurationAgainst, sizeNum, normBrand } = require('./grnConfigService');
+const { applyStageMove } = require('./stageTransitionService');
+const { buildQcFailure } = require('./qcFailureService');
 const { serialMatchesSoLine, configMismatchMessage, enrichSerialSpecs } = require('../utils/soInventorySpecMatch');
 const { getSalesOrderLines } = require('./salesManagementService');
 const { secureAccessNumber } = require('../utils/secureRandom');
@@ -249,22 +251,27 @@ async function applyDispatchQcFailure(client, {
       );
       const diag = stRes.rows[0];
       if (diag) {
-        const highlightedReason = `Dispatch QC failed: ${failReason}`.slice(0, 500);
-        const updRes = await client.query(
-          `UPDATE tickets
-              SET current_stage_id = $2,
-                  assigned_team_id = $3,
-                  assigned_user_id = NULL,
-                  status = 'in_progress',
-                  qc_fail_count = COALESCE(qc_fail_count, 0) + 1,
-                  highlighted = TRUE,
-                  highlighted_reason = $4,
-                  updated_at = NOW()
-            WHERE ticket_id = $1
-            RETURNING *`,
-          [ticket.ticket_id, diag.stage_id, diag.team_id, highlightedReason]
-        );
-        const newTicket = updRes.rows[0];
+        // Part 5.3 / 5.4 — through the one mover, with the one failure routine,
+        // so a Dispatch QC failure recorded here matches one recorded through
+        // moveToStage or submitQC instead of being a third dialect.
+        const failure = buildQcFailure({
+          stage: 'Dispatch QC',
+          reason: failReason,
+          currentFailCount: ticket.qc_fail_count || 0,
+        });
+        const highlightedReason = failure.highlightedReason;
+        const moved = await applyStageMove(client, {
+          ticket,
+          toStageName: 'Diagnosis',
+          conditionHint: 'dispatch_qc_failed',
+          status: 'in_progress',
+          extraSets: failure.sets,
+          extraParams: failure.params,
+          source: 'dispatchQcCaptureService.applyDispatchQcFailure',
+          actor: actorUserId ? { actor_type: 'user', actor_id: actorUserId, actor_name: actorName || null } : null,
+          reason: failure.failReason,
+        });
+        const newTicket = moved.ticket;
 
         if (ticket.serial_number) {
           await client.query(

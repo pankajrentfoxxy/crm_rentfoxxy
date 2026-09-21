@@ -8,6 +8,7 @@ const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
 const { createTicketFromGrnReceive } = require('./grnTicketService');
 const { logGrnReceive, logTtsplEvent } = require('./ttsplAuditService');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+const { applyStageMove } = require('./stageTransitionService');
 const { startWorkLog } = require('./ticketWorkLogService');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const {
@@ -235,16 +236,17 @@ async function reopenDiagnosisFailedTicketForQcProcess(db, ticketId, {
     return { ok: false, status: 404, message: 'Ticket not found' };
   }
 
-  await db.query(
-    `UPDATE tickets
-        SET status = 'in_progress',
-            current_stage_id = $1,
-            assigned_team_id = $2,
-            assigned_user_id = $3,
-            updated_at = NOW()
-      WHERE ticket_id = $4`,
-    [stage.stage_id, stage.team_id, floorManagerUserId, ticketId]
-  );
+  // Part 5.3 — through the one mover. Migration 271 enumerates the re-entry
+  // transitions this path uses, so it is governed by the map like everything
+  // else rather than writing the column itself.
+  await applyStageMove(db, {
+    ticket: ticketBefore,
+    toStageName: stage.stage_name,
+    assignedUserId: floorManagerUserId,
+    status: 'in_progress',
+    source: 'qcProcessIntakeService.reopenForProduction',
+    reason: sourceNote || 'Reopened from QC Process for production',
+  });
 
   const afterRes = await db.query('SELECT * FROM tickets WHERE ticket_id = $1', [ticketId]);
   const ticketAfter = afterRes.rows[0];

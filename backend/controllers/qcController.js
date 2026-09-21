@@ -12,6 +12,11 @@ const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { assertReadyForDispatchQc } = require('../services/dispatchChargerService');
+const { buildQcFailure, auditEventType } = require('../services/qcFailureService');
+const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
+
+/** The only stages a QC submission can legitimately come from. */
+const QC_SUBMITTABLE_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -90,29 +95,64 @@ function buildChecklistSummary(checklistData) {
         .map(([key]) => labelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
 }
 
-// Calculate QC Result based on checklist
-function calculateQCResult(checklistData) {
-    const criticalFailures = [
-        checklistData.keyboard === 'NOT WORKING',
-        checklistData.touchpad === 'NOT WORKING',
-        checklistData.usb_ports === 'NOT WORKING',
-        checklistData.wifi_test === 'NOT WORKING',
-        checklistData.battery_health === 'BAD',
-        checklistData.ssd_health === 'BAD',
-        checklistData.screen_resolution === 'FAIL'
-    ];
+// ── QC grading (Part 5.4, finding R4) ─────────────────────────────
+//
+// calculateQCResult used to take the checklist and nothing else, so QC2 applied
+// exactly the same seven criteria as QC1. That makes QC2 a second run of QC1
+// rather than a stricter gate, and it is why a unit could pass QC2 with an
+// AVERAGE battery, a cracked body or a dead speaker: QC1 does not care about
+// those, and QC2 was QC1.
+//
+// QC1 is the technician's own check that the machine works. QC2 is the last
+// look before the laptop is declared fit for a customer, so it also refuses
+// what a customer would reject on sight or on the first call.
+//
+// Dispatch QC deliberately keeps the QC1 criteria: it is a pre-dispatch
+// re-check of a unit that has already passed QC2, not a third, stricter grade.
 
-    const failureReasons = [];
-    if (checklistData.keyboard === 'NOT WORKING') failureReasons.push('Keyboard not working');
-    if (checklistData.touchpad === 'NOT WORKING') failureReasons.push('Touchpad not working');
-    if (checklistData.usb_ports === 'NOT WORKING') failureReasons.push('USB ports not working');
-    if (checklistData.wifi_test === 'NOT WORKING') failureReasons.push('WiFi not working');
-    if (checklistData.battery_health === 'BAD') failureReasons.push('Battery health BAD');
-    if (checklistData.ssd_health === 'BAD') failureReasons.push('SSD health BAD');
-    if (checklistData.screen_resolution === 'FAIL') failureReasons.push('Screen resolution failed');
+const QC_BASE_CRITERIA = [
+    { when: (c) => c.keyboard === 'NOT WORKING',        reason: 'Keyboard not working' },
+    { when: (c) => c.touchpad === 'NOT WORKING',        reason: 'Touchpad not working' },
+    { when: (c) => c.usb_ports === 'NOT WORKING',       reason: 'USB ports not working' },
+    { when: (c) => c.wifi_test === 'NOT WORKING',       reason: 'WiFi not working' },
+    { when: (c) => c.battery_health === 'BAD',          reason: 'Battery health BAD' },
+    { when: (c) => c.ssd_health === 'BAD',              reason: 'SSD health BAD' },
+    { when: (c) => c.screen_resolution === 'FAIL',      reason: 'Screen resolution failed' },
+];
+
+const QC2_ADDITIONAL_CRITERIA = [
+    { when: (c) => c.battery_health === 'AVERAGE',      reason: 'QC2: battery health only AVERAGE — not fit to ship' },
+    { when: (c) => c.ssd_health === 'AVERAGE',          reason: 'QC2: SSD health only AVERAGE — not fit to ship' },
+    { when: (c) => c.physical_damage === 'YES',         reason: 'QC2: physical damage / crack present' },
+    { when: (c) => c.body_hinge === 'NO',               reason: 'QC2: body hinge check failed' },
+    { when: (c) => c.ttspl_id === 'NO',                 reason: 'QC2: TTSPL asset label missing' },
+    { when: (c) => c.speaker === 'NOT WORKING',         reason: 'QC2: speaker not working' },
+    { when: (c) => c.camera_recording === 'NO',         reason: 'QC2: camera / audio recording failed' },
+    { when: (c) => c.bluetooth === 'NOT WORKING',       reason: 'QC2: Bluetooth not working' },
+    { when: (c) => c.power_adapter === 'NOT WORKING',   reason: 'QC2: power adapter not working' },
+    { when: (c) => c.required_drivers === 'NO',         reason: 'QC2: required drivers missing' },
+    { when: (c) => c.ms_office === 'NOT INSTALLED',     reason: 'QC2: MS Office not installed / activated' },
+    { when: (c) => c.vga_hdmi === 'NOT WORKING',        reason: 'QC2: VGA / HDMI not working' },
+    { when: (c) => c.lan_port === 'NOT WORKING',        reason: 'QC2: LAN port not working' },
+    { when: (c) => c.left_click === 'NOT WORKING',      reason: 'QC2: left click not working' },
+    { when: (c) => c.right_click === 'NOT WORKING',     reason: 'QC2: right click not working' },
+];
+
+function criteriaForStage(qcStage) {
+    return String(qcStage) === 'QC2'
+        ? [...QC_BASE_CRITERIA, ...QC2_ADDITIONAL_CRITERIA]
+        : QC_BASE_CRITERIA;
+}
+
+// Calculate QC Result based on checklist AND the stage doing the checking.
+function calculateQCResult(checklistData, qcStage = 'QC1') {
+    const data = checklistData || {};
+    const failureReasons = criteriaForStage(qcStage)
+        .filter((c) => c.when(data))
+        .map((c) => c.reason);
 
     return {
-        result: criticalFailures.some(f => f) ? 'FAIL' : 'PASS',
+        result: failureReasons.length ? 'FAIL' : 'PASS',
         reasons: failureReasons
     };
 }
@@ -255,7 +295,7 @@ exports.saveQC = async (req, res) => {
 // Submit QC and route ticket
 exports.submitQC = async (req, res) => {
     const { id } = req.params;
-    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
+    const { header, checklist, grading, remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
     const userId = req.user.user_id;
 
     const client = await pool.connect();
@@ -265,10 +305,35 @@ exports.submitQC = async (req, res) => {
 
         const ticketBeforeRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
         const ticketBefore = ticketBeforeRes.rows[0] || null;
-        const beforeStageRes = ticketBefore?.current_stage_id
+        if (!ticketBefore) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        const beforeStageRes = ticketBefore.current_stage_id
           ? await client.query('SELECT stage_name FROM stages WHERE stage_id = $1', [ticketBefore.current_stage_id])
           : { rows: [] };
-        const beforeStageName = beforeStageRes.rows[0]?.stage_name || qcStage;
+        const beforeStageName = beforeStageRes.rows[0]?.stage_name || null;
+
+        // Part 5.3 (finding R3) — the stage comes from the TICKET, never from the
+        // request body. submitQC used to take req.body.qcStage on trust and never
+        // compare it to current_stage_id, so a ticket sitting at Diagnosis could
+        // be submitted as a QC2 pass and jump to Pending Inventory.
+        const qcStage = beforeStageName;
+        if (!QC_SUBMITTABLE_STAGES.includes(qcStage)) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                success: false,
+                message: `This ticket is at "${qcStage || 'an unknown stage'}" — QC can only be submitted from ${QC_SUBMITTABLE_STAGES.join(', ')}.`,
+            });
+        }
+        const claimedStage = req.body.qcStage;
+        if (claimedStage && String(claimedStage) !== qcStage) {
+            // Not an error: the client is simply out of date. The ticket wins, and
+            // the disagreement is worth seeing in the log.
+            console.warn(
+                `[qc] ticket ${id}: client submitted qcStage="${claimedStage}" but the ticket is at "${qcStage}". Using the ticket.`
+            );
+        }
 
         const ticketMetaRes = await client.query(
             `SELECT serial_number, machine_number, vendor_serial_id, ticket_type, ttspl_id, qc_fail_count
@@ -279,8 +344,8 @@ exports.submitQC = async (req, res) => {
         const serialNumber = ticketMeta.serial_number || null;
         const machineNumber = ticketMeta.machine_number || null;
 
-        // Calculate QC result
-        const { result, reasons } = calculateQCResult(checklist);
+        // Calculate QC result against the criteria for THIS stage (Part 5.4).
+        const { result, reasons } = calculateQCResult(checklist, qcStage);
 
         // Save or update QC result
         const qcCheck = await client.query(
@@ -346,20 +411,29 @@ exports.submitQC = async (req, res) => {
             );
         }
 
-        // Route ticket based on result
+        // Route ticket based on result.
+        //
+        // Part 5.4 (R5, R6): a failure is now described by ONE routine, shared
+        // with ticketPhase2Controller.moveToStage, so the two entry points
+        // produce identical rows. It also decides the destination, because the
+        // third failure escalates to the floor manager instead of going round
+        // the rework loop again.
+        const failure = result === 'FAIL'
+            ? buildQcFailure({
+                stage: qcStage,
+                reason: remarks?.trim() || reasons.join('; '),
+                currentFailCount: ticketMeta.qc_fail_count || 0,
+              })
+            : null;
+
         let nextStage;
-        if (result === 'PASS') {
-            if (qcStage === 'QC1') {
-                nextStage = 'QC2';
-            } else if (qcStage === 'QC2' || qcStage === 'Dispatch QC') {
-                // Dispatch QC still goes to Inventory. Floor QC2 goes to Pending Inventory.
-                nextStage = qcStage === 'Dispatch QC' ? 'Inventory' : 'Pending Inventory';
-            }
+        if (failure) {
+            nextStage = failure.toStageName;
+        } else if (qcStage === 'QC1') {
+            nextStage = 'QC2';
         } else {
-            // FAIL routing depends on the stage:
-            //  - QC2 fail        -> back to QC1 for full re-inspection (never Assembly/Software)
-            //  - QC1 / Dispatch  -> back to Assembly & Software for technician rework
-            nextStage = qcStage === 'QC2' ? 'QC1' : 'Assembly & Software';
+            // Dispatch QC still goes to Inventory. Floor QC2 goes to Pending Inventory.
+            nextStage = qcStage === 'Dispatch QC' ? 'Inventory' : 'Pending Inventory';
         }
 
         if (ticketBefore?.ticket_id) {
@@ -418,7 +492,11 @@ exports.submitQC = async (req, res) => {
                         assignedUserId = null;
                     }
                 }
-            } else if (result === 'FAIL' && qcStage === 'QC1') {
+            } else if (failure && !failure.escalated && qcStage !== 'Dispatch QC') {
+                // Going back round the loop needs somebody to go back to. An
+                // escalated ticket goes to the floor manager's queue instead, so
+                // there is nobody to pre-assign.
+                const teamLabel = qcStage === 'QC2' ? 'QC1' : 'Hardware & Software';
                 const manualId = assignToUserId != null && assignToUserId !== ''
                     ? parseInt(assignToUserId, 10)
                     : null;
@@ -426,7 +504,7 @@ exports.submitQC = async (req, res) => {
                     await client.query('ROLLBACK');
                     return res.status(400).json({
                         success: false,
-                        message: 'Hardware & Software technician is required when failing from QC1',
+                        message: `${teamLabel} technician is required when failing from ${qcStage}`,
                     });
                 }
                 const eligible = await fetchOrderedMemberIds(client, team_id);
@@ -434,40 +512,52 @@ exports.submitQC = async (req, res) => {
                     await client.query('ROLLBACK');
                     return res.status(400).json({
                         success: false,
-                        message: 'Selected assignee is not an active Hardware & Software team member',
+                        message: `Selected assignee is not an active ${teamLabel} team member`,
                     });
                 }
                 assignedUserId = manualId;
             }
 
-            const qc1FailReason = (remarks?.trim() || reasons?.join('; ') || 'QC1 checklist failed').slice(0, 2000);
-            const qc1FailUpdates = result === 'FAIL' && qcStage === 'QC1'
-                ? `, qc_fail_count = COALESCE(qc_fail_count, 0) + 1,
-                     qc1_failed_at = NOW(),
-                     qc1_fail_reason = $6,
-                     highlighted = TRUE,
-                     highlighted_reason = $7`
-                : '';
-            const qc1FailParams = result === 'FAIL' && qcStage === 'QC1'
-                ? [qc1FailReason, `QC1 failed: ${qc1FailReason}`]
-                : [];
+            // Part 5.3 — the write goes through the one stage mover, which
+            // checks stage_transition_rules. submitQC used to move the ticket
+            // itself, consulting nothing.
+            try {
+                await applyStageMove(client, {
+                    ticket: ticketBefore,
+                    toStageName: nextStage,
+                    conditionHint: failure ? failure.conditionHint : null,
+                    assignedUserId,
+                    status: isCompleted ? 'completed' : 'in_progress',
+                    extraSets: failure ? failure.sets : [],
+                    extraParams: failure ? failure.params : [],
+                    source: 'qcController.submitQC',
+                    actor: req.user,
+                    correlationId: req.correlationId || null,
+                    reason: failure ? failure.failReason : null,
+                });
+            } catch (moveErr) {
+                await client.query('ROLLBACK');
+                if (moveErr instanceof StageTransitionRefused) {
+                    return res.status(moveErr.status).json({ success: false, message: moveErr.message });
+                }
+                throw moveErr;
+            }
 
-            await client.query(
-                `UPDATE tickets 
-                 SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = $5,
-                     status = $4::varchar, completed_at = CASE WHEN $4::varchar = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
-                     ${qc1FailUpdates}
-                 WHERE ticket_id = $3`,
-                [stage_id, team_id, id, isCompleted ? 'completed' : 'in_progress', assignedUserId, ...qc1FailParams]
-            );
-
-            if (result === 'FAIL' && qcStage === 'QC1') {
+            if (failure) {
+                // Part 5.4 (R5) — this fires for QC2 now, not only QC1. A QC2
+                // failure through this endpoint used to record nothing at all.
                 await ttsplAuditService.logTtsplEvent({
                     ttsplId: ticketMeta.ttspl_id,
                     vendorSerialId: ticketMeta.vendor_serial_id,
-                    eventType: 'qc1_failed',
-                    description: `QC1 failed: ${qc1FailReason}`,
-                    metadata: { reason: qc1FailReason, ticket_id: Number(id) },
+                    eventType: auditEventType(qcStage),
+                    description: failure.highlightedReason,
+                    metadata: {
+                        reason: failure.failReason,
+                        ticket_id: Number(id),
+                        stage: qcStage,
+                        fail_count: failure.failCount,
+                        escalated: failure.escalated,
+                    },
                     actorUserId: userId,
                     actorName: req.user.name,
                     db: client

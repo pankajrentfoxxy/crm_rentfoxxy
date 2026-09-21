@@ -2,6 +2,17 @@ const pool = require('../config/db');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
+const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
+
+/** What each diagnosis outcome means to stage_transition_rules. */
+const DIAGNOSIS_CONDITIONS = {
+    'Floor Manager': 'diagnosis_failed',
+    'Chip Level Repair': 'chip_required',
+    'Body & Paint': 'body_required',
+    Procurement: 'parts_required',
+    Hold: 'security_hold',
+    'Assembly & Software': 'no_chip_no_body',
+};
 
 // Diagnosis sections configuration
 const DIAGNOSIS_SECTIONS = {
@@ -453,24 +464,53 @@ exports.submitDiagnosis = async (req, res) => {
         if (nextTeam === 'Floor Manager') nextStageName = 'Floor Manager';
         if (nextTeam === 'Hold') nextStageName = 'Hold';
 
-        // Find stage and team for next stage
+        // Part 5.4 — the security hold bug lived here. nextStageName could be
+        // 'Hold', a stage that exists in no seed, and the lookup was
+        // `stage_name ILIKE '%Hold%'`, which matched nothing. Nothing matched,
+        // so nothing was updated, so the ticket did not move — and the endpoint
+        // returned success: true. A hold that silently does not hold is worse
+        // than no hold at all.
+        //
+        // The stage is seeded by migration 270, the lookup is exact, and a
+        // missing stage is now a 500 that says so instead of a quiet no-op.
         let nextStageId = null;
-        const stageRes = await client.query(`SELECT stage_id, team_id FROM stages WHERE stage_name ILIKE $1 LIMIT 1`, [`%${nextStageName}%`]);
-        if (stageRes.rows.length > 0) {
-            nextStageId = stageRes.rows[0].stage_id;
-            const nextTeamId = stageRes.rows[0].team_id;
-            // When reverting to Floor Manager (issues found), set priority=high so ticket is highlighted
-            const priorityClause = nextTeam === 'Floor Manager' ? ', priority = \'high\'' : '';
-            if (keepAssignee) {
-                await client.query(`UPDATE tickets SET current_stage_id = $1, assigned_team_id = $2 WHERE ticket_id = $3`, [nextStageId, nextTeamId, id]);
-            } else {
-                await client.query(`UPDATE tickets SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = NULL${priorityClause} WHERE ticket_id = $3`, [nextStageId, nextTeamId, id]);
+        const extraSets = [];
+        const extraParams = [];
+        if (nextTeam === 'Floor Manager') {
+            // Reverting to the floor manager: high priority so it is visible.
+            extraSets.push(`priority = 'high'`);
+        }
+        if (nextTeam === 'Hold') {
+            extraSets.push('security_hold_at = NOW()');
+            extraSets.push('security_hold_reason = $1');
+            extraParams.push(String(remarks || '').trim() || 'Security hold raised at diagnosis');
+            extraSets.push('highlighted = TRUE');
+        }
+
+        try {
+            const moved = await applyStageMove(client, {
+                ticket: { ticket_id: id },
+                toStageName: nextStageName,
+                conditionHint: DIAGNOSIS_CONDITIONS[nextStageName] || null,
+                assignedUserId: keepAssignee ? 'keep' : null,
+                extraSets,
+                extraParams,
+                source: 'diagnosisController.submitDiagnosis',
+                actor: req.user,
+                correlationId: req.correlationId || null,
+                reason: remarks || null,
+            });
+            nextStageId = moved.toStage.stage_id;
+            await syncWorkLogForTicketState(client, moved.ticket);
+        } catch (moveErr) {
+            await client.query('ROLLBACK');
+            if (moveErr instanceof StageTransitionRefused) {
+                return res.status(moveErr.status).json({ success: false, message: moveErr.message });
             }
-            const ticketAfterDx = await client.query(
-                `SELECT ticket_id, status, assigned_user_id, current_stage_id FROM tickets WHERE ticket_id = $1`,
-                [id]
-            );
-            await syncWorkLogForTicketState(client, ticketAfterDx.rows[0]);
+            return res.status(moveErr.status || 500).json({
+                success: false,
+                message: moveErr.message || 'Could not move the ticket out of Diagnosis',
+            });
         }
 
         // 6. Log Activity

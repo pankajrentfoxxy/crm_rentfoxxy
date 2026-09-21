@@ -73,28 +73,51 @@ const ttsplHistoryView = checkAnySectionPermission(
   'view'
 );
 
+// Part 5.6 (finding R13). Until now most of this router carried authMiddleware
+// and nothing else, so ANY logged-in user could advance any ticket, submit QC,
+// or fail a diagnosis. Every route below declares (section, action).
+//
+// The lists are wide on purpose. A ticket screen is reached from the floor
+// pipeline, from QC management, from the SO QC screens and from Dispatch QC,
+// and a role that can legitimately open one of those must not lose a screen it
+// has today. What changes is that holding NO relevant permission is now a 403
+// instead of a pass — the audit's actual finding.
+const FLOOR_SECTIONS = [
+  'floor_tickets', 'floor_pipeline', 'tickets', 'qc_management',
+  'so_laptop_qc', 'replacement_so_laptop_qc', 'dispatch_qc', 'pending_inventory',
+];
+const floorAnyView = checkAnySectionPermission(FLOOR_SECTIONS, 'view');
+const floorAnyEdit = checkAnySectionPermission(FLOOR_SECTIONS, 'edit');
+const floorAnyCreate = checkAnySectionPermission(FLOOR_SECTIONS, 'create');
+// QC submission is a write on a QC stage specifically.
+const qcSubmit = checkAnySectionPermission(
+  ['qc_management', 'floor_tickets', 'floor_pipeline', 'so_laptop_qc',
+   'replacement_so_laptop_qc', 'dispatch_qc'],
+  'edit'
+);
+
 // All routes require authentication
 router.use(authMiddleware);
 
 // @route   GET /api/tickets/stages
 // @desc    Get all workflow stages
 // @access  Private
-router.get('/stages', getAllStages);
+router.get('/stages', floorAnyView, getAllStages);
 
 // @route   POST /api/tickets
 // @desc    Create a new ticket
 // @access  Private
-router.post('/', createTicket);
+router.post('/', floorAnyCreate, createTicket);
 
 // @route   GET /api/tickets
 // @desc    Get all tickets (with filters)
 // @access  Private
-router.get('/', getTickets);
+router.get('/', floorAnyView, getTickets);
 
 // @route   GET /api/tickets/my
 // @desc    Get tickets assigned to me or my team
 // @access  Private
-router.get('/my', getMyTickets);
+router.get('/my', floorAnyView, getMyTickets);
 
 // @route   POST /api/tickets/bulk-move
 // @desc    Bulk move all tickets from one stage to another
@@ -102,10 +125,10 @@ router.get('/my', getMyTickets);
 router.post('/bulk-move', ftEdit, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
-router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
+router.get('/qc/qc2-assignees', floorAnyView, qcController.getQC2Assignees);
 
 // Phase 2 — floor pipeline (must be before /:id)
-router.get('/floor-counts', getFloorNavCounts);
+router.get('/floor-counts', floorAnyView, getFloorNavCounts);
 router.get('/floor-status-counts', floorQueueView, getFloorStatusCounts);
 router.get('/floor-dashboard', floorPipelineView, phase2.getFloorDashboard);
 router.get(
@@ -113,36 +136,36 @@ router.get(
   floorQueueView,
   getFloorManagerQueue
 );
-router.get('/team-members', getTeamMembers);
-router.get('/:id/next-assignee', getNextAssignee);
+router.get('/team-members', floorAnyView, getTeamMembers);
+router.get('/:id/next-assignee', floorAnyView, getNextAssignee);
 router.get('/:id/production-history', ftView, getProductionHistory);
 router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
-router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
-router.post('/:id/move-stage', phase2.moveToStage);
-router.patch('/:id/chip-repair', phase2.markChipRepairRequired);
-router.patch('/:id/body-paint', phase2.markBodyPaintRequired);
+router.get('/ttspl/:ttsplId', ttsplHistoryView, phase2.getTicketsByTtsplId);
+router.post('/:id/move-stage', floorAnyEdit, phase2.moveToStage);
+router.patch('/:id/chip-repair', floorAnyEdit, phase2.markChipRepairRequired);
+router.patch('/:id/body-paint', floorAnyEdit, phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
   ftEdit,
   phase2.markQcFailed
 );
-router.patch('/:id/diagnosis-failed', phase2.markDiagnosisFailed);
+router.patch('/:id/diagnosis-failed', floorAnyEdit, phase2.markDiagnosisFailed);
 router.patch('/:id/config', ftConfigEdit, phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id
 // @desc    Get ticket by ID with full details
 // @access  Private
-router.get('/:id', getTicketById);
+router.get('/:id', floorAnyView, getTicketById);
 
 // @route   PUT /api/tickets/:id
 // @desc    Update ticket details
 // @access  Private
-router.put('/:id', updateTicket);
+router.put('/:id', floorAnyEdit, updateTicket);
 
 // @route   POST /api/tickets/:id/next-stage
 // @desc    Move ticket to next stage
 // @access  Private
-router.post('/:id/next-stage', moveToNextStage);
+router.post('/:id/next-stage', floorAnyEdit, moveToNextStage);
 
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
@@ -152,49 +175,49 @@ router.post('/:id/assign', ftAssign, assignTicket);
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
 // @access  Private (All Roles - validation in controller)
-router.post('/:id/claim', claimTicket);
+router.post('/:id/claim', floorAnyEdit, claimTicket);
 
 // @route   PUT /api/tickets/:id/grade
 // @desc    Update ticket grade
 // @access  Private (Grading Team, Admin)
-router.put('/:id/grade', updateGrade);
+router.put('/:id/grade', floorAnyEdit, updateGrade);
 
 // @route   POST /api/tickets/:id/notes
 // @desc    Add note/comment to ticket
 // @access  Private
-router.post('/:id/notes', addNote);
+router.post('/:id/notes', floorAnyEdit, addNote);
 
 // @route   POST /api/tickets/:id/parts
 // @desc    Add part to ticket
 // @access  Private
-router.post('/:id/parts', addPartToTicket);
+router.post('/:id/parts', floorAnyEdit, addPartToTicket);
 router.post(
   '/:id/parts-with-config',
   ftEdit,
   addPartToTicketWithConfig
 );
 router.delete('/:id/parts/:ticketPartId', ftEdit, removePartFromTicket);
-router.post('/:id/log-note', logNote);
+router.post('/:id/log-note', floorAnyEdit, logNote);
 
 // Cost & Parts System
-router.post('/:id/part-request', requestPart);
-router.post('/:id/fulfill-part', fulfillPartRequest);
-router.post('/:id/service-cost', addServiceCost);
+router.post('/:id/part-request', floorAnyEdit, requestPart);
+router.post('/:id/fulfill-part', floorAnyEdit, fulfillPartRequest);
+router.post('/:id/service-cost', floorAnyEdit, addServiceCost);
 // Work Logs Routes
-router.post('/:id/work/start', startWork);
-router.post('/:id/work/end', endWork);
-router.get('/:id/work/active', getActiveWorkLog);
+router.post('/:id/work/start', floorAnyEdit, startWork);
+router.post('/:id/work/end', floorAnyEdit, endWork);
+router.get('/:id/work/active', floorAnyView, getActiveWorkLog);
 
 // Stage task checklist (Assembly & Software, Final Testing, ...)
-router.get('/:id/stage-task', getStageTask);
-router.post('/:id/stage-task', saveStageTask);
+router.get('/:id/stage-task', floorAnyView, getStageTask);
+router.post('/:id/stage-task', floorAnyEdit, saveStageTask);
 
 // QC Routes
-router.get('/:id/qc', qcController.getQCData);
-router.post('/:id/qc/save', qcController.saveQC);
-router.post('/:id/qc/submit', qcController.submitQC);
-router.post('/qc/:qc_id/upload-photo', wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
-router.get('/:ticket_id/qc/history', qcController.getQCHistory);
+router.get('/:id/qc', floorAnyView, qcController.getQCData);
+router.post('/:id/qc/save', qcSubmit, qcController.saveQC);
+router.post('/:id/qc/submit', qcSubmit, qcController.submitQC);
+router.post('/qc/:qc_id/upload-photo', qcSubmit, wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
+router.get('/:ticket_id/qc/history', floorAnyView, qcController.getQCHistory);
 
 
 

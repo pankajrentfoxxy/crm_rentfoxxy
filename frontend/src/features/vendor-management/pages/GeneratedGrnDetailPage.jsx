@@ -20,6 +20,7 @@ import {
   X
 } from 'lucide-react';
 import { fetchGeneratedGrnOverview, fetchGrnReceivedProducts, uploadGrnBill } from '../vendorManagementApi';
+import GrnConfigVerification from '../components/GrnConfigVerification';
 import PoReplacementsPanel from '../components/PoReplacementsPanel';
 
 function formatPoType(t) {
@@ -450,6 +451,8 @@ export default function GeneratedGrnDetailPage() {
                         </p>
                         <p className="text-xs text-gray-600 mt-1 leading-relaxed">{config || '—'}</p>
                         <p className="text-xs font-mono text-gray-500 mt-2">S/N: {item.serial_number || '—'}</p>
+                        {/* Part 5.1 — the verification stored at receive, finally readable. */}
+                        <GrnConfigVerification verification={item.config_verification} />
                         {item.physical_damage_remark ? (
                           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2 mt-2 leading-relaxed">
                             <span className="font-semibold">Physical damage:</span> {item.physical_damage_remark}

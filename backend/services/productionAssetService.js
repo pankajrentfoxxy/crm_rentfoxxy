@@ -7,6 +7,7 @@ const { normalizeCondition, normalizeMissingParts } = require('../constants/lapt
 const { compareConfig } = require('./grnConfigService');
 const { transitionAsset } = require('./inventoryStateMachine');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+const { applyStageMove } = require('./stageTransitionService');
 const {
   INVENTORY_TAGS,
   assignWarehouseLocation,
@@ -957,27 +958,18 @@ async function receiveIntoInventory(db, productionAssetId, {
   const ticket = await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true });
   if (ticket) {
       const ticketBefore = { ...ticket };
-      const invStage = await db.query(
-        `SELECT stage_id, team_id, stage_name FROM stages WHERE stage_name = 'Inventory' ORDER BY stage_order LIMIT 1`
-      );
-      if (invStage.rows.length) {
-        await db.query(
-          `UPDATE tickets
-              SET current_stage_id = $2,
-                  assigned_team_id = $3,
-                  status = 'completed',
-                  completed_at = NOW(),
-                  updated_at = NOW()
-            WHERE ticket_id = $1`,
-          [ticket.ticket_id, invStage.rows[0].stage_id, invStage.rows[0].team_id]
-        );
-      } else {
-        await db.query(
-          `UPDATE tickets SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-            WHERE ticket_id = $1`,
-          [ticket.ticket_id]
-        );
-      }
+      // Part 5.3 — through the one mover. The assignee is kept: whoever
+      // received the unit into inventory stays on the closed ticket.
+      const movedToInventory = await applyStageMove(db, {
+        ticket,
+        toStageName: 'Inventory',
+        conditionHint: 'inventory_received',
+        assignedUserId: 'keep',
+        status: 'completed',
+        source: 'productionAssetService.receiveIntoInventory',
+        actor: actorUserId ? { actor_type: 'user', actor_id: actorUserId, actor_name: null } : null,
+        reason: 'Serial-verified receive into inventory',
+      });
 
       await db.query(
         `UPDATE inventory SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory',
@@ -1000,8 +992,8 @@ async function receiveIntoInventory(db, productionAssetId, {
         ticketAfter: {
           ...ticket,
           status: 'completed',
-          current_stage_id: invStage.rows[0]?.stage_id || ticket.current_stage_id,
-          assigned_team_id: invStage.rows[0]?.team_id || ticket.assigned_team_id,
+          current_stage_id: movedToInventory.toStage.stage_id,
+          assigned_team_id: movedToInventory.toStage.team_id,
         },
         beforeStageName: null,
         afterStageName: 'Inventory',

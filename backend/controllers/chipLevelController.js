@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
+const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
 
 const normalizeArray = (value) => {
   if (!Array.isArray(value)) return [];
@@ -128,12 +129,24 @@ exports.submitChipRepair = async (req, res) => {
       [id, req.user.user_id, req.user.user_id, safeIssues, issue_notes, parts_required, parts_notes, safeResolved]
     );
 
-    await pool.query(
-      `UPDATE tickets
-       SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = NULL
-       WHERE ticket_id = $3`,
-      [diagnosisStage.stage_id, diagnosisStage.team_id, id]
-    );
+    // Part 5.3 — one mover. This used to write current_stage_id itself and
+    // consult stage_transition_rules not at all.
+    try {
+      await applyStageMove(pool, {
+        ticket: { ticket_id: id },
+        toStageName: 'Diagnosis',
+        conditionHint: 'repair_completed',
+        source: 'chipLevelController.submitChipRepair',
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        reason: issue_notes || null,
+      });
+    } catch (moveErr) {
+      if (moveErr instanceof StageTransitionRefused) {
+        return res.status(moveErr.status).json({ success: false, message: moveErr.message });
+      }
+      throw moveErr;
+    }
 
     await pool.query(
       `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)

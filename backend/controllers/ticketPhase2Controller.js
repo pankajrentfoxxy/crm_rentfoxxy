@@ -9,6 +9,12 @@ const { logProductionHistory } = require('../services/ticketWorkflowHistoryServi
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
 const vendorBilling = require('./vendorBillingController');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
+const { buildQcFailure, ESCALATION_STAGE, auditEventType } = require('../services/qcFailureService');
+const {
+  checkTransition,
+  applyStageMove,
+  StageTransitionRefused,
+} = require('../services/stageTransitionService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
@@ -24,11 +30,11 @@ function isSuperAdmin(user) {
   return user?.role === 'super_admin';
 }
 
-function canBypassTransitionRules(user, body) {
-  if (!user) return false;
-  if (isSuperAdmin(user)) return true;
-  return PRIVILEGED_ROLES.includes(user.role);
-}
+// Part 5.3 (R1): canBypassTransitionRules used to live here. It returned true
+// for super_admin, admin, floor_manager and manager — every role that moves a
+// ticket — so stage_transition_rules governed nobody. It is gone. A legitimate
+// transition is a row in the table (migration 271 added the ones the code was
+// already performing); there is no role that is exempt from the map.
 
 function isStageRouter(user) {
   if (!user) return false;
@@ -65,23 +71,6 @@ async function getStageByName(db, stageName) {
 async function getStageById(db, stageId) {
   const r = await db.query(`SELECT * FROM stages WHERE stage_id = $1`, [stageId]);
   return r.rows[0] || null;
-}
-
-async function validateTransition(fromStageName, toStageName, conditionHint) {
-  const r = await pool.query(
-    `SELECT * FROM stage_transition_rules
-     WHERE from_stage_name = $1 AND to_stage_name = $2
-     LIMIT 1`,
-    [fromStageName, toStageName]
-  );
-  if (!r.rows.length) {
-    return { ok: false, message: `Transition from "${fromStageName}" to "${toStageName}" is not allowed` };
-  }
-  const rule = r.rows[0];
-  if (conditionHint && rule.condition && rule.condition !== conditionHint) {
-    return { ok: false, message: `Transition requires condition "${rule.condition}"` };
-  }
-  return { ok: true, rule };
 }
 
 async function notifyHighlightedTechnician(ticket, reason) {
@@ -274,7 +263,7 @@ exports.moveToStage = async (req, res) => {
       effectiveToStage = 'Pending Inventory';
     }
 
-    const nextStage = await getStageByName(client, effectiveToStage);
+    let nextStage = await getStageByName(client, effectiveToStage);
 
     if (!nextStage) {
       await client.query('ROLLBACK');
@@ -292,9 +281,42 @@ exports.moveToStage = async (req, res) => {
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') conditionHint = 'dispatch_qc_passed';
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Diagnosis') conditionHint = 'dispatch_qc_failed';
+    if (currentStageName === 'Final Testing' && effectiveToStage === 'Assembly & Software') conditionHint = 'final_test_failed';
+
+    // Part 5.4 (R6) — bound the rework loops before anything else is decided.
+    // QC1 <-> Assembly and QC2 <-> QC1 could cycle forever: qc_fail_count was
+    // incremented and read by nobody. The third failure goes to the floor
+    // manager instead of round again, so the redirect has to happen here,
+    // before the transition is validated and before the assignee is picked.
+    const REWORK_LOOPS = new Set([
+      'QC1→Assembly & Software',
+      'QC2→QC1',
+      'Final Testing→Assembly & Software',
+    ]);
+    let escalation = null;
+    const isQcFailure = REWORK_LOOPS.has(`${currentStageName}→${effectiveToStage}`);
+    if (isQcFailure) {
+      const probe = buildQcFailure({
+        stage: currentStageName,
+        reason,
+        currentFailCount: ticket.qc_fail_count || 0,
+      });
+      if (probe.escalated) {
+        escalation = probe;
+        effectiveToStage = ESCALATION_STAGE;
+        conditionHint = 'qc_escalated';
+        nextStage = await getStageByName(client, effectiveToStage);
+        if (!nextStage) {
+          await client.query('ROLLBACK');
+          return res.status(500).json({
+            success: false,
+            message: `Escalation stage "${ESCALATION_STAGE}" is not configured`,
+          });
+        }
+      }
+    }
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
-    const bypassTransitionRules = canBypassTransitionRules(req.user, req.body);
     const dispatchQcActor = req.user.role === 'dispatch' || req.user.role === 'dispatch_qc';
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
@@ -307,7 +329,6 @@ exports.moveToStage = async (req, res) => {
     if (
       currentStageName === 'Dispatch QC'
       && effectiveToStage === 'Inventory'
-      && !bypassTransitionRules
       && req.user.role !== 'super_admin'
       && req.user.role !== 'admin'
     ) {
@@ -343,8 +364,13 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    const transition = await validateTransition(currentStageName, effectiveToStage, conditionHint);
-    if (!transition.ok && !bypassTransitionRules) {
+    // The map governs everybody now. No role argument reaches this check.
+    const transition = await checkTransition(client, {
+      fromStageName: currentStageName,
+      toStageName: effectiveToStage,
+      conditionHint,
+    });
+    if (!transition.ok) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: transition.message });
     }
@@ -356,40 +382,68 @@ exports.moveToStage = async (req, res) => {
     let highlightedReason = ticket.highlighted_reason;
     let qcFailCount = ticket.qc_fail_count || 0;
 
-    if (currentStageName === 'QC1' && effectiveToStage === 'Assembly & Software') {
+    // Part 5.4 — ONE failure routine. QC1, QC2 and Final Testing failures all
+    // record the same four facts (reason, assignee, timestamp, count) through
+    // qcFailureService, so this path and submitQC can no longer disagree about
+    // what a QC failure is. Before this, a QC2 failure here recorded everything
+    // except the count, and through submitQC recorded nothing at all.
+    if (isQcFailure) {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'QC1 fail reason is required' });
+        return res.status(400).json({ success: false, message: `${currentStageName} fail reason is required` });
       }
-      if (!overrideAssignee) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Hardware & Software technician is required when failing from QC1',
-        });
+
+      // The rework technician is required when the ticket is going back round
+      // the loop. An escalated ticket goes to the floor manager's queue, so
+      // there is nobody to pre-assign and asking for one would be nonsense.
+      if (!escalation && currentStageName !== 'Final Testing') {
+        const teamLabel = currentStageName === 'QC2' ? 'QC1' : 'Hardware & Software';
+        if (!overrideAssignee) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `${teamLabel} technician is required when failing from ${currentStageName}`,
+          });
+        }
+        const memberIds = nextStage.team_id
+          ? await fetchOrderedMemberIds(client, nextStage.team_id)
+          : [];
+        if (!memberIds.includes(overrideAssignee)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Selected user is not an active ${teamLabel} team member`,
+          });
+        }
       }
-      const hwMemberIds = nextStage.team_id
-        ? await fetchOrderedMemberIds(client, nextStage.team_id)
-        : [];
-      if (!hwMemberIds.includes(overrideAssignee)) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Selected user is not an active Hardware & Software team member',
-        });
+
+      const failure = escalation || buildQcFailure({
+        stage: currentStageName,
+        reason,
+        currentFailCount: ticket.qc_fail_count || 0,
+        assignedUserId: overrideAssignee,
+      });
+      for (const frag of failure.sets) {
+        updates.push(frag.replace(/\$(\d+)/g, (_m, n) => `$${pi + Number(n) - 1}`));
       }
-      qcFailCount += 1;
-      updates.push(`qc_fail_count = $${pi++}`); params.push(qcFailCount);
-      updates.push(`qc1_failed_at = NOW()`);
-      updates.push(`qc1_fail_reason = $${pi++}`); params.push(reason.trim());
+      params.push(...failure.params);
+      pi += failure.params.length;
+      qcFailCount = failure.failCount;
       highlighted = true;
-      highlightedReason = `QC1 failed: ${reason.trim()}`;
+      highlightedReason = failure.highlightedReason;
+
       await ttsplAuditService.logTtsplEvent({
         ttsplId: ticket.ttspl_id,
         vendorSerialId: ticket.vendor_serial_id,
-        eventType: 'qc1_failed',
-        description: highlightedReason,
-        metadata: { reason: reason.trim(), ticket_id: ticket.ticket_id },
+        eventType: auditEventType(currentStageName),
+        description: failure.highlightedReason,
+        metadata: {
+          reason: failure.failReason,
+          ticket_id: ticket.ticket_id,
+          stage: currentStageName,
+          fail_count: failure.failCount,
+          escalated: failure.escalated,
+        },
         actorUserId: req.user.user_id,
         actorName: req.user.name,
         db: client
@@ -480,45 +534,6 @@ exports.moveToStage = async (req, res) => {
       updates.push(`highlighted_reason = NULL`);
       highlighted = false;
       highlightedReason = null;
-    }
-
-    if (currentStageName === 'QC2' && effectiveToStage === 'QC1') {
-      if (!reason?.trim()) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'QC2 fail reason is required' });
-      }
-      if (!overrideAssignee) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'QC1 technician is required when failing from QC2 to QC1',
-        });
-      }
-      const qc1MemberIds = nextStage.team_id
-        ? await fetchOrderedMemberIds(client, nextStage.team_id)
-        : [];
-      if (!qc1MemberIds.includes(overrideAssignee)) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Selected user is not an active QC1 team member',
-        });
-      }
-      updates.push(`qc2_failed_at = NOW()`);
-      updates.push(`qc2_fail_reason = $${pi++}`); params.push(reason.trim());
-      highlighted = true;
-      highlightedReason = `QC2 failed: ${reason.trim()}`;
-      updates.push(`highlighted = TRUE`);
-      updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
-      await ttsplAuditService.logTtsplEvent({
-        ttsplId: ticket.ttspl_id,
-        vendorSerialId: ticket.vendor_serial_id,
-        eventType: 'qc2_failed',
-        description: highlightedReason,
-        metadata: { reason: reason.trim() },
-        actorUserId: req.user.user_id,
-        db: client
-      });
     }
 
     if (effectiveToStage === 'QC1' && ticket.qc1_failed_at && currentStageName !== 'QC2') {
@@ -688,14 +703,31 @@ exports.moveToStage = async (req, res) => {
       }
     }
 
-    updates.push(`current_stage_id = $${pi++}`); params.push(nextStage.stage_id);
-    updates.push(`assigned_team_id = $${pi++}`); params.push(nextStage.team_id);
-    updates.push(`assigned_user_id = $${pi++}`); params.push(assignedUserId);
-
-    params.push(id);
-    const updateSql = `UPDATE tickets SET ${updates.join(', ')} WHERE ticket_id = $${pi} RETURNING *`;
-    const updated = await client.query(updateSql, params);
-    const newTicket = updated.rows[0];
+    // Part 5.3 — the write goes through the one mover. The stage, team and
+    // assignee columns are its job; everything this function accumulated in
+    // `updates` rides along in the same statement, so nothing it records is lost.
+    let moveResult;
+    try {
+      moveResult = await applyStageMove(client, {
+        ticket,
+        toStageName: effectiveToStage,
+        conditionHint,
+        assignedUserId,
+        extraSets: updates,
+        extraParams: params,
+        source: 'ticketPhase2Controller.moveToStage',
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        reason: reason || null,
+      });
+    } catch (moveErr) {
+      await client.query('ROLLBACK');
+      if (moveErr instanceof StageTransitionRefused) {
+        return res.status(moveErr.status).json({ success: false, message: moveErr.message });
+      }
+      throw moveErr;
+    }
+    const newTicket = moveResult.ticket;
 
     if (ticket.serial_number) {
       await client.query(

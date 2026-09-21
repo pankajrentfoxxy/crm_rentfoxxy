@@ -217,6 +217,7 @@ export default function ProductReceivedPage() {
   const [completedUnits, setCompletedUnits] = useState([]);
   const [activeGrnId, setActiveGrnId] = useState(null);
   const [captureToken, setCaptureToken] = useState(null);
+  const [captureWaiverReason, setCaptureWaiverReason] = useState('');
   const [captureUrl, setCaptureUrl] = useState('');
   const [accessNumber, setAccessNumber] = useState(null);
   const [captureLoading, setCaptureLoading] = useState(false);
@@ -399,7 +400,10 @@ export default function ProductReceivedPage() {
   // Switching to a dead / part-missing unit drops the capture session; the serial
   // is typed by hand instead and no config verification is possible.
   useEffect(() => {
-    if (requiresConfigCapture(receivedCondition)) return;
+    if (requiresConfigCapture(receivedCondition)) {
+      setCaptureWaiverReason('');
+      return;
+    }
     setCaptureToken(null);
     setCaptureUrl('');
     setAccessNumber(null);
@@ -444,6 +448,10 @@ export default function ProductReceivedPage() {
       toast.error('Select at least one missing part');
       return;
     }
+    if (!needsCapture && captureWaiverReason.trim().length < 5) {
+      toast.error('Say why the configuration could not be captured (at least 5 characters)');
+      return;
+    }
 
     setModalBusy(true);
     try {
@@ -455,6 +463,7 @@ export default function ProductReceivedPage() {
         bill_status: billStatus,
         bill_name: billStatus === 'received' ? billName.trim() : undefined,
         capture_token: needsCapture ? captureToken || undefined : undefined,
+        config_capture_waiver_reason: needsCapture ? undefined : captureWaiverReason.trim() || undefined,
         physical_damage_remark: physicalDamageRemark.trim() || undefined,
         received_condition: receivedCondition,
         missing_parts: receivedCondition === 'part_missing' ? missingParts : undefined,
@@ -1058,14 +1067,33 @@ export default function ProductReceivedPage() {
                       </p>
                     ) : null}
                     {!needsCapture ? (
-                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2 m-0 flex gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
-                        <span>
-                          The laptop cannot be scanned in this condition — type the serial number from the
-                          sticker. Config is taken from the purchase order and the floor ticket is flagged
-                          for the technician.
-                        </span>
-                      </p>
+                      <div className="rounded-lg border border-amber-100 bg-amber-50 p-2 space-y-2">
+                        <p className="text-[11px] text-amber-800 m-0 flex gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                          <span>
+                            The laptop cannot be scanned in this condition — type the serial number from the
+                            sticker. Config is taken from the purchase order and the floor ticket is flagged
+                            for the technician.
+                          </span>
+                        </p>
+                        {/* Part 5.1 — a unit received without a configuration capture used to
+                            leave no trace of that fact. It now carries a reason and an actor. */}
+                        <label className="block text-[11px] font-semibold text-amber-900">
+                          Why no configuration capture? <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={captureWaiverReason}
+                          disabled={modalBusy}
+                          onChange={(e) => setCaptureWaiverReason(e.target.value)}
+                          placeholder="e.g. Unit does not power on; serial read from the chassis label"
+                          className="w-full rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                        />
+                        <p className="text-[11px] text-amber-700 m-0">
+                          This is stored against the laptop and shown on the GRN, so the skipped check is
+                          visible later instead of silent.
+                        </p>
+                      </div>
                     ) : null}
                   </div>
 
