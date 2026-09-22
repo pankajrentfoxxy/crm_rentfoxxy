@@ -35,6 +35,15 @@ function AssignedQueueBlock({ children }) {
   return children;
 }
 
+/** Hide "My resolved" from field technicians — leads/admins keep it. */
+function LeadResolvedOnly({ children }) {
+  const { user, isAssignedDataOnly } = useAuth();
+  if (isAssignedTicketsOnly(user, isAssignedDataOnly)) {
+    return <Navigate to="/support/my-tickets" replace />;
+  }
+  return children;
+}
+
 function LeadOnly({ children }) {
   const { user, isAssignedDataOnly } = useAuth();
   if (isAssignedTicketsOnly(user, isAssignedDataOnly) || !isSupportLead(user)) {
@@ -89,7 +98,7 @@ export default function SupportApp() {
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
         <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
         <Route path="pickup-bucket" element={<StatsOnly><TechnicianDeliveryBucketPage movement="return" /></StatsOnly>} />
-        <Route path="my-resolved" element={<SupportTicketsView view="my_resolved" showFilters />} />
+        <Route path="my-resolved" element={<LeadResolvedOnly><SupportTicketsView view="my_resolved" showFilters /></LeadResolvedOnly>} />
         <Route path="tech-bucket" element={<SupportTechBucketPage />} />
         <Route path="parts-queue" element={<PartsQueueOnly><SupportPartsQueuePage /></PartsQueueOnly>} />
         <Route path="challans/:challanId" element={<ChallanViewPage />} />
