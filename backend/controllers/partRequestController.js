@@ -25,6 +25,15 @@ const {
   loadKnownBrands,
 } = require('../services/partFitmentService');
 
+/**
+ * Migration 313 (support v2) unified the two part-request tables: every row of
+ * support_part_requests was copied into part_requests with context='FIELD' and
+ * legacy_support_request_id set. These are the FLOOR screens -- the floor queue,
+ * the warehouse queue and the procurement queue -- and a field request must not
+ * appear in any of them. Rows that predate the column are NULL and are FLOOR.
+ */
+const FLOOR_ONLY = `COALESCE(pr.context, 'FLOOR') = 'FLOOR'`;
+
 const FULL_SELECT = `
   SELECT pr.*,
          COALESCE(pr.part_name, p.part_name) AS part_name,
@@ -319,6 +328,8 @@ exports.listPartRequests = async (req, res) => {
       params.push(req.user.user_id);
       where.push(`pr.requested_by = $${params.length}`);
     }
+
+    where.push(FLOOR_ONLY);
 
     const sql = `${FULL_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY pr.created_at DESC LIMIT 500`;
     const result = await pool.query(sql, params);
@@ -1407,7 +1418,7 @@ exports.getWarehouseQueue = async (req, res) => {
   try {
     await ensurePartsSpecColumns(pool);
     const result = await pool.query(
-      `${FULL_SELECT} WHERE pr.status = ANY($1::text[])
+      `${FULL_SELECT} WHERE pr.status = ANY($1::text[]) AND ${FLOOR_ONLY}
         ORDER BY CASE pr.status WHEN 'pending' THEN 0 WHEN 'received' THEN 1 WHEN 'ordered' THEN 2 ELSE 3 END,
                  pr.created_at ASC`,
       [WAREHOUSE_QUEUE_STATUSES]
@@ -1438,7 +1449,7 @@ exports.exportWarehouseQueueCsv = async (req, res) => {
     }
 
     const result = await pool.query(
-      `${FULL_SELECT} WHERE pr.status = ANY($1::text[])
+      `${FULL_SELECT} WHERE pr.status = ANY($1::text[]) AND ${FLOOR_ONLY}
         ORDER BY pr.created_at ASC`,
       [statuses]
     );
@@ -1465,7 +1476,7 @@ exports.getProcurementQueue = async (req, res) => {
   try {
     await ensurePartsSpecColumns(pool);
     const result = await pool.query(
-      `${FULL_SELECT} WHERE pr.status IN ('escalated','ordered') ORDER BY pr.created_at ASC`
+      `${FULL_SELECT} WHERE pr.status IN ('escalated','ordered') AND ${FLOOR_ONLY} ORDER BY pr.created_at ASC`
     );
     res.json({ success: true, requests: result.rows });
   } catch (err) {
