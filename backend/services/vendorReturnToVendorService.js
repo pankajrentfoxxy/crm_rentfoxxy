@@ -18,17 +18,24 @@ const {
 const WAREHOUSE_STATUSES = new Set(['in_stock', 'returned', 'qc_failed']);
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'procurement']);
 
+// Two different meanings of "returned" were being conflated. A unit whose
+// inventory_status is 'returned' came back from a CUSTOMER and is sitting in our
+// warehouse — the single most common reason to send a rented machine back to its
+// vendor and stop paying rent on it. A unit already sent back to the vendor is a
+// separate thing, and ALREADY_RETURNED_TO_VENDOR_SQL below excludes those from
+// every query here regardless of the filter. So 'returned' belongs in the default
+// set; 'hide_returned' stays available as an explicit opt-out.
 const INVENTORY_STATUS_FILTERS = {
+  all: [...WAREHOUSE_STATUSES],
   hide_returned: ['in_stock', 'qc_failed'],
-  all: ['in_stock', 'returned', 'qc_failed'],
   in_stock: ['in_stock'],
   returned: ['returned'],
   qc_failed: ['qc_failed'],
 };
 
 function resolveInventoryStatuses(filter) {
-  const key = String(filter || 'hide_returned').trim().toLowerCase();
-  return INVENTORY_STATUS_FILTERS[key] || INVENTORY_STATUS_FILTERS.hide_returned;
+  const key = String(filter || 'all').trim().toLowerCase();
+  return INVENTORY_STATUS_FILTERS[key] || INVENTORY_STATUS_FILTERS.all;
 }
 
 /** Already sent back to vendor (any open or completed VRTDC). Cancelled DCs do not block. */
@@ -209,22 +216,38 @@ async function listEligibleLaptops({ vendorId, poId, search, inventoryStatus, pa
   };
 }
 
-/** Vendors that currently have inward / warehouse laptops eligible to return. */
+/**
+ * Vendors that currently have inward / warehouse laptops eligible to return.
+ *
+ * Counts every warehouse status the DC itself accepts, 'returned' included. It
+ * previously counted only in_stock and qc_failed, which made this a dead end:
+ * a vendor whose returnable units had all come back from customers scored zero,
+ * dropped out of the step-1 dropdown, and could never be reached — even though
+ * step 2 had a "Returned only" filter and createReturnDc would have accepted
+ * every one of those units.
+ *
+ * The per-status breakdown rides along so the dropdown can say what the count is
+ * made of instead of just "N inward".
+ */
 async function listEligibleVendors() {
   const { rows } = await pool.query(
     `SELECT v.vendor_id,
             v.business_name,
             v.first_name,
-            COUNT(*)::int AS inward_count
+            COUNT(*)::int AS inward_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'in_stock')::int AS in_stock_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'qc_failed')::int AS qc_failed_count
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
        JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL
       WHERE vsn.deleted_at IS NULL
         AND vsn.po_id IS NOT NULL
-        AND vsn.inventory_status IN ('in_stock', 'qc_failed')
+        AND vsn.inventory_status = ANY($1::text[])
         AND NOT ${ALREADY_RETURNED_TO_VENDOR_SQL}
       GROUP BY v.vendor_id, v.business_name, v.first_name
-      ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`
+      ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`,
+    [[...WAREHOUSE_STATUSES]]
   );
   return rows;
 }

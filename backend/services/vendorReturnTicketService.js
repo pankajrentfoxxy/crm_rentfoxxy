@@ -10,7 +10,14 @@ const { formatCompanyBlock } = require('../utils/companyDefaults');
 const { createReturnDc } = require('./vendorReturnToVendorService');
 
 const RENTAL_PO_TYPES = ['rental_purchase', 'rent_to_own'];
-const ELIGIBLE_STATUSES = ['in_stock'];
+// The warehouse statuses a rented unit can sit in while the vendor bill is still
+// charging us for it — the same set vendorReturnToVendorService accepts on the DC
+// this ticket eventually raises. 'returned' (came back from a customer, now on our
+// shelf) is the usual reason to hand a machine back and stop the rent, and the
+// vendor bill keeps charging for it until vendor_rent_end_date is set, so leaving
+// it out made the rent unstoppable from here. 'rented', 'in_repair' and the
+// outward states stay out: the unit is not ours to hand over yet.
+const ELIGIBLE_STATUSES = ['in_stock', 'returned', 'qc_failed'];
 const LIVE_ITEM_STATUSES = ['requested', 'rental_stopped', 'dc_created', 'handed_over', 'vendor_received'];
 const RETURN_NOTIFY_CC = process.env.VENDOR_RETURN_NOTIFY_CC || process.env.ACCOUNTS_EMAIL_CC || '';
 
@@ -256,9 +263,9 @@ async function assertSerialEligible(client, serialId, vendorId) {
   if (!RENTAL_PO_TYPES.includes(String(row.purchase_order_type || ''))) {
     throw new Error(`${row.inventory_asset_code || row.serial_number}: not on a rental purchase PO`);
   }
-  if (String(row.inventory_status || '') !== 'in_stock') {
+  if (!ELIGIBLE_STATUSES.includes(String(row.inventory_status || ''))) {
     throw new Error(
-      `${row.inventory_asset_code || row.serial_number}: only in-stock laptops can be returned (status: ${row.inventory_status})`
+      `${row.inventory_asset_code || row.serial_number}: not in the warehouse (status: ${row.inventory_status})`
     );
   }
   if (Number(row.vendor_id) !== Number(vendorId)) {

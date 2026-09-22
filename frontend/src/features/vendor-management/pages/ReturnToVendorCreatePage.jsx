@@ -11,16 +11,30 @@ import {
 
 const STEPS = ['Select Vendor', 'Select Laptops', 'Confirm'];
 
+// 'hide_returned' hides units that came back from a CUSTOMER, which are normally
+// exactly the ones being sent back to the vendor — so it is no longer the default.
+// Units already sent back to the vendor are excluded by the API under every
+// filter, so nothing here can list a machine twice.
 const STATUS_FILTERS = [
-  { value: 'hide_returned', label: 'Hide already returned' },
   { value: 'all', label: 'All warehouse' },
   { value: 'in_stock', label: 'In stock' },
-  { value: 'returned', label: 'Returned only' },
+  { value: 'returned', label: 'Customer returns' },
   { value: 'qc_failed', label: 'QC failed' },
+  { value: 'hide_returned', label: 'Hide customer returns' },
 ];
 
 function vendorLabel(v) {
   return [v.business_name, v.first_name].filter(Boolean).join(' · ') || `Vendor ${v.vendor_id}`;
+}
+
+/** "12 inward · 5 in stock, 6 customer returns, 1 QC failed" */
+function vendorCountLabel(v) {
+  const parts = [];
+  if (v.in_stock_count) parts.push(`${v.in_stock_count} in stock`);
+  if (v.returned_count) parts.push(`${v.returned_count} customer return${v.returned_count === 1 ? '' : 's'}`);
+  if (v.qc_failed_count) parts.push(`${v.qc_failed_count} QC failed`);
+  const total = `${v.inward_count} inward`;
+  return parts.length > 1 ? `${total} · ${parts.join(', ')}` : total;
 }
 
 /**
@@ -70,7 +84,7 @@ export default function ReturnToVendorCreatePage() {
   const [selectedMap, setSelectedMap] = useState(new Map());
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('hide_returned');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [returnReason, setReturnReason] = useState('');
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
@@ -310,7 +324,7 @@ export default function ReturnToVendorCreatePage() {
                 <option value="">{vendorsLoading ? 'Loading vendors…' : 'Select vendor'}</option>
                 {vendors.map((v) => (
                   <option key={v.vendor_id} value={String(v.vendor_id)}>
-                    {vendorLabel(v)} ({v.inward_count} inward)
+                    {vendorLabel(v)} ({vendorCountLabel(v)})
                   </option>
                 ))}
               </select>
@@ -466,7 +480,7 @@ export default function ReturnToVendorCreatePage() {
                     <tr>
                       <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
                         {statusFilter === 'hide_returned'
-                          ? 'No inward laptops to return. Already-returned units are hidden — switch Status to All warehouse if needed.'
+                          ? 'No inward laptops to return. Customer returns are hidden by this filter — switch Status to All warehouse to include them.'
                           : 'No inward laptops for this vendor and filter'}
                       </td>
                     </tr>
