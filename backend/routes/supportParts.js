@@ -113,5 +113,6 @@ router.get('/bucket',                              ctrl.getTechnicianBucket);
 
 // Warehouse queue
 router.get('/warehouse-queue',                     requireWarehouse, ctrl.getWarehouseQueue);
+router.get('/parts/:partId/reserved',              requireWarehouse, ctrl.getReservedPartUnits);
 
 module.exports = router;

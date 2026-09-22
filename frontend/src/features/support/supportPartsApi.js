@@ -68,6 +68,9 @@ export const getTechnicianBucket = () =>
 export const getSupportPartsWarehouseQueue = (params) =>
   api.get(`${BASE}/warehouse-queue`, { params });
 
+export const getReservedPartUnits = (partId) =>
+  api.get(`${BASE}/parts/${encodeURIComponent(partId)}/reserved`);
+
 export const requestPartReassign = (requestId, data) =>
   api.post(`${BASE}/requests/${requestId}/request-reassign`, data);
 
