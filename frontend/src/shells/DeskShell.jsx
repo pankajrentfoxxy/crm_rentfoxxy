@@ -32,9 +32,25 @@ export default function DeskShell({ title, breadcrumb, actions, children }) {
 
   // A section with no visible children does not render at all — an empty
   // accordion that opens onto nothing is worse than an absent one.
+  // A section may declare `groups` (Move does: Outward / Inward / Gate). Items
+  // keep their flat order; the groups are a rendering concern, so a section
+  // without them renders exactly as before under a single unnamed group.
   const visible = useMemo(
     () => SECTIONS
-      .map((s) => ({ ...s, items: s.items.filter((i) => hasPermission(i.section, i.action)) }))
+      .map((s) => {
+        const items = s.items.filter((i) => hasPermission(i.section, i.action));
+        const names = s.groups || [];
+        const groups = names.length
+          ? names
+              .map((name) => ({ name, items: items.filter((i) => i.group === name) }))
+              .filter((g) => g.items.length > 0)
+          : [{ name: null, items }];
+        // anything with an unrecognised or missing group still renders
+        const grouped = new Set(groups.flatMap((g) => g.items));
+        const rest = items.filter((i) => !grouped.has(i));
+        if (rest.length) groups.push({ name: null, items: rest });
+        return { ...s, items, groups };
+      })
       .filter((s) => s.items.length > 0),
     [hasPermission]
   );
@@ -82,26 +98,44 @@ export default function DeskShell({ title, breadcrumb, actions, children }) {
 
                   {open && !collapsed && (
                     <ul className="list-none m-0 p-0">
-                      {s.items.map((i) => {
-                        const active = here.startsWith(i.to.split('?')[0]);
-                        return (
-                          <li key={i.to}>
-                            <Link
-                              to={i.to}
-                              className={`block font-ui truncate ${active ? 'text-accent bg-accent-soft' : 'text-ink-2 hover:bg-surface-2'}`}
+                      {s.groups.map((g) => (
+                        <React.Fragment key={g.name || '_'}>
+                          {g.name && (
+                            <li
+                              className="text-ink-3 uppercase tracking-wide font-ui"
                               style={{
                                 padding: 'var(--d-pad-y) var(--d-pad-x)',
                                 paddingLeft: 'calc(var(--d-pad-x) * 2)',
-                                minHeight: 'var(--d-tap)',
-                                fontSize: 'var(--d-base)',
-                                lineHeight: 'var(--d-tap)',
+                                fontSize: 'var(--d-xs, var(--d-sm))',
                               }}
                             >
-                              {i.label}
-                            </Link>
-                          </li>
-                        );
-                      })}
+                              {g.name}
+                            </li>
+                          )}
+                          {g.items.map((i) => {
+                            const active = here.startsWith(i.to.split('?')[0]);
+                            return (
+                              <li key={i.to}>
+                                <Link
+                                  to={i.to}
+                                  className={`block font-ui truncate ${active ? 'text-accent bg-accent-soft' : 'text-ink-2 hover:bg-surface-2'}`}
+                                  style={{
+                                    padding: 'var(--d-pad-y) var(--d-pad-x)',
+                                    paddingLeft: g.name
+                                      ? 'calc(var(--d-pad-x) * 3)'
+                                      : 'calc(var(--d-pad-x) * 2)',
+                                    minHeight: 'var(--d-tap)',
+                                    fontSize: 'var(--d-base)',
+                                    lineHeight: 'var(--d-tap)',
+                                  }}
+                                >
+                                  {i.label}
+                                </Link>
+                              </li>
+                            );
+                          })}
+                        </React.Fragment>
+                      ))}
                     </ul>
                   )}
                 </div>

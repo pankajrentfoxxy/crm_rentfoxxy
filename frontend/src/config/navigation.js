@@ -7,8 +7,11 @@
  * is decided by the same matrix — so revoking a permission removes the link
  * rather than leaving it visible with a 403 behind it (finding X6).
  *
- * Eight sections, from Decision 7: Procure · Produce · Stock · Sell · Move ·
- * Serve · Money · Control. The RentFoxxy / Gorefurbo split is a filter INSIDE
+ * Eight sections, from Decision 7: Procure · Production · Stock · Sell · Move ·
+ * Serve · Money · Control. Decision 7 wrote this one as the verb "Produce" to
+ * match Procure/Sell/Move/Serve; the floor calls it Production, and the menu
+ * uses the word the people reading it use. The key stays `produce` so no route,
+ * permission or test moves with the label. The RentFoxxy / Gorefurbo split is a filter INSIDE
  * Sell, never two branches — one laptop crossing books must not cross sections.
  *
  * Section names are the live ones from `permission_sections`, not invented.
@@ -35,7 +38,7 @@ export const SECTIONS = [
   },
   {
     key: 'produce',
-    label: 'Produce',
+    label: 'Production',
     items: [
       { to: '/floor-pipeline/tickets', label: 'Floor Pipeline', section: 'floor_pipeline', action: 'view' },
       { to: '/floor-pipeline/tickets?stage=Diagnosis', label: 'Diagnosis', section: 'floor_tickets', action: 'view' },
@@ -99,22 +102,39 @@ export const SECTIONS = [
   {
     key: 'move',
     label: 'Move',
+    // Every challan in the system, grouped by DIRECTION rather than by which
+    // module happens to own the document. A challan is a challan: the question
+    // on the floor is always "is this going out or coming in", never "which
+    // controller wrote it". The four families that live in other sections
+    // (vendor return, vendor repair, scrap, service parts) are linked here as
+    // well as there — one document, two ways to reach it, no second flow.
+    groups: ['Outward', 'Inward', 'Gate & tracking'],
     items: [
-      { to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
-      { to: '/sales-pipeline/return-dc', label: 'Return Challans', section: 'return_dc', action: 'view' },
-      { to: '/guard', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
-      // Part 3.7, behind REACT_APP_CARRET — beside the existing screens, not
-      // replacing them (hard rule 6).
-      { to: '/carret/move/gate', label: 'Guard Gate (Carret)', section: 'guard_gate_checking', action: 'view' },
-      { to: '/carret/move/challans', label: 'Challans (Carret)', section: 'delivery_challans', action: 'view' },
-      { to: '/carret/move/return-challans', label: 'Return Challans (Carret)', section: 'return_dc', action: 'view' },
-      { to: '/guard/scanner', label: 'Gate Scanner', section: 'gate_dashboard', action: 'view' },
-      { to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
-      { to: '/sales-pipeline/delivery-register', label: 'Delivery Register', section: 'delivery_register_management', action: 'view' },
-      { to: '/delivery-register-management/technicians', label: 'Delivery Technicians', section: 'delivery_register_management', action: 'view' },
-      { to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
-      { to: '/dispatch/pending-orders', label: 'Pending Dispatch', section: 'dispatch_pending_orders', action: 'view' },
-      { to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers', section: 'dispatch_charger', action: 'view' },
+      // ---- Outward: leaving the warehouse ----
+      { group: 'Outward', to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
+      { group: 'Outward', to: '/carret/move/challans', label: 'Delivery Challans (Carret)', section: 'delivery_challans', action: 'view' },
+      { group: 'Outward', to: '/vendor-management/return-to-vendor', label: 'Vendor Return DC', section: 'vendor_return_to_vendor', action: 'view' },
+      { group: 'Outward', to: '/vendor-management/vendor-repair-dc', label: 'Vendor Repair DC', section: 'vendor_repair_dc', action: 'view' },
+      { group: 'Outward', to: '/inventory-management/scrap-challans', label: 'Scrap Challans', section: 'scrap_challans', action: 'view' },
+      { group: 'Outward', to: '/support-parts/queue', label: 'Service Parts Challans', section: 'support_part_challan', action: 'view' },
+      { group: 'Outward', to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers', section: 'dispatch_charger', action: 'view' },
+
+      // ---- Inward: coming back in ----
+      { group: 'Inward', to: '/sales-pipeline/return-dc', label: 'Return Challans', section: 'return_dc', action: 'view' },
+      { group: 'Inward', to: '/carret/move/return-challans', label: 'Return Challans (Carret)', section: 'return_dc', action: 'view' },
+      { group: 'Inward', to: '/vendor-management/vendor-repair-dc?direction=inward', label: 'Vendor Repair Receive', section: 'vendor_repair_dc', action: 'view' },
+      { group: 'Inward', to: '/vendor-management/return-ticket', label: 'Vendor Return Ticket', section: 'vendor_return_ticket', action: 'view' },
+      { group: 'Inward', to: '/inventory-management/physical-part-inward', label: 'Part Inward', section: 'parts_inventory', action: 'view' },
+
+      // ---- Gate & tracking: the crossing itself ----
+      { group: 'Gate & tracking', to: '/guard', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate (Carret)', section: 'guard_gate_checking', action: 'view' },
+      { group: 'Gate & tracking', to: '/guard/scanner', label: 'Gate Scanner', section: 'gate_dashboard', action: 'view' },
+      { group: 'Gate & tracking', to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
+      { group: 'Gate & tracking', to: '/sales-pipeline/delivery-register', label: 'Delivery Register', section: 'delivery_register_management', action: 'view' },
+      { group: 'Gate & tracking', to: '/delivery-register-management/technicians', label: 'Delivery Technicians', section: 'delivery_register_management', action: 'view' },
+      { group: 'Gate & tracking', to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
+      { group: 'Gate & tracking', to: '/dispatch/pending-orders', label: 'Pending Dispatch', section: 'dispatch_pending_orders', action: 'view' },
     ],
   },
   {

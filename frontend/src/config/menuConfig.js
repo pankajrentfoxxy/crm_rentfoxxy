@@ -191,7 +191,34 @@ export const operationAccordionChildren = salesPipelineAccordionChildren;
 /**
  * Sidebar menu configuration — visibility driven by hasPermission(section, 'view')
  */
+/**
+ * Carret (the redesign) entry points, behind REACT_APP_CARRET.
+ *
+ * The Carret screens have their own eight-section menu in config/navigation.js,
+ * rendered by DeskShell — but that shell only exists INSIDE a Carret page, so
+ * until now the only way to reach one was to type the URL. That made the whole
+ * redesign invisible from the running CRM. These links are the way in; nothing
+ * is replaced and nothing is deleted (hard rule 6).
+ */
+const CARRET_ON = process.env.REACT_APP_CARRET === '1';
+
+const carretMenuItems = [
+  { icon: LayoutDashboard, label: 'Operations Overview', path: '/carret', section: 'dashboard' },
+  { icon: Laptop, label: 'Assets', path: '/carret/stock/assets', section: 'inventory_management' },
+  { icon: Truck, label: 'Challans', path: '/carret/move/challans', section: 'delivery_challans' },
+  { icon: Shield, label: 'Guard Gate', path: '/carret/move/gate', section: 'guard_gate_checking' },
+  { icon: Wrench, label: 'Floor Pipeline', path: '/carret/produce/pipeline', section: 'floor_pipeline' },
+  { icon: Boxes, label: 'Parts', path: '/carret/produce/parts', section: 'parts_inventory' },
+  { icon: ShoppingCart, label: 'Sales Orders', path: '/carret/sell/sales-orders', section: 'sales_orders_doc' },
+  { icon: Store, label: 'Purchase Orders', path: '/carret/procure/purchase-orders', section: 'vendor_management' },
+  { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
+  { icon: DollarSign, label: 'Ageing & Outstanding', path: '/carret/money/ageing', section: 'customer_billing' },
+];
+
 export const MENU_GROUPS = [
+  ...(CARRET_ON
+    ? [{ key: 'carret', label: 'Carret (new UI)', items: carretMenuItems }]
+    : []),
   {
     key: 'reports',
     label: 'Reports & Analytics',
