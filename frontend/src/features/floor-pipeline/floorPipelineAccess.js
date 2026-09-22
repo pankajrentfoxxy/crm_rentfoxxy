@@ -51,7 +51,10 @@ export function firstAllowedFloorTicketsPath(canView) {
 }
 
 export function isFloorAssignedDataOnly(isAssignedDataOnly) {
-  return FLOOR_TICKET_ASSIGN_SECTIONS.some((section) => isAssignedDataOnly(section));
+  // Mirror backend hasUnrestrictedTicketListAccess: All Data on any floor/ticket
+  // section unlocks the full list. "Assigned only" UI only when every section is assigned.
+  const scopeSections = [...FLOOR_TICKET_ASSIGN_SECTIONS, 'chip_level_repair'];
+  return scopeSections.every((section) => isAssignedDataOnly(section));
 }
 
 export function hasFloorTicketEdit(canEdit) {
