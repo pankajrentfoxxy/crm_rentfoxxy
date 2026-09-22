@@ -736,8 +736,7 @@ export default function SparePartsPoPage() {
                       <thead className="bg-slate-50 text-left">
                         <tr>
                           <th className="p-2">#</th>
-                          <th className="p-2">Brand</th>
-                          <th className="p-2">Model</th>
+                          <th className="p-2">Part brand</th>
                           <th className="p-2">Part</th>
                           <th className="p-2">Type</th>
                           <th className="p-2">Warranty (mo)</th>
@@ -751,7 +750,6 @@ export default function SparePartsPoPage() {
                           <tr key={`pv-${idx}`} className="border-t">
                             <td className="p-2">{idx + 1}</td>
                             <td className="p-2">{formatBrandLabel(ln)}</td>
-                            <td className="p-2">{formatModelLabel(ln)}</td>
                             <td className="p-2">{formatPartLabel(ln)}</td>
                             <td className="p-2">{ln.part_type || '—'}</td>
                             <td className="p-2">

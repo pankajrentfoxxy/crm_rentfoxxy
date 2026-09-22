@@ -1,8 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2, Check, MapPin } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { listPartInstances } from '../../floor-pipeline/partRequestsApi';
+import {
+  listPartInstances,
+  updatePartInstanceFitment,
+} from '../../floor-pipeline/partRequestsApi';
 import ScanField from '../../../components/ScanField';
+import FitmentControls, {
+  FitmentChip,
+  computeFitStatus,
+  emptyFitment,
+} from '../../inventory-management/components/FitmentControls';
 
 /**
  * Warehouse picks the physical unit (serial / PRT-ID) for each selected support
@@ -15,36 +23,72 @@ import ScanField from '../../../components/ScanField';
  */
 export default function PickSupportSerialsModal({ open, requests = [], busy = false, onClose, onConfirm }) {
   const [loading, setLoading] = useState(false);
-  const [unitsByPart, setUnitsByPart] = useState({});
+  const [unitsByReq, setUnitsByReq] = useState({});
   const [choice, setChoice] = useState({}); // { [request_id]: instance_id }
   const [search, setSearch] = useState({}); // { [request_id]: text }
+  const [showAllByReq, setShowAllByReq] = useState({}); // { [request_id]: bool }
+  const [retagKey, setRetagKey] = useState(null); // `${reqId}:${instanceId}`
+  const [retagValue, setRetagValue] = useState(emptyFitment());
+  const [retagReason, setRetagReason] = useState('');
+  const [retagBusy, setRetagBusy] = useState(false);
 
   const partIds = useMemo(
     () => [...new Set(requests.map((r) => r.part_id).filter(Boolean))],
     [requests]
   );
 
-  useEffect(() => {
-    if (!open || !partIds.length) return;
-    let alive = true;
+  const laptopFor = useCallback((r) => ({
+    brand: r.brand || r.laptop_brand || '',
+    model: r.model || r.laptop_model || '',
+  }), []);
+
+  const loadUnits = useCallback(async () => {
+    if (!requests.length) return;
     setLoading(true);
+    try {
+      const pairs = await Promise.all(
+        requests.map(async (r) => {
+          const params = {
+            part_id: r.part_id,
+            status: 'in_stock',
+            limit: 500,
+            for_request_id: r.id || r.request_id,
+            for_request_kind: 'support',
+          };
+          if (showAllByReq[r.id]) params.include_incompatible = true;
+          try {
+            const { data } = await listPartInstances(params);
+            return [r.id, data.instances || []];
+          } catch {
+            return [r.id, []];
+          }
+        })
+      );
+      const byReq = Object.fromEntries(pairs);
+      setUnitsByReq(byReq);
+    } finally {
+      setLoading(false);
+    }
+  }, [requests, showAllByReq]);
+
+  useEffect(() => {
+    if (!open || !partIds.length) return undefined;
     setChoice({});
     setSearch({});
-    Promise.all(
-      partIds.map((pid) =>
-        listPartInstances({ part_id: pid, status: 'in_stock', limit: 500 })
-          .then(({ data }) => [pid, data.instances || []])
-          .catch(() => [pid, []])
-      )
-    )
-      .then((pairs) => { if (alive) setUnitsByPart(Object.fromEntries(pairs)); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [open, partIds, requests]);
+    setShowAllByReq({});
+    setRetagKey(null);
+    return undefined;
+  }, [open, partIds]);
+
+  useEffect(() => {
+    if (!open || !requests.length) return undefined;
+    loadUnits();
+    return undefined;
+  }, [open, requests, loadUnits]);
 
   if (!open) return null;
 
-  const unitsFor = (r) => unitsByPart[r.part_id] || [];
+  const unitsFor = (r) => unitsByReq[r.id] || [];
 
   const filteredUnits = (r) => {
     const q = (search[r.id] || '').trim().toLowerCase();
@@ -63,7 +107,6 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
   const setQuery = (reqId, text) =>
     setSearch((prev) => ({ ...prev, [reqId]: text }));
 
-  // Scan / Enter → match against this part's stock and select it.
   const handleScan = (r, text) => {
     const t = String(text || '').trim().toLowerCase();
     if (!t) return;
@@ -81,6 +124,46 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
       toast.success(`Selected ${match.serial_number || match.prt_id}`);
     } else {
       toast.error('No matching unit in stock for this part');
+    }
+  };
+
+  const openRetag = (r, u) => {
+    const hint = laptopFor(r);
+    setRetagKey(`${r.id}:${u.instance_id}`);
+    setRetagValue({
+      fitment: u.fitment || 'unset',
+      fits_laptop_brand: u.fits_laptop_brand || hint.brand || null,
+      fits_laptop_models: Array.isArray(u.fits_laptop_models) && u.fits_laptop_models.length
+        ? u.fits_laptop_models
+        : (hint.model ? [hint.model] : []),
+    });
+    setRetagReason('');
+  };
+
+  const saveRetag = async (r, instanceId) => {
+    if (retagValue.fitment === 'specific' && !retagValue.fits_laptop_brand) {
+      toast.error('Pick a laptop brand');
+      return;
+    }
+    if (!retagReason.trim()) {
+      toast.error('Reason is required to retag');
+      return;
+    }
+    setRetagBusy(true);
+    try {
+      await updatePartInstanceFitment(instanceId, {
+        fitment: retagValue.fitment,
+        fits_laptop_brand: retagValue.fits_laptop_brand,
+        fits_laptop_models: retagValue.fits_laptop_models,
+        reason: retagReason.trim(),
+      });
+      toast.success('Fitment updated');
+      setRetagKey(null);
+      await loadUnits();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Retag failed');
+    } finally {
+      setRetagBusy(false);
     }
   };
 
@@ -121,6 +204,7 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
               const shown = filteredUnits(r);
               const selectedId = choice[r.id];
               const selectedUnit = units.find((u) => String(u.instance_id) === String(selectedId));
+              const hint = laptopFor(r);
               return (
                 <div key={r.id} className="rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center justify-between gap-2">
@@ -130,19 +214,40 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
                     </p>
                     <span className="font-mono text-[11px] text-slate-500">{r.request_number}</span>
                   </div>
+                  {(r.ttspl_id || hint.brand) ? (
+                    <p className="text-[11px] text-slate-500 m-0 mt-0.5">
+                      {[r.ttspl_id, hint.brand && `${hint.brand}${hint.model ? ` ${hint.model}` : ''}`]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  ) : null}
 
                   {!units.length ? (
                     <p className="mt-2 text-[11px] text-amber-600">No stocked units for this part.</p>
                   ) : (
                     <>
-                      <div className="mt-2">
-                        <ScanField
-                          value={search[r.id] || ''}
-                          onChange={(text) => setQuery(r.id, text)}
-                          onScan={(text) => handleScan(r, text)}
-                          placeholder="Search or scan serial / PRT-ID…"
-                          aria-label={`Search or scan serial for ${r.part_name}`}
-                        />
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <ScanField
+                            value={search[r.id] || ''}
+                            onChange={(text) => setQuery(r.id, text)}
+                            onScan={(text) => handleScan(r, text)}
+                            placeholder="Search or scan serial / PRT-ID…"
+                            aria-label={`Search or scan serial for ${r.part_name}`}
+                          />
+                        </div>
+                        <label
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 cursor-pointer shrink-0 whitespace-nowrap"
+                          title="Hides units tagged for a different laptop brand/model"
+                        >
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-300"
+                            checked={!showAllByReq[r.id]}
+                            onChange={(e) => setShowAllByReq((prev) => ({ ...prev, [r.id]: !e.target.checked }))}
+                          />
+                          Only parts for this laptop
+                        </label>
                       </div>
 
                       {selectedUnit && (
@@ -152,6 +257,7 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
                             {selectedUnit.serial_number || 'No serial'} · {selectedUnit.prt_id}
                             {selectedUnit.location_code ? ` · ${selectedUnit.location_code}` : ''}
                           </span>
+                          <FitmentChip status={computeFitStatus(selectedUnit, hint.brand, hint.model)} />
                           <button
                             type="button"
                             className="ml-auto text-[11px] text-emerald-700 hover:underline shrink-0"
@@ -166,24 +272,77 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
                         <div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-50">
                           {shown.length === 0 ? (
                             <p className="px-3 py-3 text-[11px] text-slate-400">No units match your search.</p>
-                          ) : shown.map((u) => (
-                            <button
-                              key={u.instance_id}
-                              type="button"
-                              onClick={() => pick(r.id, u.instance_id)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-slate-50"
-                            >
-                              <span className="font-mono text-slate-800 truncate">
-                                {u.serial_number || 'No serial'}
-                              </span>
-                              <span className="font-mono text-slate-400">· {u.prt_id}</span>
-                              {u.location_code && (
-                                <span className="ml-auto inline-flex items-center gap-1 text-slate-400 shrink-0">
-                                  <MapPin className="w-3 h-3" /> {u.location_code}
-                                </span>
-                              )}
-                            </button>
-                          ))}
+                          ) : shown.map((u) => {
+                            const status = computeFitStatus(u, hint.brand, hint.model);
+                            const key = `${r.id}:${u.instance_id}`;
+                            return (
+                              <div key={u.instance_id} className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => pick(r.id, u.instance_id)}
+                                  className="flex w-full items-center gap-2 text-left text-xs hover:bg-slate-50 rounded"
+                                >
+                                  <span className="font-mono text-slate-800 truncate">
+                                    {u.serial_number || 'No serial'}
+                                  </span>
+                                  <span className="font-mono text-slate-400">· {u.prt_id}</span>
+                                  <FitmentChip status={status} />
+                                  {u.location_code && (
+                                    <span className="ml-auto inline-flex items-center gap-1 text-slate-400 shrink-0">
+                                      <MapPin className="w-3 h-3" /> {u.location_code}
+                                    </span>
+                                  )}
+                                </button>
+                                {status === 'unfit' ? (
+                                  <div className="mt-1.5">
+                                    {retagKey === key ? (
+                                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 space-y-2">
+                                        <FitmentControls
+                                          compact
+                                          value={retagValue}
+                                          onChange={setRetagValue}
+                                          laptopHint={hint.brand ? hint : null}
+                                          allowUnset
+                                        />
+                                        <input
+                                          className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                                          placeholder="Reason for retag"
+                                          value={retagReason}
+                                          onChange={(e) => setRetagReason(e.target.value)}
+                                        />
+                                        <div className="flex gap-2">
+                                          <button
+                                            type="button"
+                                            disabled={retagBusy}
+                                            onClick={() => saveRetag(r, u.instance_id)}
+                                            className="rounded-lg bg-slate-800 text-white px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+                                          >
+                                            {retagBusy ? 'Saving…' : 'Save retag'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={retagBusy}
+                                            onClick={() => setRetagKey(null)}
+                                            className="rounded-lg border px-2.5 py-1 text-xs"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="text-[11px] font-semibold text-blue-700 hover:underline"
+                                        onClick={() => openRetag(r, u)}
+                                      >
+                                        Retag
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </>

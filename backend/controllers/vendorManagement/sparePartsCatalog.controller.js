@@ -28,11 +28,11 @@ async function ensureFloorPart(client, { name, category, part_type, specificatio
     return existing.rows[0].part_id;
   }
 
-  const brands = default_brand ? [default_brand] : null;
+  // compatible_brands = laptop fitment default; do not seed with spare brand.
   const ins = await client.query(
     `INSERT INTO parts (part_name, part_type, category, quantity, min_threshold, description, compatible_brands, default_brand, default_model)
-     VALUES ($1, $2, $3, 0, 5, $4, $5, $6, $7) RETURNING part_id`,
-    [name, part_type || category, category, specifications || name, brands, default_brand || null, default_model || null]
+     VALUES ($1, $2, $3, 0, 5, $4, NULL, $5, $6) RETURNING part_id`,
+    [name, part_type || category, category, specifications || name, default_brand || null, default_model || null]
   );
   return ins.rows[0].part_id;
 }
@@ -159,7 +159,7 @@ async function createCatalogItem(req, res) {
         default_brand || null,
         default_model || null,
         specifications || null,
-        toBrandArray(compatible_brands) || (default_brand ? [default_brand] : null),
+        toBrandArray(compatible_brands),
         floorPartId,
       ]
     );
@@ -239,12 +239,11 @@ async function updateCatalogItem(req, res) {
     } else {
       await client.query(
         `UPDATE parts SET part_name = $2, category = $3, part_type = $4, description = COALESCE($5, description),
-                compatible_brands = COALESCE($6, compatible_brands),
-                default_brand = $7, default_model = $8
+                default_brand = $6, default_model = $7
           WHERE part_id = $1`,
         [
           floorPartId, name, category, part_type || category, specifications,
-          default_brand ? [default_brand] : null, default_brand || null, default_model || null,
+          default_brand || null, default_model || null,
         ]
       );
     }

@@ -6,14 +6,12 @@ import {
   fetchSparePartsCatalog,
   updateSparePartsCatalogItem,
 } from '../vendorManagementApi';
-import { fetchCascadeSpareModels } from '../../../utils/assetConfigurationApi';
 
 const emptyForm = () => ({
   name: '',
   category: '',
   part_type: '',
   default_brand: '',
-  default_model: '',
   specifications: '',
 });
 
@@ -21,8 +19,6 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
   const [rows, setRows] = useState([]);
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
-  const [models, setModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
@@ -53,31 +49,6 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
     load();
   }, [load]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const brand = (form.default_brand || '').trim();
-    if (!brand) {
-      setModels([]);
-      return undefined;
-    }
-    setModelsLoading(true);
-    fetchCascadeSpareModels(brand)
-      .then(({ data }) => {
-        if (cancelled) return;
-        const list = Array.isArray(data?.models) ? data.models : Array.isArray(data?.data) ? data.data : [];
-        setModels(list.map((m) => (typeof m === 'string' ? m : m?.name)).filter(Boolean));
-      })
-      .catch(() => {
-        if (!cancelled) setModels([]);
-      })
-      .finally(() => {
-        if (!cancelled) setModelsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [form.default_brand]);
-
   const resetForm = () => {
     setForm(emptyForm());
     setEditId(null);
@@ -90,7 +61,6 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
       category: row.category || '',
       part_type: row.part_type || '',
       default_brand: row.default_brand || '',
-      default_model: row.default_model || '',
       specifications: row.specifications || '',
     });
   };
@@ -101,10 +71,6 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
       toast.error('Part name and category are required');
       return;
     }
-    if (form.default_model && !form.default_brand) {
-      toast.error('Select a brand before model');
-      return;
-    }
     setSaving(true);
     try {
       const payload = {
@@ -112,7 +78,7 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
         category: form.category,
         part_type: form.part_type.trim() || null,
         default_brand: form.default_brand.trim() || null,
-        default_model: form.default_model.trim() || null,
+        default_model: null,
         specifications: form.specifications.trim() || null,
       };
       if (editId) {
@@ -137,7 +103,7 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
         <div>
           <h2 className="font-semibold text-slate-900">Spare parts catalog</h2>
           <p className="text-xs text-slate-500">
-            Master list for raising spare POs — Brand → Model → Part on each PO line.
+            Master list for raising spare POs — Brand → Part on each PO line.
           </p>
         </div>
         <button type="button" className="inline-flex items-center gap-1 text-sm text-orange-700 font-semibold" onClick={load} disabled={loading}>
@@ -178,29 +144,15 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
           />
         </label>
         <label className="block text-sm">
-          <span className="text-xs font-semibold text-slate-600">Brand</span>
+          <span className="text-xs font-semibold text-slate-600">Part brand</span>
           <select
             className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
             value={form.default_brand}
-            onChange={(e) => setForm((f) => ({ ...f, default_brand: e.target.value, default_model: '' }))}
+            onChange={(e) => setForm((f) => ({ ...f, default_brand: e.target.value }))}
           >
             <option value="">Any / universal</option>
             {brands.map((b) => (
               <option key={b.id} value={b.name}>{b.name}</option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-sm">
-          <span className="text-xs font-semibold text-slate-600">Model</span>
-          <select
-            className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-            value={form.default_model}
-            disabled={!form.default_brand || modelsLoading}
-            onChange={(e) => setForm((f) => ({ ...f, default_model: e.target.value }))}
-          >
-            <option value="">{!form.default_brand ? 'Select brand first' : modelsLoading ? 'Loading…' : 'Any / optional'}</option>
-            {models.map((m) => (
-              <option key={m} value={m}>{m}</option>
             ))}
           </select>
         </label>
@@ -249,24 +201,22 @@ export default function SparePartsCatalogPanel({ onCatalogChange }) {
               <th className="px-3 py-2">Category</th>
               <th className="px-3 py-2">Part name</th>
               <th className="px-3 py-2">Type</th>
-              <th className="px-3 py-2">Brand</th>
-              <th className="px-3 py-2">Model</th>
+              <th className="px-3 py-2">Part brand</th>
               <th className="px-3 py-2">Stock</th>
               <th className="px-3 py-2 w-16" />
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">Loading…</td></tr>
+              <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">No parts in catalog — add one above.</td></tr>
+              <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400">No parts in catalog — add one above.</td></tr>
             ) : rows.map((row) => (
               <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                 <td className="px-3 py-2 text-xs">{row.category_label || row.category}</td>
                 <td className="px-3 py-2 font-medium">{row.name}</td>
                 <td className="px-3 py-2 text-xs text-slate-600">{row.part_type || '—'}</td>
                 <td className="px-3 py-2 text-xs">{row.default_brand || '—'}</td>
-                <td className="px-3 py-2 text-xs">{row.default_model || '—'}</td>
                 <td className="px-3 py-2 text-xs">{row.stock_qty ?? 0}</td>
                 <td className="px-3 py-2">
                   <button type="button" className="text-xs text-orange-700 font-semibold" onClick={() => startEdit(row)}>Edit</button>

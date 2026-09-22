@@ -3,6 +3,8 @@ const pool = require('../config/db');
 const path = require('path');
 const fs   = require('fs');
 const { generateChallanPdf } = require('../services/supportPartChallanPdfService');
+const { recordMovement, MOVEMENT } = require('../services/partMovementService');
+const { fits, assertAssignmentAllowed, loadKnownBrands } = require('../services/partFitmentService');
 
 // Display ticket number is derived from the support ticket id (no dedicated
 // column exists on support_tickets), e.g. STK-0045.
@@ -132,7 +134,7 @@ exports.raiseSupportPartRequest = async (req, res) => {
          FROM part_instances WHERE status = 'in_stock'
          GROUP BY part_id
        ) pi_count ON pi_count.part_id = p.part_id
-       WHERE p.part_id = $1 AND NOT COALESCE(p.archived, FALSE)`,
+       WHERE p.part_id = $1`,
       [part_id]
     );
     if (!partRes.rows.length)
@@ -270,7 +272,8 @@ exports.listSupportPartRequests = async (req, res) => {
               tech.name AS tech_name, tech.email AS tech_email,
               approver.name AS approved_by_name,
               st.customer_name, ${TICKET_NUMBER_SQL} AS support_ticket_number,
-              spc.challan_number, spc.tech_esign_url, spc.pdf_path
+              spc.challan_number, spc.tech_esign_url, spc.pdf_path,
+              sti.brand AS laptop_brand, sti.model AS laptop_model
        FROM support_part_requests spr
        JOIN parts p ON p.part_id = spr.part_id
        LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
@@ -278,6 +281,7 @@ exports.listSupportPartRequests = async (req, res) => {
        LEFT JOIN users approver ON approver.user_id = spr.approved_by
        JOIN support_tickets st ON st.id = spr.support_ticket_id
        LEFT JOIN support_part_challans spc ON spc.id = spr.challan_id
+       LEFT JOIN support_ticket_items sti ON sti.id = spr.support_item_id
        ${where}
        ORDER BY spr.created_at DESC`,
       params
@@ -340,7 +344,20 @@ exports.approveAndGenerateChallan = async (req, res) => {
 
     const challanItems = [];
     for (const reqRow of requests) {
+      let laptopBrand = reqRow.laptop_brand || null;
+      let laptopModel = reqRow.laptop_model || null;
+      if (reqRow.support_item_id && (laptopBrand == null || laptopModel == null)) {
+        const stiRes = await client.query(
+          `SELECT brand, model FROM support_ticket_items WHERE id = $1`,
+          [reqRow.support_item_id]
+        );
+        laptopBrand = laptopBrand || stiRes.rows[0]?.brand || null;
+        laptopModel = laptopModel || stiRes.rows[0]?.model || null;
+      }
+
       let instance = null;
+      let fitGate = null;
+      let fitChecked = false;
 
       // Warehouse explicitly chose a unit/serial for this request.
       const chosenId = pickedInstances[reqRow.id] ?? pickedInstances[String(reqRow.id)];
@@ -357,6 +374,17 @@ exports.approveAndGenerateChallan = async (req, res) => {
         if (chosen.status !== 'in_stock') {
           throw new Error(`Selected unit for "${reqRow.part_name}" is '${chosen.status}', not available`);
         }
+        fitGate = await assertAssignmentAllowed({
+          unit: chosen,
+          laptopBrand,
+          laptopModel,
+          mismatchReason: req.body?.fitment_mismatch_reason,
+          db: client,
+        });
+        if (!fitGate.ok) {
+          throw Object.assign(new Error(fitGate.message), { status: 400, code: fitGate.code });
+        }
+        fitChecked = true;
         instance = chosen;
       }
 
@@ -364,10 +392,16 @@ exports.approveAndGenerateChallan = async (req, res) => {
         const instRes = await client.query(
           `SELECT * FROM part_instances
            WHERE part_id = $1 AND status = 'in_stock'
-           ORDER BY received_at ASC LIMIT 1 FOR UPDATE`,
+           ORDER BY received_at ASC
+           FOR UPDATE`,
           [reqRow.part_id]
         );
-        instance = instRes.rows[0];
+        const candidates = instRes.rows || [];
+        await loadKnownBrands(client);
+        const fitOnes = candidates.filter((u) => fits(u, laptopBrand, laptopModel) === 'fit');
+        const unknownOnes = candidates.filter((u) => fits(u, laptopBrand, laptopModel) === 'unknown');
+        // Prefer fit, then unknown — never auto-pick unfit.
+        instance = fitOnes[0] || unknownOnes[0] || null;
       }
 
       if (!instance && Number(reqRow.quantity) > 0) {
@@ -397,8 +431,8 @@ exports.approveAndGenerateChallan = async (req, res) => {
           const { generatePrtId } = require('../services/partIdService');
           const prtId = await generatePrtId(new Date(), client);
           const newInst = await client.query(
-            `INSERT INTO part_instances (prt_id, part_id, unit_cost, status, notes)
-             VALUES ($1,$2,$3,'in_stock','Auto-created from legacy stock') RETURNING *`,
+            `INSERT INTO part_instances (prt_id, part_id, unit_cost, status, notes, fitment)
+             VALUES ($1,$2,$3,'in_stock','Auto-created from legacy stock','unset') RETURNING *`,
             [prtId, reqRow.part_id, Number(partQtyRes.rows[0]?.cost || 0)]
           );
           instance = newInst.rows[0];
@@ -406,6 +440,44 @@ exports.approveAndGenerateChallan = async (req, res) => {
       }
       if (!instance)
         throw new Error(`Part "${reqRow.part_name}" is out of stock. Reject or escalate.`);
+
+      if (!fitChecked) {
+        fitGate = await assertAssignmentAllowed({
+          unit: instance,
+          laptopBrand,
+          laptopModel,
+          mismatchReason: req.body?.fitment_mismatch_reason,
+          db: client,
+        });
+        if (!fitGate.ok) {
+          throw Object.assign(new Error(fitGate.message), { status: 400, code: fitGate.code });
+        }
+      }
+
+      if (fitGate?.allowedMismatch) {
+        await recordMovement(client, {
+          type: MOVEMENT.FITMENT_MISMATCH,
+          partId: instance.part_id,
+          instanceId: instance.instance_id,
+          prtId: instance.prt_id,
+          serialNumber: instance.serial_number,
+          notes: JSON.stringify({
+            event: 'allowed_mismatch',
+            stage: fitGate.stage,
+            fit_status: fitGate.status,
+            support_part_request_id: reqRow.id,
+            unit: {
+              fitment: instance.fitment,
+              fits_laptop_brand: instance.fits_laptop_brand,
+              fits_laptop_models: instance.fits_laptop_models,
+            },
+            laptop: { brand: laptopBrand, model: laptopModel },
+            reason: fitGate.reason || null,
+          }),
+          actorUserId: req.user?.user_id,
+          actorName: req.user?.name,
+        });
+      }
 
       await client.query(
         `UPDATE part_instances SET status = 'reserved', updated_at = NOW()
@@ -1041,9 +1113,15 @@ exports.markPartUsed = async (req, res) => {
   try {
     await client.query('BEGIN');
     const r = await client.query(
-      `SELECT spr.*, p.part_name FROM support_part_requests spr
-        JOIN parts p ON p.part_id = spr.part_id
-       WHERE spr.id = $1 FOR UPDATE OF spr`,
+      `SELECT spr.*, p.part_name,
+              pi.fitment, pi.fits_laptop_brand, pi.fits_laptop_models,
+              pi.prt_id, pi.serial_number AS instance_serial,
+              sti.brand AS laptop_brand, sti.model AS laptop_model
+         FROM support_part_requests spr
+         JOIN parts p ON p.part_id = spr.part_id
+         LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+         LEFT JOIN support_ticket_items sti ON sti.id = spr.support_item_id
+        WHERE spr.id = $1 FOR UPDATE OF spr`,
       [reqId]
     );
     if (!r.rows.length) throw Object.assign(new Error('Request not found'), { status: 404 });
@@ -1053,6 +1131,42 @@ exports.markPartUsed = async (req, res) => {
       throw Object.assign(new Error('Not authorised'), { status: 403 });
     if (!['issued', 'dispatched', 'delivered'].includes(spr.status))
       throw new Error(`Cannot mark used: status is '${spr.status}'`);
+
+    if (spr.instance_id) {
+      const fitGate = await assertAssignmentAllowed({
+        unit: {
+          fitment: spr.fitment,
+          fits_laptop_brand: spr.fits_laptop_brand,
+          fits_laptop_models: spr.fits_laptop_models,
+        },
+        laptopBrand: spr.laptop_brand,
+        laptopModel: spr.laptop_model,
+        mismatchReason: req.body?.fitment_mismatch_reason,
+        db: client,
+      });
+      if (!fitGate.ok) {
+        throw Object.assign(new Error(fitGate.message), { status: 400, code: fitGate.code });
+      }
+      if (fitGate.allowedMismatch) {
+        await recordMovement(client, {
+          type: MOVEMENT.FITMENT_MISMATCH,
+          partId: spr.part_id,
+          instanceId: spr.instance_id,
+          prtId: spr.prt_id,
+          serialNumber: spr.instance_serial,
+          notes: JSON.stringify({
+            event: 'allowed_mismatch_mark_used',
+            stage: fitGate.stage,
+            fit_status: fitGate.status,
+            support_part_request_id: spr.id,
+            laptop: { brand: spr.laptop_brand, model: spr.laptop_model },
+            reason: fitGate.reason || null,
+          }),
+          actorUserId: req.user?.user_id,
+          actorName: req.user?.name,
+        });
+      }
+    }
 
     const needsOldPart = spr.collect_old_part
       && spr.old_part_collection_method === 'tech_collection'
@@ -1413,7 +1527,8 @@ exports.getWarehouseQueue = async (req, res) => {
              GREATEST(COALESCE(pi_count.available, 0), COALESCE(p.quantity, 0))::int AS available,
              u.user_id AS tech_id,
              u.name AS tech_name,
-             st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number
+             st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number,
+             sti.brand AS laptop_brand, sti.model AS laptop_model
       FROM support_part_requests spr
       JOIN parts p ON p.part_id = spr.part_id
       LEFT JOIN (
@@ -1422,6 +1537,7 @@ exports.getWarehouseQueue = async (req, res) => {
       ) pi_count ON pi_count.part_id = p.part_id
       JOIN users u ON u.user_id = spr.assigned_to_tech
       JOIN support_tickets st ON st.id = spr.support_ticket_id
+      LEFT JOIN support_ticket_items sti ON sti.id = spr.support_item_id
       WHERE spr.status IN ('pending','return_requested')
       ${dateSql}
       ${techClause}

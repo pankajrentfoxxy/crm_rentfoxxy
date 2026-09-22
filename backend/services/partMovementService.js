@@ -21,6 +21,8 @@ const MOVEMENT = Object.freeze({
   SENT_TO_VENDOR_REPAIR: 'sent_to_vendor_repair',
   RECEIVED_FROM_VENDOR_REPAIR: 'received_from_vendor_repair',
   SCRAPPED: 'scrapped',
+  FITMENT_RETAG: 'fitment_retag',
+  FITMENT_MISMATCH: 'fitment_mismatch',
 });
 
 // Resolved once per process. A deployment that has not run migration 178 keeps

@@ -20,6 +20,12 @@ export const getPartCostSummary = (ttsplId) => api.get(`${base}/cost-summary/${t
 export const listPartInstances = (params) => api.get(`${base}/instances`, { params });
 export const addPartInstances = (body) => api.post(`${base}/instances`, body);
 export const updatePartInstance = (instanceId, body) => api.patch(`${base}/instances/${instanceId}`, body);
+/** Retag laptop fitment on a physical unit. */
+export const updatePartInstanceFitment = (instanceId, body) =>
+  api.patch(`${base}/instances/${instanceId}/fitment`, body);
+/** Retag laptop fitment on many units of one part in a single pass. */
+export const bulkUpdatePartInstanceFitment = (body) =>
+  api.post(`${base}/instances/bulk-fitment`, body);
 
 export const approvePartRequest = (id, body) => api.patch(`${base}/${id}/approve`, body);
 export const rejectPartRequest = (id, body) => api.patch(`${base}/${id}/reject`, body);

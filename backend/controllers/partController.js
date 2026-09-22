@@ -21,7 +21,8 @@ exports.getAllParts = async (req, res) => {
     const result = await pool.query(
       `SELECT p.part_id, p.part_name, p.part_type, p.category, p.quantity, p.vendor, p.cost,
               p.location_code, p.model_number, p.pin_size, p.part_sku, p.description,
-              p.compatible_brands, p.default_brand, p.default_model,
+              p.compatible_brands, p.compatible_models, p.default_fitment,
+              p.default_brand, p.default_model,
               COALESCE(st.in_stock_count, 0)::int AS in_stock_count,
               COALESCE(st.reserved_count, 0)::int AS reserved_count
          FROM parts p
@@ -60,26 +61,41 @@ function toBrandArray(val) {
     .filter(Boolean);
 }
 
+function toModelArray(val) {
+  return toBrandArray(val);
+}
+
+function normalizeDefaultFitment(val) {
+  const f = String(val || 'unset').toLowerCase();
+  return ['unset', 'universal', 'specific'].includes(f) ? f : 'unset';
+}
+
 // Create Part
 exports.createPart = async (req, res) => {
   const {
     part_name, part_type, quantity, vendor, cost, location_code,
-    category, description, part_sku, compatible_brands, is_consumable,
+    category, description, part_sku, compatible_brands, compatible_models,
+    default_fitment, is_consumable,
     warranty_months, notes, min_threshold, model_number, pin_size,
   } = req.body;
 
   try {
     const cat = (category || part_type || 'general').toString();
+    const fitment = normalizeDefaultFitment(default_fitment);
+    const brands = toBrandArray(compatible_brands);
+    const models = toModelArray(compatible_models);
     const result = await pool.query(
       `INSERT INTO parts
          (part_name, part_type, quantity, vendor, cost, location_code,
-          category, description, part_sku, compatible_brands, is_consumable,
+          category, description, part_sku, compatible_brands, compatible_models,
+          default_fitment, is_consumable,
           warranty_months, notes, min_threshold, model_number, pin_size)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         part_name, part_type, quantity || 0, vendor, cost || 0, location_code,
-        cat, description || null, part_sku || null, toBrandArray(compatible_brands),
+        cat, description || null, part_sku || null, brands, models,
+        fitment,
         is_consumable === true || is_consumable === 'true',
         Number(warranty_months) || 0, notes || null,
         Number.isFinite(Number(min_threshold)) ? Number(min_threshold) : 5,
@@ -120,12 +136,15 @@ exports.updatePart = async (req, res) => {
   const { id } = req.params;
   const {
     part_name, part_type, vendor, cost, location_code,
-    category, description, part_sku, compatible_brands, is_consumable,
+    category, description, part_sku, compatible_brands, compatible_models,
+    default_fitment, is_consumable,
     warranty_months, notes, min_threshold, model_number, pin_size,
   } = req.body;
 
   try {
     const brands = compatible_brands === undefined ? null : toBrandArray(compatible_brands);
+    const models = compatible_models === undefined ? null : toModelArray(compatible_models);
+    const fitment = default_fitment === undefined ? null : normalizeDefaultFitment(default_fitment);
     const result = await pool.query(
       `UPDATE parts 
        SET part_name = COALESCE($1, part_name),
@@ -143,6 +162,8 @@ exports.updatePart = async (req, res) => {
            min_threshold = COALESCE($14, min_threshold),
            model_number = COALESCE($15, model_number),
            pin_size = COALESCE($16, pin_size),
+           compatible_models = COALESCE($17, compatible_models),
+           default_fitment = COALESCE($18, default_fitment),
            updated_at = NOW()
        WHERE part_id = $6
        RETURNING *`,
@@ -155,6 +176,8 @@ exports.updatePart = async (req, res) => {
         min_threshold != null && min_threshold !== '' ? Number(min_threshold) : null,
         model_number !== undefined ? (model_number ? String(model_number).trim() : null) : null,
         pin_size !== undefined ? (pin_size ? String(pin_size).trim() : null) : null,
+        models,
+        fitment,
       ]
     );
 

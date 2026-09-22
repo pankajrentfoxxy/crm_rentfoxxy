@@ -10,6 +10,13 @@
 const pool = require('../config/db');
 const { generatePrtId } = require('./partIdService');
 const { recordMovement, MOVEMENT } = require('./partMovementService');
+const {
+  defaultsFromPart,
+  validateFitment,
+  loadKnownBrands,
+  fits,
+  FITMENT,
+} = require('./partFitmentService');
 const { PART_CATEGORIES } = require('../constants/laptopConditions');
 
 const VALID_CATEGORIES = new Set(PART_CATEGORIES.map((c) => c.value));
@@ -86,9 +93,7 @@ async function resolveOrCreateFloorPartId(client, line) {
 
   const name = lineName(line) || `Spare part ${lineRawId(line) ?? ''}`.trim();
   const category = normalizeCategory(line?.category);
-  const brands = line?.brand_name || line?.brand
-    ? [String(line.brand_name || line.brand).trim()]
-    : null;
+  // compatible_brands is laptop-fitment default only — never seed with spare brand.
   const defaultBrand = line?.brand_name || line?.brand
     ? String(line.brand_name || line.brand).trim()
     : null;
@@ -99,14 +104,13 @@ async function resolveOrCreateFloorPartId(client, line) {
   const ins = await client.query(
     `INSERT INTO parts
        (part_name, part_type, category, quantity, min_threshold, description, compatible_brands, cost, default_brand, default_model)
-     VALUES ($1, $2, $3, 0, 5, $4, $5, $6, $7, $8)
+     VALUES ($1, $2, $3, 0, 5, $4, NULL, $5, $6, $7)
      RETURNING part_id`,
     [
       name,
       line?.part_type || category,
       category,
       line?.specifications || name,
-      brands,
       Number(line?.rate ?? line?.unit_price ?? line?.cost ?? 0) || 0,
       defaultBrand,
       defaultModel,
@@ -131,10 +135,22 @@ async function resolveOrCreateFloorPartId(client, line) {
 
 async function getPartMeta(db, partId) {
   const r = await db.query(
-    `SELECT part_id, part_name, category, cost, location_code FROM parts WHERE part_id = $1`,
+    `SELECT part_id, part_name, category, cost, location_code,
+            default_fitment, compatible_brands, compatible_models
+       FROM parts WHERE part_id = $1`,
     [Number(partId)]
   );
   return r.rows[0] || null;
+}
+
+function resolveUnitFitment(partRow, override) {
+  if (override && override.fitment && override.fitment !== FITMENT.UNSET) {
+    return validateFitment(override);
+  }
+  if (override && override.fitment === FITMENT.UNSET) {
+    return validateFitment({ fitment: FITMENT.UNSET });
+  }
+  return validateFitment(defaultsFromPart(partRow));
 }
 
 /**
@@ -148,6 +164,7 @@ async function getPartMeta(db, partId) {
 async function receiveUnitsIntoInventory(client, {
   partId, units, unitCost, locationCode, spoId, grnId, spoLineIndex,
   vendorId, batchNumber, receivedBy, actorName, notes, brand, model,
+  fitment, fits_laptop_brand, fits_laptop_models,
 }) {
   const list = Array.isArray(units) ? units : [];
   if (!list.length) return [];
@@ -156,6 +173,11 @@ async function receiveUnitsIntoInventory(client, {
   const cost = Number(unitCost) || Number(part?.cost) || 0;
   const brandName = brand != null && String(brand).trim() ? String(brand).trim() : null;
   const modelName = model != null && String(model).trim() ? String(model).trim() : null;
+  const fit = resolveUnitFitment(part, {
+    fitment,
+    fits_laptop_brand,
+    fits_laptop_models,
+  });
   const created = [];
   const now = new Date();
 
@@ -169,9 +191,13 @@ async function receiveUnitsIntoInventory(client, {
       `INSERT INTO part_instances
          (prt_id, part_id, spo_id, grn_id, spo_line_index, batch_number, unit_cost,
           location_code, status, notes, serial_number, vendor_serial_id, asset_code,
-          vendor_id, source, brand, model, received_at, received_by, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_stock',$9,$10,$11,$12,$13,'purchase',$14,$15,NOW(),$16,NOW(),NOW())
-       RETURNING instance_id, prt_id, serial_number, asset_code, unit_cost, status, location_code, brand, model`,
+          vendor_id, source, brand, model,
+          fitment, fits_laptop_brand, fits_laptop_models,
+          received_at, received_by, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_stock',$9,$10,$11,$12,$13,'purchase',$14,$15,
+               $16,$17,$18,NOW(),$19,NOW(),NOW())
+       RETURNING instance_id, prt_id, serial_number, asset_code, unit_cost, status, location_code,
+                 brand, model, fitment, fits_laptop_brand, fits_laptop_models`,
       [
         prtId, Number(partId), spoId || null, grnId || null,
         spoLineIndex != null ? Number(spoLineIndex) : null,
@@ -182,6 +208,9 @@ async function receiveUnitsIntoInventory(client, {
         vendorId != null ? Number(vendorId) : null,
         brandName,
         modelName,
+        fit.fitment,
+        fit.fits_laptop_brand,
+        fit.fits_laptop_models,
         receivedBy || null,
       ]
     );
@@ -226,19 +255,44 @@ async function receiveUnitsIntoInventory(client, {
  * Attach freshly received units to requests that were waiting on procurement.
  * Runs in the same transaction as the receive so stock can never be double-promised.
  */
+/**
+ * Attach freshly received units to requests that were waiting on procurement.
+ * Prefer fit, then unknown; never auto-link an unfit unit at any stage.
+ */
 async function autoLinkOpenRequests(client, { partId, instances, actorUserId, actorName }) {
   const linked = [];
+  await loadKnownBrands(client);
   for (const inst of instances) {
+    const candidates = await client.query(
+      `SELECT pr.request_id, pr.ticket_id, pr.request_number, t.brand AS laptop_brand, t.model AS laptop_model
+         FROM part_requests pr
+         LEFT JOIN tickets t ON t.ticket_id = pr.ticket_id
+        WHERE pr.part_id = $1 AND pr.status IN ('escalated', 'ordered') AND pr.instance_id IS NULL
+        ORDER BY pr.created_at ASC`,
+      [Number(partId)]
+    );
+
+    let chosen = null;
+    let chosenStatus = null;
+    for (const pref of ['fit', 'unknown']) {
+      for (const row of candidates.rows) {
+        const status = fits(inst, row.laptop_brand, row.laptop_model);
+        if (status === pref) {
+          chosen = row;
+          chosenStatus = status;
+          break;
+        }
+      }
+      if (chosen) break;
+    }
+    if (!chosen) continue;
+
     const upd = await client.query(
       `UPDATE part_requests
           SET status = 'approved', instance_id = $1, updated_at = NOW()
-        WHERE request_id = (
-          SELECT request_id FROM part_requests
-           WHERE part_id = $2 AND status IN ('escalated', 'ordered') AND instance_id IS NULL
-           ORDER BY created_at ASC LIMIT 1
-        )
+        WHERE request_id = $2 AND instance_id IS NULL
         RETURNING request_id, ticket_id, request_number`,
-      [inst.instance_id, Number(partId)]
+      [inst.instance_id, chosen.request_id]
     );
     if (!upd.rows.length) continue;
 
@@ -260,7 +314,7 @@ async function autoLinkOpenRequests(client, { partId, instances, actorUserId, ac
       unitCost: inst.unit_cost,
       requestId: request.request_id,
       ticketId: request.ticket_id,
-      notes: `Auto-reserved on receipt for ${request.request_number || 'open request'}`,
+      notes: `Auto-reserved on receipt for ${request.request_number || 'open request'} (fit=${chosenStatus})`,
       actorUserId,
       actorName,
     });

@@ -64,6 +64,8 @@ router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 's
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
 router.get('/instances', allowPartInstanceRead, ctrl.listPartInstances);
 router.post('/instances', allowPartInstanceWrite, ctrl.addPartInstances);
+router.patch('/instances/:instanceId/fitment', allowPartInstanceWrite, ctrl.updatePartInstanceFitment);
+router.post('/instances/bulk-fitment', allowPartInstanceWrite, ctrl.bulkUpdatePartInstanceFitment);
 router.patch('/instances/:instanceId', allowPartInstanceWrite, ctrl.updatePartInstance);
 const allowTtsplPartDetach = (req, res, next) => {
   if (req.user?.role === 'super_admin') return next();

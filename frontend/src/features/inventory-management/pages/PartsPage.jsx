@@ -9,6 +9,14 @@ import DataTable from '../../reporting/components/DataTable';
 import { inr } from '../../reporting/reportingUtils';
 import { listPartInstances, addPartInstances } from '../../floor-pipeline/partRequestsApi';
 import PartSerialsDrawer from '../components/PartSerialsDrawer';
+import FitmentControls, {
+  emptyFitment,
+  fitmentFromCatalogPart,
+  catalogFieldsFromFitment,
+  formatFitmentSummary,
+} from '../components/FitmentControls';
+import FitmentSettingsPanel from '../components/FitmentSettingsPanel';
+import { useAuth } from '../../../context/AuthContext';
 
 const CATEGORIES = [
   { value: '', label: 'All' },
@@ -49,7 +57,8 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
   const blank = {
     part_name: '', category: 'general', description: '', quantity: 0,
     min_threshold: 5, cost: '', location_code: '', vendor: '',
-    part_sku: '', compatible_brands: '', warranty_months: 0, is_consumable: false, notes: '',
+    part_sku: '', warranty_months: 0, is_consumable: false, notes: '',
+    fitment: emptyFitment(),
   };
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
@@ -66,12 +75,10 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
         location_code: initial.location_code || '',
         vendor: initial.vendor || '',
         part_sku: initial.part_sku || '',
-        compatible_brands: Array.isArray(initial.compatible_brands)
-          ? initial.compatible_brands.join(', ')
-          : initial.compatible_brands || '',
         warranty_months: initial.warranty_months || 0,
         is_consumable: !!initial.is_consumable,
         notes: initial.notes || '',
+        fitment: fitmentFromCatalogPart(initial),
       });
     } else {
       setForm(blank);
@@ -119,10 +126,12 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
             <span className="text-gray-600">Part SKU</span>
             <input className="mt-1 w-full border rounded-lg px-3 py-2 font-mono" placeholder="optional" value={form.part_sku} onChange={(e) => setForm({ ...form, part_sku: e.target.value })} />
           </label>
-          <label className="block">
-            <span className="text-gray-600">Compatible Brands</span>
-            <input className="mt-1 w-full border rounded-lg px-3 py-2" placeholder="Dell, HP, Lenovo" value={form.compatible_brands} onChange={(e) => setForm({ ...form, compatible_brands: e.target.value })} />
-          </label>
+          <FitmentControls
+            label="Default fitment (pre-fills at GRN)"
+            value={form.fitment}
+            onChange={(fitment) => setForm({ ...form, fitment })}
+            allowUnset
+          />
           {!initial && (
             <label className="block">
               <span className="text-gray-600">Initial Quantity</span>
@@ -294,6 +303,76 @@ function UsageModal({ part, onClose }) {
   );
 }
 
+function formatFitsBrand(r) {
+  if (r.fitment === 'universal') return 'Universal';
+  if (r.fitment === 'unset' || !r.fitment) return '—';
+  return r.fits_laptop_brand || '—';
+}
+
+function fitsModelsList(r) {
+  if (r.fitment === 'universal') return ['Universal'];
+  if (r.fitment === 'unset' || !r.fitment) return [];
+  const models = Array.isArray(r.fits_laptop_models) ? r.fits_laptop_models.map((m) => String(m).trim()).filter(Boolean) : [];
+  if (!models.length) return ['All models'];
+  return models;
+}
+
+function FitsModelsCell({ row, onShowAll }) {
+  const models = fitsModelsList(row);
+  if (!models.length) return <span className="text-gray-400">—</span>;
+  if (models.length === 1) {
+    return <span className="text-slate-800">{models[0]}</span>;
+  }
+  const extra = models.length - 1;
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <span className="text-slate-800">{models[0]}</span>
+      <button
+        type="button"
+        onClick={() => onShowAll(row, models)}
+        className="inline-flex items-center rounded-full bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 text-xs font-semibold hover:bg-blue-100"
+        title={`View all ${models.length} models`}
+      >
+        +{extra}
+      </button>
+    </span>
+  );
+}
+
+function FitsModelsPopup({ open, title, models, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Fits laptop models</h3>
+            {title ? <p className="text-xs text-slate-500 mt-0.5">{title}</p> : null}
+          </div>
+          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 text-slate-500" aria-label="Close">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <ul className="p-4 overflow-y-auto max-h-[60vh] space-y-1.5">
+          {models.map((m) => (
+            <li key={m} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+              {m}
+            </li>
+          ))}
+        </ul>
+        <div className="px-4 py-3 border-t flex justify-end">
+          <button type="button" onClick={onClose} className="rounded-lg border px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InstancesTab() {
   const [instances, setInstances] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -304,6 +383,7 @@ function InstancesTab() {
   const [search, setSearch] = useState('');
   const [labelFor, setLabelFor] = useState(null);
   const [filterOpts, setFilterOpts] = useState({ brands: [], models: [], models_by_brand: {} });
+  const [modelsPopup, setModelsPopup] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -311,8 +391,8 @@ function InstancesTab() {
       const params = { limit: 500 };
       if (status) params.status = status;
       if (category) params.category = category;
-      if (brand) params.brand = brand;
-      if (model) params.model = model;
+      if (brand) params.fits_laptop_brand = brand;
+      if (model) params.fits_laptop_model = model;
       const { data } = await listPartInstances(params);
       setInstances(data.instances || []);
       if (data.filters) {
@@ -347,6 +427,8 @@ function InstancesTab() {
         String(r.prt_id || '').toLowerCase().includes(q) ||
         String(r.serial_number || '').toLowerCase().includes(q) ||
         String(r.part_name || '').toLowerCase().includes(q) ||
+        String(r.fits_laptop_brand || '').toLowerCase().includes(q) ||
+        String((Array.isArray(r.fits_laptop_models) ? r.fits_laptop_models.join(' ') : '') || '').toLowerCase().includes(q) ||
         String(r.brand_name || r.brand || '').toLowerCase().includes(q) ||
         String(r.model_name || r.model || '').toLowerCase().includes(q) ||
         String(r.installed_ttspl_id || '').toLowerCase().includes(q) ||
@@ -390,7 +472,7 @@ function InstancesTab() {
           </select>
         </label>
         <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">Brand</span>
+          <span className="block text-gray-500 text-xs mb-1">Fits laptop brand</span>
           <select
             className="border rounded-lg px-3 py-2 text-sm min-w-[140px]"
             value={brand}
@@ -399,14 +481,14 @@ function InstancesTab() {
               setModel('');
             }}
           >
-            <option value="">All brands</option>
+            <option value="">All</option>
             {filterOpts.brands.map((b) => (
               <option key={b} value={b}>{b}</option>
             ))}
           </select>
         </label>
         <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">Model</span>
+          <span className="block text-gray-500 text-xs mb-1">Fits laptop model</span>
           <select
             className="border rounded-lg px-3 py-2 text-sm min-w-[160px]"
             value={model}
@@ -449,8 +531,9 @@ function InstancesTab() {
                 <th className="p-3">PRT-ID</th>
                 <th className="p-3">Serial No.</th>
                 <th className="p-3">Part Name</th>
-                <th className="p-3">Brand</th>
-                <th className="p-3">Model</th>
+                <th className="p-3">Fits laptop brand</th>
+                <th className="p-3">Fits laptop model</th>
+                <th className="p-3">Part brand</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">PO No.</th>
@@ -469,8 +552,17 @@ function InstancesTab() {
                   <td className="p-3 font-mono text-blue-600 whitespace-nowrap">{r.prt_id}</td>
                   <td className="p-3 font-mono">{r.serial_number || '—'}</td>
                   <td className="p-3">{r.part_name}</td>
-                  <td className="p-3">{r.brand_name || r.brand || '—'}</td>
-                  <td className="p-3">{r.model_name || r.model || '—'}</td>
+                  <td className="p-3">{formatFitsBrand(r)}</td>
+                  <td className="p-3">
+                    <FitsModelsCell
+                      row={r}
+                      onShowAll={(row, models) => setModelsPopup({
+                        models,
+                        title: `${row.prt_id || ''} · ${formatFitsBrand(row)}`,
+                      })}
+                    />
+                  </td>
+                  <td className="p-3 text-slate-600">{r.brand_name || r.brand || '—'}</td>
                   <td className="p-3">{CAT_LABEL[partCategory(r)] || r.category || '—'}</td>
                   <td className="p-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${INSTANCE_STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}`}>
@@ -523,11 +615,19 @@ function InstancesTab() {
         onClose={() => setLabelFor(null)}
         title="Reprint QR label"
       />
+      <FitsModelsPopup
+        open={Boolean(modelsPopup)}
+        title={modelsPopup?.title}
+        models={modelsPopup?.models || []}
+        onClose={() => setModelsPopup(null)}
+      />
     </div>
   );
 }
 
 export default function PartsPage() {
+  const { user } = useAuth();
+  const isAdmin = ['admin', 'super_admin', 'manager'].includes(user?.role);
   const [tab, setTab] = useState('instances');
   const [parts, setParts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -606,6 +706,7 @@ export default function PartsPage() {
   const totalValue = enriched.reduce((s, p) => s + p.total_value, 0);
 
   const savePart = async (form) => {
+    const fitFields = catalogFieldsFromFitment(form.fitment);
     const payload = {
       part_name: form.part_name,
       part_type: form.category,
@@ -616,7 +717,9 @@ export default function PartsPage() {
       cost: form.cost,
       location_code: form.location_code,
       part_sku: form.part_sku,
-      compatible_brands: form.compatible_brands,
+      default_fitment: fitFields.default_fitment,
+      compatible_brands: fitFields.compatible_brands,
+      compatible_models: fitFields.compatible_models,
       is_consumable: form.is_consumable,
       warranty_months: form.warranty_months,
       notes: form.notes,
@@ -671,8 +774,8 @@ export default function PartsPage() {
     { key: 'description', label: 'Specifications', render: (r) => r.description || '—' },
     {
       key: 'compatible_brands',
-      label: 'Compatible',
-      render: (r) => (Array.isArray(r.compatible_brands) && r.compatible_brands.length ? r.compatible_brands.join(', ') : '—'),
+      label: 'Default fitment',
+      render: (r) => formatFitmentSummary(fitmentFromCatalogPart(r)),
     },
     {
       key: 'quantity',
@@ -755,6 +858,8 @@ export default function PartsPage() {
             <MetricCard title="Out of Stock" value={outCount} color="red" />
             <MetricCard title="Total Stock Value" value={inr(totalValue)} color="green" />
           </div>
+
+          {isAdmin ? <FitmentSettingsPanel /> : null}
 
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
             <label className="text-sm flex-1 min-w-[180px]">

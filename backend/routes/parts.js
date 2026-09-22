@@ -10,6 +10,12 @@ const {
 } = require('../controllers/partsDashboardController');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { SUPPORT_PARTS_CATALOG_SECTIONS } = require('../middleware/supportAccess');
+const {
+  getEnforcementStage,
+  setEnforcementStage,
+  STAGES,
+} = require('../services/partFitmentService');
+const pool = require('../config/db');
 const cp = checkSectionPermission;
 
 router.use(authMiddleware);
@@ -39,6 +45,37 @@ router.post('/labels/print', partsCatalogView, printPartLabels);
 // Parts tracking dashboard.
 router.get('/dashboard', checkAnySectionPermission(['parts_dashboard', 'parts_inventory'], 'view'), getPartsDashboard);
 router.get('/dashboard/drilldown', checkAnySectionPermission(['parts_dashboard', 'parts_inventory'], 'view'), getPartsDashboardDrilldown);
+
+// Part fitment enforcement setting
+router.get('/fitment-settings', checkAnySectionPermission(['parts_inventory', 'parts_approval'], 'view'), async (req, res) => {
+  try {
+    const enforcement = await getEnforcementStage();
+    const untagged = await pool.query(
+      `SELECT count(*)::int AS n FROM part_instances WHERE COALESCE(fitment, 'unset') = 'unset'`
+    );
+    res.json({
+      success: true,
+      enforcement,
+      stages: STAGES,
+      untagged_units: untagged.rows[0]?.n || 0,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.put('/fitment-settings', cp('parts_inventory', 'edit'), async (req, res) => {
+  try {
+    const stage = String(req.body?.enforcement || req.body?.stage || '').toLowerCase();
+    if (!STAGES.includes(stage)) {
+      return res.status(400).json({ success: false, message: `enforcement must be one of: ${STAGES.join(', ')}` });
+    }
+    await setEnforcementStage(stage, { updatedBy: req.user?.user_id });
+    res.json({ success: true, enforcement: stage });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+});
 
 // @route   GET /api/parts
 // @desc    Get / search parts by part_name (?search=)

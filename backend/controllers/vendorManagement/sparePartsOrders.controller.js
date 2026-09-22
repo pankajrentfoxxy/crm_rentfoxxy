@@ -11,7 +11,6 @@ const { allocatePartAssetCodes } = require('../../services/partIdService');
 const {
   listActiveSpareBrandsForDropdown,
   resolveSpareBrandModelPair,
-  listCascadeSpareModelsForBrand,
 } = require('../../services/assetConfigurationService');
 const {
   resolveFloorPartId,
@@ -53,7 +52,10 @@ const resolveFloorPartsId = resolveFloorPartId;
  * @param {import('pg').PoolClient} client
  * @param {{serialId: number, serialNumber: string|null, assetCode: string}[]} units
  */
-async function trackReceivedUnits(client, { line, units, spoId, grnId, lineIndex, vendorId, user }) {
+async function trackReceivedUnits(client, {
+  line, units, spoId, grnId, lineIndex, vendorId, user,
+  fitment, fits_laptop_brand, fits_laptop_models,
+}) {
   if (!Array.isArray(units) || !units.length) return [];
 
   const partId = await resolveOrCreateFloorPartId(client, line);
@@ -76,6 +78,9 @@ async function trackReceivedUnits(client, { line, units, spoId, grnId, lineIndex
     actorName: user?.name || null,
     brand: line.brand_name || line.brand || null,
     model: line.model_name || line.model || null,
+    fitment,
+    fits_laptop_brand,
+    fits_laptop_models,
   });
 
   await autoLinkOpenRequests(client, {
@@ -86,6 +91,21 @@ async function trackReceivedUnits(client, { line, units, spoId, grnId, lineIndex
   });
 
   return instances;
+}
+
+function fitmentFromBody(body = {}) {
+  if (body.fitment == null && body.fits_laptop_brand == null && body.fits_laptop_models == null) {
+    return {};
+  }
+  return {
+    fitment: body.fitment,
+    fits_laptop_brand: body.fits_laptop_brand,
+    fits_laptop_models: Array.isArray(body.fits_laptop_models)
+      ? body.fits_laptop_models
+      : (typeof body.fits_laptop_models === 'string' && body.fits_laptop_models
+        ? body.fits_laptop_models.split(',').map((s) => s.trim()).filter(Boolean)
+        : body.fits_laptop_models),
+  };
 }
 
 function lineSubtotal(lineItems) {
@@ -426,7 +446,7 @@ async function create(req, res) {
     const row = line_items_raw_norm[i];
     try {
       const resolved = await resolveSpareBrandModelPair(row.brand_name, row.model_name, {
-        requireModel: Boolean(String(row.model_name || '').trim()),
+        requireModel: false,
       });
       if (!resolved.brand) {
         return res.status(400).json({
@@ -434,14 +454,7 @@ async function create(req, res) {
           message: `Line ${i + 1}: brand is required`,
         });
       }
-      // If brand has mapped models, require one
-      const mapped = await listCascadeSpareModelsForBrand(resolved.brand);
-      if (mapped.has_mapping && !resolved.model) {
-        return res.status(400).json({
-          success: false,
-          message: `Line ${i + 1}: model is required for brand "${resolved.brand}"`,
-        });
-      }
+      // Spare PO is brand-only; model is optional and not required even if master mapping exists.
       line_items.push({
         ...row,
         brand_name: resolved.brand,
@@ -1036,6 +1049,7 @@ async function receiveSpareLineSerial(req, res) {
       lineIndex,
       vendorId: spo.vendor_id || null,
       user: req.user,
+      ...fitmentFromBody(req.body),
     });
     prtId = instance?.prt_id || null;
 
@@ -1255,6 +1269,7 @@ async function receiveSpareLineBulk(req, res) {
       lineIndex,
       vendorId: spo.vendor_id || null,
       user: req.user,
+      ...fitmentFromBody(req.body),
     });
     instances.forEach((inst, i) => {
       if (createdRows[i]) createdRows[i].prt_id = inst.prt_id;

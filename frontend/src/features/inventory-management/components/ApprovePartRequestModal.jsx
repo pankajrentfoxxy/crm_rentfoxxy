@@ -1,12 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { AlertTriangle, Check, Loader2, QrCode, Search, X } from 'lucide-react';
 import api from '../../../utils/api';
 import ScanField from '../../../components/ScanField';
 import { PART_CATEGORIES } from '../../../constants/laptopConditions';
-import { listPartInstances } from '../../floor-pipeline/partRequestsApi';
+import {
+  listPartInstances,
+  updatePartInstanceFitment,
+} from '../../floor-pipeline/partRequestsApi';
 import { lookupPartUnit } from '../partTrackingApi';
+import FitmentControls, {
+  FitmentChip,
+  computeFitStatus,
+  emptyFitment,
+} from './FitmentControls';
 
 /**
  * Warehouse approval: pick the exact physical unit going out (by scanning its
@@ -20,6 +28,12 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
   const [units, setUnits] = useState([]);
   const [selected, setSelected] = useState('auto');
   const [search, setSearch] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const [fitCounts, setFitCounts] = useState(null);
+  const [retagId, setRetagId] = useState(null);
+  const [retagValue, setRetagValue] = useState(emptyFitment());
+  const [retagReason, setRetagReason] = useState('');
+  const [retagBusy, setRetagBusy] = useState(false);
 
   const [scanCode, setScanCode] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -33,37 +47,67 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
   const [catalog, setCatalog] = useState([]);
 
   const partId = request?.part_id;
+  const laptopBrand = request?.brand || request?.laptop_brand || '';
+  const laptopModel = request?.model || request?.laptop_model || '';
+  const laptopHint = useMemo(
+    () => (laptopBrand ? { brand: laptopBrand, model: laptopModel || undefined } : null),
+    [laptopBrand, laptopModel]
+  );
+  const requestId = request?.request_id;
+
+  const loadUnits = useCallback(async () => {
+    if (!partId) return;
+    setLoading(true);
+    try {
+      const params = {
+        part_id: partId,
+        status: 'in_stock',
+        limit: 500,
+        for_request_id: requestId,
+        for_request_kind: 'floor',
+      };
+      if (showAll) params.include_incompatible = true;
+      const { data } = await listPartInstances(params);
+      const rows = data.instances || [];
+      setUnits(rows);
+      setFitCounts(data.laptop?.counts || null);
+      setSelected((prev) => {
+        if (prev === 'auto') return rows.length ? rows[0].instance_id : 'auto';
+        if (rows.some((r) => r.instance_id === prev)) return prev;
+        return rows.length ? rows[0].instance_id : 'auto';
+      });
+    } catch {
+      setUnits([]);
+      setFitCounts(null);
+      setSelected('auto');
+    } finally {
+      setLoading(false);
+    }
+  }, [partId, requestId, showAll]);
 
   useEffect(() => {
     if (!open || !partId) return undefined;
-    let alive = true;
-    setLoading(true);
     setSelected('auto');
     setSearch('');
     setScanCode('');
     setScanned(null);
     setScanError('');
-    // Replacing a part almost always sends the old one back; upgrades often add
-    // to an empty slot, so leave that for the team to confirm.
+    setShowAll(false);
+    setFitCounts(null);
+    setRetagId(null);
     setOldPartExpected(request?.request_type === 'upgrade' ? 'not_available' : 'yes');
     setOldPartCategory(request?.category || '');
     setOldPartName(request?.part_name || '');
     setOldPartId(request?.part_id || null);
-
-    listPartInstances({ part_id: partId, status: 'in_stock', limit: 500 })
-      .then(({ data }) => {
-        if (!alive) return;
-        const rows = data.instances || [];
-        setUnits(rows);
-        setSelected(rows.length ? rows[0].instance_id : 'auto');
-      })
-      .catch(() => { if (alive) { setUnits([]); setSelected('auto'); } })
-      .finally(() => { if (alive) setLoading(false); });
-
-    return () => { alive = false; };
+    return undefined;
   }, [open, partId, request]);
 
-  // Catalog for naming the old part when it is not the same type as the new one.
+  useEffect(() => {
+    if (!open || !partId) return undefined;
+    loadUnits();
+    return undefined;
+  }, [open, partId, loadUnits]);
+
   useEffect(() => {
     if (!open) return undefined;
     let alive = true;
@@ -112,6 +156,46 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
     }
   }
 
+  function openRetag(u) {
+    setRetagId(u.instance_id);
+    setRetagValue({
+      fitment: u.fitment || 'unset',
+      fits_laptop_brand: u.fits_laptop_brand || laptopHint?.brand || null,
+      fits_laptop_models: Array.isArray(u.fits_laptop_models) && u.fits_laptop_models.length
+        ? u.fits_laptop_models
+        : (laptopHint?.model ? [laptopHint.model] : []),
+    });
+    setRetagReason('');
+  }
+
+  async function saveRetag() {
+    if (!retagId) return;
+    if (retagValue.fitment === 'specific' && !retagValue.fits_laptop_brand) {
+      toast.error('Pick a laptop brand');
+      return;
+    }
+    if (!retagReason.trim()) {
+      toast.error('Reason is required to retag');
+      return;
+    }
+    setRetagBusy(true);
+    try {
+      await updatePartInstanceFitment(retagId, {
+        fitment: retagValue.fitment,
+        fits_laptop_brand: retagValue.fits_laptop_brand,
+        fits_laptop_models: retagValue.fits_laptop_models,
+        reason: retagReason.trim(),
+      });
+      toast.success('Fitment updated');
+      setRetagId(null);
+      await loadUnits();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Retag failed');
+    } finally {
+      setRetagBusy(false);
+    }
+  }
+
   function submit() {
     if (oldPartExpected === 'yes' && !oldPartId && !oldPartName.trim()) {
       toast.error('Pick the category and name of the old part coming back');
@@ -138,6 +222,7 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
             <p className="text-xs text-slate-500 mt-0.5">
               {request?.part_name}{request?.request_number ? ` · ${request.request_number}` : ''}
               {request?.ttspl_id ? ` · ${request.ttspl_id}` : ''}
+              {laptopBrand ? ` · ${laptopBrand}${laptopModel ? ` ${laptopModel}` : ''}` : ''}
             </p>
           </div>
           <button type="button" className="p-2 rounded-lg hover:bg-slate-100" onClick={onClose} aria-label="Close">
@@ -200,9 +285,42 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
           </section>
 
           <section className="space-y-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Or pick from stock
-            </h4>
+            <div className="flex items-start justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 m-0 pt-1">
+                Or pick from stock
+              </h4>
+              <label
+                className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer"
+                title="Hides units tagged for a different laptop brand/model"
+              >
+                <input
+                  type="checkbox"
+                  className="rounded border-slate-300"
+                  checked={!showAll}
+                  onChange={(e) => setShowAll(!e.target.checked)}
+                />
+                Only parts for this laptop
+              </label>
+            </div>
+
+            {laptopBrand ? (
+              <p className="text-[11px] text-slate-500 m-0">
+                {fitCounts ? (
+                  <>
+                    {fitCounts.fit} tagged for {laptopBrand}
+                    {laptopModel ? ` ${laptopModel}` : ''}
+                    {fitCounts.unknown ? ` · ${fitCounts.unknown} not tagged yet` : ''}
+                    {fitCounts.unfit
+                      ? ` · ${fitCounts.unfit} for other models${showAll ? '' : ' (hidden)'}`
+                      : ''}
+                  </>
+                ) : null}
+              </p>
+            ) : (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 m-0">
+                This ticket has no laptop brand on it, so parts cannot be matched — every unit is listed.
+              </p>
+            )}
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading available units…
@@ -231,25 +349,79 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
                     <p className="text-sm text-slate-500 py-3 text-center">
                       {units.length ? 'No units match your search.' : 'No tracked units in stock — auto-pick will assign one.'}
                     </p>
-                  ) : filtered.map((u) => (
-                    <label
-                      key={u.instance_id}
-                      className={`flex items-center gap-3 rounded-xl border p-3 text-sm cursor-pointer ${Number(selected) === u.instance_id ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}
-                    >
-                      <input
-                        type="radio"
-                        name="unit"
-                        checked={Number(selected) === u.instance_id}
-                        onChange={() => { setSelected(u.instance_id); setScanned(null); }}
-                      />
-                      <div className="min-w-0">
-                        <p className="font-mono text-xs font-semibold text-slate-800 truncate m-0">{u.prt_id}</p>
-                        <p className="text-xs text-slate-500 m-0">
-                          {u.serial_number || 'No serial'}{u.location_code ? ` · ${u.location_code}` : ''}
-                        </p>
+                  ) : filtered.map((u) => {
+                    const status = computeFitStatus(u, laptopBrand, laptopModel);
+                    return (
+                      <div key={u.instance_id} className="space-y-1.5">
+                        <label
+                          className={`flex items-center gap-3 rounded-xl border p-3 text-sm cursor-pointer ${Number(selected) === u.instance_id ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}
+                        >
+                          <input
+                            type="radio"
+                            name="unit"
+                            checked={Number(selected) === u.instance_id}
+                            onChange={() => { setSelected(u.instance_id); setScanned(null); }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-mono text-xs font-semibold text-slate-800 truncate m-0">{u.prt_id}</p>
+                              <FitmentChip status={status} />
+                            </div>
+                            <p className="text-xs text-slate-500 m-0">
+                              {u.serial_number || 'No serial'}{u.location_code ? ` · ${u.location_code}` : ''}
+                            </p>
+                          </div>
+                        </label>
+                        {status === 'unfit' ? (
+                          <div className="pl-9">
+                            {retagId === u.instance_id ? (
+                              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-2">
+                                <FitmentControls
+                                  compact
+                                  value={retagValue}
+                                  onChange={setRetagValue}
+                                  laptopHint={laptopHint}
+                                  allowUnset
+                                />
+                                <input
+                                  className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                                  placeholder="Reason for retag"
+                                  value={retagReason}
+                                  onChange={(e) => setRetagReason(e.target.value)}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={retagBusy}
+                                    onClick={saveRetag}
+                                    className="rounded-lg bg-slate-800 text-white px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+                                  >
+                                    {retagBusy ? 'Saving…' : 'Save retag'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={retagBusy}
+                                    onClick={() => setRetagId(null)}
+                                    className="rounded-lg border px-2.5 py-1 text-xs"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-[11px] font-semibold text-blue-700 hover:underline"
+                                onClick={() => openRetag(u)}
+                              >
+                                Retag
+                              </button>
+                            )}
+                          </div>
+                        ) : null}
                       </div>
-                    </label>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}

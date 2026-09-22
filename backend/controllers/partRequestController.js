@@ -17,6 +17,13 @@ const {
   applyConfigFromPartAttach,
   revertConfigFromPartDetach,
 } = require('../services/partConfigUpdateService');
+const {
+  validateFitment,
+  assertAssignmentAllowed,
+  FitmentValidationError,
+  fits,
+  loadKnownBrands,
+} = require('../services/partFitmentService');
 
 const FULL_SELECT = `
   SELECT pr.*,
@@ -408,15 +415,30 @@ exports.approvePartRequest = async (req, res) => {
       if (!auto_select && pr.instance_id) instanceId = pr.instance_id;
     }
     if (!instanceId) {
-      // auto-select oldest in_stock instance for this part
+      // Prefer fit, then unknown; never auto-pick unfit.
+      const laptopBrand = pr.brand || null;
+      const laptopModel = pr.model || null;
+      await loadKnownBrands(client);
       const pick = await client.query(
-        `SELECT instance_id FROM part_instances
+        `SELECT instance_id, fitment, fits_laptop_brand, fits_laptop_models
+           FROM part_instances
           WHERE part_id = $1 AND status = 'in_stock'
-          ORDER BY received_at ASC, instance_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
+          ORDER BY received_at ASC, instance_id ASC
+          FOR UPDATE SKIP LOCKED`,
         [pr.part_id]
       );
-      if (pick.rows.length) {
-        instanceId = pick.rows[0].instance_id;
+      let chosen = null;
+      for (const pref of ['fit', 'unknown']) {
+        for (const row of pick.rows) {
+          if (fits(row, laptopBrand, laptopModel) === pref) {
+            chosen = row;
+            break;
+          }
+        }
+        if (chosen) break;
+      }
+      if (chosen) {
+        instanceId = chosen.instance_id;
       } else {
         // No PRT instance exists yet. Legacy stock may live only in parts.quantity
         // (added before Phase 16). If there is stock, mint a PRT instance on-the-fly.
@@ -435,8 +457,8 @@ exports.approvePartRequest = async (req, res) => {
         const prtId = await generatePrtId(new Date(), client);
         const created = await client.query(
           `INSERT INTO part_instances
-             (prt_id, part_id, unit_cost, status, notes, received_at, created_at, updated_at)
-           VALUES ($1, $2, $3, 'in_stock', 'Auto-created from legacy stock on approval', NOW(), NOW(), NOW())
+             (prt_id, part_id, unit_cost, status, notes, fitment, received_at, created_at, updated_at)
+           VALUES ($1, $2, $3, 'in_stock', 'Auto-created from legacy stock on approval', 'unset', NOW(), NOW(), NOW())
            RETURNING instance_id`,
           [prtId, pr.part_id, Number(part.cost || 0)]
         );
@@ -464,6 +486,48 @@ exports.approvePartRequest = async (req, res) => {
     if (inst.status !== 'in_stock' && inst.status !== 'reserved') {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: `${inst.prt_id} is '${inst.status}', not available` });
+    }
+
+    const fitGate = await assertAssignmentAllowed({
+      unit: inst,
+      laptopBrand: pr.brand,
+      laptopModel: pr.model,
+      mismatchReason: req.body?.fitment_mismatch_reason,
+      db: client,
+    });
+    if (!fitGate.ok) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: fitGate.message,
+        code: fitGate.code,
+        fit_status: fitGate.status,
+      });
+    }
+    if (fitGate.allowedMismatch || fitGate.status === 'unknown') {
+      await recordMovement(client, {
+        type: MOVEMENT.FITMENT_MISMATCH,
+        partId: inst.part_id,
+        instanceId: inst.instance_id,
+        prtId: inst.prt_id,
+        serialNumber: inst.serial_number,
+        requestId: pr.request_id,
+        ticketId: pr.ticket_id,
+        notes: JSON.stringify({
+          event: fitGate.allowedMismatch ? 'allowed_mismatch' : 'unknown_laptop_or_unit',
+          stage: fitGate.stage,
+          fit_status: fitGate.status,
+          unit: {
+            fitment: inst.fitment,
+            fits_laptop_brand: inst.fits_laptop_brand,
+            fits_laptop_models: inst.fits_laptop_models,
+          },
+          laptop: { brand: pr.brand, model: pr.model },
+          reason: fitGate.reason || null,
+        }),
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name,
+      });
     }
 
     // Inventory declares here whether a defective part is coming back off the
@@ -683,8 +747,9 @@ exports.attachPartAndReturnOld = async (req, res) => {
     const reqRes = await client.query(
       `SELECT pr.*, p.part_name, p.cost AS part_cost, p.category,
               pi.prt_id, pi.serial_number AS instance_serial, pi.unit_cost AS instance_cost,
+              pi.fitment, pi.fits_laptop_brand, pi.fits_laptop_models,
               t.ttspl_id, t.serial_number, t.vendor_serial_id, t.current_stage_id,
-              t.ram, t.storage, t.processor,
+              t.ram, t.storage, t.processor, t.brand AS laptop_brand, t.model AS laptop_model,
               st.stage_name
          FROM part_requests pr
          JOIN parts p ON p.part_id = pr.part_id
@@ -699,6 +764,37 @@ exports.attachPartAndReturnOld = async (req, res) => {
     const r = reqRes.rows[0];
     if (r.status !== 'approved') {
       throw Object.assign(new Error(`Cannot attach part: request status is '${r.status}'. Must be approved.`), { status: 400 });
+    }
+
+    if (r.instance_id) {
+      const fitGate = await assertAssignmentAllowed({
+        unit: r,
+        laptopBrand: r.laptop_brand,
+        laptopModel: r.laptop_model,
+        mismatchReason: req.body?.fitment_mismatch_reason,
+        db: client,
+      });
+      if (!fitGate.ok) {
+        throw Object.assign(new Error(fitGate.message), { status: 400, code: fitGate.code });
+      }
+      if (fitGate.allowedMismatch) {
+        await recordMovement(client, {
+          type: MOVEMENT.FITMENT_MISMATCH,
+          partId: r.part_id,
+          instanceId: r.instance_id,
+          prtId: r.prt_id,
+          requestId: r.request_id,
+          ticketId: r.ticket_id,
+          notes: JSON.stringify({
+            event: 'allowed_mismatch_attach',
+            stage: fitGate.stage,
+            laptop: { brand: r.laptop_brand, model: r.laptop_model },
+            reason: fitGate.reason || null,
+          }),
+          actorUserId: req.user?.user_id,
+          actorName: req.user?.name,
+        });
+      }
     }
 
     if (r.old_part_expected === 'yes' && !old_part_returned) {
@@ -1463,10 +1559,15 @@ exports.getPartCostSummary = async (req, res) => {
 };
 
 // GET /api/part-requests/instances?status=&part_id=&category=&brand=&model=&search=&limit=
+// Optional: for_request_id + for_request_kind=floor|support → fit_status per row
 exports.listPartInstances = async (req, res) => {
   try {
     await ensurePartInstanceSerialColumn(pool);
-    const { status, part_id, category, brand, model, search, limit = 200 } = req.query;
+    const {
+      status, part_id, category, brand, model, search, limit = 200,
+      for_request_id, for_request_kind, include_incompatible,
+      fits_laptop_brand, fits_laptop_model,
+    } = req.query;
     const conditions = [];
     const params = [];
     if (status) { params.push(status); conditions.push(`pi.status = $${params.length}`); }
@@ -1484,13 +1585,26 @@ exports.listPartInstances = async (req, res) => {
       NULLIF(TRIM(p.default_model), '')
     )`;
 
-    if (brand && String(brand).trim()) {
+    // Spare vendor brand (legacy param) — keep for callers that still pass brand/model
+    if (brand && String(brand).trim() && !fits_laptop_brand) {
       params.push(String(brand).trim().toLowerCase());
       conditions.push(`LOWER(${brandExpr}) = $${params.length}`);
     }
-    if (model && String(model).trim()) {
+    if (model && String(model).trim() && !fits_laptop_model) {
       params.push(String(model).trim().toLowerCase());
       conditions.push(`LOWER(${modelExpr}) = $${params.length}`);
+    }
+    // Laptop fitment tagged at GRN
+    if (fits_laptop_brand && String(fits_laptop_brand).trim()) {
+      params.push(String(fits_laptop_brand).trim().toLowerCase());
+      conditions.push(`LOWER(TRIM(COALESCE(pi.fits_laptop_brand, ''))) = $${params.length}`);
+    }
+    if (fits_laptop_model && String(fits_laptop_model).trim()) {
+      params.push(String(fits_laptop_model).trim().toLowerCase());
+      conditions.push(`EXISTS (
+        SELECT 1 FROM UNNEST(COALESCE(pi.fits_laptop_models, ARRAY[]::text[])) AS m(val)
+         WHERE LOWER(TRIM(m.val)) = $${params.length}
+      )`);
     }
     if (search && String(search).trim()) {
       params.push(`%${String(search).trim()}%`);
@@ -1502,17 +1616,52 @@ exports.listPartInstances = async (req, res) => {
         OR spo.purchase_order_number ILIKE $${i}
         OR COALESCE(vend.business_name, vend.first_name) ILIKE $${i})`);
     }
-    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    params.push(Math.min(1000, Number(limit) || 200));
 
-    // The PO and vendor travel with the unit so a warranty claim can be traced
-    // back to who supplied it without hunting through GRN history.
+    // Fitment is matched in JS (services/partFitmentService.fits) rather than in
+    // SQL so there is exactly one implementation of the rule. The row set here is
+    // one part's stock, so the post-filter is cheap.
+    let laptopBrand = null;
+    let laptopModel = null;
+    const showAll = String(include_incompatible || '').toLowerCase() === 'true'
+      || include_incompatible === '1';
+    if (for_request_id) {
+      const kind = String(for_request_kind || 'floor').toLowerCase();
+      if (kind === 'support') {
+        const lr = await pool.query(
+          `SELECT sti.brand, sti.model
+             FROM support_part_requests spr
+             LEFT JOIN support_ticket_items sti ON sti.id = spr.support_item_id
+            WHERE spr.id = $1`,
+          [Number(for_request_id)]
+        );
+        laptopBrand = lr.rows[0]?.brand || null;
+        laptopModel = lr.rows[0]?.model || null;
+      } else {
+        const lr = await pool.query(
+          `SELECT t.brand, t.model
+             FROM part_requests pr
+             LEFT JOIN tickets t ON t.ticket_id = pr.ticket_id
+            WHERE pr.request_id = $1`,
+          [Number(for_request_id)]
+        );
+        laptopBrand = lr.rows[0]?.brand || null;
+        laptopModel = lr.rows[0]?.model || null;
+      }
+      await loadKnownBrands(pool);
+    }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    // The fit filter runs after the query, so fetch the whole stock of this part
+    // before trimming — otherwise LIMIT could cut off the fitting units.
+    params.push(for_request_id && !showAll ? 1000 : Math.min(1000, Number(limit) || 200));
+
     const result = await pool.query(
       `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.status, pi.location_code,
               pi.unit_cost, pi.notes, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
               pi.received_at, pi.created_at, pi.asset_code, pi.source, pi.spo_id, pi.grn_id,
               pi.vendor_repair_dc_number, pi.brand, pi.model, pi.spo_line_index,
               pi.removed_from_ttspl_id, pi.condition_on_removal,
+              pi.fitment, pi.fits_laptop_brand, pi.fits_laptop_models,
               p.part_name, p.category, p.part_type, p.default_brand, p.default_model,
               spo.purchase_order_number, spo.purchase_order_date,
               COALESCE(pi.vendor_id, spo.vendor_id) AS vendor_id,
@@ -1530,16 +1679,36 @@ exports.listPartInstances = async (req, res) => {
       params
     );
 
-    // Filter dropdown options from full stock (not limited by current brand/model filters)
+    // Fit status + fit-first ordering, so the picker sees the right unit on top.
+    const FIT_RANK = { fit: 0, unknown: 1, unfit: 2 };
+    let instances = result.rows.map((r) => ({
+      ...r,
+      fit_status: for_request_id ? fits(r, laptopBrand, laptopModel) : 'unknown',
+    }));
+    let fitCounts = null;
+    if (for_request_id) {
+      fitCounts = instances.reduce(
+        (acc, r) => { acc[r.fit_status] += 1; acc.total += 1; return acc; },
+        { fit: 0, unknown: 0, unfit: 0, total: 0 }
+      );
+      if (!showAll) instances = instances.filter((r) => r.fit_status !== 'unfit');
+      instances.sort((a, b) => FIT_RANK[a.fit_status] - FIT_RANK[b.fit_status]);
+      const cap = Math.min(1000, Number(limit) || 200);
+      if (instances.length > cap) instances = instances.slice(0, cap);
+    }
+
+    // Filter dropdowns: laptop fitment tagged at GRN (authority for listing)
     const opts = await pool.query(
       `SELECT DISTINCT
-         ${brandExpr} AS brand_name,
-         ${modelExpr} AS model_name,
+         NULLIF(TRIM(pi.fits_laptop_brand), '') AS brand_name,
+         NULLIF(TRIM(m.val), '') AS model_name,
          p.category
        FROM part_instances pi
        JOIN parts p ON p.part_id = pi.part_id
-       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pi.vendor_serial_id
-       WHERE ${brandExpr} IS NOT NULL OR ${modelExpr} IS NOT NULL OR p.category IS NOT NULL`
+       LEFT JOIN LATERAL UNNEST(COALESCE(pi.fits_laptop_models, ARRAY[]::text[])) AS m(val) ON TRUE
+       WHERE pi.fits_laptop_brand IS NOT NULL
+          OR cardinality(COALESCE(pi.fits_laptop_models, ARRAY[]::text[])) > 0
+          OR p.category IS NOT NULL`
     );
     const brands = [...new Set(opts.rows.map((r) => r.brand_name).filter(Boolean))].sort((a, b) =>
       a.localeCompare(b)
@@ -1559,14 +1728,27 @@ exports.listPartInstances = async (req, res) => {
       Object.entries(modelsByBrand).map(([k, set]) => [k, [...set].sort((a, b) => a.localeCompare(b))])
     );
 
+    const catOpts = await pool.query(
+      `SELECT DISTINCT p.category FROM part_instances pi JOIN parts p ON p.part_id = pi.part_id WHERE p.category IS NOT NULL`
+    );
+
     res.json({
       success: true,
-      instances: result.rows,
+      instances,
+      laptop: for_request_id
+        ? {
+            brand: laptopBrand,
+            model: laptopModel,
+            for_request_id: Number(for_request_id),
+            for_request_kind: for_request_kind || 'floor',
+            counts: fitCounts,
+          }
+        : undefined,
       filters: {
         brands,
         models: modelsUnique,
         models_by_brand,
-        categories: [...new Set(opts.rows.map((r) => r.category).filter(Boolean))].sort(),
+        categories: catOpts.rows.map((r) => r.category).filter(Boolean).sort(),
       },
     });
   } catch (err) {
@@ -1585,6 +1767,7 @@ exports.addPartInstances = async (req, res) => {
     const {
       part_id, serial_number, serial_numbers, quantity,
       unit_cost, location_code, notes,
+      fitment, fits_laptop_brand, fits_laptop_models,
     } = req.body || {};
 
     if (!part_id) {
@@ -1603,6 +1786,16 @@ exports.addPartInstances = async (req, res) => {
     }
     if (!serials.length) {
       return res.status(400).json({ success: false, message: 'Provide at least one serial number or a quantity' });
+    }
+
+    let fit;
+    try {
+      fit = validateFitment({ fitment, fits_laptop_brand, fits_laptop_models });
+    } catch (e) {
+      if (e instanceof FitmentValidationError) {
+        return res.status(400).json({ success: false, message: e.message, code: e.code });
+      }
+      throw e;
     }
 
     await client.query('BEGIN');
@@ -1624,10 +1817,16 @@ exports.addPartInstances = async (req, res) => {
       const ins = await client.query(
         `INSERT INTO part_instances
            (prt_id, serial_number, part_id, unit_cost, location_code, status, notes,
+            fitment, fits_laptop_brand, fits_laptop_models,
             received_by, received_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,'in_stock',$6,$7,NOW(),NOW(),NOW())
-         RETURNING instance_id, prt_id, serial_number, status, location_code, unit_cost`,
-        [prtId, s || null, Number(part_id), cost, location_code || null, notes || null, req.user.user_id]
+         VALUES ($1,$2,$3,$4,$5,'in_stock',$6,$7,$8,$9,$10,NOW(),NOW(),NOW())
+         RETURNING instance_id, prt_id, serial_number, status, location_code, unit_cost,
+                   fitment, fits_laptop_brand, fits_laptop_models`,
+        [
+          prtId, s || null, Number(part_id), cost, location_code || null, notes || null,
+          fit.fitment, fit.fits_laptop_brand, fit.fits_laptop_models,
+          req.user.user_id,
+        ]
       );
       created.push(ins.rows[0]);
     }
@@ -1772,3 +1971,191 @@ async function unblockTicket(client, pr) {
     );
   }
 }
+
+// PATCH /api/part-requests/instances/:instanceId/fitment
+exports.updatePartInstanceFitment = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { instanceId } = req.params;
+    const { fitment, fits_laptop_brand, fits_laptop_models, reason } = req.body || {};
+    let fit;
+    try {
+      fit = validateFitment({ fitment, fits_laptop_brand, fits_laptop_models });
+    } catch (e) {
+      if (e instanceof FitmentValidationError) {
+        return res.status(400).json({ success: false, message: e.message, code: e.code });
+      }
+      throw e;
+    }
+
+    await client.query('BEGIN');
+    const instRes = await client.query(
+      `SELECT pi.*, p.part_name, p.category
+         FROM part_instances pi
+         JOIN parts p ON p.part_id = pi.part_id
+        WHERE pi.instance_id = $1 FOR UPDATE OF pi`,
+      [Number(instanceId)]
+    );
+    if (!instRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part unit not found' });
+    }
+    const before = instRes.rows[0];
+    const upd = await client.query(
+      `UPDATE part_instances
+          SET fitment = $2,
+              fits_laptop_brand = $3,
+              fits_laptop_models = $4,
+              updated_at = NOW()
+        WHERE instance_id = $1
+        RETURNING instance_id, prt_id, fitment, fits_laptop_brand, fits_laptop_models`,
+      [Number(instanceId), fit.fitment, fit.fits_laptop_brand, fit.fits_laptop_models]
+    );
+
+    await recordMovement(client, {
+      type: MOVEMENT.FITMENT_RETAG,
+      partId: before.part_id,
+      instanceId: before.instance_id,
+      prtId: before.prt_id,
+      serialNumber: before.serial_number,
+      category: before.category,
+      partName: before.part_name,
+      unitCost: before.unit_cost,
+      notes: JSON.stringify({
+        from: {
+          fitment: before.fitment,
+          fits_laptop_brand: before.fits_laptop_brand,
+          fits_laptop_models: before.fits_laptop_models,
+        },
+        to: fit,
+        reason: reason || null,
+      }),
+      actorUserId: req.user?.user_id,
+      actorName: req.user?.name,
+    });
+
+    await client.query('COMMIT');
+    res.json({ success: true, instance: upd.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updatePartInstanceFitment:', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// POST /api/part-requests/instances/bulk-fitment
+// Tag many units of one part in a single pass. Without this, the 1600+ units
+// that predate fitment stay 'unset' for ever and the pick-list filter has
+// nothing to narrow on.
+exports.bulkUpdatePartInstanceFitment = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const {
+      part_id, instance_ids, status, only_untagged,
+      fitment, fits_laptop_brand, fits_laptop_models, reason,
+    } = req.body || {};
+
+    let fit;
+    try {
+      fit = validateFitment({ fitment, fits_laptop_brand, fits_laptop_models });
+    } catch (e) {
+      if (e instanceof FitmentValidationError) {
+        return res.status(400).json({ success: false, message: e.message, code: e.code });
+      }
+      throw e;
+    }
+
+    const ids = Array.isArray(instance_ids)
+      ? instance_ids.map(Number).filter(Number.isFinite)
+      : [];
+    if (!ids.length && !part_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pass instance_ids, or a part_id to tag that part\'s units',
+      });
+    }
+
+    const conditions = [];
+    const params = [];
+    if (ids.length) {
+      params.push(ids);
+      conditions.push(`pi.instance_id = ANY($${params.length}::int[])`);
+    }
+    if (part_id) {
+      params.push(Number(part_id));
+      conditions.push(`pi.part_id = $${params.length}`);
+    }
+    if (status) {
+      params.push(String(status));
+      conditions.push(`pi.status = $${params.length}`);
+    }
+    if (only_untagged === true || String(only_untagged) === 'true') {
+      conditions.push(`COALESCE(pi.fitment, 'unset') = 'unset'`);
+    }
+
+    await client.query('BEGIN');
+    const sel = await client.query(
+      `SELECT pi.instance_id, pi.part_id, pi.prt_id, pi.serial_number, pi.unit_cost,
+              pi.fitment, pi.fits_laptop_brand, pi.fits_laptop_models,
+              p.part_name, p.category
+         FROM part_instances pi
+         JOIN parts p ON p.part_id = pi.part_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY pi.instance_id
+        FOR UPDATE OF pi`,
+      params
+    );
+
+    if (!sel.rows.length) {
+      await client.query('ROLLBACK');
+      return res.json({ success: true, updated: 0, message: 'No units matched' });
+    }
+
+    const targetIds = sel.rows.map((r) => r.instance_id);
+    await client.query(
+      `UPDATE part_instances
+          SET fitment = $2,
+              fits_laptop_brand = $3,
+              fits_laptop_models = $4,
+              updated_at = NOW()
+        WHERE instance_id = ANY($1::int[])`,
+      [targetIds, fit.fitment, fit.fits_laptop_brand, fit.fits_laptop_models]
+    );
+
+    for (const before of sel.rows) {
+      await recordMovement(client, {
+        type: MOVEMENT.FITMENT_RETAG,
+        partId: before.part_id,
+        instanceId: before.instance_id,
+        prtId: before.prt_id,
+        serialNumber: before.serial_number,
+        category: before.category,
+        partName: before.part_name,
+        unitCost: before.unit_cost,
+        notes: JSON.stringify({
+          from: {
+            fitment: before.fitment,
+            fits_laptop_brand: before.fits_laptop_brand,
+            fits_laptop_models: before.fits_laptop_models,
+          },
+          to: fit,
+          reason: reason || 'Bulk fitment tagging',
+          bulk: true,
+        }),
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, updated: targetIds.length, fitment: fit });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('bulkUpdatePartInstanceFitment:', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+};

@@ -22,7 +22,14 @@ import {
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import PartLabelPrintModal from '../../inventory-management/components/PartLabelPrintModal';
+import FitmentControls, {
+  emptyFitment,
+  fitmentFromCatalogPart,
+  formatFitmentSummary,
+  FITMENT,
+} from '../../inventory-management/components/FitmentControls';
 import ScanField from '../../../components/ScanField';
+import api from '../../../utils/api';
 import { createSpareGrn, fetchSpareProductReceivedContext, receiveSpareLineBulk } from '../vendorManagementApi';
 
 function statsFromLines(lines) {
@@ -125,6 +132,10 @@ export default function SparePartsProductReceivedPage() {
   const [createdUnits, setCreatedUnits] = useState([]);
   const [labelModalOpen, setLabelModalOpen] = useState(false);
   const [modalBusy, setModalBusy] = useState(false);
+  const [lineFitment, setLineFitment] = useState(emptyFitment());
+  const [catalogFitment, setCatalogFitment] = useState(emptyFitment());
+  const [editingFitment, setEditingFitment] = useState(false);
+  const [fitmentLoading, setFitmentLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,6 +180,10 @@ export default function SparePartsProductReceivedPage() {
     setBulkSerials([]);
     setNoSerialFlags([]);
     setCreatedUnits([]);
+    setLineFitment(emptyFitment());
+    setCatalogFitment(emptyFitment());
+    setEditingFitment(false);
+    setFitmentLoading(false);
   }
 
   useEffect(() => {
@@ -208,6 +223,40 @@ export default function SparePartsProductReceivedPage() {
     setBulkSerials([]);
     setNoSerialFlags([]);
     setCreatedUnits([]);
+    setLineFitment(emptyFitment());
+    setCatalogFitment(emptyFitment());
+    setEditingFitment(false);
+  }
+
+  async function resolveCatalogFitment(line) {
+    setFitmentLoading(true);
+    try {
+      const floorId = line?.floor_part_id ?? line?.parts_catalog_id ?? null;
+      const name = String(
+        line?.spare_part_name || line?.part_name || line?.name || ''
+      ).trim();
+      const params = { limit: 50 };
+      if (name) params.search = name;
+      const { data } = await api.get('/parts', { params });
+      const parts = data.parts || [];
+      let part = null;
+      if (floorId != null && Number.isFinite(Number(floorId))) {
+        part = parts.find((p) => Number(p.part_id) === Number(floorId)) || null;
+      }
+      if (!part && name) {
+        part = parts.find((p) => String(p.part_name || '').toLowerCase() === name.toLowerCase()) || null;
+      }
+      const def = fitmentFromCatalogPart(part);
+      setCatalogFitment(def);
+      setLineFitment(def);
+      setEditingFitment(def.fitment === FITMENT.UNSET);
+    } catch {
+      setCatalogFitment(emptyFitment());
+      setLineFitment(emptyFitment());
+      setEditingFitment(true);
+    } finally {
+      setFitmentLoading(false);
+    }
   }
 
   function gotoSerialInputs() {
@@ -229,6 +278,7 @@ export default function SparePartsProductReceivedPage() {
     setBulkSerials(Array.from({ length: q }, () => ''));
     setNoSerialFlags(Array.from({ length: q }, () => false));
     setReceiveStep('serials');
+    resolveCatalogFitment(lines[receiveLineIndex]);
   }
 
   function updateBulkSerialAt(i, value) {
@@ -283,7 +333,10 @@ export default function SparePartsProductReceivedPage() {
       const body = {
         line_index: receiveLineIndex,
         quantity: q,
-        serial_numbers: values
+        serial_numbers: values,
+        fitment: lineFitment.fitment,
+        fits_laptop_brand: lineFitment.fits_laptop_brand,
+        fits_laptop_models: lineFitment.fits_laptop_models,
       };
       if (grnChoice) body.grn_id = Number(grnChoice);
       const { data } = await receiveSpareLineBulk(spoId, body);
@@ -726,6 +779,50 @@ export default function SparePartsProductReceivedPage() {
                 </div>
               ) : receiveStep === 'serials' ? (
                 <div className="space-y-3">
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+                    <p className="text-xs font-semibold text-slate-600 m-0">
+                      Fitment for this line (applies to all units below)
+                    </p>
+                    {fitmentLoading ? (
+                      <p className="text-[11px] text-slate-500 flex items-center gap-1.5 m-0">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading catalog default…
+                      </p>
+                    ) : catalogFitment.fitment !== FITMENT.UNSET && !editingFitment ? (
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                        <span>
+                          Fits: <strong>{formatFitmentSummary(lineFitment)}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-blue-700 hover:underline"
+                          disabled={modalBusy}
+                          onClick={() => setEditingFitment(true)}
+                        >
+                          change
+                        </button>
+                      </div>
+                    ) : (
+                      <FitmentControls
+                        compact
+                        value={lineFitment}
+                        onChange={setLineFitment}
+                        allowUnset
+                      />
+                    )}
+                    {catalogFitment.fitment !== FITMENT.UNSET && editingFitment ? (
+                      <button
+                        type="button"
+                        className="text-[11px] text-slate-500 hover:underline"
+                        disabled={modalBusy}
+                        onClick={() => {
+                          setLineFitment(catalogFitment);
+                          setEditingFitment(false);
+                        }}
+                      >
+                        Revert to catalog default
+                      </button>
+                    ) : null}
+                  </div>
                   <div
                     className="max-h-[min(26rem,calc(100vh-20rem))] overflow-y-auto pr-1 space-y-3 rounded-lg border border-slate-100 p-3 bg-slate-50/40"
                   >
