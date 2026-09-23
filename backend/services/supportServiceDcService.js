@@ -471,6 +471,78 @@ async function resolveOriginalReferences(db, ticket, items, deliveryDefaults) {
   return { originalDcNumber, salesOrderNumber };
 }
 
+/**
+ * Bill-to identity for the challan: billing address, GSTIN and place of supply.
+ *
+ * The SDC INSERT simply never listed these three columns, unlike every other DC
+ * path (supportReplacementFlowService, supportPartReturnDcService,
+ * saleInPlaceService, salesManagementController), so the row was written with
+ * all three NULL and the PDF had nothing to print in its Bill-to box —
+ * 9 of the 11 service returns raised so far carry no billing address and no
+ * GSTIN at all.
+ *
+ * Resolved per field rather than per source, because no single source is
+ * complete: DC03537 carries TechIT Digital's billing address and place of supply
+ * but a NULL GSTIN, while the customer record holds the GSTIN. Order is original
+ * outbound DC (what was used when the unit shipped), then the sales order, then
+ * the customer master.
+ */
+async function resolveBillingIdentity(db, { customerId, originalDcNumber, salesOrderNumber }) {
+  const out = { billingAddress: null, gstNumber: null, supplyState: null };
+
+  const take = (row) => {
+    if (!row) return;
+    if (!out.billingAddress && row.customer_billing_address) {
+      out.billingAddress = row.customer_billing_address;
+    }
+    if (!out.gstNumber && String(row.gst_number || '').trim()) {
+      out.gstNumber = String(row.gst_number).trim();
+    }
+    if (!out.supplyState && String(row.supply_state || '').trim()) {
+      out.supplyState = String(row.supply_state).trim();
+    }
+  };
+
+  if (originalDcNumber) {
+    take((await db.query(
+      `SELECT customer_billing_address, gst_number, supply_state
+         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [originalDcNumber]
+    )).rows[0]);
+  }
+  if (salesOrderNumber) {
+    take((await db.query(
+      `SELECT customer_billing_address, gst_number, supply_state
+         FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC LIMIT 1`,
+      [salesOrderNumber]
+    )).rows[0]);
+  }
+  if (customerId && (!out.billingAddress || !out.gstNumber || !out.supplyState)) {
+    const c = (await db.query(
+      `SELECT name, company_name, trade_name, gst_no,
+              billing_address, billing_city, billing_state, billing_pincode
+         FROM customers WHERE customer_id = $1 LIMIT 1`,
+      [customerId]
+    )).rows[0];
+    if (c) {
+      take({
+        gst_number: c.gst_no,
+        supply_state: c.billing_state,
+        customer_billing_address: c.billing_address
+          ? {
+            name: c.trade_name || c.company_name || c.name || '',
+            address: c.billing_address,
+            city: c.billing_city || '',
+            state: c.billing_state || '',
+            pincode: c.billing_pincode || '',
+          }
+          : null,
+      });
+    }
+  }
+  return out;
+}
+
 async function buildShippingAddress(db, ticket, deliveryDefaults, body = {}) {
   const fromBody = body.shipping_address || body.customer_shipping_address;
   if (fromBody && typeof fromBody === 'object') return fromBody;
@@ -538,6 +610,12 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     await Promise.all(selected.map((row) => findOpenFloorTicket(db, row.serial)))
   ).every((openTicket) => !openTicket);
 
+  const billing = await resolveBillingIdentity(db, {
+    customerId: ticket.customer_id,
+    originalDcNumber,
+    salesOrderNumber,
+  });
+
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
   const entityCode = entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
@@ -558,15 +636,17 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   await db.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
-         customer_shipping_address, brand, model_name, quantity, serial_number,
+         customer_shipping_address, customer_billing_address, gst_number, supply_state,
+         brand, model_name, quantity, serial_number,
          dispatch_mode, ship_by, delivery_person_id, courier_name, awb_number,
          porter_tracking_id, porter_order_id,
          sales_order_number, original_dc_number, dc_purpose, remarks,
          status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
-     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,
-             $18,$19,$20,$21,
-             $22,$23,NOW(),NOW(),$24,$25,$26)`,
+     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,
+             $10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20,
+             $21,$22,$23,$24,
+             $25,$26,NOW(),NOW(),$27,$28,$29)`,
     [
       sdcNumber,
       ticketId,
@@ -574,6 +654,9 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       sdcDocumentName,
       ticket.ticket_email || null,
       JSON.stringify(shippingAddress),
+      billing.billingAddress ? JSON.stringify(billing.billingAddress) : null,
+      billing.gstNumber,
+      billing.supplyState,
       firstItem.brand || firstSpec.brand || null,
       firstItem.model || firstSpec.model || firstSpec.model_name || null,
       Math.max(1, entries.length),
