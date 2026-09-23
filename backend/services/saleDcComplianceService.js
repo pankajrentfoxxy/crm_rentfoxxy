@@ -909,6 +909,72 @@ async function emailAccountsSaleDcCreated(params) {
   return sendAccountsSaleDcEmail(params);
 }
 
+/**
+ * Ask Accounts for the e-way bill on an outbound DC whose value needs one.
+ *
+ * Extracted so a challan raised outside the sales pipeline can trigger the same
+ * mail the "Request E-Way Bill" button sends. Support raises a Service DC from
+ * the support shell and never sees that button, so nothing asked Accounts for
+ * the bill -- and the SDC is locked until they upload it, so it stayed locked.
+ * SDC/26-27/0009 and /0010 shipped that way.
+ *
+ * Reports why it did nothing rather than throwing, so a caller can treat the
+ * mail as best-effort; a genuine SMTP failure still throws.
+ *
+ * `force` is for a retrospective request on a consignment that has already left
+ * without the bill it needed. The normal guard suppresses requests after
+ * dispatch because they confuse Accounts, but a challan that shipped without an
+ * e-way bill is exactly the case where one still has to be raised.
+ */
+async function requestEwayFromAccounts(dcNumber, { actorUserId = null, force = false } = {}) {
+  const pool = require('../config/db');
+  const lines = await getDeliveryChallanLines(dcNumber);
+  if (!lines.length) return { sent: false, reason: 'dc_not_found' };
+  const head = lines[0];
+
+  const blocked = accountsMailBlockedReason(lines);
+  if (blocked && !force) return { sent: false, reason: 'status_blocked', message: blocked };
+
+  const asset = await computeDcAssetValue(dcNumber, lines);
+  const productValue = asset.total;
+  if (!requiresOutboundEway(head, productValue)) {
+    return { sent: false, reason: 'below_threshold', assetValue: productValue };
+  }
+
+  await markDcEwayRequired(dcNumber, true, productValue);
+
+  const { subtotal: billedSubtotal } = await resolveDcBilling(dcNumber, lines);
+  const mailResult = await sendAccountsDemoEwayEmail({
+    dcNumber,
+    salesOrderNumber: head.sales_order_number,
+    customerName: head.customer_name,
+    productValue,
+    billedValue: billedSubtotal,
+    laptops: asset.units,
+    pdfPath: head.pdf_path || null,
+    vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
+    needsVehicle: requiresVehicleNumber(head, true),
+  });
+
+  await pool.query(
+    `UPDATE delivery_challan_lines SET
+        accounts_notified_at = NOW(),
+        accounts_notified_by = $1,
+        updated_at = NOW()
+      WHERE dc_number = $2`,
+    [actorUserId, dcNumber]
+  );
+
+  return {
+    sent: true,
+    assetValue: productValue,
+    to: mailResult.to,
+    cc: mailResult.cc,
+    from: mailResult.from,
+    resend: Boolean(head.accounts_notified_at),
+  };
+}
+
 async function markDcEwayRequired(dcNumber, required, assetValue = null) {
   const pool = require('../config/db');
   const params = [dcNumber, Boolean(required), assetValue == null ? null : Number(assetValue)];
@@ -1009,6 +1075,7 @@ module.exports = {
   normalizeVehicleNumber,
   sendAccountsSaleDcEmail,
   sendAccountsDemoEwayEmail,
+  requestEwayFromAccounts,
   emailAccountsSaleDcCreated,
   canUploadSaleDcCompliance,
   canManageDcEwayBill,

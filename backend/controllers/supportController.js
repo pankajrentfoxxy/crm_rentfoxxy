@@ -5786,11 +5786,35 @@ exports.createServiceDc = async (req, res) => {
     } catch (pdfErr) {
         console.error('[support] service DC pdf:', pdfErr.message);
     }
+
+    // Ask Accounts for the e-way bill straight away when the consignment needs
+    // one. Support raises the SDC from the support shell and never sees the
+    // sales-pipeline "Request E-Way Bill" button, so nobody was asking -- and
+    // the challan is locked until Accounts upload the bill, so it stayed locked.
+    // After COMMIT and after the PDF, because the mail links the challan; a mail
+    // failure must never undo a challan that already exists.
+    let accounts_eway = null;
+    try {
+        const { requestEwayFromAccounts } = require('../services/saleDcComplianceService');
+        accounts_eway = await requestEwayFromAccounts(result.sdcNumber, {
+            actorUserId: req.user?.user_id || null,
+        });
+        if (accounts_eway?.sent) {
+            console.log(`[support] ${result.sdcNumber}: e-way request mailed to ${accounts_eway.to}`);
+        }
+    } catch (mailErr) {
+        console.error('[support] service DC accounts e-way mail:', mailErr.message);
+        accounts_eway = { sent: false, reason: 'mail_failed', message: mailErr.message };
+    }
+
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,
-        message: 'Service Delivery Challan created',
+        message: accounts_eway?.sent
+            ? 'Service Delivery Challan created — E-Way Bill requested from Accounts'
+            : 'Service Delivery Challan created',
         service_dc_number: result.sdcNumber,
+        accounts_eway,
         ...data,
     });
 };
