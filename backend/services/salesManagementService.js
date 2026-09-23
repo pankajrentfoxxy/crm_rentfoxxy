@@ -956,6 +956,25 @@ async function getDcQcStatusSummaries(dcNumbers) {
   return out;
 }
 
+/**
+ * Sale vs rental for a DELIVERY CHALLAN.
+ *
+ * COALESCEs the DC's own entity_code ahead of the sales order's. The SO join
+ * misses ERP-imported order numbers that were never written to sales_order_lines
+ * — GGSO00373 is one — and those DCs then read as rental even though the DC row
+ * itself says gorefurbo. SDC/26-27/0011, DC03537 and RDC002321 all showed a
+ * "Rental" badge on a sold laptop, and the Sale/Rental filter put them on the
+ * wrong side too.
+ */
+function deliveryChallanScopeWhere(scope) {
+  const entity = `LOWER(COALESCE(d.entity_code, so.entity_code, ''))`;
+  const qtype = `LOWER(COALESCE(so.quotation_type, ''))`;
+  const isSale = `(${qtype} IN ('sale', 'sales') OR ${entity} = 'gorefurbo')`;
+  if (scope === 'sale') return isSale;
+  if (scope === 'rental') return `NOT ${isSale}`;
+  return '';
+}
+
 const DC_SO_TYPE_JOIN = `
   LEFT JOIN LATERAL (
     SELECT sol.quotation_type, sol.entity_code
@@ -995,9 +1014,9 @@ function buildDeliveryChallanListWhere({
     where += ` AND d.dc_purpose = 'service_return'`;
   }
   if (orderType === 'sale') {
-    where += ` AND ${salesOrderScopeWhere('sale', 'so')}`;
+    where += ` AND ${deliveryChallanScopeWhere('sale')}`;
   } else if (orderType === 'rental') {
-    where += ` AND NOT (${salesOrderScopeWhere('sale', 'so')})`;
+    where += ` AND ${deliveryChallanScopeWhere('rental')}`;
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
@@ -1082,7 +1101,7 @@ async function listDeliveryChallansGrouped({
             d.eway_required, d.eway_bill_number, d.eway_asset_value,
             COALESCE(u.name, u.email, '') AS delivery_person_name,
             so.quotation_type AS order_type,
-            so.entity_code
+            COALESCE(d.entity_code, so.entity_code) AS entity_code
        FROM delivery_challan_lines d
        ${DC_SO_TYPE_JOIN}
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
