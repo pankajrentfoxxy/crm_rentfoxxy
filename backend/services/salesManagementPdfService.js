@@ -920,6 +920,14 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
 }
 
 // ── Service Delivery Challan PDF ─────────────────────────────────────────────
+/** "himachal_pradesh" -> "Himachal Pradesh"; supply_state is stored in either shape. */
+function titleCaseState(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
 async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }) {
   ensureUploadDir();
   const fileName = `${String(serviceDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
@@ -998,6 +1006,25 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     row('Email', header.customer_email);
     row('Address', formatDeliveryAddressLine(header.shipping_address));
     y += 10;
+
+    // Bill to. This layout printed a Deliver-to block and nothing else, so a
+    // service challan carried no billing address and no GSTIN anywhere on the
+    // page — the counterparty on a GST document was simply absent. Printed only
+    // when known, so a challan with no billing details on file keeps its old
+    // shape rather than showing an empty box.
+    const billing = normalizeDeliveryAddress(header.billing_address) || {};
+    const billLine = formatDeliveryAddressLine(header.billing_address);
+    const billGst = String(header.gst_number || billing.gst_number || '').trim();
+    if (billLine || billGst) {
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink)
+        .text(`Bill to: ${billing.name || header.customer_name || 'Customer'}`, L, y, { width: W });
+      y = doc.y + 6;
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+      row('Address', billLine);
+      row('GSTIN', billGst);
+      row('Place of Supply', header.supply_state ? titleCaseState(header.supply_state) : null);
+      y += 10;
+    }
 
     const sdcHsn = resolveHsnForDisplay(header.hsn_code, { transactionType: 'repair' }) || '847330';
     const cols = [
