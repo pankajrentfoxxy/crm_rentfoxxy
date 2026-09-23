@@ -249,6 +249,42 @@ async function resolveSerialForPickupItem(db, item) {
   return r.rows[0] || null;
 }
 
+/**
+ * Floor-pipeline statuses that mean the unit is still being worked on. Anything
+ * not finished or abandoned counts: out_for_repair, diagnosis_failed and
+ * qc_failed_return_vendor are all states in which the laptop is emphatically not
+ * ready to go back to its owner.
+ */
+const CLOSED_FLOOR_TICKET_STATUSES = new Set(['completed', 'cancelled']);
+
+/**
+ * The unit's live floor ticket, or null.
+ *
+ * A repair pickup opens a floor ticket when the warehouse receives the laptop,
+ * and that ticket is the repair. Nothing stopped an SDC being raised while it was
+ * still open, so a machine could be challaned back to the customer mid-repair:
+ * TTSPL5286 went out on SDC/26-27/0011 while ticket 4355 was sitting at Diagnosis,
+ * and SDC/26-27/0003 and /0005 did the same thing before it — 3 of the 11 service
+ * returns raised so far.
+ *
+ * Matched on vendor_serial_id first, falling back to the asset code, because
+ * older tickets predate the serial link.
+ */
+async function findOpenFloorTicket(db, serial) {
+  if (!serial) return null;
+  const r = await db.query(
+    `SELECT t.ticket_id, t.status, s.stage_name
+       FROM tickets t
+       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+      WHERE (t.vendor_serial_id = $1 OR t.ttspl_id = $2)
+        AND LOWER(COALESCE(t.status, '')) <> ALL($3::text[])
+      ORDER BY t.ticket_id DESC
+      LIMIT 1`,
+    [serial.serial_id, serial.inventory_asset_code || null, [...CLOSED_FLOOR_TICKET_STATUSES]]
+  );
+  return r.rows[0] || null;
+}
+
 async function loadOpenSdc(db, sdcNumber) {
   if (!sdcNumber) return null;
   const r = await db.query(
@@ -300,13 +336,25 @@ async function evaluatePickupItemEligibility(db, item, ticket) {
     }
   }
   const serial = await resolveSerialForPickupItem(db, item);
+  let openFloorTicket = null;
   if (!serial) reasons.push('serial not found in inventory');
   else if (serial.inventory_status !== inventorySM.STATUS.IN_STOCK) {
     reasons.push(`serial must be in stock (current: ${serial.inventory_status || 'unknown'})`);
   }
+  if (serial) {
+    openFloorTicket = await findOpenFloorTicket(db, serial);
+    if (openFloorTicket) {
+      reasons.push(
+        `repair still open on floor ticket #${openFloorTicket.ticket_id}`
+        + `${openFloorTicket.stage_name ? ` at ${openFloorTicket.stage_name}` : ''}`
+        + ` (${openFloorTicket.status}) — finish it before sending the unit back`
+      );
+    }
+  }
   return {
     item,
     serial,
+    open_floor_ticket: openFloorTicket,
     eligible: reasons.length === 0,
     reasons,
     ticket,
@@ -385,6 +433,8 @@ async function getServiceDcContext(db, ticketId) {
       reasons: row.reasons,
       inventory_status: row.serial?.inventory_status || null,
       service_dc_number: row.item.service_dc_number || null,
+      open_floor_ticket_id: row.open_floor_ticket?.ticket_id || null,
+      open_floor_ticket_stage: row.open_floor_ticket?.stage_name || null,
     })),
     can_create: items.some((row) => row.eligible),
     service_dcs: serviceDcs,
@@ -478,6 +528,16 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     if (!firstSpec.brand) firstSpec = vsn.extra || {};
   }
 
+  // pre_dispatch_qc_passed used to be a hardcoded TRUE in the INSERT below, so
+  // every SDC declared itself QC-cleared the moment it was created — SDC/26-27/0011
+  // showed as QC processed while ticket 4355 had not left Diagnosis and had neither
+  // qc1_passed_at nor qc2_passed_at. It is now derived: no open floor ticket on any
+  // unit means the repair is genuinely finished. The eligibility gate already
+  // refuses those units, so this is belt and braces rather than the only defence.
+  const preDispatchQcPassed = (
+    await Promise.all(selected.map((row) => findOpenFloorTicket(db, row.serial)))
+  ).every((openTicket) => !openTicket);
+
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
   const entityCode = entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
@@ -506,7 +566,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
          entity_code, hsn_code, pre_dispatch_qc_passed)
      VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,
              $18,$19,$20,$21,
-             $22,$23,NOW(),NOW(),$24,$25,TRUE)`,
+             $22,$23,NOW(),NOW(),$24,$25,$26)`,
     [
       sdcNumber,
       ticketId,
@@ -533,6 +593,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       actor?.user_id || null,
       entityCode,
       hsnCode,
+      preDispatchQcPassed,
     ]
   );
 
