@@ -6,6 +6,7 @@ const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
 const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
+const { cleanSpecValue, joinSpecParts } = require('../utils/specText');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -514,10 +515,15 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     y = drawTableHeader(y);
 
     const productText = (r) => {
-      const l1 = `${dash(r.brand)} ${dash(r.model_name)}${r.screen_size ? ` | ${r.screen_size}` : ''}`.trim();
-      const l2 = [r.processor, r.generation].filter(Boolean).join(' | ');
-      const l3 = [r.ram, r.storage].filter(Boolean).join(' | ');
-      const l4 = r.gpu || '';
+      // Brand/model go through joinSpecParts, not dash(): a quote that is not
+      // brand-specific carries "-" and printed as "- N/A". When neither is given
+      // the line is simply omitted — the processor and memory lines below already
+      // describe the machine.
+      const make = joinSpecParts([r.brand, r.model_name]);
+      const l1 = `${make}${r.screen_size ? `${make ? ' | ' : ''}${r.screen_size}` : ''}`.trim();
+      const l2 = joinSpecParts([r.processor, r.generation], ' | ');
+      const l3 = joinSpecParts([r.ram, r.storage], ' | ');
+      const l4 = cleanSpecValue(r.gpu);
       const l5 = [r.serial, r.ttspl].filter(Boolean).join('  ');
       return { l1, l2, l3, l4, l5 };
     };
