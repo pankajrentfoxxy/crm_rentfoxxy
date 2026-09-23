@@ -2810,7 +2810,9 @@ exports.getDeliveryChallan = async (req, res) => {
       son || headLine.sales_order_number
     );
     const firstCustomerDc = await isNewCustomerFirstDc(pool, headLine.customer_id, dcNumber);
-    const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType, firstCustomerDc);
+    const needsInvoice = requiresInvoiceCompliance(
+      headLine.entity_code, soQuotationType, firstCustomerDc, headLine.dc_purpose
+    );
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
     const billedValue = Number(totals?.subtotal ?? 0);
     const asset = await computeDcAssetValue(dcNumber, lines);

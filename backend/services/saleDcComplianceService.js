@@ -125,6 +125,15 @@ function isDemoDc(quotationType) {
 }
 
 /**
+ * A repair/service return: the customer's own machine going back to them after
+ * work on it. Nothing is sold, so there is no supply to raise an e-invoice for —
+ * only the e-way bill, which still applies on value like any other movement.
+ */
+function isServiceReturnDc(dcPurpose) {
+  return String(dcPurpose || '').toLowerCase() === 'service_return';
+}
+
+/**
  * First live sales order for this customer (new-customer 1st order).
  * Cancelled SOs are ignored. Used only for demo e-way, not e-invoice.
  */
@@ -190,8 +199,14 @@ async function isNewCustomerFirstDc(db, customerId, dcNumber) {
  * this keys off the first DC (isNewCustomerFirstDc) and not the first SO.
  * Demo DCs are excluded: they use the e-way-only path.
  */
-function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false) {
+function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false, dcPurpose = null) {
   if (isDemoDc(quotationType)) return false;
+  // A service return is not a supply. TTSPL5286 is a gorefurbo unit the customer
+  // already owns; it came in on a support ticket and went back out on
+  // SDC/26-27/0011, and isSaleDc() saw entity_code 'gorefurbo' and demanded an
+  // e-invoice for a laptop nobody was selling. The e-way bill is unaffected —
+  // requiresOutboundEway() still applies it above the value threshold.
+  if (isServiceReturnDc(dcPurpose)) return false;
   return isSaleDc(entityCode, quotationType) || Boolean(isFirstDc);
 }
 
@@ -546,7 +561,7 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
     }
   }
 
-  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) return;
+  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc, head.dc_purpose)) return;
   if (isEinvoiceComplete(head)) return;
 
   throw new Error(
@@ -972,6 +987,7 @@ module.exports = {
   ACCOUNTS_EMAIL,
   ACCOUNTS_EMAIL_CC,
   isSaleDc,
+  isServiceReturnDc,
   isDemoDc,
   isNewCustomerFirstOrder,
   isNewCustomerFirstDc,
