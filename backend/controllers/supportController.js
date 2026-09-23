@@ -6064,13 +6064,21 @@ exports.changeServiceDcTechnician = async (req, res) => {
 exports.regenerateServiceDcPdf = async (req, res) => {
     const sdcNumber = decodeURIComponent(req.params.sdcNumber || '');
     try {
+        // Same e-way gate the sales-pipeline download enforces. Without it this
+        // route was a way round the lock: the DC page would refuse the PDF on a
+        // consignment over the threshold while the support shell handed it over.
+        const { assertCanDownloadSaleDcPdf } = require('../services/saleDcComplianceService');
+        await assertCanDownloadSaleDcPdf(req.user, sdcNumber);
+
         const pdfPath = await regenerateServiceDcPdfByNumber(pool, sdcNumber);
         if (!pdfPath) {
             return res.status(404).json({ success: false, message: 'Service DC not found' });
         }
         res.json({ success: true, pdf_path: pdfPath });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message || 'PDF generation failed' });
+        const locked = /E-Way Bill must be uploaded|E-Invoice must be uploaded/.test(e.message || '');
+        res.status(locked ? 403 : 500)
+           .json({ success: false, message: e.message || 'PDF generation failed' });
     }
 };
 
