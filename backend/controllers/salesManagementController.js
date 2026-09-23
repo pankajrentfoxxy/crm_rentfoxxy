@@ -248,6 +248,17 @@ async function regenerateSoAndLinkedDcPdfs(salesOrderNumber) {
 async function regenerateDcPdfForNumber(dcNumber) {
   const lines = await getDeliveryChallanLines(dcNumber);
   if (!lines.length) return null;
+
+  // A service return has its own document. Regenerating it through the standard
+  // delivery-challan layout overwrote pdf_path with a plain DC -- no "Service
+  // Delivery Challan" heading, no Deliver-to and no Bill-to block -- and that
+  // was then what Accounts received on the e-way request. SDC/26-27/0010 was
+  // sitting in exactly that state.
+  if (String(lines[0]?.dc_purpose || '').toLowerCase() === 'service_return') {
+    const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
+    return regenerateServiceDcPdfByNumber(pool, dcNumber);
+  }
+
   const pdfPath = await generateDocumentPdf({
     docType: 'delivery_challan',
     docNumber: dcNumber,

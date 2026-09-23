@@ -910,6 +910,26 @@ async function emailAccountsSaleDcCreated(params) {
 }
 
 /**
+ * Existing challan PDF for the mail, regenerated in its own format if absent.
+ *
+ * Never falls back to generateDocumentPdf for a service return: that is a
+ * different document from the SDC the warehouse printed.
+ */
+async function resolveChallanAttachment(dcNumber, head) {
+  const fsMod = require('fs');
+  const pathMod = require('path');
+  const stored = head?.pdf_path ? String(head.pdf_path) : null;
+  if (stored && fsMod.existsSync(pathMod.join(__dirname, '..', stored))) return stored;
+
+  if (String(head?.dc_purpose || '').toLowerCase() === 'service_return') {
+    const { regenerateServiceDcPdfByNumber } = require('./serviceDcPdfService');
+    const pool = require('../config/db');
+    return (await regenerateServiceDcPdfByNumber(pool, dcNumber)) || null;
+  }
+  return stored;
+}
+
+/**
  * Ask Accounts for the e-way bill on an outbound DC whose value needs one.
  *
  * Extracted so a challan raised outside the sales pipeline can trigger the same
@@ -943,6 +963,12 @@ async function requestEwayFromAccounts(dcNumber, { actorUserId = null, force = f
 
   await markDcEwayRequired(dcNumber, true, productValue);
 
+  // Attach the challan itself, and make sure it is the RIGHT challan. A service
+  // return must go out as its Service Delivery Challan, never as a freshly
+  // generated plain DC: Accounts are entering this into the GST portal, so the
+  // attachment has to be the document the customer and the driver are holding.
+  const pdfRelative = await resolveChallanAttachment(dcNumber, head);
+
   const { subtotal: billedSubtotal } = await resolveDcBilling(dcNumber, lines);
   const mailResult = await sendAccountsDemoEwayEmail({
     dcNumber,
@@ -951,7 +977,7 @@ async function requestEwayFromAccounts(dcNumber, { actorUserId = null, force = f
     productValue,
     billedValue: billedSubtotal,
     laptops: asset.units,
-    pdfPath: head.pdf_path || null,
+    pdfPath: pdfRelative,
     vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
     needsVehicle: requiresVehicleNumber(head, true),
   });
