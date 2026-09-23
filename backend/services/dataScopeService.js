@@ -216,9 +216,6 @@ const TICKET_LIST_SCOPE_SECTIONS = [
   'chip_level_repair',
 ];
 
-/** Roles that see every floor's tickets when data_scope is all (no user_teams filter). */
-const FLOOR_TEAM_SCOPE_BYPASS_ROLES = new Set(['super_admin', 'admin']);
-
 async function isRestrictedToAssignedAny(req, sections) {
   for (const section of sections) {
     if (await isRestrictedToAssigned(req, section)) return true;
@@ -251,76 +248,46 @@ async function hasUnrestrictedTicketListAccess(req) {
 }
 
 /**
- * Floor teams the user may see. Loaded from DB (user_teams + primary team_id)
- * so granting/revoking floors takes effect without a code change or waiting for
- * JWT re-issue. Returns null when the role bypasses floor team scoping.
+ * Ticket list visibility is decided by data_scope alone — All Data means every
+ * ticket, Assigned means the user's own.
+ *
+ * There was briefly a second, invisible gate here that intersected All Data with
+ * the user's user_teams membership. It could not work, because
+ * tickets.assigned_team_id is not a floor: it is whichever team owns the ticket
+ * at its CURRENT stage, and it changes every time the ticket moves (Warehouse →
+ * Diagnose → Chip Level → Assembly → Testing → QC1 → QC2 → Dispatch QC). So the
+ * filter hid any ticket parked with a team the viewer was not a member of --
+ * including all 121 open tickets at the "Floor Manager" stage, which sit on
+ * Warehouse Team (1) while no floor manager is a member of it. The queue named
+ * after floor managers was invisible to every floor manager, TTSPL7662 on
+ * ticket 3004 among them, while Inventory's QC view still showed it active.
+ *
+ * If floor-scoped visibility is wanted later it needs a real floor column and a
+ * visible setting, not an implicit AND on an explicit All Data grant.
  */
-async function loadAccessibleFloorTeamIds(req) {
-  if (!req?.user) return [];
-  if (FLOOR_TEAM_SCOPE_BYPASS_ROLES.has(req.user.role)) return null;
-  if (Object.prototype.hasOwnProperty.call(req, '_accessibleFloorTeamIds')) {
-    return req._accessibleFloorTeamIds;
+async function resolveTicketListScope(req) {
+  if (req.user?.role === 'super_admin') {
+    return { mode: 'all' };
   }
 
   const userId = scopeUserId(req.user);
-  if (!userId) {
-    req._accessibleFloorTeamIds = [];
-    return req._accessibleFloorTeamIds;
-  }
 
-  try {
-    const r = await pool.query(
-      `SELECT DISTINCT team_id FROM (
-         SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = $1
-         UNION
-         SELECT u.team_id FROM users u WHERE u.user_id = $1 AND u.team_id IS NOT NULL
-       ) floors
-       WHERE team_id IS NOT NULL`,
-      [userId]
-    );
-    req._accessibleFloorTeamIds = r.rows
-      .map((row) => Number(row.team_id))
-      .filter((id) => Number.isInteger(id) && id > 0);
-  } catch {
-    const fallback = Array.isArray(req.user.team_ids) ? req.user.team_ids : [];
-    const primary = req.user.team_id != null ? [req.user.team_id] : [];
-    req._accessibleFloorTeamIds = [...new Set([...fallback, ...primary].map(Number))]
-      .filter((id) => Number.isInteger(id) && id > 0);
-  }
-  return req._accessibleFloorTeamIds;
-}
-
-function ticketOnAccessibleFloor(ticket, teamIds) {
-  if (teamIds == null) return true;
-  if (!Array.isArray(teamIds) || teamIds.length === 0) return false;
-  const ticketTeamId = Number(ticket?.assigned_team_id);
-  return Number.isInteger(ticketTeamId) && teamIds.includes(ticketTeamId);
-}
-
-async function resolveTicketListScope(req) {
-  if (req.user?.role === 'super_admin') {
-    return { mode: 'all', teamIds: null };
-  }
-
-  const teamIds = await loadAccessibleFloorTeamIds(req);
-
-  // QC inspectors list the full QC queue (stage filter is applied in the controller),
-  // still constrained to floors they are granted.
+  // QC inspectors list the full QC1/QC2/Dispatch QC queue; the stage filter is
+  // applied in ticketController.
   if (isQcInspectorRole(req.user?.role)) {
-    return { mode: 'all', teamIds };
+    return { mode: 'all', userId };
   }
 
   if (await hasUnrestrictedTicketListAccess(req)) {
-    return { mode: 'all', teamIds };
+    return { mode: 'all', userId };
   }
 
-  const userId = scopeUserId(req.user);
   const view = String(req.query?.view || '').toLowerCase();
   if (view === 'completed' && userId) {
-    return { mode: 'assigned_or_worked', userId, teamIds };
+    return { mode: 'assigned_or_worked', userId };
   }
 
-  return { mode: 'assigned_strict', userId, teamIds };
+  return { mode: 'assigned_strict', userId };
 }
 
 function buildTicketListAssignmentClause(scope, paramCount, params) {
@@ -340,17 +307,7 @@ function buildTicketListAssignmentClause(scope, paramCount, params) {
     next += 1;
   }
 
-  // Assigned Only = personally assigned (above). All = every ticket on accessible floors.
-  // teamIds === null → admin bypass (no floor filter). [] → no floors granted → empty.
-  if (scope.mode === 'all' && Array.isArray(scope.teamIds)) {
-    if (scope.teamIds.length === 0) {
-      clause += ' AND FALSE';
-    } else {
-      params.push(scope.teamIds);
-      clause += ` AND t.assigned_team_id = ANY($${next}::int[])`;
-      next += 1;
-    }
-  }
+  // mode 'all' adds no clause at all — that is what All Data means.
 
   return { clause, paramCount: next };
 }
@@ -358,20 +315,14 @@ function buildTicketListAssignmentClause(scope, paramCount, params) {
 async function canAccessTicketRecord(req, ticket) {
   if (req.user?.role === 'super_admin') return true;
 
-  if (isQcInspectorRole(req.user?.role) && isQcInspectorQueueStage(ticket.stage_name)) {
-    const teamIds = await loadAccessibleFloorTeamIds(req);
-    return ticketOnAccessibleFloor(ticket, teamIds);
-  }
-
-  const unrestricted = await hasUnrestrictedTicketListAccess(req);
-  if (unrestricted) {
-    const teamIds = await loadAccessibleFloorTeamIds(req);
-    return ticketOnAccessibleFloor(ticket, teamIds);
-  }
-
   const userId = scopeUserId(req.user);
-  if (!userId) return false;
-  return Number(ticket.assigned_user_id) === userId;
+  if (userId && Number(ticket.assigned_user_id) === userId) return true;
+
+  if (isQcInspectorRole(req.user?.role) && isQcInspectorQueueStage(ticket.stage_name)) {
+    return true;
+  }
+
+  return hasUnrestrictedTicketListAccess(req);
 }
 
 function appendCreatedByFilter(alias, userId, params) {
@@ -416,7 +367,6 @@ module.exports = {
   resolveSalesOrderListOrderType,
   hasUnrestrictedSalesOrderAccess,
   hasUnrestrictedTicketListAccess,
-  loadAccessibleFloorTeamIds,
   resolveTicketListScope,
   buildTicketListAssignmentClause,
   canAccessTicketRecord,
