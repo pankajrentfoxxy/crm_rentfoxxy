@@ -1643,8 +1643,10 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
 
 exports.listDeliveryChallans = async (req, res) => {
   try {
-    const assignedOnly = await isRestrictedToAssigned(req, 'dispatch')
-      || await isRestrictedToAssigned(req, 'delivery_challans');
+    // The Delivery Challans grant decides this list. Its own override is
+    // resolved first; Dispatch is only consulted (via the alias) when there
+    // is none, so an Assigned Dispatch scope cannot narrow an All DC grant.
+    const assignedOnly = await isRestrictedToAssigned(req, 'delivery_challans');
     const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
     const canSeeLockedEway = await canViewEwayLockedDc(req.user, req.permissionCache || {});
     const data = await listDeliveryChallansGrouped({
