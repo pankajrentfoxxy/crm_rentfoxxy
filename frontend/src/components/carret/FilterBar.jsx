@@ -1,59 +1,63 @@
 import React from 'react';
+import { Search } from 'lucide-react';
 
 /**
  * Filters COMBINE. Vendor + period returns the intersection, not whichever was
  * clicked last — the current screens replace one filter with the next, which is
  * why people export to a spreadsheet to answer two-dimensional questions.
  *
- * filters: [{ key, label, value, options:[{value,label}], type? }]
+ * A select names itself inside its own value ("Status: All"), so the bar needs
+ * no separate labels and stays one clean row. A select that is set is tinted,
+ * so a filtered list never looks like the whole list.
+ *
+ * filters: [{ key, label, options:[{value,label}], type?, placeholder? }]
+ * count:   the "12 customers" text at the right-hand end
  */
-export default function FilterBar({ filters = [], values = {}, onChange, onClear, right, className = '' }) {
+export default function FilterBar({ filters = [], values = {}, onChange, onClear, right, count, className = '' }) {
   const active = filters.filter((f) => values[f.key] !== undefined && values[f.key] !== '' && values[f.key] !== null);
 
   return (
-    <div
-      className={`flex flex-wrap items-center bg-surface-2 border border-rule ${className}`}
-      style={{ gap: 'var(--d-gap)', padding: 'var(--d-pad-y) var(--d-pad-x)', borderRadius: 'var(--d-radius)' }}
-    >
-      {filters.map((f) => (
-        <label key={f.key} className="inline-flex items-center font-ui text-ink-2" style={{ gap: 'var(--d-gap)', fontSize: 'var(--d-sm)' }}>
-          <span className="text-ink-3">{f.label}</span>
-          {f.type === 'search' ? (
-            <input
-              type="search"
-              value={values[f.key] ?? ''}
-              placeholder={f.placeholder || ''}
-              onChange={(e) => onChange?.(f.key, e.target.value)}
-              className="bg-surface border border-rule text-ink font-ui"
-              style={{ padding: 'var(--d-pad-y) var(--d-pad-x)', minHeight: 'var(--d-tap)', borderRadius: 'var(--d-radius)', fontSize: 'var(--d-base)' }}
-            />
-          ) : (
-            <select
-              value={values[f.key] ?? ''}
-              onChange={(e) => onChange?.(f.key, e.target.value)}
-              className="bg-surface border border-rule text-ink font-ui"
-              style={{ padding: 'var(--d-pad-y) var(--d-pad-x)', minHeight: 'var(--d-tap)', borderRadius: 'var(--d-radius)', fontSize: 'var(--d-base)' }}
-            >
-              <option value="">All</option>
-              {(f.options || []).map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          )}
+    <div className={`c-toolbar font-ui ${className}`}>
+      {filters.map((f) => (f.type === 'search' ? (
+        <label key={f.key} className="c-search">
+          <Search size={16} aria-hidden="true" />
+          <span className="sr-only">{f.label}</span>
+          <input
+            type="search"
+            className="c-input"
+            value={values[f.key] ?? ''}
+            placeholder={f.placeholder || f.label || 'Search'}
+            onChange={(e) => onChange?.(f.key, e.target.value)}
+          />
         </label>
-      ))}
+      ) : (
+        <label key={f.key}>
+          <span className="sr-only">{f.label}</span>
+          <select
+            className={`c-select ${values[f.key] ? 'is-set' : ''}`}
+            value={values[f.key] ?? ''}
+            onChange={(e) => onChange?.(f.key, e.target.value)}
+          >
+            <option value="">{f.label}: All</option>
+            {(f.options || []).map((o) => (
+              <option key={o.value} value={o.value}>{f.label}: {o.label}</option>
+            ))}
+          </select>
+        </label>
+      )))}
 
       {active.length > 0 && onClear && (
-        <button
-          type="button"
-          onClick={onClear}
-          className="font-ui text-accent bg-transparent border-0 cursor-pointer"
-          style={{ fontSize: 'var(--d-sm)', minHeight: 'var(--d-tap)' }}
-        >
-          Clear {active.length}
+        <button type="button" onClick={onClear} className="c-btn c-btn--quiet">
+          Clear {active.length === 1 ? 'filter' : `${active.length} filters`}
         </button>
       )}
-      {right && <div className="ml-auto">{right}</div>}
+
+      {(count != null || right) && (
+        <div className="c-toolbar-end">
+          {count != null && <span>{count}</span>}
+          {right}
+        </div>
+      )}
     </div>
   );
 }

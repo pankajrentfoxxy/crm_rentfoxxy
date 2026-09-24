@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, EmptyState, Button, StatTile,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, EmptyState, Button, StatTile, Segmented,
 } from '../../components/carret';
 import { useFloorPipeline, useFloorTickets } from './useProduce';
 
@@ -129,30 +129,34 @@ export default function FloorPipelinePage() {
     <DeskShell
       title="Floor Pipeline"
       breadcrumb="Produce"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle="Every laptop on the refurbishment floor, by stage, from diagnosis to dispatch QC."
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         {/* The stage strip IS the pipeline view. One screen, not six. */}
-        <div className="flex flex-wrap items-center" style={{ gap: 'var(--d-gap)' }}>
-          {STAGE_GROUPS.map((s) => (
-            <Button
-              key={s.key || 'all'}
-              variant={stage === s.key ? 'primary' : 'secondary'}
-              onClick={() => setStage(s.key)}
-            >
-              {s.label}
-              <span className="font-mono text-ink-3" style={{ marginLeft: 'var(--d-gap)' }}>
-                {pipeline.loading ? '·' : countFor(s.key)}
-              </span>
-            </Button>
-          ))}
+        <div className="flex flex-wrap overflow-x-auto">
+          <Segmented
+            label="Stage"
+            value={stage}
+            onChange={setStage}
+            options={STAGE_GROUPS.map((s) => ({
+              value: s.key,
+              label: (
+                <>
+                  {s.label}
+                  <span className="font-mono" style={{ opacity: 0.7 }}>
+                    {pipeline.loading ? '·' : countFor(s.key)}
+                  </span>
+                </>
+              ),
+            }))}
+          />
         </div>
 
         <div
           style={{
             display: 'grid',
-            gap: 'var(--d-gap)',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           }}
         >
           <StatTile label="On the floor" value={pipeline.loading ? null : countFor('')} />
@@ -170,24 +174,34 @@ export default function FloorPipelinePage() {
           />
         </div>
 
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load the floor" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r) => r.ticket_id}
-            empty={(
-              <EmptyState
-                title={stage ? `Nothing at ${stage}` : 'Nothing on the floor'}
-                body="Filters combine, so clearing one at a time will show what is excluding them."
-                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-              />
-            )}
-          />
-        )}
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load the floor" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.ticket_id}
+              empty={(
+                <EmptyState
+                  title={stage ? `Nothing at ${stage}` : 'Nothing on the floor'}
+                  body="Filters combine, so clearing one at a time will show what is excluding them."
+                  action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+                />
+              )}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

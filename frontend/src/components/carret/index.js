@@ -19,4 +19,5 @@ export { default as FilterBar } from './FilterBar';
 export { default as EmptyState } from './EmptyState';
 export { default as ScanPanel } from './ScanPanel';
 export { default as Drawer, ConfirmDialog } from './Drawer';
-export { default as Button } from './Button';
+export { default as Button, Segmented } from './Button';
+export { default as Panel } from './Panel';

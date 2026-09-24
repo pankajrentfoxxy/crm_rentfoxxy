@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, EmptyState, Button, Money, StatTile,
+  DataTable, Panel, EmptyState, Button, Money, StatTile,
 } from '../../components/carret';
 import { useAgeing, runOverdueSweep } from './useMoney';
 
@@ -76,18 +76,19 @@ export default function AgeingPage() {
     <DeskShell
       title="Ageing & Outstanding"
       breadcrumb="Money"
+      subtitle="What each customer owes, bucketed by how long it has been due."
       actions={(
         <Button variant="secondary" onClick={onSweep} disabled={sweeping}>
           {sweeping ? 'Running…' : 'Run overdue sweep'}
         </Button>
       )}
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         <div
           style={{
             display: 'grid',
-            gap: 'var(--d-gap)',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           }}
         >
           <StatTile
@@ -108,24 +109,26 @@ export default function AgeingPage() {
           <p className="font-ui text-ink-2 m-0" style={{ fontSize: 'var(--d-sm)' }}>{sweepNote}</p>
         ) : null}
 
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load ageing" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r) => r.customer_id}
-            empty={(
-              <EmptyState
-                title="Nothing outstanding"
-                body={
-                  'Only issued invoices age. An invoice still in draft has not been sent to '
-                  + 'anybody, so it is not owed — and drafts are excluded here deliberately.'
-                }
-              />
-            )}
-          />
-        )}
+        <Panel title="Outstanding by customer">
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load ageing" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.customer_id}
+              empty={(
+                <EmptyState
+                  title="Nothing outstanding"
+                  body={
+                    'Only issued invoices age. An invoice still in draft has not been sent to '
+                    + 'anybody, so it is not owed — and drafts are excluded here deliberately.'
+                  }
+                />
+              )}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

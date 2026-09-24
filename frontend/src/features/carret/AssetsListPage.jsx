@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, Money, DateTime, EmptyState, Button,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, Money, DateTime, EmptyState, Button, Segmented,
 } from '../../components/carret';
 import { ASSET_STATUSES } from '../../config/statuses';
 import { useAssetList } from './useAssets';
@@ -80,38 +80,45 @@ export default function AssetsListPage() {
     <DeskShell
       title="Assets"
       breadcrumb="Stock"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle="Every laptop by TTSPL code: where it is, what state it is in, and what it earns."
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
-        <div className="flex flex-wrap" style={{ gap: 'var(--d-gap)' }}>
-          {SEGMENTS.map((s) => (
-            <Button
-              key={s.key}
-              variant={segment === s.key ? 'primary' : 'secondary'}
-              onClick={() => setSegment(s.key)}
-            >
-              {s.label}
-            </Button>
-          ))}
+      <div style={{ display: 'grid', gap: '16px' }}>
+        <div className="flex flex-wrap">
+          <Segmented
+            label="Segment"
+            value={segment}
+            onChange={setSegment}
+            options={SEGMENTS.map((s) => ({ value: s.key, label: s.label }))}
+          />
         </div>
 
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load assets" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r, i) => r.serial_id ?? i}
-            onRowClick={open}
-            empty={<EmptyState
-              title="No assets match"
-              body="Every filter here combines, so narrowing one at a time will show what is excluding them."
-              action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-            />}
-          />
-        )}
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load assets" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r, i) => r.serial_id ?? i}
+              onRowClick={open}
+              empty={<EmptyState
+                title="No assets match"
+                body="Every filter here combines, so narrowing one at a time will show what is excluding them."
+                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+              />}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

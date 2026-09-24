@@ -71,13 +71,17 @@ export default function OperationsOverviewPage() {
   }, [counts]);
 
   return (
-    <DeskShell title="Operations" breadcrumb="Overview">
+    <DeskShell
+      title="Operations"
+      breadcrumb="Overview"
+      subtitle="The fleet at a glance. Every tile opens the list behind its number."
+    >
       {loading && <EmptyState title="Loading…" />}
       {error && <EmptyState title="Could not load the fleet" body={error} />}
 
       {!loading && !error && (
-        <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--d-pad-x)' }}>
+        <div style={{ display: 'grid', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
             {tiles.map((t) => (
               <button
                 key={t.label}

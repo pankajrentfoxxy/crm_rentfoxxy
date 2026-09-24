@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, StatTile,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, StatTile,
 } from '../../components/carret';
 import { usePartInstances } from './useProduce';
 
@@ -100,14 +100,14 @@ export default function PartsListPage() {
     <DeskShell
       title="Parts"
       breadcrumb="Produce"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{rows.length} shown</span>}
+      subtitle="Spare-part units: what is on the shelf, what is fitted, and into which laptop."
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         <div
           style={{
             display: 'grid',
-            gap: 'var(--d-gap)',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           }}
         >
           <StatTile label="Shown" value={loading ? null : rows.length} />
@@ -121,24 +121,34 @@ export default function PartsListPage() {
           />
         </div>
 
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load parts" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r) => r.instance_id}
-            empty={(
-              <EmptyState
-                title="No parts match"
-                body="Filters combine, so clearing one at a time will show what is excluding them."
-                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-              />
-            )}
-          />
-        )}
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${rows.length} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load parts" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.instance_id}
+              empty={(
+                <EmptyState
+                  title="No parts match"
+                  body="Filters combine, so clearing one at a time will show what is excluding them."
+                  action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+                />
+              )}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

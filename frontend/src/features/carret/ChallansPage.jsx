@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, EmptyState, Button, Money,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, EmptyState, Button, Money,
 } from '../../components/carret';
 import { useChallans, useGatePreflight } from './useDeliveryChallans';
 
@@ -67,17 +67,14 @@ export default function ChallansPage({ movement = 'outbound' }) {
     <DeskShell
       title={movement === 'return' ? 'Return Challans' : 'Delivery Challans'}
       breadcrumb="Move"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle={movement === 'return' ? 'Units coming back in from customers, one challan at a time.' : 'Challans leaving the warehouse, with a gate pre-flight before anything goes out.'}
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
+      <div style={{ display: 'grid', gap: '16px' }}>
         {inspecting && (
           <section
-            className="border bg-surface"
+            className="c-card"
             style={{
-              padding: 'var(--d-pad-x)',
-              borderRadius: 'var(--d-radius)',
+              padding: '16px',
               borderColor: preflight.ok === false ? 'var(--alert-crit)' : 'var(--rule)',
             }}
           >
@@ -103,20 +100,32 @@ export default function ChallansPage({ movement = 'outbound' }) {
           </section>
         )}
 
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load challans" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r, i) => r.dc_number ?? i}
-            empty={<EmptyState
-              title="No challans match"
-              body="Filters combine, so clearing one at a time will show what is excluding them."
-              action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-            />}
-          />
-        )}
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load challans" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r, i) => r.dc_number ?? i}
+              empty={<EmptyState
+                title="No challans match"
+                body="Filters combine, so clearing one at a time will show what is excluding them."
+                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+              />}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

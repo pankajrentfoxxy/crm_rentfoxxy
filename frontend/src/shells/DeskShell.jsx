@@ -1,5 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import {
+  ShoppingCart, Factory, Package, Tag, Truck, Headphones, Wallet, ShieldCheck,
+  ChevronRight, Menu, LayoutGrid,
+} from 'lucide-react';
 import DensityProvider from './DensityProvider';
 import ThemeToggle from './ThemeToggle';
 import { SECTIONS } from '../config/navigation';
@@ -15,15 +19,34 @@ import { usePermission } from '../hooks/usePermission';
  * twelve chances to get it wrong.
  *
  * Visibility comes from usePermission — the existing hook, which reads the same
- * matrix the backend enforces. Nothing here reads user.role (finding X6), and
- * no route-prefix helper exists (isPartsManagementRoute and its eight hardcoded
- * prefixes are not carried over).
+ * matrix the backend enforces. Nothing here reads user.role (finding X6) for
+ * access; the role is only printed in the footer. No route-prefix helper exists
+ * (isPartsManagementRoute and its eight hardcoded prefixes are not carried over).
  */
-export default function DeskShell({ title, breadcrumb, actions, children }) {
+const SECTION_ICONS = {
+  procure: ShoppingCart,
+  produce: Factory,
+  stock: Package,
+  sell: Tag,
+  move: Truck,
+  serve: Headphones,
+  money: Wallet,
+  control: ShieldCheck,
+};
+
+const humanise = (s) => String(s || '')
+  .replace(/_/g, ' ')
+  .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const initialsOf = (name) => String(name || '?')
+  .split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+
+export default function DeskShell({ title, subtitle, breadcrumb, actions, children }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { pathname, search } = useLocation();
   const here = pathname + search;
-  const { hasPermission } = usePermission();
+  const { hasPermission, user } = usePermission();
 
   const [openSection, setOpenSection] = useState(() => {
     const match = SECTIONS.find((s) => s.items.some((i) => here.startsWith(i.to.split('?')[0])));
@@ -55,79 +78,72 @@ export default function DeskShell({ title, breadcrumb, actions, children }) {
     [hasPermission]
   );
 
-  const toggle = useCallback((key) => setOpenSection((k) => (k === key ? null : key)), []);
+  // In the collapsed rail a section icon has nowhere to open into, so clicking
+  // one expands the rail as well.
+  const toggle = useCallback((key) => {
+    setCollapsed(false);
+    setOpenSection((k) => (k === key ? null : key));
+  }, []);
+
+  // One button, two jobs: below 960px the rail is an overlay; above it, it
+  // collapses to icons.
+  const onMenu = useCallback(() => {
+    if (window.matchMedia('(max-width: 960px)').matches) setMobileOpen((o) => !o);
+    else setCollapsed((c) => !c);
+  }, []);
+
+  const crumbs = breadcrumb ? String(breadcrumb).split('/').map((c) => c.trim()).filter(Boolean) : [];
+  const displayName = user?.name || user?.email || 'Signed in';
 
   return (
     <DensityProvider density="desk">
-      <div className="flex min-h-screen">
-        <nav
-          aria-label="Main"
-          className="shrink-0 bg-surface border-r border-rule flex flex-col"
-          style={{ width: collapsed ? 'calc(var(--d-tap) + var(--d-pad-x))' : '15rem', transition: 'width .15s' }}
-        >
-          <div className="flex items-center border-b border-rule" style={{ padding: 'var(--d-pad-y) var(--d-pad-x)', gap: 'var(--d-gap)' }}>
-            {!collapsed && <span className="font-ui text-ink" style={{ fontWeight: 700 }}>Carret</span>}
-            <button
-              type="button"
-              onClick={() => setCollapsed((c) => !c)}
-              aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-              aria-expanded={!collapsed}
-              className="ml-auto bg-transparent border-0 text-ink-2 cursor-pointer font-ui"
-              style={{ minHeight: 'var(--d-tap)', minWidth: 'var(--d-tap)' }}
-            >
-              {collapsed ? '»' : '«'}
-            </button>
+      <div className={`c-app ${collapsed ? 'is-collapsed' : ''} ${mobileOpen ? 'is-mobile-open' : ''}`}>
+        <nav aria-label="Main" className="c-side">
+          <div className="c-brand">
+            <span className="c-brand-mark" aria-hidden="true">RF</span>
+            {!collapsed && (
+              <div className="min-w-0">
+                <b>Rentfoxxy</b>
+                <span>Operations CRM</span>
+              </div>
+            )}
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="c-side-scroll">
+            {!collapsed && <div className="c-nav-label">Workspace</div>}
             {visible.map((s) => {
               const open = openSection === s.key;
+              const isHere = s.items.some((i) => here.startsWith(i.to.split('?')[0]));
+              const Icon = SECTION_ICONS[s.key] || LayoutGrid;
               return (
                 <div key={s.key}>
                   <button
                     type="button"
                     onClick={() => toggle(s.key)}
-                    aria-expanded={open}
+                    aria-expanded={open && !collapsed}
                     title={collapsed ? s.label : undefined}
-                    className="w-full flex items-center bg-transparent border-0 text-ink-2 cursor-pointer font-ui text-left hover:bg-surface-2"
-                    style={{ padding: 'var(--d-pad-y) var(--d-pad-x)', minHeight: 'var(--d-tap)', fontSize: 'var(--d-sm)', gap: 'var(--d-gap)' }}
+                    className={`c-nav-h ${open && !collapsed ? 'is-open' : ''} ${isHere ? 'is-here' : ''}`}
                   >
-                    <span className="uppercase tracking-wide truncate">{collapsed ? s.label.slice(0, 2) : s.label}</span>
-                    {!collapsed && <span className="ml-auto text-ink-3" aria-hidden="true">{open ? '−' : '+'}</span>}
+                    <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                    {!collapsed && <span className="truncate">{s.label}</span>}
+                    {!collapsed && <ChevronRight size={16} className="c-chev" aria-hidden="true" />}
                   </button>
 
                   {open && !collapsed && (
-                    <ul className="list-none m-0 p-0">
+                    <ul className="c-nav-sub">
                       {s.groups.map((g) => (
                         <React.Fragment key={g.name || '_'}>
-                          {g.name && (
-                            <li
-                              className="text-ink-3 uppercase tracking-wide font-ui"
-                              style={{
-                                padding: 'var(--d-pad-y) var(--d-pad-x)',
-                                paddingLeft: 'calc(var(--d-pad-x) * 2)',
-                                fontSize: 'var(--d-xs, var(--d-sm))',
-                              }}
-                            >
-                              {g.name}
-                            </li>
-                          )}
+                          {g.name && <li className="c-nav-group">{g.name}</li>}
                           {g.items.map((i) => {
                             const active = here.startsWith(i.to.split('?')[0]);
                             return (
                               <li key={i.to}>
                                 <Link
                                   to={i.to}
-                                  className={`block font-ui truncate ${active ? 'text-accent bg-accent-soft' : 'text-ink-2 hover:bg-surface-2'}`}
-                                  style={{
-                                    padding: 'var(--d-pad-y) var(--d-pad-x)',
-                                    paddingLeft: g.name
-                                      ? 'calc(var(--d-pad-x) * 3)'
-                                      : 'calc(var(--d-pad-x) * 2)',
-                                    minHeight: 'var(--d-tap)',
-                                    fontSize: 'var(--d-base)',
-                                    lineHeight: 'var(--d-tap)',
-                                  }}
+                                  onClick={() => setMobileOpen(false)}
+                                  aria-current={active ? 'page' : undefined}
+                                  className={`c-nav-s ${active ? 'is-current' : ''}`}
+                                  title={i.label}
                                 >
                                   {i.label}
                                 </Link>
@@ -142,25 +158,55 @@ export default function DeskShell({ title, breadcrumb, actions, children }) {
               );
             })}
           </div>
+
+          <div className="c-side-foot">
+            <span className="c-avatar" aria-hidden="true">{initialsOf(displayName)}</span>
+            {!collapsed && (
+              <div className="min-w-0">
+                <b>{displayName}</b>
+                {user?.role && <span>{humanise(user.role)}</span>}
+              </div>
+            )}
+          </div>
         </nav>
 
-        <div className="flex-1 min-w-0 flex flex-col">
-          <header
-            className="bg-surface border-b border-rule flex items-center flex-wrap"
-            style={{ padding: 'var(--d-pad-y) var(--d-pad-x)', gap: 'var(--d-pad-x)' }}
-          >
-            <div className="min-w-0">
-              {breadcrumb && <div className="text-ink-3 font-ui truncate" style={{ fontSize: 'var(--d-sm)' }}>{breadcrumb}</div>}
-              {/* The actual page title. The legacy topbar shows a constant. */}
-              <h1 className="text-ink font-ui m-0 truncate" style={{ fontSize: 'var(--d-lg)', fontWeight: 600 }}>{title}</h1>
-            </div>
-            <div className="ml-auto flex items-center" style={{ gap: 'var(--d-gap)' }}>
-              {actions}
+        <div className="c-main">
+          <header className="c-top">
+            <button
+              type="button"
+              className="c-icon-btn"
+              onClick={onMenu}
+              aria-label={collapsed ? 'Expand navigation' : 'Toggle navigation'}
+            >
+              <Menu size={18} aria-hidden="true" />
+            </button>
+            <div className="ml-auto flex items-center" style={{ gap: '8px' }}>
               <ThemeToggle />
             </div>
           </header>
 
-          <main className="flex-1 min-w-0 overflow-x-hidden" style={{ padding: 'var(--d-pad-x)' }}>
+          <main className="c-content">
+            {crumbs.length > 0 && (
+              <nav aria-label="Breadcrumb" className="c-crumbs">
+                {crumbs.map((c) => (
+                  <React.Fragment key={c}>
+                    <span>{c}</span>
+                    <span className="c-sep" aria-hidden="true">/</span>
+                  </React.Fragment>
+                ))}
+                <span className="c-crumb-here">{title}</span>
+              </nav>
+            )}
+
+            <div className="c-ph">
+              <div className="min-w-0">
+                {/* The actual page title. The legacy topbar shows a constant. */}
+                <h1>{title}</h1>
+                {subtitle && <p>{subtitle}</p>}
+              </div>
+              {actions && <div className="c-ph-actions">{actions}</div>}
+            </div>
+
             {children}
           </main>
         </div>

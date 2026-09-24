@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DocumentHeader, StatusChip, EntityEdge, StatTile, Timeline,
+  DocumentHeader, StatusChip, Panel, StatTile, Timeline,
   DataTable, Money, DocNumber, DateTime, EmptyState, Button,
 } from '../../components/carret';
 import { statusFamily } from '../../config/statuses';
@@ -77,7 +77,7 @@ export default function AssetRecordPage() {
       breadcrumb="Stock / Assets"
       actions={<Button variant="secondary" onClick={() => window.print()}>Print</Button>}
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         <DocumentHeader
           docNumber={asset?.ttspl_id || ttspl}
           type="Asset"
@@ -93,7 +93,7 @@ export default function AssetRecordPage() {
           ]}
         />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 'var(--d-pad-x)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
           <StatTile
             label="Lifecycle state"
             value={asset?.inventory_status || 'awaiting GRN'}
@@ -115,8 +115,9 @@ export default function AssetRecordPage() {
           <div
             className="font-ui"
             style={{
-              padding: 'var(--d-pad-x)', borderRadius: 'var(--d-radius)',
+              padding: '12px 16px', borderRadius: 'var(--d-radius-lg)',
               border: '1px solid var(--alert-warn)', color: 'var(--alert-warn)',
+              background: 'var(--surface)',
               fontSize: 'var(--d-base)',
             }}
           >
@@ -125,26 +126,20 @@ export default function AssetRecordPage() {
           </div>
         )}
 
-        <EntityEdge entity={entity} showLabel>
-          <section>
-            <h2 className="font-ui text-ink" style={{ fontSize: 'var(--d-lg)', fontWeight: 600, marginBottom: 'var(--d-gap)' }}>
-              Documents and movements
-            </h2>
-            <DataTable
-              columns={documentColumns}
-              rows={documents}
-              rowKey={(r) => r.event_id}
-              empty={<EmptyState title="No documents yet" body="Purchase orders, challans and invoices appear here as they are raised." />}
-            />
-          </section>
-        </EntityEdge>
+        <Panel entity={entity} title="Documents and movements">
+          <DataTable
+            columns={documentColumns}
+            rows={documents}
+            rowKey={(r) => r.event_id}
+            empty={<EmptyState title="No documents yet" body="Purchase orders, challans and invoices appear here as they are raised." />}
+          />
+        </Panel>
 
-        <section>
-          <h2 className="font-ui text-ink" style={{ fontSize: 'var(--d-lg)', fontWeight: 600, marginBottom: 'var(--d-gap)' }}>
-            Timeline
-          </h2>
-          <Timeline events={events} />
-        </section>
+        <Panel title="Timeline">
+          <div className="c-card-b">
+            <Timeline events={events} />
+          </div>
+        </Panel>
       </div>
     </DeskShell>
   );

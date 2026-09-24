@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, Timeline, EmptyState, Button, Money, DateTime, DocNumber, StatTile,
+  DataTable, Panel, Timeline, EmptyState, Button, Money, DateTime, DocNumber, StatTile,
 } from '../../components/carret';
 import { useInvoiceTimeline, useInvoicePayments, cancelInvoice } from './useMoney';
 
@@ -98,13 +98,17 @@ export default function InvoiceRecordPage() {
   ], []);
 
   return (
-    <DeskShell title={`Invoice #${invoiceId}`} breadcrumb="Money">
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+    <DeskShell
+      title={`Invoice #${invoiceId}`}
+      breadcrumb="Money / Customer Invoices"
+      subtitle="Payments received against this invoice, its history, and corrections."
+    >
+      <div style={{ display: 'grid', gap: '16px' }}>
         <div
           style={{
             display: 'grid',
-            gap: 'var(--d-gap)',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           }}
         >
           <StatTile label="Payments recorded" value={ledger.loading ? null : ledger.payments.length} />
@@ -112,8 +116,7 @@ export default function InvoiceRecordPage() {
           <StatTile label="Timeline entries" value={timeline.loading ? null : timeline.events.length} />
         </div>
 
-        <section style={{ display: 'grid', gap: 'var(--d-gap)' }}>
-          <h2 className="font-ui text-ink m-0" style={{ fontSize: 'var(--d-lg)' }}>Payments</h2>
+        <Panel title="Payments">
           {ledger.loading && <EmptyState title="Loading…" />}
           {ledger.error && <EmptyState title="Could not load payments" body={ledger.error} />}
           {!ledger.loading && !ledger.error && (
@@ -127,10 +130,9 @@ export default function InvoiceRecordPage() {
               />}
             />
           )}
-        </section>
+        </Panel>
 
-        <section style={{ display: 'grid', gap: 'var(--d-gap)' }}>
-          <h2 className="font-ui text-ink m-0" style={{ fontSize: 'var(--d-lg)' }}>Timeline</h2>
+        <Panel title="Timeline">
           {timeline.loading && <EmptyState title="Loading…" />}
           {timeline.error && <EmptyState title="Could not load the timeline" body={timeline.error} />}
           {!timeline.loading && !timeline.error && (
@@ -138,7 +140,7 @@ export default function InvoiceRecordPage() {
               // The Timeline component takes events table rows as they come —
               // occurred_at, actor_name, event_type, from_state, to_state. No
               // reshaping: it was built against that shape in Part 1.
-              ? <Timeline events={timeline.events} />
+              ? <div className="c-card-b"><Timeline events={timeline.events} /></div>
               : (
                 <EmptyState
                   title="Nothing recorded yet"
@@ -146,12 +148,13 @@ export default function InvoiceRecordPage() {
                 />
               )
           )}
-        </section>
+        </Panel>
 
-        <section style={{ display: 'grid', gap: 'var(--d-gap)' }}>
-          <h2 className="font-ui text-ink m-0" style={{ fontSize: 'var(--d-lg)' }}>Correct this invoice</h2>
-          <CancelPanel invoiceId={invoiceId} onDone={() => { timeline.refresh(); ledger.refresh(); }} />
-        </section>
+        <Panel title="Correct this invoice">
+          <div className="c-card-b">
+            <CancelPanel invoiceId={invoiceId} onDone={() => { timeline.refresh(); ledger.refresh(); }} />
+          </div>
+        </Panel>
       </div>
     </DeskShell>
   );

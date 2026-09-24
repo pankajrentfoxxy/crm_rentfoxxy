@@ -5,27 +5,43 @@ import React from 'react';
  * never encodes state — so a Button never takes a lifecycle family.
  */
 const VARIANTS = {
-  primary:  { background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-ink)' },
-  secondary:{ background: 'var(--surface-2)', borderColor: 'var(--rule)', color: 'var(--ink)' },
-  quiet:    { background: 'transparent', borderColor: 'transparent', color: 'var(--accent)' },
+  primary: 'c-btn--primary',
+  secondary: '',
+  quiet: 'c-btn--quiet',
 };
 
 export default function Button({ variant = 'secondary', children, className = '', ...rest }) {
   return (
     <button
       type="button"
-      className={`font-ui border inline-flex items-center justify-center cursor-pointer ${className}`}
-      style={{
-        ...VARIANTS[variant] || VARIANTS.secondary,
-        padding: 'var(--d-pad-y) var(--d-pad-x)',
-        minHeight: 'var(--d-tap)',
-        borderRadius: 'var(--d-radius)',
-        fontSize: 'var(--d-base)',
-        gap: 'var(--d-gap)',
-      }}
+      className={`c-btn ${VARIANTS[variant] ?? ''} ${className}`}
       {...rest}
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * One choice from a few (Book: Both / RentFoxxy / Gorefurbo). A row of
+ * primary/secondary buttons says "several actions"; this says "one setting".
+ * options: [{ value, label, icon? }]
+ */
+export function Segmented({ options = [], value, onChange, label }) {
+  return (
+    <div className="c-seg" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          className={value === o.value ? 'is-on' : ''}
+          onClick={() => onChange?.(o.value)}
+        >
+          {o.icon}
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }

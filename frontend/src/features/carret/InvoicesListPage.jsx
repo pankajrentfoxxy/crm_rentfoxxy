@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, StatTile,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, StatTile,
 } from '../../components/carret';
 import { useInvoices } from './useMoney';
 
@@ -106,14 +106,14 @@ export default function InvoicesListPage() {
     <DeskShell
       title="Customer Invoices"
       breadcrumb="Money"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle="GST invoices with the CGST/SGST or IGST split, due dates and live outstanding."
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         <div
           style={{
             display: 'grid',
-            gap: 'var(--d-gap)',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '12px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           }}
         >
           <StatTile label="Shown" value={loading ? null : total} />
@@ -130,25 +130,35 @@ export default function InvoicesListPage() {
           />
         </div>
 
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title="Could not load invoices" body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r) => r.invoice_id}
-            onRowClick={(r) => navigate(`/carret/money/invoices/${r.invoice_id}`)}
-            empty={(
-              <EmptyState
-                title="No invoices match"
-                body="Filters combine, so clearing one at a time will show what is excluding them."
-                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-              />
-            )}
-          />
-        )}
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title="Could not load invoices" body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.invoice_id}
+              onRowClick={(r) => navigate(`/carret/money/invoices/${r.invoice_id}`)}
+              empty={(
+                <EmptyState
+                  title="No invoices match"
+                  body="Filters combine, so clearing one at a time will show what is excluding them."
+                  action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+                />
+              )}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

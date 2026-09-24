@@ -12,30 +12,56 @@ import { statusFamily, statusLabel, statusGlyph, isCanonicalAssetStatus } from '
  * development — it has to be visible. Silently swallowing it is how twenty
  * statuses accumulated in the first place.
  */
-export default function StatusChip({ status, className = '', title }) {
-  const family = statusFamily(status);
-  const known = isCanonicalAssetStatus(status);
+/**
+ * Document statuses — quotations, orders, challans, invoices, POs. These are
+ * not asset lifecycle states and never will be, so they get their own small
+ * map instead of rendering as a stray "?". Same rule as assets: a tone AND a
+ * glyph AND a word. Anything in neither list still renders as a visible stray.
+ */
+const DOC_STATUS = {
+  draft:      { tone: 'closed',  glyph: '○' },
+  pending:    { tone: 'moving',  glyph: '○' },
+  sent:       { tone: 'idle',    glyph: '➔' },
+  issued:     { tone: 'idle',    glyph: '➔' },
+  confirmed:  { tone: 'earning', glyph: '●' },
+  accepted:   { tone: 'earning', glyph: '●' },
+  approved:   { tone: 'earning', glyph: '●' },
+  active:     { tone: 'earning', glyph: '●' },
+  partial:    { tone: 'moving',  glyph: '◐' },
+  dispatched: { tone: 'idle',    glyph: '➔' },
+  delivered:  { tone: 'earning', glyph: '✓' },
+  received:   { tone: 'earning', glyph: '✓' },
+  completed:  { tone: 'earning', glyph: '✓' },
+  paid:       { tone: 'earning', glyph: '✓' },
+  closed:     { tone: 'closed',  glyph: '✓' },
+  overdue:    { tone: 'crit',    glyph: '!' },
+  rejected:   { tone: 'crit',    glyph: '✕' },
+  cancelled:  { tone: 'closed',  glyph: '⊘' },
+};
 
-  const style = {
-    background: `var(--lc-${family}-soft)`,
-    color: `var(--lc-${family})`,
-    borderColor: `var(--lc-${family})`,
-    fontSize: 'var(--d-sm)',
-    padding: 'calc(var(--d-pad-y) / 2) var(--d-pad-x)',
-    borderRadius: 'var(--d-radius)',
-    minHeight: 'var(--d-tap)',
-  };
+const TONE_VARS = {
+  crit: { fg: 'var(--alert-crit)', bg: 'var(--alert-crit-soft)' },
+};
+
+export default function StatusChip({ status, className = '', title }) {
+  const known = isCanonicalAssetStatus(status);
+  const doc = known ? null : DOC_STATUS[String(status || '').toLowerCase()];
+  const family = doc ? doc.tone : statusFamily(status);
+
+  const style = TONE_VARS[family]
+    ? { background: TONE_VARS[family].bg, color: TONE_VARS[family].fg }
+    : { background: `var(--lc-${family}-soft)`, color: `var(--lc-${family})` };
 
   return (
     <span
-      className={`inline-flex items-center gap-d border font-ui leading-none whitespace-nowrap ${className}`}
+      className={`c-chip font-ui ${className}`}
       style={style}
-      title={title || (known ? undefined : `Non-canonical status: ${status}`)}
+      title={title || (known || doc ? undefined : `Non-canonical status: ${status}`)}
       data-status={status || ''}
       data-family={family}
     >
-      <span aria-hidden="true">{statusGlyph(status)}</span>
-      <span>{statusLabel(status)}</span>
+      <span aria-hidden="true">{doc ? doc.glyph : statusGlyph(status)}</span>
+      <span>{doc ? String(status).charAt(0).toUpperCase() + String(status).slice(1).toLowerCase() : statusLabel(status)}</span>
     </span>
   );
 }

@@ -8,7 +8,12 @@ import EmptyState from './EmptyState';
  * that is too wide is a table problem, and making the whole page scroll
  * sideways to read one column is the thing that breaks every phone layout.
  *
- * columns: [{ key, header, align?, numeric?, width?, render?(row) }]
+ * The first column is the row's name and reads in full ink; the rest read one
+ * step quieter so the eye lands on what the row IS before what it holds.
+ *
+ * columns: [{ key, header, align?, numeric?, width?, render?(row), sub?(row) }]
+ * `sub` renders a second, monospace line under the value (a code under a name).
+ * Inside a <Panel> the table drops its own frame and sits under the toolbar.
  */
 export default function DataTable({
   columns = [],
@@ -38,22 +43,15 @@ export default function DataTable({
   }
 
   return (
-    <div className={`w-full overflow-x-auto border border-rule bg-surface ${className}`} style={{ borderRadius: 'var(--d-radius)' }}>
-      <table className="w-full border-collapse font-ui" style={{ fontSize: 'var(--d-base)' }}>
+    <div className={`c-table-wrap ${className}`}>
+      <table className="c-table font-ui">
         <thead>
           <tr>
             {columns.map((c) => (
               <th
                 key={c.key}
                 scope="col"
-                className="sticky top-0 z-10 bg-surface-2 text-ink-3 font-ui text-left border-b border-rule whitespace-nowrap"
-                style={{
-                  fontSize: 'var(--d-sm)',
-                  fontWeight: 500,
-                  padding: 'var(--d-pad-y) var(--d-pad-x)',
-                  textAlign: c.align || (c.numeric ? 'right' : 'left'),
-                  width: c.width,
-                }}
+                style={{ textAlign: c.align || (c.numeric ? 'right' : 'left'), width: c.width }}
               >
                 {c.header}
               </th>
@@ -67,21 +65,24 @@ export default function DataTable({
               data-row
               tabIndex={0}
               onClick={onRowClick ? () => onRowClick(row, i) : undefined}
-              className={`border-b border-rule-2 text-ink-2 ${onRowClick ? 'cursor-pointer hover:bg-surface-2' : ''}`}
-              style={{ height: 'var(--d-row)' }}
+              className={onRowClick ? 'is-click' : ''}
             >
-              {columns.map((c) => (
-                <td
-                  key={c.key}
-                  className={c.numeric ? 'tabular-nums font-mono text-ink' : ''}
-                  style={{
-                    padding: 'var(--d-pad-y) var(--d-pad-x)',
-                    textAlign: c.align || (c.numeric ? 'right' : 'left'),
-                  }}
-                >
-                  {c.render ? c.render(row, i) : row?.[c.key] ?? '—'}
-                </td>
-              ))}
+              {columns.map((c, ci) => {
+                const sub = c.sub?.(row, i);
+                return (
+                  <td
+                    key={c.key}
+                    className={[
+                      ci === 0 ? 'is-primary' : '',
+                      c.numeric ? 'is-num font-mono' : '',
+                    ].join(' ').trim() || undefined}
+                    style={c.align ? { textAlign: c.align } : undefined}
+                  >
+                    {c.render ? c.render(row, i) : row?.[c.key] ?? '—'}
+                    {sub ? <span className="c-sub">{sub}</span> : null}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

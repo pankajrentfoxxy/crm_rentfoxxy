@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, EntityEdge,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented,
 } from '../../components/carret';
-import { ENTITIES, ENTITY } from '../../config/entities';
+import { ENTITIES } from '../../config/entities';
 import { useSellList } from './useSell';
 
 /**
@@ -24,6 +24,7 @@ import { useSellList } from './useSell';
 const RESOURCES = {
   quotations: {
     title: 'Quotations',
+    subtitle: 'Quotations across both books, from raised to accepted.',
     resource: 'quotations',
     statuses: ['pending', 'sent', 'accepted', 'approved', 'rejected'],
     columns: (nav) => [
@@ -37,6 +38,7 @@ const RESOURCES = {
   },
   'sales-orders': {
     title: 'Sales Orders',
+    subtitle: 'Confirmed orders, and the quotation each one came from.',
     resource: 'sales-orders',
     statuses: ['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled'],
     columns: () => [
@@ -59,10 +61,11 @@ const RESOURCES = {
   },
   customers: {
     title: 'Customers',
+    subtitle: 'B2B accounts with GST registration and contact details.',
     resource: 'customers',
     statuses: [],
     columns: () => [
-      { key: 'customer_name', header: 'Customer' },
+      { key: 'customer_name', header: 'Customer', sub: (r) => (r.customer_id ? `#${r.customer_id}` : null) },
       { key: 'gst_number', header: 'GSTIN', render: (r) => (r.gst_number ? <DocNumber value={r.gst_number} /> : '—') },
       { key: 'customer_email', header: 'Email' },
       { key: 'customer_mobile', header: 'Phone' },
@@ -103,40 +106,48 @@ export default function SellListPage({ kind = 'sales-orders' }) {
     <DeskShell
       title={config.title}
       breadcrumb="Sell"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle={config.subtitle}
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
         {/* The books, side by side. Decision 1: a filter inside Sell, never two
             branches of the menu. */}
-        <div className="flex flex-wrap items-center" style={{ gap: 'var(--d-gap)' }}>
-          <span className="font-ui text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>Book</span>
-          <Button variant={entity === '' ? 'primary' : 'secondary'} onClick={() => setEntity('')}>
-            Both
-          </Button>
-          {Object.values(ENTITIES).map((e) => (
-            <Button
-              key={e.key}
-              variant={entity === e.code ? 'primary' : 'secondary'}
-              onClick={() => setEntity(e.code)}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  display: 'inline-block', width: '4px', height: '1em',
-                  background: `var(${e.edgeVar})`, marginRight: 'var(--d-gap)',
-                }}
-              />
-              {e.label}
-            </Button>
-          ))}
+        <div className="flex flex-wrap items-center" style={{ gap: '10px' }}>
+          <span className="font-ui text-ink-3" style={{ fontSize: '13.5px', fontWeight: 500 }}>Book</span>
+          <Segmented
+            label="Book"
+            value={entity}
+            onChange={setEntity}
+            options={[
+              { value: '', label: 'Both' },
+              ...Object.values(ENTITIES).map((e) => ({
+                value: e.code,
+                label: e.label,
+                icon: (
+                  <span
+                    aria-hidden="true"
+                    style={{ display: 'inline-block', width: '4px', height: '14px', borderRadius: '2px', background: `var(${e.edgeVar})` }}
+                  />
+                ),
+              })),
+            ]}
+          />
         </div>
 
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
-        {!loading && !error && (
-          <EntityEdge entity={entity === ENTITIES[ENTITY.SALE].code ? ENTITY.SALE : ENTITY.RENTAL}>
+        <Panel
+          entity={Object.values(ENTITIES).find((e) => e.code === entity)?.key}
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
+          {!loading && !error && (
             <DataTable
               columns={columns}
               rows={rows}
@@ -147,8 +158,8 @@ export default function SellListPage({ kind = 'sales-orders' }) {
                 action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
               />}
             />
-          </EntityEdge>
-        )}
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );

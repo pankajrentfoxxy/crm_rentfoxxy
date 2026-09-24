@@ -12,16 +12,18 @@ export default function StatTile({ label, value, delta, family, unit, className 
   const hasValue = value !== null && value !== undefined && value !== '';
   return (
     <div
-      className={`bg-surface border border-rule ${className}`}
-      style={{ padding: 'var(--d-pad-x)', borderRadius: 'var(--d-radius)' }}
+      className={`c-card ${className}`}
+      style={{ padding: '14px 16px' }}
     >
-      <div className="text-ink-3 font-ui" style={{ fontSize: 'var(--d-sm)' }}>{label}</div>
+      <div className="text-ink-3 font-ui" style={{ fontSize: '13px', fontWeight: 500 }}>{label}</div>
       <div
-        className="font-mono tabular-nums"
+        className="font-ui tabular-nums"
         style={{
-          fontSize: 'calc(var(--d-lg) * 1.6)',
-          lineHeight: 1.1,
-          marginTop: 'var(--d-gap)',
+          fontSize: '26px',
+          fontWeight: 600,
+          letterSpacing: '-.01em',
+          lineHeight: 1.2,
+          marginTop: '4px',
           color: family ? `var(--lc-${family})` : 'var(--ink)',
         }}
       >

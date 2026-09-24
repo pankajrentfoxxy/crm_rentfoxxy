@@ -16,11 +16,10 @@ export default function DocumentHeader({
   const ent = resolveEntity(entity);
   return (
     <header
-      className={`bg-surface border border-rule ${className}`}
+      className={`c-card ${className}`}
       style={{
-        borderRadius: 'var(--d-radius)',
         borderLeft: ent ? `4px solid var(${ent.edgeVar})` : undefined,
-        padding: 'var(--d-pad-x)',
+        padding: '18px 20px',
       }}
       data-entity={ent?.key || ''}
     >
@@ -29,7 +28,7 @@ export default function DocumentHeader({
           <div className="text-ink-3 font-ui uppercase tracking-wide" style={{ fontSize: 'var(--d-sm)' }}>
             {type}{ent ? ` · ${ent.label}` : ''}
           </div>
-          <div className="text-ink" style={{ fontSize: 'var(--d-lg)', fontWeight: 600, marginTop: 'var(--d-gap)' }}>
+          <div className="text-ink" style={{ fontSize: '20px', fontWeight: 600, marginTop: '4px' }}>
             <DocNumber value={docNumber} />
           </div>
         </div>
@@ -41,7 +40,7 @@ export default function DocumentHeader({
         <dl
           className="grid border-t border-rule"
           style={{
-            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
             gap: 'var(--d-pad-x)',
             marginTop: 'var(--d-pad-x)',
             paddingTop: 'var(--d-pad-x)',
@@ -49,8 +48,8 @@ export default function DocumentHeader({
         >
           {meta.map((m) => (
             <div key={m.label} className="min-w-0">
-              <dt className="text-ink-3 font-ui" style={{ fontSize: 'var(--d-sm)' }}>{m.label}</dt>
-              <dd className="text-ink font-ui m-0 break-words" style={{ fontSize: 'var(--d-base)' }}>{m.value ?? '—'}</dd>
+              <dt className="text-ink-3 font-ui" style={{ fontSize: '13px', fontWeight: 500 }}>{m.label}</dt>
+              <dd className="text-ink font-ui m-0 break-words" style={{ fontSize: 'var(--d-base)', marginTop: '2px' }}>{m.value ?? '—'}</dd>
             </div>
           ))}
         </dl>

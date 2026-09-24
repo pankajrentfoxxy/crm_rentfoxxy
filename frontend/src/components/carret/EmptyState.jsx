@@ -7,13 +7,10 @@ import React from 'react';
  */
 export default function EmptyState({ title = 'Nothing here yet', body, action, className = '' }) {
   return (
-    <div
-      className={`flex flex-col items-center justify-center text-center ${className}`}
-      style={{ padding: 'calc(var(--d-pad-y) * 6) var(--d-pad-x)', gap: 'var(--d-gap)' }}
-    >
-      <div className="font-ui text-ink" style={{ fontSize: 'var(--d-lg)', fontWeight: 600 }}>{title}</div>
-      {body && <div className="font-ui text-ink-2" style={{ fontSize: 'var(--d-base)', maxWidth: '52ch' }}>{body}</div>}
-      {action && <div style={{ marginTop: 'var(--d-gap)' }}>{action}</div>}
+    <div className={`c-empty ${className}`}>
+      <div className="font-ui text-ink" style={{ fontSize: '16px', fontWeight: 600 }}>{title}</div>
+      {body && <div className="font-ui text-ink-3" style={{ fontSize: 'var(--d-base)', maxWidth: '56ch' }}>{body}</div>}
+      {action && <div style={{ marginTop: '8px' }}>{action}</div>}
     </div>
   );
 }

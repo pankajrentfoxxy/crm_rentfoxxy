@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, StatusChip, DocNumber, DateTime, Money, EmptyState, Button,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button,
 } from '../../components/carret';
 import { useProcureList } from './useProduce';
 
@@ -22,6 +22,7 @@ import { useProcureList } from './useProduce';
 const RESOURCES = {
   'purchase-orders': {
     title: 'Purchase Orders',
+    subtitle: 'Vendor purchase orders, and how much of each has been received.',
     path: '/vendor-management/purchase-orders',
     statuses: ['draft', 'pending', 'approved', 'partial', 'completed', 'cancelled'],
     columns: () => [
@@ -53,6 +54,7 @@ const RESOURCES = {
   },
   vendors: {
     title: 'Vendors',
+    subtitle: 'Suppliers with GST registration and contact details.',
     path: '/vendor-management/vendors',
     statuses: [],
     columns: () => [
@@ -70,6 +72,7 @@ const RESOURCES = {
   },
   'spare-parts-orders': {
     title: 'Spare Parts Orders',
+    subtitle: 'Purchase orders for spare parts.',
     path: '/vendor-management/spare-parts-orders',
     statuses: ['draft', 'pending', 'approved', 'partial', 'completed', 'cancelled'],
     columns: () => [
@@ -82,6 +85,7 @@ const RESOURCES = {
   },
   'replaced-products': {
     title: 'Vendor Returns & Replacements',
+    subtitle: 'Units sent back to vendors, and the replacements received.',
     path: '/vendor-management/replaced-products',
     statuses: [],
     columns: () => [
@@ -95,6 +99,7 @@ const RESOURCES = {
   },
   'vendor-repair-dcs': {
     title: 'Vendor Repair',
+    subtitle: 'Units out with vendors for repair, and how many have come back.',
     path: '/vendor-repair/dc',
     statuses: ['draft', 'sent', 'partial', 'received', 'closed'],
     columns: () => [
@@ -155,27 +160,37 @@ export default function ProcureListPage({ kind = 'purchase-orders' }) {
     <DeskShell
       title={config.title}
       breadcrumb="Procure"
-      actions={<span className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{total} shown</span>}
+      subtitle={config.subtitle}
     >
-      <div style={{ display: 'grid', gap: 'var(--d-pad-x)' }}>
-        <FilterBar filters={filterDefs} values={filters} onChange={onFilter} onClear={onClear} />
-
-        {loading && <EmptyState title="Loading…" />}
-        {error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
-        {!loading && !error && (
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(r, i) => r.po_id || r.spo_id || r.vendor_id || r.dc_number || r.id || i}
-            empty={(
-              <EmptyState
-                title={`No ${config.title.toLowerCase()} match`}
-                body="Filters combine, so clearing one at a time will show what is excluding them."
-                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-              />
-            )}
-          />
-        )}
+      <div style={{ display: 'grid', gap: '16px' }}>
+        <Panel
+          toolbar={(
+            <FilterBar
+              filters={filterDefs}
+              values={filters}
+              onChange={onFilter}
+              onClear={onClear}
+              count={`${total} shown`}
+            />
+          )}
+        >
+          {loading && <EmptyState title="Loading…" />}
+          {error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
+          {!loading && !error && (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r, i) => r.po_id || r.spo_id || r.vendor_id || r.dc_number || r.id || i}
+              empty={(
+                <EmptyState
+                  title={`No ${config.title.toLowerCase()} match`}
+                  body="Filters combine, so clearing one at a time will show what is excluding them."
+                  action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
+                />
+              )}
+            />
+          )}
+        </Panel>
       </div>
     </DeskShell>
   );
