@@ -2417,7 +2417,7 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number,
             -- Part 3.2: the fields the gate pre-flight checks. The gate could
             -- not refuse anything before because it never asked for them.
-            dcl.status, dcl.awb_number, dcl.eway_required, dcl.eway_bill_number,
+            dcl.status, dcl.awb_number, dcl.porter_tracking_id, dcl.eway_required, dcl.eway_bill_number,
             dcl.eway_asset_value, dcl.ship_by,
             COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
        FROM delivery_challan_lines dcl

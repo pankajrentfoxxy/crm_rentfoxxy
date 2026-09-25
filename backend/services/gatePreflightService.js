@@ -87,9 +87,14 @@ function checkAwb(head) {
   if (!COURIER_MODES.has(mode)) return null;
 
   if (head?.awb_number) return null;
+  // Porter bookings carry a Porter tracking ID, never an AWB — every porter
+  // challan was being refused here for a number it can never have.
+  if (mode === 'porter' && String(head?.porter_tracking_id || '').trim()) return null;
   return {
     code: 'AWB_MISSING',
-    message: `Dispatch mode is "${mode}" but no AWB number is recorded.`,
+    message: mode === 'porter'
+      ? 'Dispatch mode is "porter" but no Porter tracking ID is recorded.'
+      : `Dispatch mode is "${mode}" but no AWB number is recorded.`,
     detail: { dispatch_mode: mode },
   };
 }

@@ -229,6 +229,7 @@ exports.attachSerial = async (req, res) => {
       && await saleInPlace.hasOpenSaleInPlaceEvent(client, freshSerial.serial_id);
 
     if (inPlace && !saleInPlaceOk) {
+      await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
         message: 'Sale-in-place orders only accept units currently on rent with this customer '
@@ -256,6 +257,7 @@ exports.attachSerial = async (req, res) => {
       [serialForAttach.serial_id]
     );
     if (dup.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: `Serial already attached to ${dup.rows[0].sales_order_number}` });
     }
 
@@ -284,12 +286,15 @@ exports.attachSerial = async (req, res) => {
       );
     }
     if (!line) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'No matching order line with remaining capacity for this config' });
     }
     if ((countByLine[line.line_id] || 0) >= Number(line.ordered_qty)) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'This line is already fully allocated' });
     }
     if (!serialMatchesSoLine(line, serialForAttach)) {
+      await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
         message: configMismatchMessage(line, serialForAttach),

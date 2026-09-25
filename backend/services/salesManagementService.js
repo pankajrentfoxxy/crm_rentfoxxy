@@ -308,6 +308,54 @@ async function nextDocumentNumber(docType, callerClient = null) {
   }
 }
 
+/**
+ * What nextDocumentNumber would return, without taking it. For a form that
+ * wants to show "EST-000123" before anything is saved; the real number is
+ * still allocated inside the save transaction, so the two can differ if
+ * someone else saves first. Opening a form must never consume a number.
+ */
+async function peekDocumentNumber(docType) {
+  const meta = DOC_TYPES[docType];
+  if (!meta) throw new Error(`Unknown document type: ${docType}`);
+  const seq = await pool.query(
+    'SELECT last_value, prefix FROM sm_document_sequences WHERE doc_type = $1',
+    [docType]
+  );
+  const prefix = seq.rows[0]?.prefix || meta.prefix;
+  const dataMax = await maxFlatSeqFromData(pool, prefix, meta.pad);
+  const next = Math.max(Number(seq.rows[0]?.last_value || 0), dataMax) + 1;
+  return `${prefix}${String(next).padStart(meta.pad, '0')}`;
+}
+
+/**
+ * Quotation status rules (Part 4.3).
+ *
+ * pending  — raised, not yet sent (the UI calls it Draft)
+ * sent     — emailed to the customer
+ * approved — approved internally
+ * accepted — the customer said yes (email link, or recorded by staff)
+ * rejected — final
+ *
+ * A rejected quotation is closed; re-quoting means a new quotation, so the
+ * record of what was refused survives. An accepted quotation can still be
+ * rejected (the customer backs out), which the controller refuses once an
+ * order exists against it.
+ */
+const QUOTATION_TRANSITIONS = {
+  pending: ['sent', 'approved', 'accepted', 'rejected'],
+  sent: ['sent', 'approved', 'accepted', 'rejected'],
+  approved: ['sent', 'accepted', 'rejected'],
+  accepted: ['sent', 'rejected'],
+  rejected: [],
+};
+
+function canTransitionQuotation(from, to) {
+  const f = String(from || 'pending').toLowerCase();
+  const t = String(to || '').toLowerCase();
+  if (f === t && t !== 'rejected') return true;
+  return (QUOTATION_TRANSITIONS[f] || []).includes(t);
+}
+
 // Financial-year document numbers: SO/26-27/0779 and DC/26-27/0778.
 // Indian FY runs Apr 1 -> Mar 31. The sequence is stored in
 // sm_document_sequences.last_value encoded as (fyCode * 10000 + seq), e.g.
@@ -583,7 +631,7 @@ async function tableColumnExists(tableName, columnName) {
   return exists;
 }
 
-async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status, source_lead_id }) {
+async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status, source_lead_id, entity_code }) {
   const params = [];
   const conditions = [];
   if (search) {
@@ -597,6 +645,11 @@ async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status
   if (source_lead_id) {
     params.push(Number(source_lead_id));
     conditions.push(`source_lead_id = $${params.length}`);
+  }
+  // The book filter (Decision 1: RentFoxxy / Gorefurbo is a filter inside Sell).
+  if (entity_code === 'rentfoxxy' || entity_code === 'gorefurbo') {
+    params.push(entity_code);
+    conditions.push(`COALESCE(entity_code, 'rentfoxxy') = $${params.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -3132,6 +3185,9 @@ module.exports = {
   UnknownQuotationType,
   QUOTATION_TYPES,
   nextDocumentNumber,
+  peekDocumentNumber,
+  QUOTATION_TRANSITIONS,
+  canTransitionQuotation,
   nextFinancialYearNumber,
   peekFinancialYearNumber,
   currentFinancialYear,

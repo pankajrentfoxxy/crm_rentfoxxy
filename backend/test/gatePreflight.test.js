@@ -120,6 +120,13 @@ describe('3.2 — AWB', () => {
   it('passes a courier challan that has one', () => {
     assert.equal(checkAwb({ dispatch_mode: 'bluedart', awb_number: '7781104432' }), null);
   });
+
+  it('accepts a porter challan on its Porter tracking ID, which is all porter ever has', () => {
+    assert.equal(checkAwb({ dispatch_mode: 'porter', awb_number: null, porter_tracking_id: 'CRN8812' }), null);
+    const f = checkAwb({ dispatch_mode: 'porter', awb_number: null, porter_tracking_id: '  ' });
+    assert.equal(f.code, 'AWB_MISSING');
+    assert.match(f.message, /Porter tracking ID/);
+  });
 });
 
 describe('3.2 — challan state (DC1)', () => {

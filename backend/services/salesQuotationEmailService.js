@@ -277,6 +277,19 @@ async function acceptSalesQuotationByToken(token) {
     };
   }
 
+  // A rejected quotation is closed; the customer's old email link must not
+  // quietly reopen it.
+  if (String(row.status || '').toLowerCase() === 'rejected') {
+    return {
+      success: false,
+      rejected: true,
+      message: 'This quotation is no longer open. Please contact us for a fresh quotation.',
+      estimate_no: row.quotation_number,
+      company_name: companyName,
+      source: 'sales_quotation',
+    };
+  }
+
   const acceptRes = await pool.query(
     `UPDATE sales_quotations
         SET status = 'accepted',
@@ -285,6 +298,7 @@ async function acceptSalesQuotationByToken(token) {
       WHERE quotation_number = $1
         AND token = $2
         AND accepted_at IS NULL
+        AND COALESCE(status, '') <> 'rejected'
       RETURNING accepted_at`,
     [row.quotation_number, token]
   );

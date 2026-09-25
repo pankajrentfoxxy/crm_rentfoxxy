@@ -812,7 +812,7 @@ exports.acceptLeadQuotation = async (req, res) => {
   try {
     const { acceptSalesQuotationByToken } = require('../services/salesQuotationEmailService');
     const salesAccept = await acceptSalesQuotationByToken(token);
-    if (salesAccept) return res.json(salesAccept);
+    if (salesAccept) return res.status(salesAccept.rejected ? 409 : 200).json(salesAccept);
 
     await ensureLeadQuotationColumns();
     const qRes = await pool.query(

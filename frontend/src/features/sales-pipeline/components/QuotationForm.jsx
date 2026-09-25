@@ -17,44 +17,9 @@ import {
   filterCustomersForQuotation,
   isCustomerEligibleForQuotation,
 } from '../../../utils/customerType';
+import { getField, buildBillingAddress } from '../customerAddresses';
 
 const DEFAULT_TERMS = 'Payment terms as agreed. Goods remain property of Rentfoxxy until full payment.';
-
-function getField(obj, snake, camel) {
-  if (!obj) return '';
-  const val = obj[snake] ?? obj[camel];
-  if (val && typeof val === 'object' && val.address) return val.address;
-  return val || '';
-}
-
-function customerDisplayName(customer) {
-  if (!customer) return 'N/A';
-  return customer.company_name || customer.companyName || customer.name || customer.customer_name || 'N/A';
-}
-
-function buildBillingAddress(customer) {
-  if (!customer) return null;
-  const displayName = customerDisplayName(customer);
-  if (customer.billing_address && typeof customer.billing_address === 'object') {
-    return {
-      ...customer.billing_address,
-      name: displayName,
-      gst_number: customer.billing_address.gst_number
-        || getField(customer, 'gst_no', 'gstNo')
-        || getField(customer, 'gst_number', 'gstNumber'),
-    };
-  }
-  return {
-    name: displayName,
-    phone: customer.phone || customer.customer_number || 'N/A',
-    country: 'India',
-    state: getField(customer, 'billing_state', 'billingState') || 'N/A',
-    city: getField(customer, 'billing_city', 'billingCity') || 'N/A',
-    zip_code: getField(customer, 'billing_pincode', 'billingPincode') || 'N/A',
-    gst_number: getField(customer, 'gst_no', 'gstNo') || getField(customer, 'gst_number', 'gstNumber') || 'N/A',
-    address: getField(customer, 'billing_address', 'billingAddress') || 'N/A',
-  };
-}
 
 const emptyManualShipping = () => ({
   name: '', phone: '', country: 'India', state: '', city: '', zip_code: '', address: '',

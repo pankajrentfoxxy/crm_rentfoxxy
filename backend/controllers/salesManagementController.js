@@ -6,6 +6,8 @@ const { respondIfRefused } = require('../utils/transitionRefusal');
 const inventorySM = require('../services/inventoryStateMachine');
 const {
   nextDocumentNumber,
+  peekDocumentNumber,
+  canTransitionQuotation,
   nextFinancialYearNumber,
   peekFinancialYearNumber,
   computeGstBreakdown,
@@ -432,7 +434,13 @@ exports.getAddQuotationMeta = async (req, res) => {
           LIMIT 500`,
         scopeParams
       ),
-      nextDocumentNumber('quotation'),
+      // A preview only: opening the form used to take a real number every
+      // time, leaving gaps in the EST- series. The number is allocated when
+      // the quotation is saved. The type decides the book (EST- or GEST-).
+      peekDocumentNumber(entityDocType(
+        'quotation',
+        ['sale', 'sales'].includes(typeFilter) ? 'gorefurbo' : 'rentfoxxy'
+      )),
       fetchCatalogAttributeOptions(),
     ]);
     res.json({
@@ -457,6 +465,7 @@ exports.listQuotations = async (req, res) => {
       search: req.query.search || '',
       status: req.query.status,
       source_lead_id: req.query.source_lead_id,
+      entity_code: req.query.entity_code,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -476,6 +485,17 @@ exports.getQuotation = async (req, res) => {
       quotation_number: req.params.quotationNumber,
       lines,
       remaining_qty: await getQuotationRemainingQty(req.params.quotationNumber),
+      // The orders raised from this quotation, so its record can link forward.
+      sales_orders: (await pool.query(
+        `SELECT sales_order_number,
+                MIN(created_at) AS created_at,
+                BOOL_AND(COALESCE(status, '') = 'cancelled') AS cancelled
+           FROM sales_order_lines
+          WHERE quotation_number = $1
+          GROUP BY sales_order_number
+          ORDER BY MIN(created_at)`,
+        [req.params.quotationNumber]
+      )).rows,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -665,6 +685,31 @@ exports.updateQuotationStatus = async (req, res) => {
     }
     const updaterName = req.user?.name || req.user?.username || req.user?.email || 'Admin';
 
+    const current = String(lines[0].status || 'pending').toLowerCase();
+    if (!canTransitionQuotation(current, status)) {
+      return res.status(409).json({
+        success: false,
+        code: 'QUOTATION_TRANSITION_REFUSED',
+        message: current === 'rejected'
+          ? 'This quotation was rejected and is closed. Raise a new quotation instead.'
+          : `A quotation that is ${current} cannot be moved to ${status}.`,
+      });
+    }
+    if (status === 'rejected' && current === 'accepted') {
+      const so = await pool.query(
+        `SELECT sales_order_number FROM sales_order_lines
+          WHERE quotation_number = $1 AND COALESCE(status, '') <> 'cancelled' LIMIT 1`,
+        [quotationNumber]
+      );
+      if (so.rows.length) {
+        return res.status(409).json({
+          success: false,
+          code: 'QUOTATION_HAS_ORDER',
+          message: `Sales order ${so.rows[0].sales_order_number} was raised from this quotation. Cancel the order first.`,
+        });
+      }
+    }
+
     if (status === 'sent') {
       const result = await sendSalesQuotationEmail({
         quotationNumber,
@@ -681,7 +726,8 @@ exports.updateQuotationStatus = async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW()
+      `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW(),
+              accepted_at = CASE WHEN $1 = 'accepted' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END
        WHERE quotation_number = $4`,
       [status, req.user?.user_id, updaterName, quotationNumber]
     );

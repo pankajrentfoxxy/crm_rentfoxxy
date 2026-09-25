@@ -24,8 +24,21 @@ const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
 const InvoiceRecordPage = React.lazy(() => import('../features/carret/InvoiceRecordPage'));
 const AgeingPage = React.lazy(() => import('../features/carret/AgeingPage'));
+const QuotationFormPage = React.lazy(() => import('../features/carret/sell/QuotationFormPage'));
+const QuotationRecordPage = React.lazy(() => import('../features/carret/sell/QuotationRecordPage'));
+const SalesOrderFormPage = React.lazy(() => import('../features/carret/sell/SalesOrderFormPage'));
+const SalesOrderRecordPage = React.lazy(() => import('../features/carret/sell/SalesOrderRecordPage'));
 
 export const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
+
+const SO_SECTIONS = ['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement'];
+
+/** Any one of several sections grants the page (the backend's cpAny). */
+const guardAny = (sections, action, node) => (
+  <ProtectedRoute sections={sections} action={action}>
+    <React.Suspense fallback={null}>{node}</React.Suspense>
+  </ProtectedRoute>
+);
 
 const guard = (section, action, node) => (
   <ProtectedRoute section={section} action={action}>
@@ -48,7 +61,14 @@ export const carretRoutes = CARRET_ENABLED
       // Sell (Part 4.5). The RentFoxxy / Gorefurbo split is a filter INSIDE
       // each list (Decision 1), never two branches of the menu.
       { path: '/carret/sell/quotations', element: guard('sales_quotations', 'view', <SellListPage kind="quotations" />) },
-      { path: '/carret/sell/sales-orders', element: guard('sales_orders_doc', 'view', <SellListPage kind="sales-orders" />) },
+      { path: '/carret/sell/quotations/new', element: guard('sales_quotations', 'create', <QuotationFormPage />) },
+      { path: '/carret/sell/quotations/:quotationNumber', element: guard('sales_quotations', 'view', <QuotationRecordPage />) },
+      { path: '/carret/sell/sales-orders', element: guardAny(SO_SECTIONS, 'view', <SellListPage kind="sales-orders" />) },
+      { path: '/carret/sell/sales-orders/new', element: guardAny(SO_SECTIONS, 'create', <SalesOrderFormPage />) },
+      // SO numbers carry slashes (SO/26-27/0779); links encode them into one
+      // segment and the pages decode the param.
+      { path: '/carret/sell/sales-orders/:soNumber', element: guardAny(SO_SECTIONS, 'view', <SalesOrderRecordPage />) },
+      { path: '/carret/sell/sales-orders/:soNumber/edit', element: guardAny(SO_SECTIONS, 'edit', <SalesOrderFormPage />) },
       { path: '/carret/sell/customers', element: guard('customer_management', 'view', <SellListPage kind="customers" />) },
 
       // Procure & Produce (Part 5.7). Five procurement lists are one component,

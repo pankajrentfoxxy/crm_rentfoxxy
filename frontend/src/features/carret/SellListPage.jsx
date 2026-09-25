@@ -1,8 +1,12 @@
 import React, { useState, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented, Tabs,
 } from '../../components/carret';
+import { usePermission } from '../../hooks/usePermission';
+import { SO_SECTIONS } from './sell/sellShared';
 import { ENTITIES } from '../../config/entities';
 import { useSellList } from './useSell';
 
@@ -21,18 +25,25 @@ import { useSellList } from './useSell';
  * The sale book's label comes from config/entities.js — the brand name is not
  * settled, and renaming it must cost one string rather than a repaint.
  */
+const typeLabel = (t) => ({ sale: 'Sale', sales: 'Sale', rental: 'Rental', demo: 'Demo' }[String(t || '').toLowerCase()] || t || '—');
+
 const RESOURCES = {
   quotations: {
     title: 'Quotations',
     subtitle: 'Quotations across both books, from raised to accepted.',
     resource: 'quotations',
-    statuses: ['pending', 'sent', 'accepted', 'approved', 'rejected'],
-    columns: (nav) => [
+    tabs: [
+      { key: '', label: 'All' }, { key: 'pending', label: 'Draft' }, { key: 'sent', label: 'Sent' },
+      { key: 'approved', label: 'Approved' }, { key: 'accepted', label: 'Accepted' }, { key: 'rejected', label: 'Rejected' },
+    ],
+    create: { label: 'New quotation', to: '/carret/sell/quotations/new', section: ['sales_quotations'] },
+    open: (r) => `/carret/sell/quotations/${encodeURIComponent(r.quotation_number)}`,
+    columns: () => [
       { key: 'quotation_number', header: 'Quotation', render: (r) => <DocNumber value={r.quotation_number} /> },
-      { key: 'customer_name', header: 'Customer' },
-      { key: 'quotation_type', header: 'Type' },
-      { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
-      { key: 'total', header: 'Value', numeric: true, render: (r) => <Money value={r.total || r.grand_total} showZero={false} /> },
+      { key: 'customer_name', header: 'Customer', render: (r) => r.company_name || r.customer_name, sub: (r) => r.contact_name || null },
+      { key: 'quotation_type', header: 'Type', render: (r) => typeLabel(r.quotation_type) },
+      { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status === 'pending' ? 'draft' : r.status} /> },
+      { key: 'total', header: 'Value', numeric: true, render: (r) => <Money value={r.total_value} showZero={false} /> },
       { key: 'created_at', header: 'Raised', render: (r) => <DateTime value={r.created_at} /> },
     ],
   },
@@ -40,7 +51,12 @@ const RESOURCES = {
     title: 'Sales Orders',
     subtitle: 'Confirmed orders, and the quotation each one came from.',
     resource: 'sales-orders',
-    statuses: ['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled'],
+    tabs: [
+      { key: '', label: 'All' }, { key: 'pending', label: 'Open' }, { key: 'dispatched', label: 'Dispatched' },
+      { key: 'delivered', label: 'Delivered' }, { key: 'cancelled', label: 'Cancelled' },
+    ],
+    create: { label: 'New sales order', to: '/carret/sell/sales-orders/new', section: SO_SECTIONS },
+    open: (r) => `/carret/sell/sales-orders/${encodeURIComponent(r.sales_order_number)}`,
     columns: () => [
       { key: 'sales_order_number', header: 'Order', render: (r) => <DocNumber value={r.sales_order_number} /> },
       { key: 'customer_name', header: 'Customer' },
@@ -54,8 +70,14 @@ const RESOURCES = {
           ? <DocNumber value={r.quotation_number} />
           : <span className="text-ink-3 font-ui">no quotation</span>),
       },
-      { key: 'quotation_type', header: 'Type' },
-      { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
+      { key: 'quotation_type', header: 'Type', render: (r) => (r.is_replacement_order ? 'Replacement' : typeLabel(r.quotation_type)) },
+      {
+        key: 'progress',
+        header: 'Laptops',
+        render: (r) => `${r.delivered_count || 0} delivered · ${r.attached_count || 0} attached of ${r.laptop_qty || 0}`,
+      },
+      { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status === 'pending' ? 'confirmed' : r.status} /> },
+      { key: 'total', header: 'Value', numeric: true, render: (r) => <Money value={r.total_value} showZero={false} /> },
       { key: 'created_at', header: 'Raised', render: (r) => <DateTime value={r.created_at} /> },
     ],
   },
@@ -63,12 +85,12 @@ const RESOURCES = {
     title: 'Customers',
     subtitle: 'B2B accounts with GST registration and contact details.',
     resource: 'customers',
-    statuses: [],
+    tabs: [],
     columns: () => [
       { key: 'customer_name', header: 'Customer', sub: (r) => (r.customer_id ? `#${r.customer_id}` : null) },
       { key: 'gst_number', header: 'GSTIN', render: (r) => (r.gst_number ? <DocNumber value={r.gst_number} /> : '—') },
-      { key: 'customer_email', header: 'Email' },
-      { key: 'customer_mobile', header: 'Phone' },
+      { key: 'email', header: 'Email' },
+      { key: 'phone', header: 'Phone' },
       { key: 'created_at', header: 'Onboarded', render: (r) => <DateTime value={r.created_at} /> },
     ],
   },
@@ -76,29 +98,28 @@ const RESOURCES = {
 
 export default function SellListPage({ kind = 'sales-orders' }) {
   const config = RESOURCES[kind] || RESOURCES['sales-orders'];
+  const navigate = useNavigate();
+  const { hasPermission } = usePermission();
   const [entity, setEntity] = useState('');
   const [filters, setFilters] = useState({});
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
 
-  const { loading, error, rows, total } = useSellList(config.resource, {
+  const { loading, error, rows, total, pages } = useSellList(config.resource, {
     entity,
-    status: filters.status || '',
+    status,
     search: filters.search || '',
+    page,
   });
 
-  const onFilter = useCallback((k, v) => setFilters((f) => ({ ...f, [k]: v })), []);
-  const onClear = useCallback(() => { setFilters({}); setEntity(''); }, []);
+  const onFilter = useCallback((k, v) => { setFilters((f) => ({ ...f, [k]: v })); setPage(1); }, []);
+  const onClear = useCallback(() => { setFilters({}); setEntity(''); setStatus(''); setPage(1); }, []);
+  const canCreate = config.create && config.create.section.some((s) => hasPermission(s, 'create'));
 
-  const filterDefs = useMemo(() => {
-    const defs = [{ key: 'search', label: 'Search', type: 'search', placeholder: 'Number or customer' }];
-    if (config.statuses.length) {
-      defs.push({
-        key: 'status',
-        label: 'Status',
-        options: config.statuses.map((s) => ({ value: s, label: s.replace(/_/g, ' ') })),
-      });
-    }
-    return defs;
-  }, [config.statuses]);
+  const filterDefs = useMemo(
+    () => [{ key: 'search', label: 'Search', type: 'search', placeholder: 'Number or customer' }],
+    []
+  );
 
   const columns = useMemo(() => config.columns(), [config]);
 
@@ -107,6 +128,11 @@ export default function SellListPage({ kind = 'sales-orders' }) {
       title={config.title}
       breadcrumb="Sell"
       subtitle={config.subtitle}
+      actions={canCreate && (
+        <Button variant="primary" onClick={() => navigate(config.create.to)}>
+          <Plus size={16} aria-hidden="true" /> {config.create.label}
+        </Button>
+      )}
     >
       <div style={{ display: 'grid', gap: '16px' }}>
         {/* The books, side by side. Decision 1: a filter inside Sell, never two
@@ -116,7 +142,7 @@ export default function SellListPage({ kind = 'sales-orders' }) {
           <Segmented
             label="Book"
             value={entity}
-            onChange={setEntity}
+            onChange={(v) => { setEntity(v); setPage(1); }}
             options={[
               { value: '', label: 'Both' },
               ...Object.values(ENTITIES).map((e) => ({
@@ -136,13 +162,18 @@ export default function SellListPage({ kind = 'sales-orders' }) {
         <Panel
           entity={Object.values(ENTITIES).find((e) => e.code === entity)?.key}
           toolbar={(
+            <>
+            {config.tabs.length > 0 && (
+              <Tabs tabs={config.tabs} value={status} onChange={(v) => { setStatus(v); setPage(1); }} />
+            )}
             <FilterBar
               filters={filterDefs}
               values={filters}
               onChange={onFilter}
               onClear={onClear}
-              count={`${total} shown`}
+              count={`${total} ${config.title.toLowerCase()}`}
             />
+            </>
           )}
         >
           {loading && <EmptyState title="Loading…" />}
@@ -152,12 +183,20 @@ export default function SellListPage({ kind = 'sales-orders' }) {
               columns={columns}
               rows={rows}
               rowKey={(r, i) => r.quotation_number || r.sales_order_number || r.customer_id || i}
+              onRowClick={config.open ? (r) => navigate(config.open(r)) : undefined}
               empty={<EmptyState
                 title={`No ${config.title.toLowerCase()} match`}
                 body="Filters combine, so clearing one at a time will show what is excluding them."
                 action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
               />}
             />
+          )}
+          {pages > 1 && (
+            <div className="c-toolbar" style={{ borderTop: '1px solid var(--rule)', borderBottom: 0 }}>
+              <Button variant="quiet" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+              <span className="font-ui text-ink-3">Page {page} of {pages}</span>
+              <Button variant="quiet" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            </div>
           )}
         </Panel>
       </div>

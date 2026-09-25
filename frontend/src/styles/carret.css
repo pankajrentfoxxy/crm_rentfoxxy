@@ -327,3 +327,67 @@
   .c-top{ padding:8px 16px }
   .c-content{ padding:16px 16px 48px }
 }
+
+/* =====================================================================
+   FORMS AND RECORDS — components/carret/Form.jsx
+   ===================================================================== */
+.c-field{ display:flex; flex-direction:column; gap:6px; min-width:0 }
+.c-label{ font-size:13px; font-weight:500; color:var(--ink-2) }
+.c-req{ color:var(--alert-crit) }
+.c-note{ font-size:12.5px; color:var(--ink-3) }
+.c-note.is-error{ color:var(--alert-crit) }
+.c-input[aria-invalid="true"]{ border-color:var(--alert-crit) }
+.c-select-full{ cursor:pointer }
+.c-textarea{ height:auto; padding:8px 12px; resize:vertical; line-height:1.45 }
+.c-input:disabled, .c-input[readonly]{ background:var(--surface-2); color:var(--ink-3) }
+.c-check{ display:inline-flex; align-items:center; gap:8px; font-size:var(--d-base); color:var(--ink-2); cursor:pointer; min-height:var(--d-tap) }
+.c-check input{ width:16px; height:16px; accent-color:var(--accent) }
+.c-form-grid{ display:grid; grid-template-columns:repeat(var(--c-cols,3), minmax(0,1fr)); gap:14px 16px }
+.c-kv{ display:grid; grid-template-columns:repeat(var(--c-cols,3), minmax(0,1fr)); gap:14px 16px; margin:0 }
+.c-kv dt{ font-size:13px; font-weight:500; color:var(--ink-3) }
+.c-kv dd{ margin:2px 0 0; font-size:var(--d-base); color:var(--ink); overflow-wrap:anywhere }
+.c-notice{ display:flex; gap:10px; align-items:flex-start; padding:10px 14px; border-radius:var(--d-radius); border:1px solid var(--rule-2); background:var(--surface-2); font-size:var(--d-base); color:var(--ink-2) }
+.c-notice-g{ flex:none; width:20px; height:20px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:700; color:var(--ink-inverse); background:var(--ink-3) }
+.c-notice-t{ font-weight:600; color:var(--ink) }
+.c-notice-b{ margin-top:2px }
+.c-notice.is-good{ border-color:var(--alert-good) } .c-notice.is-good .c-notice-g{ background:var(--alert-good) }
+.c-notice.is-warn{ border-color:var(--alert-warn) } .c-notice.is-warn .c-notice-g{ background:var(--alert-warn) }
+.c-notice.is-serious{ border-color:var(--alert-serious) } .c-notice.is-serious .c-notice-g{ background:var(--alert-serious) }
+.c-notice.is-crit{ border-color:var(--alert-crit); background:var(--alert-crit-soft) } .c-notice.is-crit .c-notice-g{ background:var(--alert-crit) }
+.c-notice.is-info{ border-color:var(--accent-line) } .c-notice.is-info .c-notice-g{ background:var(--accent) }
+.c-tabs{ display:flex; gap:2px; border-bottom:1px solid var(--rule); overflow-x:auto; scrollbar-width:thin }
+.c-tabs button{ border:0; background:none; padding:10px 14px; font:inherit; font-size:var(--d-base); color:var(--ink-3); cursor:pointer; white-space:nowrap; border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; gap:8px; align-items:center }
+.c-tabs button:hover{ color:var(--ink) }
+.c-tabs button.is-on{ color:var(--ink); font-weight:600; border-bottom-color:var(--accent) }
+.c-tab-count{ font-family:var(--font-mono); font-size:12px; padding:1px 7px; border-radius:10px; background:var(--surface-3); color:var(--ink-2) }
+.c-flow{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:8px }
+.c-flow-b{ width:100%; display:flex; gap:10px; align-items:flex-start; text-align:left; padding:10px 12px; border-radius:var(--d-radius); border:1px solid var(--rule); background:var(--surface); font:inherit; cursor:pointer; color:var(--ink-3) }
+.c-flow-b:disabled{ cursor:default }
+.c-flow-g{ flex:none; width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:700; border:1.5px solid var(--rule-2); color:var(--ink-3) }
+.c-flow-l{ display:block; font-size:13.5px; font-weight:600 }
+.c-flow-s{ display:block; font-size:12px; color:var(--ink-3); font-family:var(--font-mono); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.c-flow .is-done .c-flow-b{ color:var(--ink-2) }
+.c-flow .is-done .c-flow-g{ background:var(--alert-good); border-color:var(--alert-good); color:var(--ink-inverse) }
+.c-flow .is-current .c-flow-b{ border-color:var(--accent); background:var(--accent-soft); color:var(--ink) }
+.c-flow .is-current .c-flow-g{ border-color:var(--accent); color:var(--accent) }
+.c-flow .is-blocked .c-flow-b{ border-color:var(--alert-crit); background:var(--alert-crit-soft); color:var(--ink) }
+.c-flow .is-blocked .c-flow-g{ border-color:var(--alert-crit); color:var(--alert-crit) }
+.c-stack{ display:grid; gap:16px; min-width:0 }
+.c-split{ display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; align-items:start }
+@media (max-width:1100px){ .c-split{ grid-template-columns:minmax(0,1fr) } }
+@media (max-width:760px){
+  .c-form-grid, .c-kv{ grid-template-columns:minmax(0,1fr) }
+  .c-form-grid > .c-field{ grid-column:auto !important }
+}
+.c-line{ border:1px solid var(--rule); border-radius:var(--d-radius-lg); padding:14px 16px; background:var(--surface) }
+.c-line-h{ display:flex; align-items:center; gap:12px; margin-bottom:12px; min-width:0 }
+.c-line-n{ font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); flex:none }
+.c-line-cfg{ font-size:var(--d-base); color:var(--ink); font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.c-line-amt{ margin-left:auto; font-family:var(--font-mono); color:var(--ink); flex:none }
+.c-totals{ display:grid; gap:6px; font-size:var(--d-base) }
+.c-totals div{ display:flex; justify-content:space-between; gap:12px; color:var(--ink-2) }
+.c-totals div span:last-child{ font-family:var(--font-mono); color:var(--ink) }
+.c-totals .is-grand{ border-top:1px solid var(--rule); padding-top:8px; margin-top:4px; font-weight:600; color:var(--ink) }
+.c-addr{ font-size:var(--d-base); color:var(--ink-2); line-height:1.5 }
+.c-addr b{ color:var(--ink); font-weight:600 }
+.c-actions-bar{ position:sticky; bottom:0; z-index:5; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; padding:12px 16px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--d-radius-lg); box-shadow:var(--shadow-lg) }
