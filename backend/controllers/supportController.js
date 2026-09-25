@@ -5758,20 +5758,22 @@ exports.createServiceDc = async (req, res) => {
             dispatch: req.body || {},
             actor: req.user,
         });
-        const pickupItemId = result.item_ids?.[0] || null;
-        await logAudit(client, {
-            itemId: pickupItemId,
-            ticketId,
-            userId: req.user.user_id,
-            action: 'service_dc_created',
-            detail: {
-                service_dc_number: result.sdcNumber,
-                sales_order_number: result.sales_order_number,
-                original_dc_number: result.original_dc_number,
-                item_ids: result.item_ids,
-                dispatch_mode: result.dispatch_mode,
-            },
-        });
+        // One SDC per original sales order — audit each separately.
+        for (const sdc of result.service_dcs || [result]) {
+            await logAudit(client, {
+                itemId: sdc.item_ids?.[0] || null,
+                ticketId,
+                userId: req.user.user_id,
+                action: 'service_dc_created',
+                detail: {
+                    service_dc_number: sdc.sdcNumber,
+                    sales_order_number: sdc.sales_order_number,
+                    original_dc_number: sdc.original_dc_number,
+                    item_ids: sdc.item_ids,
+                    dispatch_mode: sdc.dispatch_mode,
+                },
+            });
+        }
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
     } catch (e) {
@@ -5781,10 +5783,13 @@ exports.createServiceDc = async (req, res) => {
     } finally {
         client.release();
     }
-    try {
-        await regenerateServiceDcPdfByNumber(pool, result.sdcNumber);
-    } catch (pdfErr) {
-        console.error('[support] service DC pdf:', pdfErr.message);
+    const sdcNumbers = (result.service_dcs || [result]).map((sdc) => sdc.sdcNumber);
+    for (const sdcNumber of sdcNumbers) {
+        try {
+            await regenerateServiceDcPdfByNumber(pool, sdcNumber);
+        } catch (pdfErr) {
+            console.error('[support] service DC pdf:', sdcNumber, pdfErr.message);
+        }
     }
 
     // The E-Way Bill request is NOT sent from here. Dispatch raise it themselves
@@ -5794,8 +5799,11 @@ exports.createServiceDc = async (req, res) => {
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,
-        message: 'Service Delivery Challan created',
+        message: sdcNumbers.length > 1
+            ? `${sdcNumbers.length} Service Delivery Challans created (one per sales order)`
+            : 'Service Delivery Challan created',
         service_dc_number: result.sdcNumber,
+        service_dc_numbers: sdcNumbers,
         ...data,
     });
 };

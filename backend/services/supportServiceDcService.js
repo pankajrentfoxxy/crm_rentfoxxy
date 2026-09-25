@@ -423,12 +423,23 @@ async function getServiceDcContext(db, ticketId) {
   const extras = await loadSdcTrackingExtras(db, sdcRes.rows.map((r) => r.dc_number));
   const serviceDcs = sdcRes.rows.map((row) => buildSdcTracking(row, extras.get(row.dc_number) || {}));
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, items[0]?.item || null);
+  const origins = [];
+  for (const row of items) {
+    origins.push(await resolveUnitOrigin(db, ticket, row.item, deliveryDefaults || {}));
+  }
   return {
     ticket_id: ticket.id,
-    eligible_items: items.map((row) => ({
+    eligible_items: items.map((row, idx) => ({
       id: row.item.id,
       ttspl_id: row.item.ttspl_id || row.item.unique_serial_number,
       serial_number: row.item.serial_number,
+      brand: row.item.brand || null,
+      model: row.item.model || null,
+      ram: row.item.ram || null,
+      storage: row.item.storage || null,
+      sales_order_number: origins[idx].salesOrderNumber,
+      original_dc_number: origins[idx].originalDcNumber,
+      so_source: origins[idx].source,
       eligible: row.eligible,
       reasons: row.reasons,
       inventory_status: row.serial?.inventory_status || null,
@@ -443,32 +454,85 @@ async function getServiceDcContext(db, ticketId) {
   };
 }
 
-async function resolveOriginalReferences(db, ticket, items, deliveryDefaults) {
-  let originalDcNumber = deliveryDefaults.original_dc_number || ticket.dc_number || null;
-  let salesOrderNumber = deliveryDefaults.sales_order_number || ticket.sales_order_number || null;
-  for (const row of items) {
-    const code = row.item.ttspl_id || row.item.unique_serial_number || row.item.serial_number;
-    if (!code) continue;
+/**
+ * The sales order and outbound DC one unit was shipped to this customer on.
+ *
+ * Resolved per unit, not per ticket: a repair ticket can carry laptops from
+ * different sales orders, and the ticket's own sales_order_number is simply the
+ * first one it was linked to. Ticket 3510 picked up TTSPL4019 (SO-001449) and
+ * TTSPL4515 (SO-003050), and the old ticket-first lookup put both on SO-001449.
+ * The ticket/delivery defaults are only a fallback for a unit with no outbound DC.
+ *
+ * A previous SDC counts as the unit's last shipment (it carries the SO), but its
+ * original_dc_number is reported so the chain points at the real outbound DC.
+ * An exact asset-code token in the serial list outranks a substring hit, so
+ * TTSPL6186 does not resolve to TTSPL6186_A's DC.
+ */
+async function resolveUnitOrigin(db, ticket, item, deliveryDefaults = {}) {
+  const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+  if (code) {
     const outRes = await db.query(
-      `SELECT dc_number, sales_order_number
+      `SELECT dc_number, sales_order_number, dc_purpose, original_dc_number
          FROM delivery_challan_lines
         WHERE movement_type = 'outbound'
           AND COALESCE(dc_purpose, 'standard') NOT IN ('replacement')
+          AND COALESCE(status, '') <> 'cancelled'
           AND customer_id = $1
+          AND sales_order_number IS NOT NULL
           AND serial_number::text ILIKE '%' || $2 || '%'
-        ORDER BY created_at DESC NULLS LAST
+        ORDER BY
+          CASE WHEN serial_number::text ~ ('[|"]' || $3 || '"') THEN 0 ELSE 1 END,
+          created_at DESC NULLS LAST
         LIMIT 1`,
-      [ticket.customer_id, code]
+      [ticket.customer_id, code, code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')]
     );
-    if (outRes.rows.length) {
-      originalDcNumber = originalDcNumber || outRes.rows[0].dc_number || null;
-      salesOrderNumber = salesOrderNumber || outRes.rows[0].sales_order_number || null;
+    const hit = outRes.rows[0];
+    if (hit) {
+      return {
+        salesOrderNumber: hit.sales_order_number,
+        originalDcNumber: hit.dc_purpose === DC_PURPOSE
+          ? (hit.original_dc_number || hit.dc_number)
+          : hit.dc_number,
+        source: 'unit_dc',
+      };
     }
   }
-  if (!salesOrderNumber) {
-    throw Object.assign(new Error('Original sales order not found for this unit — cannot create Service DC without SO reference'), { status: 400 });
+  return {
+    salesOrderNumber: deliveryDefaults.sales_order_number || ticket.sales_order_number || null,
+    originalDcNumber: deliveryDefaults.original_dc_number || ticket.dc_number || null,
+    source: 'ticket',
+  };
+}
+
+/**
+ * Group eligible units by the sales order each was shipped on — one SDC per
+ * group. A ticket whose units all share one SO yields a single group, exactly
+ * as before.
+ */
+async function groupSelectedBySalesOrder(db, ticket, selected, deliveryDefaults) {
+  const groups = new Map();
+  for (const row of selected) {
+    const origin = await resolveUnitOrigin(db, ticket, row.item, deliveryDefaults);
+    if (!origin.salesOrderNumber) {
+      const code = row.item.ttspl_id || row.item.unique_serial_number || row.item.serial_number;
+      throw Object.assign(
+        new Error(`Original sales order not found for ${code || `item ${row.item.id}`} — cannot create Service DC without SO reference`),
+        { status: 400 }
+      );
+    }
+    const key = origin.salesOrderNumber.trim().toUpperCase();
+    if (!groups.has(key)) {
+      groups.set(key, {
+        salesOrderNumber: origin.salesOrderNumber,
+        originalDcNumber: origin.originalDcNumber,
+        rows: [],
+      });
+    }
+    const group = groups.get(key);
+    group.originalDcNumber = group.originalDcNumber || origin.originalDcNumber;
+    group.rows.push(row);
   }
-  return { originalDcNumber, salesOrderNumber };
+  return [...groups.values()];
 }
 
 /**
@@ -584,10 +648,56 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   }
 
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, selected[0].item);
-  const { originalDcNumber, salesOrderNumber } = await resolveOriginalReferences(db, ticket, selected, deliveryDefaults);
+  const groups = await groupSelectedBySalesOrder(db, ticket, selected, deliveryDefaults);
   const shippingAddress = await buildShippingAddress(db, ticket, deliveryDefaults, dispatch || {});
-  const dispatchInfo = normalizeDispatch(dispatch || {});
+  const baseDispatch = normalizeDispatch(dispatch || {});
 
+  // One AWB belongs to one consignment. With several SDCs the single AWB field
+  // is not reused across them; per-SO AWBs come in awb_by_so, else dispatch
+  // fills each SDC's AWB from the DC page.
+  const awbBySo = dispatch?.awb_by_so && typeof dispatch.awb_by_so === 'object' ? dispatch.awb_by_so : {};
+  const awbFor = (so) => {
+    const key = Object.keys(awbBySo).find((k) => k.trim().toUpperCase() === so.trim().toUpperCase());
+    const perSo = key ? String(awbBySo[key] || '').trim() : '';
+    if (perSo) return perSo;
+    return groups.length === 1 ? baseDispatch.awbNumber : null;
+  };
+
+  const created = [];
+  for (const group of groups) {
+    created.push(await createServiceDcForGroup(db, {
+      ticket,
+      ticketId,
+      rows: group.rows,
+      salesOrderNumber: group.salesOrderNumber,
+      originalDcNumber: group.originalDcNumber,
+      shippingAddress,
+      dispatchInfo: {
+        ...baseDispatch,
+        awbNumber: baseDispatch.dispatchMode === 'courier' ? awbFor(group.salesOrderNumber) : null,
+      },
+      actor,
+    }));
+  }
+
+  const first = created[0];
+  return {
+    ...first,
+    item_ids: created.flatMap((c) => c.item_ids),
+    service_dcs: created,
+  };
+}
+
+async function createServiceDcForGroup(db, {
+  ticket,
+  ticketId,
+  rows: selected,
+  salesOrderNumber,
+  originalDcNumber,
+  shippingAddress,
+  dispatchInfo,
+  actor,
+}) {
   const sdcNumber = await nextFinancialYearNumber('service_dc', db);
   const entries = [];
   let firstSpec = {};
@@ -786,6 +896,7 @@ async function deliverServiceDcSerial(db, {
   customerId,
   entityCode,
   dispatchMode,
+  txnType = 'rental',
   actor,
 }) {
   const sr = await db.query(
@@ -807,6 +918,22 @@ async function deliverServiceDcSerial(db, {
         WHERE id = $1`,
       [pickupItem.customer_inventory_id]
     );
+  }
+
+  // A unit sold on its original SO goes back to the customer as sold; it was
+  // previously always forced to rented, which started rent on a sold laptop.
+  if (txnType === 'sale') {
+    await inventorySM.markDelivered(db, serialId, {
+      quotationType: 'sale',
+      dcNumber,
+      customerId,
+      entityCode,
+      dispatchMode: dispatchMode || 'inhouse',
+      deliveredAt: new Date(),
+      actorUserId: actor?.user_id,
+      actorName: actor?.name,
+    });
+    return { delivered: true, billingBranch: 'sale_no_rent' };
   }
 
   if (billing.rentPaused) {
@@ -914,7 +1041,8 @@ async function collectSerialIdsFromSdc(db, dcNumber) {
 
 async function onServiceDcDelivered(db, dcNumber, actor = {}) {
   const meta = await db.query(
-    `SELECT dc_purpose, support_ticket_id, dispatch_mode, entity_code, customer_id
+    `SELECT dc_purpose, support_ticket_id, dispatch_mode, entity_code, customer_id,
+            sales_order_number, original_dc_number
        FROM delivery_challan_lines
       WHERE dc_number = $1 AND movement_type = 'outbound'
       LIMIT 1`,
@@ -925,16 +1053,27 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
 
   const serialIds = await collectSerialIdsFromSdc(db, dcNumber);
   const billingLog = [];
+  const txnType = await resolveTxnTypeForDc(db, {
+    salesOrderNumber: row.sales_order_number,
+    originalDcNumber: row.original_dc_number,
+  });
 
   for (const serialId of serialIds) {
+    // Each serial's own pickup item — this used to take the first item on the
+    // SDC for every serial, so a second unit's customer_inventory row was never
+    // re-activated.
     const itemRes = await db.query(
       `SELECT sti.*
          FROM support_ticket_items sti
+         JOIN vendor_serial_numbers vsn ON vsn.serial_id = $2
         WHERE sti.service_dc_number = $1
           AND sti.item_type = 'pickup'
-        ORDER BY sti.id ASC
+        ORDER BY
+          CASE WHEN COALESCE(sti.ttspl_id, sti.unique_serial_number) = vsn.inventory_asset_code
+                 OR sti.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+          sti.id ASC
         LIMIT 1`,
-      [dcNumber]
+      [dcNumber, serialId]
     );
     const pickupItem = itemRes.rows[0];
     if (!pickupItem) continue;
@@ -945,6 +1084,7 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
       customerId: row.customer_id,
       entityCode: row.entity_code || 'rentfoxxy',
       dispatchMode: row.dispatch_mode,
+      txnType,
       actor,
     });
     if (result.billingBranch) billingLog.push({ serialId, branch: result.billingBranch });
