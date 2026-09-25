@@ -1189,7 +1189,15 @@ async function loadDocument(db, docType, docNumber, preferredDirection) {
   }
   if (docType === 'so') return loadSalesOrder(db, docNumber);
   if (docType === 'rdc') return loadReturnDc(db, docNumber);
-  if (docType === 'sdc') return loadServiceDc(db, docNumber);
+  if (docType === 'sdc') {
+    // A refused Service DC comes back through the gate like any refused DC;
+    // without this the guard could never scan it INWARD (SDC/26-27/0015).
+    if (preferredDirection === 'inward') {
+      const refused = await loadRefusedDeliveryReturn(db, docNumber);
+      if (refused) return refused;
+    }
+    return loadServiceDc(db, docNumber);
+  }
   if (docType === 'vrdc') return loadVendorRepairDc(db, docNumber, preferredDirection);
   if (docType === 'vrdc_receive') return loadVendorRepairReceiveDc(db, docNumber);
   if (docType === 'vrtdc') return loadVendorReturnToVendorDc(db, docNumber);
@@ -2049,7 +2057,7 @@ async function resolveScan({ direction, scan, user }) {
   }
 
   if (
-    ctx.reference_type === 'dc'
+    ['dc', 'sdc'].includes(ctx.reference_type)
     && ctx.active === false
     && ctx.statuses?.every((s) => s === 'rejected')
   ) {
