@@ -204,21 +204,20 @@ async function markDcDeliveredFromTracking(dcNumber, shipment) {
       // is given the courier's real scan time. What stays here is BlueDart's
       // own tracking detail, which is nobody else's business.
       `UPDATE delivery_challan_lines
-          SET courier_tracking_status = $3,
-              courier_tracking_status_type = $4,
+          SET courier_tracking_status = $2,
+              courier_tracking_status_type = $3,
               courier_tracking_synced_at = NOW(),
-              courier_received_by = COALESCE($5, courier_received_by),
+              courier_received_by = COALESCE($4, courier_received_by),
               delivery_notes = CASE
-                WHEN delivery_notes IS NULL OR TRIM(delivery_notes) = '' THEN $6
-                ELSE delivery_notes || E'\n' || $6
+                WHEN delivery_notes IS NULL OR TRIM(delivery_notes) = '' THEN $5
+                ELSE delivery_notes || E'\n' || $5
               END,
               updated_at = NOW()
         WHERE dc_number = $1
-          AND NOT (COALESCE(status, '') = ANY($7::text[]))
+          AND NOT (COALESCE(status, '') = ANY($6::text[]))
         RETURNING id`,
       [
         dcNumber,
-        deliveredAt.toISOString(),
         shipment.status || null,
         shipment.status_type || null,
         receivedBy,

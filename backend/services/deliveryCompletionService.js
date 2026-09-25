@@ -131,15 +131,17 @@ async function completeDelivery(client, {
 
   // V8: only one of the five paths took a row lock, so two concurrent
   // submissions could both finalise inventory and both raise an invoice.
+  // Postgres refuses FOR UPDATE with DISTINCT, so lock every line and
+  // de-duplicate the statuses here.
   const state = await client.query(
-    `SELECT DISTINCT LOWER(COALESCE(status, '')) AS status
+    `SELECT LOWER(COALESCE(status, '')) AS status
        FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE`,
     [dcNumber]
   );
   if (!state.rows.length) {
     return { ok: false, statusCode: 404, message: 'Delivery challan not found' };
   }
-  const states = state.rows.map((r) => r.status);
+  const states = [...new Set(state.rows.map((r) => r.status))];
   if (states.includes('cancelled')) {
     return { ok: false, statusCode: 409, message: 'This delivery challan is cancelled and cannot be delivered.' };
   }
