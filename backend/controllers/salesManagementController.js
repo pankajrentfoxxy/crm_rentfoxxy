@@ -726,8 +726,8 @@ exports.updateQuotationStatus = async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW(),
-              accepted_at = CASE WHEN $1 = 'accepted' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END
+      `UPDATE sales_quotations SET status = $1::text, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW(),
+              accepted_at = CASE WHEN $1::text = 'accepted' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END
        WHERE quotation_number = $4`,
       [status, req.user?.user_id, updaterName, quotationNumber]
     );
@@ -4280,6 +4280,7 @@ exports.submitDeliveryRegister = async (req, res) => {
       client.release();
     }
   } catch (error) {
+    if (respondIfRefused(error, res)) return;
     console.error('submitDeliveryRegister:', error);
     res.status(500).json({ success: false, message: error.message });
   }
@@ -5349,7 +5350,8 @@ exports.regenerateDcPdf = async (req, res) => {
     if (!pdf) return res.status(404).json({ success: false, message: 'DC not found' });
     res.json({ success: true, pdf_path: pdf });
   } catch (e) {
-    const status = e.message?.includes('E-Invoice must be uploaded') ? 403 : 500;
+    // Both paperwork locks are a refusal the user can act on, not a server fault.
+    const status = /(E-Invoice|E-Way Bill) must be uploaded/.test(e.message || '') ? 403 : 500;
     res.status(status).json({ success: false, message: e.message });
   }
 };

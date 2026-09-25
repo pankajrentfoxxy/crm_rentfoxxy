@@ -20,6 +20,17 @@ function isTransitionRefused(err) {
 }
 
 function respondIfRefused(err, res) {
+  // A delivery without the proof its mode needs (deliveryCompletionService) is
+  // the user's to fix — say what is missing rather than a 500.
+  if (err?.code === 'DELIVERY_PROOF_REJECTED') {
+    res.status(400).json({
+      success: false,
+      code: 'DELIVERY_PROOF_REJECTED',
+      message: err.message,
+      detail: { mode: err.mode, missing: err.missing || [] },
+    });
+    return true;
+  }
   if (!isTransitionRefused(err)) return false;
 
   // Error level, not warn: a refusal reaching a user means a screen offered an

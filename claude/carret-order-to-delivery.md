@@ -60,14 +60,22 @@ API base unless noted: `/api/sales-management` (FE: `features/sales-pipeline/sal
 
 - [x] Quotation form burned a number per open (peek now) — 25 Sep
 - [x] accepted_at not set by staff accept; rejected quote re-openable via email link — 25 Sep
-- [ ] SO form lists `approved` quotes but backend needs `accepted`; "Create SO" drops `fromQuote`
-- [ ] Quotation validity/terms/remarks and SO advance_* are not persisted (no columns)
-- [ ] `attachSerial` early returns after BEGIN with no ROLLBACK (lock held)
-- [ ] Carret `useChallans` reads the wrong response keys (list always empty); `movement_type` ignored
-- [ ] Porter DCs refused at gate with AWB_MISSING (porter uses porter_tracking_id)
-- [ ] Gate confirm: refusal event lost to ROLLBACK; controller turns refusal into a 500
-- [ ] DC detail "Mark Delivered" / "Verify & Deliver" send no POD → ProofRejected → 500
+- [x] SO form listed `approved` quotes but backend needs `accepted` — Carret form lists accepted (old form unchanged)
+- [ ] Quotation validity/terms/remarks and SO advance_* are not persisted (no columns) — Carret forms do not offer them
+- [x] `attachSerial` early returns after BEGIN with no ROLLBACK — fixed + test 25 Sep
+- [x] Carret `useChallans` read the wrong keys — fixed; returns read /return-dc
+- [x] Porter DCs refused at gate with AWB_MISSING — porter_tracking_id accepted, test 25 Sep
+- [x] Gate confirm refusal: event re-recorded after ROLLBACK, 409 with failures — 25 Sep
+- [x] ProofRejected now answers 400 with what is missing; Carret never calls PATCH /delivered without proof
 - [ ] Hardened OTP service (deliveryOtpService, migration 261) is not wired to any path
 - [ ] Register POD upload (`/delivery-register-management/:dc/pod`) bypasses completeDelivery
-- [ ] BlueDart auto-delivery sends no customer WhatsApp / no PDF regen
+- [x] BlueDart auto-delivery now sends the delivered WhatsApp (no PDF regen yet)
 - [ ] Technician portal dashboard filters legacy status='pending'
+- [x] Accept via PATCH status 500'd (`inconsistent types deduced for parameter $1`) — cast, DB test, 25 Sep
+- [x] Challan PDF e-way lock answered 500 — now 403 with the reason
+
+## Carret screens (built 25 Sep 2026)
+
+/carret/sell/quotations (+/new, /:qn) · /carret/sell/sales-orders (+/new, /:so, /:so/edit) ·
+/carret/move/challans (+/new?so=, /:dc) · /carret/move/gate (?dc=) · /carret/move/deliveries ·
+/carret/move/my-deliveries · /carret/move/tracking. Old screens under "Old view" in the menu.

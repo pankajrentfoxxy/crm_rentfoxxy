@@ -28,6 +28,11 @@ const QuotationFormPage = React.lazy(() => import('../features/carret/sell/Quota
 const QuotationRecordPage = React.lazy(() => import('../features/carret/sell/QuotationRecordPage'));
 const SalesOrderFormPage = React.lazy(() => import('../features/carret/sell/SalesOrderFormPage'));
 const SalesOrderRecordPage = React.lazy(() => import('../features/carret/sell/SalesOrderRecordPage'));
+const ChallanCreatePage = React.lazy(() => import('../features/carret/move/ChallanCreatePage'));
+const ChallanRecordPage = React.lazy(() => import('../features/carret/move/ChallanRecordPage'));
+const DeliveryRegisterPage = React.lazy(() => import('../features/carret/move/DeliveryRegisterPage'));
+const MyDeliveriesPage = React.lazy(() => import('../features/carret/move/MyDeliveriesPage'));
+const CourierTrackingPage = React.lazy(() => import('../features/carret/move/CourierTrackingPage'));
 
 export const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
 
@@ -56,6 +61,11 @@ export const carretRoutes = CARRET_ENABLED
       // so it gets the floor-density shell rather than a cut-down desk page.
       { path: '/carret/move/gate', element: guard('guard_gate_checking', 'view', <GuardGatePage />) },
       { path: '/carret/move/challans', element: guard('delivery_challans', 'view', <ChallansPage movement="outbound" />) },
+      { path: '/carret/move/challans/new', element: guardAny([...SO_SECTIONS, 'delivery_challans'], 'create', <ChallanCreatePage />) },
+      { path: '/carret/move/challans/:dcNumber', element: guardAny([...SO_SECTIONS, 'delivery_challans'], 'view', <ChallanRecordPage />) },
+      { path: '/carret/move/deliveries', element: guardAny(['delivery_register_management', 'technician_bucket'], 'view', <DeliveryRegisterPage />) },
+      { path: '/carret/move/my-deliveries', element: guardAny(['technician_bucket', 'delivery_my_deliveries'], 'view', <MyDeliveriesPage />) },
+      { path: '/carret/move/tracking', element: guard('bluedart_awb_tracking', 'view', <CourierTrackingPage />) },
       { path: '/carret/move/return-challans', element: guard('return_dc', 'view', <ChallansPage movement="return" />) },
 
       // Sell (Part 4.5). The RentFoxxy / Gorefurbo split is a filter INSIDE

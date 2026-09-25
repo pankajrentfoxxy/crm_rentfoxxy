@@ -64,7 +64,7 @@ exports.confirm = async (req, res) => {
       remarks: req.body?.remarks || null,
       user: actorFromReq(req),
     });
-    const status = result.ok ? 200 : 400;
+    const status = result.ok ? 200 : (result.refused ? 409 : 400);
     return res.status(status).json({ success: Boolean(result.ok), ...result });
   } catch (err) {
     console.error('guardGate.confirm', err);

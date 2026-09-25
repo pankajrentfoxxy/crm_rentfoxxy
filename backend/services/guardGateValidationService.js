@@ -2841,6 +2841,38 @@ async function confirmSession({ sessionId, remarks, user }) {
     };
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+    if (err?.code === 'GATE_REFUSED') {
+      // The pre-flight wrote its gate_refused event inside this transaction,
+      // so the ROLLBACK above erased it. Write it again outside, where it
+      // survives: a refusal nobody can see afterwards is the defect Part 3.2
+      // exists to fix. Then answer the guard with what failed, not a 500.
+      try {
+        const { recordEvent, ENTITY } = require('./eventService');
+        await recordEvent(pool, {
+          entityType: ENTITY.DC,
+          entityId: err.dcNumber,
+          entityRef: err.dcNumber,
+          eventType: 'gate_refused',
+          payload: {
+            failures: (err.failures || []).map((f) => ({ code: f.code, message: f.message, detail: f.detail })),
+            checked: ['challan_state', 'dispatch_qc', 'eway_bill', 'awb'],
+            session_id: sessionId,
+          },
+          source: 'guardGateValidationService.confirmSession',
+          actor: actor?.userId ? { actor_type: 'user', actor_id: actor.userId, actor_name: actor.name } : null,
+        });
+      } catch (evErr) {
+        console.error('gate_refused event not recorded:', evErr.message);
+      }
+      return {
+        ok: false,
+        refused: true,
+        code: 'GATE_REFUSED',
+        message: err.message,
+        failures: err.failures || [],
+        dc_number: err.dcNumber,
+      };
+    }
     throw err;
   } finally {
     client.release();

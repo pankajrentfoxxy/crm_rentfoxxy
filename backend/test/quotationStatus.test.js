@@ -57,5 +57,42 @@ describe('4.3 — opening the quotation form does not consume a number', () => {
     assert.match(n, /^GEST-\d+$/);
   });
 
+});
+
+describe('4.3 — the status handler against the database', () => {
+  const ctrl = require('../controllers/salesManagementController');
+  const qn = `TEST-QSTATUS-${Date.now()}`;
+  const call = async (status) => {
+    const res = { code: 200, body: null };
+    res.status = (c) => { res.code = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    await ctrl.updateQuotationStatus({ params: { quotationNumber: qn }, body: { status }, user: { user_id: 1, name: 'test' } }, res);
+    return res;
+  };
+
+  it('records acceptance with accepted_at, then refuses going back to draft', async () => {
+    await pool.query(
+      `INSERT INTO sales_quotations (quotation_number, customer_name, status, quotation_type, quantity, rate)
+       VALUES ($1, 'test', 'pending', 'rental', 1, 1)`,
+      [qn]
+    );
+    try {
+      const ok = await call('accepted');
+      assert.equal(ok.code, 200, JSON.stringify(ok.body));
+      const { rows } = await pool.query('SELECT status, accepted_at FROM sales_quotations WHERE quotation_number = $1', [qn]);
+      assert.equal(rows[0].status, 'accepted');
+      assert.ok(rows[0].accepted_at, 'accepted_at must be set');
+
+      const back = await call('pending');
+      assert.equal(back.code, 409);
+      assert.equal(back.body.code, 'QUOTATION_TRANSITION_REFUSED');
+
+      assert.equal((await call('rejected')).code, 200);
+      assert.equal((await call('accepted')).code, 409, 'rejected stays closed');
+    } finally {
+      await pool.query('DELETE FROM sales_quotations WHERE quotation_number = $1', [qn]);
+    }
+  });
+
   it('closes the pool', async () => { await pool.end(); });
 });

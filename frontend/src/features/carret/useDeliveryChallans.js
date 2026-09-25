@@ -1,30 +1,37 @@
 import { useEffect, useState, useMemo } from 'react';
 import api from '../../utils/api';
 
-/** Move screens data. Reads the existing endpoints — no parallel API (rule 3). */
-export function useChallans({ status = '', movement = 'outbound', search = '', limit = 100 }) {
-  const [state, setState] = useState({ loading: true, error: null, rows: [], total: 0 });
+/**
+ * Move screens data. Reads the existing endpoints — no parallel API (rule 3).
+ * Outbound challans: GET /delivery-challans → { delivery_challans, stats, pagination }.
+ * Return challans live on their own endpoint: GET /return-dc → { return_dcs, pagination }.
+ */
+export function useChallans({ status = '', movement = 'outbound', search = '', page = 1, limit = 25, refreshKey = 0 }) {
+  const [state, setState] = useState({ loading: true, error: null, rows: [], total: 0, pages: 1, stats: null });
 
   const query = useMemo(() => {
-    const p = new URLSearchParams({ limit: String(limit) });
+    const p = new URLSearchParams({ limit: String(limit), page: String(page) });
     if (status) p.set('status', status);
-    if (movement) p.set('movement_type', movement);
     if (search) p.set('search', search);
     return p.toString();
-  }, [status, movement, search, limit]);
+  }, [status, search, page, limit]);
 
   useEffect(() => {
     let cancelled = false;
     setState((s) => ({ ...s, loading: true, error: null }));
+    const url = movement === 'return' ? '/sales-management/return-dc' : '/sales-management/delivery-challans';
 
-    api.get(`/sales-management/delivery-challans?${query}`)
+    api.get(`${url}?${query}`)
       .then(({ data }) => {
         if (cancelled) return;
-        const rows = data?.rows || data?.data || data?.challans || [];
+        const rows = data?.delivery_challans || data?.return_dcs || data?.rows || [];
+        const list = Array.isArray(rows) ? rows : [];
         setState({
           loading: false, error: null,
-          rows: Array.isArray(rows) ? rows : [],
-          total: data?.total ?? (Array.isArray(rows) ? rows.length : 0),
+          rows: list,
+          total: data?.pagination?.total ?? data?.total ?? list.length,
+          pages: data?.pagination?.totalPages || 1,
+          stats: data?.stats || null,
         });
       })
       .catch((err) => {
@@ -32,12 +39,12 @@ export function useChallans({ status = '', movement = 'outbound', search = '', l
         setState({
           loading: false,
           error: err?.response?.data?.message || 'Could not load challans.',
-          rows: [], total: 0,
+          rows: [], total: 0, pages: 1, stats: null,
         });
       });
 
     return () => { cancelled = true; };
-  }, [query]);
+  }, [query, movement, refreshKey]);
 
   return state;
 }

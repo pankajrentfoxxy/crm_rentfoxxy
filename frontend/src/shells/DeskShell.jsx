@@ -61,7 +61,10 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
   const visible = useMemo(
     () => SECTIONS
       .map((s) => {
-        const items = s.items.filter((i) => hasPermission(i.section, i.action));
+        // `sections` means any one of them grants the item.
+        const items = s.items.filter((i) => (i.sections
+          ? i.sections.some((sec) => hasPermission(sec, i.action))
+          : hasPermission(i.section, i.action)));
         const names = s.groups || [];
         const groups = names.length
           ? names

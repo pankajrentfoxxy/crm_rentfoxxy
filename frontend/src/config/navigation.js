@@ -17,6 +17,9 @@
  * Section names are the live ones from `permission_sections`, not invented.
  */
 
+// Any one of these grants the sales-order screens (the backend's cpAny).
+const SO_SECTIONS = ['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement'];
+
 export const SECTIONS = [
   {
     key: 'procure',
@@ -84,19 +87,21 @@ export const SECTIONS = [
   {
     key: 'sell',
     label: 'Sell',
+    // Order to delivery is complete in Carret (25 Sep 2026): these open the new
+    // screens. The old ones stay under "Old view" until the process is signed
+    // off (hard rule 6), then they go.
+    groups: ['Order to delivery', 'Customers & more', 'Old view'],
     items: [
-      { to: '/lead-crm/leads', label: 'Leads', section: 'leads', action: 'view' },
-      { to: '/lead-crm/follow-ups', label: 'Follow-ups', section: 'lead_follow_ups', action: 'view' },
-      { to: '/sales-pipeline/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
-      { to: '/sales-pipeline/sales-orders', label: 'Sales Orders', section: 'sales_orders_doc', action: 'view' },
-      // Part 4.5, behind REACT_APP_CARRET. Beside the existing screens; the
-      // legacy chain is retired only once these are signed off (hard rule 6).
-      { to: '/carret/sell/quotations', label: 'Quotations (Carret)', section: 'sales_quotations', action: 'view' },
-      { to: '/carret/sell/sales-orders', label: 'Sales Orders (Carret)', section: 'sales_orders_doc', action: 'view' },
-      { to: '/carret/sell/customers', label: 'Customers (Carret)', section: 'customer_management', action: 'view' },
-      { to: '/customer-management/customers', label: 'Customers', section: 'customer_management', action: 'view' },
-      { to: '/sales-pipeline/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
-      { to: '/sales-pipeline/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
+      { group: 'Order to delivery', to: '/carret/sell/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
+      { group: 'Order to delivery', to: '/carret/sell/sales-orders', label: 'Sales Orders', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
+      { group: 'Customers & more', to: '/lead-crm/leads', label: 'Leads', section: 'leads', action: 'view' },
+      { group: 'Customers & more', to: '/lead-crm/follow-ups', label: 'Follow-ups', section: 'lead_follow_ups', action: 'view' },
+      { group: 'Customers & more', to: '/customer-management/customers', label: 'Customers', section: 'customer_management', action: 'view' },
+      { group: 'Customers & more', to: '/carret/sell/customers', label: 'Customers (list)', section: 'customer_management', action: 'view' },
+      { group: 'Customers & more', to: '/sales-pipeline/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
+      { group: 'Customers & more', to: '/sales-pipeline/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
+      { group: 'Old view', to: '/sales-pipeline/quotations', label: 'Quotations (old)', section: 'sales_quotations', action: 'view' },
+      { group: 'Old view', to: '/sales-pipeline/sales-orders', label: 'Sales Orders (old)', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
     ],
   },
   {
@@ -108,11 +113,10 @@ export const SECTIONS = [
     // controller wrote it". The four families that live in other sections
     // (vendor return, vendor repair, scrap, service parts) are linked here as
     // well as there — one document, two ways to reach it, no second flow.
-    groups: ['Outward', 'Inward', 'Gate & tracking'],
+    groups: ['Outward', 'Inward', 'Gate & tracking', 'Old view'],
     items: [
       // ---- Outward: leaving the warehouse ----
-      { group: 'Outward', to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
-      { group: 'Outward', to: '/carret/move/challans', label: 'Delivery Challans (Carret)', section: 'delivery_challans', action: 'view' },
+      { group: 'Outward', to: '/carret/move/challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
       { group: 'Outward', to: '/vendor-management/return-to-vendor', label: 'Vendor Return DC', section: 'vendor_return_to_vendor', action: 'view' },
       { group: 'Outward', to: '/vendor-management/vendor-repair-dc', label: 'Vendor Repair DC', section: 'vendor_repair_dc', action: 'view' },
       { group: 'Outward', to: '/inventory-management/scrap-challans', label: 'Scrap Challans', section: 'scrap_challans', action: 'view' },
@@ -127,14 +131,21 @@ export const SECTIONS = [
       { group: 'Inward', to: '/inventory-management/physical-part-inward', label: 'Part Inward', section: 'parts_inventory', action: 'view' },
 
       // ---- Gate & tracking: the crossing itself ----
-      { group: 'Gate & tracking', to: '/guard', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
-      { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate (Carret)', section: 'guard_gate_checking', action: 'view' },
-      { group: 'Gate & tracking', to: '/guard/scanner', label: 'Gate Scanner', section: 'gate_dashboard', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
       { group: 'Gate & tracking', to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
-      { group: 'Gate & tracking', to: '/sales-pipeline/delivery-register', label: 'Delivery Register', section: 'delivery_register_management', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/deliveries', label: 'Delivery Register', sections: ['delivery_register_management', 'technician_bucket'], section: 'delivery_register_management', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/my-deliveries', label: 'My Deliveries', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
       { group: 'Gate & tracking', to: '/delivery-register-management/technicians', label: 'Delivery Technicians', section: 'delivery_register_management', action: 'view' },
-      { group: 'Gate & tracking', to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
       { group: 'Gate & tracking', to: '/dispatch/pending-orders', label: 'Pending Dispatch', section: 'dispatch_pending_orders', action: 'view' },
+
+      // ---- Old view: kept until Order to delivery is signed off ----
+      { group: 'Old view', to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans (old)', section: 'delivery_challans', action: 'view' },
+      { group: 'Old view', to: '/guard', label: 'Guard Gate (old)', section: 'guard_gate_checking', action: 'view' },
+      { group: 'Old view', to: '/guard/scanner', label: 'Gate Scanner (old)', section: 'gate_dashboard', action: 'view' },
+      { group: 'Old view', to: '/sales-pipeline/delivery-register', label: 'Delivery Register (old)', section: 'delivery_register_management', action: 'view' },
+      { group: 'Old view', to: '/sales-pipeline/my-deliveries', label: 'My Deliveries (old)', section: 'technician_bucket', action: 'view' },
+      { group: 'Old view', to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking (old)', section: 'bluedart_awb_tracking', action: 'view' },
     ],
   },
   {

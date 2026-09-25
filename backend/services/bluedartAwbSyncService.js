@@ -265,6 +265,15 @@ async function markDcDeliveredFromTracking(dcNumber, shipment) {
 
     await client.query('COMMIT');
 
+    // The customer hears "delivered" on every other path; a courier delivery
+    // closed from tracking was the one that stayed silent.
+    try {
+      require('./salesOrderWhatsApp').notifySoDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+    try {
+      require('./supportWhatsApp').notifySupportServiceDeliveredAsync({ dcNumber });
+    } catch (_) { /* WhatsApp must never block delivery */ }
+
     await fireOnDeliveryRentalInvoice(dcNumber);
     return { delivered: true, lines: upd.rowCount };
   } catch (err) {
