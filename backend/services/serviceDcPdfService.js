@@ -1,5 +1,4 @@
-const { generateServiceDcPdf, generateDocumentPdf } = require('./salesManagementPdfService');
-const { getDeliveryChallanLines } = require('./salesManagementService');
+const { generateServiceDcPdf } = require('./salesManagementPdfService');
 const { buildUnitsForRdc } = require('./returnDcPdfService');
 
 async function buildUnitsForSdc(db, dcl, pickupItems) {
@@ -10,9 +9,13 @@ async function regenerateServiceDcPdfByNumber(db, sdcNumber) {
   try {
     if (!sdcNumber) return null;
     const dclRes = await db.query(
-      `SELECT dcl.*, st.customer_phone, st.ticket_phone_override
+      `SELECT dcl.*, st.customer_phone, st.ticket_phone_override,
+              COALESCE(NULLIF(TRIM(dt.first_name || ' ' || COALESCE(dt.last_name, '')), ''), u.name) AS delivery_person_name,
+              COALESCE(dt.phone, u.mobile_no) AS delivery_person_phone
          FROM delivery_challan_lines dcl
          LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+         LEFT JOIN delivery_technicians dt ON dt.technician_id = dcl.delivery_person_id
+         LEFT JOIN users u ON u.user_id = COALESCE(dt.user_id, dcl.delivery_person_id)
         WHERE dcl.dc_number = $1
           AND dcl.movement_type = 'outbound'
           AND dcl.dc_purpose = 'service_return'
@@ -49,6 +52,14 @@ async function regenerateServiceDcPdfByNumber(db, sdcNumber) {
         support_ticket_id: dcl.support_ticket_id,
         dispatch_mode: dcl.dispatch_mode,
         remarks: dcl.remarks,
+        dc_date: dcl.dc_date || dcl.created_at,
+        dispatched_at: dcl.dispatched_at,
+        delivered_at: dcl.delivered_at || dcl.delivery_completed_at,
+        courier_name: dcl.courier_name,
+        awb_number: dcl.awb_number,
+        delivery_person_name: dcl.delivery_person_name,
+        delivery_person_phone: dcl.delivery_person_phone,
+        esign_url: dcl.esign_url,
       },
       units: units.length ? units : [{
         brand: dcl.brand,
@@ -71,23 +82,12 @@ async function regenerateServiceDcPdfByNumber(db, sdcNumber) {
 }
 
 /**
- * Re-render an SDC with the standard DC layout, which prints the ship-by mode and
- * the assigned delivery technician. Same output as POST /delivery-challans/:dc/pdf.
+ * Kept for the technician-change route. The service challan layout now prints the
+ * ship-by mode and the assigned delivery technician itself, so this renders the same
+ * document rather than a priced plain DC.
  */
 async function regenerateServiceDcDocumentPdf(db, sdcNumber) {
-  const lines = await getDeliveryChallanLines(sdcNumber);
-  if (!lines.length) return null;
-  const pdfPath = await generateDocumentPdf({
-    docType: 'delivery_challan',
-    docNumber: sdcNumber,
-    header: lines[0] || {},
-    lines,
-  });
-  await db.query(
-    `UPDATE delivery_challan_lines SET pdf_path = $1, updated_at = NOW() WHERE dc_number = $2`,
-    [pdfPath, sdcNumber]
-  );
-  return pdfPath;
+  return regenerateServiceDcPdfByNumber(db, sdcNumber);
 }
 
 module.exports = {
