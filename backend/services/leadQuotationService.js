@@ -19,7 +19,14 @@ const SELLER_LINES = [
 
 const DEFAULT_HSN_SAC = '363684';
 
-const FALLBACK_QUOTATION_CC = ['pankaj@rentfoxxy.com', 'shivam@rentfoxxy.com', 'pradeep@rentfoxxy.com'];
+// Used only when QUOTATION_DEFAULT_CC is absent. Kept in step with the live env
+// value, which is what actually ships: this list had drifted to pankaj@ and
+// shivam@, neither of which is a mailbox that receives quotations.
+const FALLBACK_QUOTATION_CC = [
+  'pankkajyadav@rentfoxxy.com',
+  'adminn@rentfoxxy.com',
+  'pradeep@rentfoxxy.com',
+];
 
 /** Team CC on quotation emails — override via QUOTATION_DEFAULT_CC (comma-separated). */
 function getDefaultQuotationCc() {

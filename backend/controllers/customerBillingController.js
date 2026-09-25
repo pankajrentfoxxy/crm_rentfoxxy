@@ -2,6 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
+const {
+  isCustomerInvoiceEmailEnabled,
+  CUSTOMER_INVOICE_DISABLED_MESSAGE,
+} = require('../services/outboundMessagingGuard');
 const archiverLib = require('archiver');
 
 function createZipArchive(options = { zlib: { level: 9 } }) {
@@ -742,6 +746,9 @@ exports.generateInvoicesBulk = async (req, res) => {
 
 exports.sendInvoice = async (req, res) => {
   try {
+    if (!isCustomerInvoiceEmailEnabled()) {
+      return res.status(403).json({ success: false, email_sent: false, message: CUSTOMER_INVOICE_DISABLED_MESSAGE });
+    }
     const { id } = req.params;
     const { to_email, cc_emails } = req.body || {};
     const result = await pool.query(
@@ -775,6 +782,7 @@ exports.sendInvoice = async (req, res) => {
       subject: `Invoice ${invoice.invoice_number} — Rentfoxxy`,
       text: `Please find attached invoice ${invoice.invoice_number} for the billing period ${invoice.from_date} to ${invoice.to_date}.`,
       pdfRelativePath: pdfPath,
+      customerInvoice: true,
     });
     // Only mark it sent if it actually went out, and only from 'draft'.
     // Without the status guard, re-sending a PAID invoice reverted it to 'sent'

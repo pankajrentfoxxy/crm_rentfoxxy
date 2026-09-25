@@ -72,7 +72,21 @@ async function collectUnbilledSecurityLines(client, {
   customerId, month, year, includeCurrentMonth = false, serialIds = [],
 }) {
   const { prevStart, prevEnd } = previousMonthRange(month, year);
-  const windowStart = includeCurrentMonth ? new Date(year, month - 1, 1) : prevStart;
+  // includeCurrentMonth EXTENDS the window forward; it does not move it.
+  //
+  // It used to replace the range outright — true meant "September only", which
+  // silently excluded anything delivered in August. That matters because the
+  // flag is set by the on-delivery path: dispatching one laptop mid-month
+  // regenerates the whole monthly draft, and on the rebuild every laptop
+  // delivered in the PREVIOUS month fell outside the window and lost its
+  // security line. INV-1113 is exactly that — TTSPL7631 (31 Aug) and TTSPL7616
+  // (27 Aug) both carry a one_month_rental security of Rs 1,999, and the
+  // invoice went out with a security deposit of zero.
+  //
+  // Starting at prevStart either way is safe: a security line is emitted once
+  // per serial, and the query already excludes anything with a deposit row, a
+  // billing ack, or a line on another invoice.
+  const windowStart = prevStart;
   const windowEnd = includeCurrentMonth ? new Date(year, month, 0) : prevEnd;
   const scopedIds = [...new Set((serialIds || []).map((id) => Number(id)).filter((n) => n > 0))];
   const result = await client.query(

@@ -31,10 +31,22 @@ function taskflowPublicUrl() {
     .replace(/\/+$/, '');
 }
 
+/** Public API base — used in browser SSO redirect URLs. */
 function taskflowApiUrl() {
   const fromEnv = String(process.env.TASKFLOW_API_URL || '').trim().replace(/\/+$/, '');
   if (fromEnv) return fromEnv;
   return `${taskflowPublicUrl()}/api`;
+}
+
+/**
+ * Server-to-server API base (pending-count, health). Prefer loopback so CRM
+ * does not depend on public DNS/SSL for TaskFlow on the same VPS.
+ */
+function taskflowInternalApiUrl() {
+  const fromEnv = String(process.env.TASKFLOW_INTERNAL_API_URL || '').trim().replace(/\/+$/, '');
+  if (fromEnv) return fromEnv;
+  const port = String(process.env.TASKFLOW_INTERNAL_PORT || '4011').trim();
+  return `http://127.0.0.1:${port}/api`;
 }
 
 async function loadCrmUser(reqUser) {
@@ -94,7 +106,7 @@ function verifySsoTokenLocally(token) {
 
 async function verifySsoTokenWithTaskflow(token) {
   const { status, data } = await axios.post(
-    `${taskflowApiUrl()}/auth/sso`,
+    `${taskflowInternalApiUrl()}/auth/sso`,
     { token },
     { timeout: 8000, validateStatus: () => true }
   );
@@ -124,7 +136,7 @@ async function fetchPendingCount(reqUser) {
   const user = await loadCrmUser(reqUser);
   const token = signCrmTaskflowToken(user, 'crm_pending_count', COUNT_EXPIRES);
   try {
-    const { status, data } = await axios.get(`${taskflowApiUrl()}/auth/crm/pending-count`, {
+    const { status, data } = await axios.get(`${taskflowInternalApiUrl()}/auth/crm/pending-count`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       timeout: 8000,
       validateStatus: () => true,
@@ -164,4 +176,6 @@ module.exports = {
   verifySsoTokenLocally,
   verifySsoTokenWithTaskflow,
   taskflowPublicUrl,
+  taskflowApiUrl,
+  taskflowInternalApiUrl,
 };

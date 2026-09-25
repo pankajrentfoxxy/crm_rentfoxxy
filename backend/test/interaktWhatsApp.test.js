@@ -1,6 +1,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
+// The send path is exercised with fake HTTP; the global kill switch would short-circuit it.
+process.env.OUTBOUND_MESSAGING_ENABLED = 'true';
+
 const {
   validateTemplatePayload,
   sanitizeValues,

@@ -249,6 +249,42 @@ async function resolveSerialForPickupItem(db, item) {
   return r.rows[0] || null;
 }
 
+/**
+ * Floor-pipeline statuses that mean the unit is still being worked on. Anything
+ * not finished or abandoned counts: out_for_repair, diagnosis_failed and
+ * qc_failed_return_vendor are all states in which the laptop is emphatically not
+ * ready to go back to its owner.
+ */
+const CLOSED_FLOOR_TICKET_STATUSES = new Set(['completed', 'cancelled']);
+
+/**
+ * The unit's live floor ticket, or null.
+ *
+ * A repair pickup opens a floor ticket when the warehouse receives the laptop,
+ * and that ticket is the repair. Nothing stopped an SDC being raised while it was
+ * still open, so a machine could be challaned back to the customer mid-repair:
+ * TTSPL5286 went out on SDC/26-27/0011 while ticket 4355 was sitting at Diagnosis,
+ * and SDC/26-27/0003 and /0005 did the same thing before it — 3 of the 11 service
+ * returns raised so far.
+ *
+ * Matched on vendor_serial_id first, falling back to the asset code, because
+ * older tickets predate the serial link.
+ */
+async function findOpenFloorTicket(db, serial) {
+  if (!serial) return null;
+  const r = await db.query(
+    `SELECT t.ticket_id, t.status, s.stage_name
+       FROM tickets t
+       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+      WHERE (t.vendor_serial_id = $1 OR t.ttspl_id = $2)
+        AND LOWER(COALESCE(t.status, '')) <> ALL($3::text[])
+      ORDER BY t.ticket_id DESC
+      LIMIT 1`,
+    [serial.serial_id, serial.inventory_asset_code || null, [...CLOSED_FLOOR_TICKET_STATUSES]]
+  );
+  return r.rows[0] || null;
+}
+
 async function loadOpenSdc(db, sdcNumber) {
   if (!sdcNumber) return null;
   const r = await db.query(
@@ -300,13 +336,25 @@ async function evaluatePickupItemEligibility(db, item, ticket) {
     }
   }
   const serial = await resolveSerialForPickupItem(db, item);
+  let openFloorTicket = null;
   if (!serial) reasons.push('serial not found in inventory');
   else if (serial.inventory_status !== inventorySM.STATUS.IN_STOCK) {
     reasons.push(`serial must be in stock (current: ${serial.inventory_status || 'unknown'})`);
   }
+  if (serial) {
+    openFloorTicket = await findOpenFloorTicket(db, serial);
+    if (openFloorTicket) {
+      reasons.push(
+        `repair still open on floor ticket #${openFloorTicket.ticket_id}`
+        + `${openFloorTicket.stage_name ? ` at ${openFloorTicket.stage_name}` : ''}`
+        + ` (${openFloorTicket.status}) — finish it before sending the unit back`
+      );
+    }
+  }
   return {
     item,
     serial,
+    open_floor_ticket: openFloorTicket,
     eligible: reasons.length === 0,
     reasons,
     ticket,
@@ -375,16 +423,29 @@ async function getServiceDcContext(db, ticketId) {
   const extras = await loadSdcTrackingExtras(db, sdcRes.rows.map((r) => r.dc_number));
   const serviceDcs = sdcRes.rows.map((row) => buildSdcTracking(row, extras.get(row.dc_number) || {}));
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, items[0]?.item || null);
+  const origins = [];
+  for (const row of items) {
+    origins.push(await resolveUnitOrigin(db, ticket, row.item, deliveryDefaults || {}));
+  }
   return {
     ticket_id: ticket.id,
-    eligible_items: items.map((row) => ({
+    eligible_items: items.map((row, idx) => ({
       id: row.item.id,
       ttspl_id: row.item.ttspl_id || row.item.unique_serial_number,
       serial_number: row.item.serial_number,
+      brand: row.item.brand || null,
+      model: row.item.model || null,
+      ram: row.item.ram || null,
+      storage: row.item.storage || null,
+      sales_order_number: origins[idx].salesOrderNumber,
+      original_dc_number: origins[idx].originalDcNumber,
+      so_source: origins[idx].source,
       eligible: row.eligible,
       reasons: row.reasons,
       inventory_status: row.serial?.inventory_status || null,
       service_dc_number: row.item.service_dc_number || null,
+      open_floor_ticket_id: row.open_floor_ticket?.ticket_id || null,
+      open_floor_ticket_stage: row.open_floor_ticket?.stage_name || null,
     })),
     can_create: items.some((row) => row.eligible),
     service_dcs: serviceDcs,
@@ -393,32 +454,157 @@ async function getServiceDcContext(db, ticketId) {
   };
 }
 
-async function resolveOriginalReferences(db, ticket, items, deliveryDefaults) {
-  let originalDcNumber = deliveryDefaults.original_dc_number || ticket.dc_number || null;
-  let salesOrderNumber = deliveryDefaults.sales_order_number || ticket.sales_order_number || null;
-  for (const row of items) {
-    const code = row.item.ttspl_id || row.item.unique_serial_number || row.item.serial_number;
-    if (!code) continue;
+/**
+ * The sales order and outbound DC one unit was shipped to this customer on.
+ *
+ * Resolved per unit, not per ticket: a repair ticket can carry laptops from
+ * different sales orders, and the ticket's own sales_order_number is simply the
+ * first one it was linked to. Ticket 3510 picked up TTSPL4019 (SO-001449) and
+ * TTSPL4515 (SO-003050), and the old ticket-first lookup put both on SO-001449.
+ * The ticket/delivery defaults are only a fallback for a unit with no outbound DC.
+ *
+ * A previous SDC counts as the unit's last shipment (it carries the SO), but its
+ * original_dc_number is reported so the chain points at the real outbound DC.
+ * An exact asset-code token in the serial list outranks a substring hit, so
+ * TTSPL6186 does not resolve to TTSPL6186_A's DC.
+ */
+async function resolveUnitOrigin(db, ticket, item, deliveryDefaults = {}) {
+  const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+  if (code) {
     const outRes = await db.query(
-      `SELECT dc_number, sales_order_number
+      `SELECT dc_number, sales_order_number, dc_purpose, original_dc_number
          FROM delivery_challan_lines
         WHERE movement_type = 'outbound'
           AND COALESCE(dc_purpose, 'standard') NOT IN ('replacement')
+          AND COALESCE(status, '') <> 'cancelled'
           AND customer_id = $1
+          AND sales_order_number IS NOT NULL
           AND serial_number::text ILIKE '%' || $2 || '%'
-        ORDER BY created_at DESC NULLS LAST
+        ORDER BY
+          CASE WHEN serial_number::text ~ ('[|"]' || $3 || '"') THEN 0 ELSE 1 END,
+          created_at DESC NULLS LAST
         LIMIT 1`,
-      [ticket.customer_id, code]
+      [ticket.customer_id, code, code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')]
     );
-    if (outRes.rows.length) {
-      originalDcNumber = originalDcNumber || outRes.rows[0].dc_number || null;
-      salesOrderNumber = salesOrderNumber || outRes.rows[0].sales_order_number || null;
+    const hit = outRes.rows[0];
+    if (hit) {
+      return {
+        salesOrderNumber: hit.sales_order_number,
+        originalDcNumber: hit.dc_purpose === DC_PURPOSE
+          ? (hit.original_dc_number || hit.dc_number)
+          : hit.dc_number,
+        source: 'unit_dc',
+      };
     }
   }
-  if (!salesOrderNumber) {
-    throw Object.assign(new Error('Original sales order not found for this unit — cannot create Service DC without SO reference'), { status: 400 });
+  return {
+    salesOrderNumber: deliveryDefaults.sales_order_number || ticket.sales_order_number || null,
+    originalDcNumber: deliveryDefaults.original_dc_number || ticket.dc_number || null,
+    source: 'ticket',
+  };
+}
+
+/**
+ * Group eligible units by the sales order each was shipped on — one SDC per
+ * group. A ticket whose units all share one SO yields a single group, exactly
+ * as before.
+ */
+async function groupSelectedBySalesOrder(db, ticket, selected, deliveryDefaults) {
+  const groups = new Map();
+  for (const row of selected) {
+    const origin = await resolveUnitOrigin(db, ticket, row.item, deliveryDefaults);
+    if (!origin.salesOrderNumber) {
+      const code = row.item.ttspl_id || row.item.unique_serial_number || row.item.serial_number;
+      throw Object.assign(
+        new Error(`Original sales order not found for ${code || `item ${row.item.id}`} — cannot create Service DC without SO reference`),
+        { status: 400 }
+      );
+    }
+    const key = origin.salesOrderNumber.trim().toUpperCase();
+    if (!groups.has(key)) {
+      groups.set(key, {
+        salesOrderNumber: origin.salesOrderNumber,
+        originalDcNumber: origin.originalDcNumber,
+        rows: [],
+      });
+    }
+    const group = groups.get(key);
+    group.originalDcNumber = group.originalDcNumber || origin.originalDcNumber;
+    group.rows.push(row);
   }
-  return { originalDcNumber, salesOrderNumber };
+  return [...groups.values()];
+}
+
+/**
+ * Bill-to identity for the challan: billing address, GSTIN and place of supply.
+ *
+ * The SDC INSERT simply never listed these three columns, unlike every other DC
+ * path (supportReplacementFlowService, supportPartReturnDcService,
+ * saleInPlaceService, salesManagementController), so the row was written with
+ * all three NULL and the PDF had nothing to print in its Bill-to box —
+ * 9 of the 11 service returns raised so far carry no billing address and no
+ * GSTIN at all.
+ *
+ * Resolved per field rather than per source, because no single source is
+ * complete: DC03537 carries TechIT Digital's billing address and place of supply
+ * but a NULL GSTIN, while the customer record holds the GSTIN. Order is original
+ * outbound DC (what was used when the unit shipped), then the sales order, then
+ * the customer master.
+ */
+async function resolveBillingIdentity(db, { customerId, originalDcNumber, salesOrderNumber }) {
+  const out = { billingAddress: null, gstNumber: null, supplyState: null };
+
+  const take = (row) => {
+    if (!row) return;
+    if (!out.billingAddress && row.customer_billing_address) {
+      out.billingAddress = row.customer_billing_address;
+    }
+    if (!out.gstNumber && String(row.gst_number || '').trim()) {
+      out.gstNumber = String(row.gst_number).trim();
+    }
+    if (!out.supplyState && String(row.supply_state || '').trim()) {
+      out.supplyState = String(row.supply_state).trim();
+    }
+  };
+
+  if (originalDcNumber) {
+    take((await db.query(
+      `SELECT customer_billing_address, gst_number, supply_state
+         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [originalDcNumber]
+    )).rows[0]);
+  }
+  if (salesOrderNumber) {
+    take((await db.query(
+      `SELECT customer_billing_address, gst_number, supply_state
+         FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC LIMIT 1`,
+      [salesOrderNumber]
+    )).rows[0]);
+  }
+  if (customerId && (!out.billingAddress || !out.gstNumber || !out.supplyState)) {
+    const c = (await db.query(
+      `SELECT name, company_name, trade_name, gst_no,
+              billing_address, billing_city, billing_state, billing_pincode
+         FROM customers WHERE customer_id = $1 LIMIT 1`,
+      [customerId]
+    )).rows[0];
+    if (c) {
+      take({
+        gst_number: c.gst_no,
+        supply_state: c.billing_state,
+        customer_billing_address: c.billing_address
+          ? {
+            name: c.trade_name || c.company_name || c.name || '',
+            address: c.billing_address,
+            city: c.billing_city || '',
+            state: c.billing_state || '',
+            pincode: c.billing_pincode || '',
+          }
+          : null,
+      });
+    }
+  }
+  return out;
 }
 
 async function buildShippingAddress(db, ticket, deliveryDefaults, body = {}) {
@@ -462,10 +648,56 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   }
 
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, selected[0].item);
-  const { originalDcNumber, salesOrderNumber } = await resolveOriginalReferences(db, ticket, selected, deliveryDefaults);
+  const groups = await groupSelectedBySalesOrder(db, ticket, selected, deliveryDefaults);
   const shippingAddress = await buildShippingAddress(db, ticket, deliveryDefaults, dispatch || {});
-  const dispatchInfo = normalizeDispatch(dispatch || {});
+  const baseDispatch = normalizeDispatch(dispatch || {});
 
+  // One AWB belongs to one consignment. With several SDCs the single AWB field
+  // is not reused across them; per-SO AWBs come in awb_by_so, else dispatch
+  // fills each SDC's AWB from the DC page.
+  const awbBySo = dispatch?.awb_by_so && typeof dispatch.awb_by_so === 'object' ? dispatch.awb_by_so : {};
+  const awbFor = (so) => {
+    const key = Object.keys(awbBySo).find((k) => k.trim().toUpperCase() === so.trim().toUpperCase());
+    const perSo = key ? String(awbBySo[key] || '').trim() : '';
+    if (perSo) return perSo;
+    return groups.length === 1 ? baseDispatch.awbNumber : null;
+  };
+
+  const created = [];
+  for (const group of groups) {
+    created.push(await createServiceDcForGroup(db, {
+      ticket,
+      ticketId,
+      rows: group.rows,
+      salesOrderNumber: group.salesOrderNumber,
+      originalDcNumber: group.originalDcNumber,
+      shippingAddress,
+      dispatchInfo: {
+        ...baseDispatch,
+        awbNumber: baseDispatch.dispatchMode === 'courier' ? awbFor(group.salesOrderNumber) : null,
+      },
+      actor,
+    }));
+  }
+
+  const first = created[0];
+  return {
+    ...first,
+    item_ids: created.flatMap((c) => c.item_ids),
+    service_dcs: created,
+  };
+}
+
+async function createServiceDcForGroup(db, {
+  ticket,
+  ticketId,
+  rows: selected,
+  salesOrderNumber,
+  originalDcNumber,
+  shippingAddress,
+  dispatchInfo,
+  actor,
+}) {
   const sdcNumber = await nextFinancialYearNumber('service_dc', db);
   const entries = [];
   let firstSpec = {};
@@ -477,6 +709,22 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     entries.push(`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || code}`);
     if (!firstSpec.brand) firstSpec = vsn.extra || {};
   }
+
+  // pre_dispatch_qc_passed used to be a hardcoded TRUE in the INSERT below, so
+  // every SDC declared itself QC-cleared the moment it was created — SDC/26-27/0011
+  // showed as QC processed while ticket 4355 had not left Diagnosis and had neither
+  // qc1_passed_at nor qc2_passed_at. It is now derived: no open floor ticket on any
+  // unit means the repair is genuinely finished. The eligibility gate already
+  // refuses those units, so this is belt and braces rather than the only defence.
+  const preDispatchQcPassed = (
+    await Promise.all(selected.map((row) => findOpenFloorTicket(db, row.serial)))
+  ).every((openTicket) => !openTicket);
+
+  const billing = await resolveBillingIdentity(db, {
+    customerId: ticket.customer_id,
+    originalDcNumber,
+    salesOrderNumber,
+  });
 
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
@@ -498,15 +746,17 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   await db.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
-         customer_shipping_address, brand, model_name, quantity, serial_number,
+         customer_shipping_address, customer_billing_address, gst_number, supply_state,
+         brand, model_name, quantity, serial_number,
          dispatch_mode, ship_by, delivery_person_id, courier_name, awb_number,
          porter_tracking_id, porter_order_id,
          sales_order_number, original_dc_number, dc_purpose, remarks,
          status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
-     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,
-             $18,$19,$20,$21,
-             $22,$23,NOW(),NOW(),$24,$25,TRUE)`,
+     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,
+             $10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20,
+             $21,$22,$23,$24,
+             $25,$26,NOW(),NOW(),$27,$28,$29)`,
     [
       sdcNumber,
       ticketId,
@@ -514,6 +764,9 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       sdcDocumentName,
       ticket.ticket_email || null,
       JSON.stringify(shippingAddress),
+      billing.billingAddress ? JSON.stringify(billing.billingAddress) : null,
+      billing.gstNumber,
+      billing.supplyState,
       firstItem.brand || firstSpec.brand || null,
       firstItem.model || firstSpec.model || firstSpec.model_name || null,
       Math.max(1, entries.length),
@@ -533,6 +786,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       actor?.user_id || null,
       entityCode,
       hsnCode,
+      preDispatchQcPassed,
     ]
   );
 
@@ -634,6 +888,7 @@ async function deliverServiceDcSerial(db, {
   customerId,
   entityCode,
   dispatchMode,
+  txnType = 'rental',
   actor,
 }) {
   const sr = await db.query(
@@ -655,6 +910,22 @@ async function deliverServiceDcSerial(db, {
         WHERE id = $1`,
       [pickupItem.customer_inventory_id]
     );
+  }
+
+  // A unit sold on its original SO goes back to the customer as sold; it was
+  // previously always forced to rented, which started rent on a sold laptop.
+  if (txnType === 'sale') {
+    await inventorySM.markDelivered(db, serialId, {
+      quotationType: 'sale',
+      dcNumber,
+      customerId,
+      entityCode,
+      dispatchMode: dispatchMode || 'inhouse',
+      deliveredAt: new Date(),
+      actorUserId: actor?.user_id,
+      actorName: actor?.name,
+    });
+    return { delivered: true, billingBranch: 'sale_no_rent' };
   }
 
   if (billing.rentPaused) {
@@ -791,7 +1062,8 @@ async function collectSerialIdsFromSdc(db, dcNumber) {
 
 async function onServiceDcDelivered(db, dcNumber, actor = {}) {
   const meta = await db.query(
-    `SELECT dc_purpose, support_ticket_id, dispatch_mode, entity_code, customer_id
+    `SELECT dc_purpose, support_ticket_id, dispatch_mode, entity_code, customer_id,
+            sales_order_number, original_dc_number
        FROM delivery_challan_lines
       WHERE dc_number = $1 AND movement_type = 'outbound'
       LIMIT 1`,
@@ -802,16 +1074,27 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
 
   const serialIds = await collectSerialIdsFromSdc(db, dcNumber);
   const billingLog = [];
+  const txnType = await resolveTxnTypeForDc(db, {
+    salesOrderNumber: row.sales_order_number,
+    originalDcNumber: row.original_dc_number,
+  });
 
   for (const serialId of serialIds) {
+    // Each serial's own pickup item — this used to take the first item on the
+    // SDC for every serial, so a second unit's customer_inventory row was never
+    // re-activated.
     const itemRes = await db.query(
       `SELECT sti.*
          FROM support_ticket_items sti
+         JOIN vendor_serial_numbers vsn ON vsn.serial_id = $2
         WHERE sti.service_dc_number = $1
           AND sti.item_type = 'pickup'
-        ORDER BY sti.id ASC
+        ORDER BY
+          CASE WHEN COALESCE(sti.ttspl_id, sti.unique_serial_number) = vsn.inventory_asset_code
+                 OR sti.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+          sti.id ASC
         LIMIT 1`,
-      [dcNumber]
+      [dcNumber, serialId]
     );
     const pickupItem = itemRes.rows[0];
     if (!pickupItem) continue;
@@ -822,6 +1105,7 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
       customerId: row.customer_id,
       entityCode: row.entity_code || 'rentfoxxy',
       dispatchMode: row.dispatch_mode,
+      txnType,
       actor,
     });
     if (result.billingBranch) billingLog.push({ serialId, branch: result.billingBranch });

@@ -48,6 +48,7 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
   const [trackDc, setTrackDc] = useState(null);
   const [techEdit, setTechEdit] = useState(null); // { dc_number, technician_user_id, reason }
   const [technicians, setTechnicians] = useState(null);
+  const [awbBySo, setAwbBySo] = useState({});
 
   const repairPickups = (pickups || []).filter(
     (p) => (p.pickup_type === 'repair' || p.source_item_id) && p.warehouse_received_at
@@ -84,14 +85,22 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
   }
   if (!ctx) return null;
 
-  const eligibleIds = (ctx.eligible_items || []).filter((i) => i.eligible).map((i) => i.id);
+  const eligibleItems = (ctx.eligible_items || []).filter((i) => i.eligible);
+  const eligibleIds = eligibleItems.map((i) => i.id);
   const serviceDcs = ctx.service_dcs || [];
   const canCreate = isLead && ctx.can_create && eligibleIds.length > 0;
+  // The backend raises one SDC per original sales order; mirror that grouping.
+  const soGroups = eligibleItems.reduce((acc, item) => {
+    const so = item.sales_order_number || '—';
+    const group = acc.find((g) => g.so === so) || acc[acc.push({ so, dc: item.original_dc_number, items: [] }) - 1];
+    group.items.push(item);
+    return acc;
+  }, []);
 
   const createSdc = async (form) => {
     setSaving(true);
     try {
-      await api.post(`/support/tickets/${ticketId}/service-dc`, {
+      const { data } = await api.post(`/support/tickets/${ticketId}/service-dc`, {
         item_ids: eligibleIds,
         dispatch_mode: form.dispatch_mode,
         technician_user_id: form.technician_user_id,
@@ -101,8 +110,10 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
         porter_order_id: form.porter_order_id,
         shipping_address: form.pickup_address,
         remarks: form.reason,
+        awb_by_so: soGroups.length > 1 ? awbBySo : undefined,
       });
-      toast.success('Service Delivery Challan created');
+      toast.success(data?.message || 'Service Delivery Challan created');
+      setAwbBySo({});
       setShowCreate(false);
       onRefresh?.();
       load();
@@ -172,7 +183,49 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
       </div>
 
       {showCreate && (
-        <div className="rounded-lg border border-teal-100 bg-white p-3">
+        <div className="rounded-lg border border-teal-100 bg-white p-3 space-y-3">
+          <div className="space-y-2">
+            <p className="text-xs text-slate-600">
+              {soGroups.length > 1
+                ? `${soGroups.length} Service DCs will be created — one per original sales order.`
+                : 'One Service DC will be created.'}
+            </p>
+            {soGroups.map((g, idx) => (
+              <div key={g.so} className="rounded-lg border border-slate-200 px-3 py-2 text-xs">
+                <p className="font-semibold text-slate-800">
+                  SDC #{idx + 1} · SO <span className="font-mono">{g.so}</span>
+                  {g.dc ? <span className="font-normal text-slate-500"> · original DC {g.dc}</span> : null}
+                  {g.items.some((i) => i.so_source === 'ticket') ? (
+                    <span className="ml-2 font-normal text-amber-700">SO taken from ticket</span>
+                  ) : null}
+                </p>
+                <ul className="mt-1 space-y-0.5 text-slate-600">
+                  {g.items.map((i) => (
+                    <li key={i.id}>
+                      <span className="font-mono">{i.ttspl_id}</span>
+                      {[i.brand, i.model].filter(Boolean).length ? ` · ${[i.brand, i.model].filter(Boolean).join(' ')}` : ''}
+                      {[i.ram, i.storage].filter(Boolean).length ? ` · ${[i.ram, i.storage].filter(Boolean).join(' / ')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+                {soGroups.length > 1 && (
+                  <input
+                    type="text"
+                    value={awbBySo[g.so] || ''}
+                    onChange={(e) => setAwbBySo((m) => ({ ...m, [g.so]: e.target.value }))}
+                    placeholder="Courier AWB for this SDC (courier only, optional)"
+                    className="mt-2 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                    disabled={saving}
+                  />
+                )}
+              </div>
+            ))}
+            {soGroups.length > 1 && (
+              <p className="text-[11px] text-slate-500">
+                With several SDCs the AWB field below is not used — enter one AWB per SDC above, or add it later on each DC.
+              </p>
+            )}
+          </div>
           <PickupSetupForm
             ticket={ticket}
             customerId={ticket.customer_id}

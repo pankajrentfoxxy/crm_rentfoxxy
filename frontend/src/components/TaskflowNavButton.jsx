@@ -71,22 +71,34 @@ export default function TaskflowNavButton() {
       ? `Open TaskFlow — ${count} pending task${count === 1 ? '' : 's'}`
       : 'Open TaskFlow in a new tab';
 
+  const showPendingBadge = integrationStatus === 'ok' || integrationStatus === 'unmapped';
+  const hasPending = count > 0;
+
   return (
     <button
       type="button"
       onClick={openTaskflow}
       disabled={opening}
       title={title}
+      aria-label={title}
       className="relative inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg disabled:opacity-60"
     >
-      <ListTodo className="w-4 h-4" />
+      <ListTodo className="w-4 h-4 shrink-0" />
       <span className="hidden sm:inline">{opening ? 'Opening…' : 'TaskFlow'}</span>
-      {count > 0 && (
-        <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold leading-[18px] text-center">
+      {showPendingBadge && hasPending && (
+        <span
+          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-red-600 text-white text-[11px] font-bold leading-none tabular-nums shadow-sm"
+          aria-label={`${count} pending tasks`}
+        >
           {badge}
         </span>
       )}
-      {count === 0 && integrationStatus !== 'ok' && integrationStatus !== 'unmapped' && (
+      {showPendingBadge && hasPending && (
+        <span className="absolute -top-1.5 -right-1.5 sm:hidden min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold leading-[18px] text-center">
+          {badge}
+        </span>
+      )}
+      {!hasPending && integrationStatus !== 'ok' && integrationStatus !== 'unmapped' && (
         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-white" aria-hidden />
       )}
     </button>

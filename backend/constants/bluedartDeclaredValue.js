@@ -3,6 +3,17 @@
  * Lookup logic unchanged: match processor category + generation/Apple grade → amount.
  */
 const pool = require('../config/db');
+const { cleanSpecValue } = require('../utils/specText');
+
+/**
+ * Intel Core Ultra tier, or null. Matches "Ultra 7", "Core Ultra 7" and the full
+ * "Intel(R) Core(TM) Ultra 7 165U" that QC writes, without mistaking the model
+ * number (165U) for the tier.
+ */
+function ultraTier(text) {
+  const m = String(text || '').match(/\b(?:core\s*)?ultra\s*([579])\b/i);
+  return m ? m[1] : null;
+}
 
 const FALLBACK_MATRIX = [
   { category: 'i5', grade: '5th', amount: 14000 },
@@ -42,6 +53,16 @@ function normalizeCategory(processor) {
   if (!raw) return null;
   const p = raw.toLowerCase().replace(/\s+/g, '');
 
+  // Intel Core Ultra. The matrix already carries an "i7 · u7" row at Rs 50,000,
+  // written for exactly these machines, but nothing ever reached it: "Ultra 7"
+  // contains no "i7", so this returned null, lookupInMatrix gave up, and
+  // computeDcAssetValue silently fell back to the BILLED amount. On a rental DC
+  // that is the monthly rent -- Rs 4,200 for SO/26-27/0938 -- so two laptops
+  // worth Rs 52,652 each shipped on SDC/26-27/0009 and /0010 with no e-way bill
+  // and no lock. 24 units on this instance carry an Ultra 7 processor.
+  const ultra = ultraTier(raw);
+  if (ultra) return ultra === '5' ? 'i5' : 'i7';
+
   if (/\bm\s*[1-5]\b/i.test(raw) || /\bm[1-5]\b/i.test(raw) || /apple\s*m[1-5]/i.test(raw)) {
     return 'APPLE';
   }
@@ -57,15 +78,22 @@ function normalizeCategory(processor) {
   return null;
 }
 
-function normalizeGrade(generation) {
-  const raw = String(generation || '').trim().toLowerCase();
-  if (!raw) return null;
-  if (/^u7$|ultra\s*7|u-?series\s*7/.test(raw) || raw === 'u7') return 'u7';
-  const m = raw.match(/(\d{1,2})\s*(st|nd|rd|th)?/i);
-  if (m) {
-    return `${m[1]}th`;
+/**
+ * Generation/grade key. `processor` is consulted as a fallback because the Ultra
+ * tier usually lives in the processor field while generation is blank or a "-"
+ * placeholder, which cleanSpecValue treats as absent.
+ */
+function normalizeGrade(generation, processor) {
+  const raw = cleanSpecValue(generation).toLowerCase();
+  if (raw) {
+    const ultraFromGen = ultraTier(raw) || (/^u([579])$/.exec(raw) || [])[1];
+    if (ultraFromGen) return `u${ultraFromGen}`;
+    const m = raw.match(/(\d{1,2})\s*(st|nd|rd|th)?/i);
+    if (m) return `${m[1]}th`;
+    return raw;
   }
-  return raw;
+  const ultraFromProc = ultraTier(processor);
+  return ultraFromProc ? `u${ultraFromProc}` : null;
 }
 
 function resolveAppleGrade(processor, generation, model) {
@@ -152,7 +180,7 @@ function lookupInMatrix(matrix, processor, generation, model) {
     return row ? Number(row.amount) : 60000;
   }
 
-  const grade = normalizeGrade(generation);
+  const grade = normalizeGrade(generation, processor);
   if (!grade) return null;
 
   const row = rows.find(

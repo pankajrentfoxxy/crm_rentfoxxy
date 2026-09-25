@@ -125,6 +125,15 @@ function isDemoDc(quotationType) {
 }
 
 /**
+ * A repair/service return: the customer's own machine going back to them after
+ * work on it. Nothing is sold, so there is no supply to raise an e-invoice for —
+ * only the e-way bill, which still applies on value like any other movement.
+ */
+function isServiceReturnDc(dcPurpose) {
+  return String(dcPurpose || '').toLowerCase() === 'service_return';
+}
+
+/**
  * First live sales order for this customer (new-customer 1st order).
  * Cancelled SOs are ignored. Used only for demo e-way, not e-invoice.
  */
@@ -190,8 +199,14 @@ async function isNewCustomerFirstDc(db, customerId, dcNumber) {
  * this keys off the first DC (isNewCustomerFirstDc) and not the first SO.
  * Demo DCs are excluded: they use the e-way-only path.
  */
-function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false) {
+function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false, dcPurpose = null) {
   if (isDemoDc(quotationType)) return false;
+  // A service return is not a supply. TTSPL5286 is a gorefurbo unit the customer
+  // already owns; it came in on a support ticket and went back out on
+  // SDC/26-27/0011, and isSaleDc() saw entity_code 'gorefurbo' and demanded an
+  // e-invoice for a laptop nobody was selling. The e-way bill is unaffected —
+  // requiresOutboundEway() still applies it above the value threshold.
+  if (isServiceReturnDc(dcPurpose)) return false;
   return isSaleDc(entityCode, quotationType) || Boolean(isFirstDc);
 }
 
@@ -546,7 +561,7 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
     }
   }
 
-  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) return;
+  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc, head.dc_purpose)) return;
   if (isEinvoiceComplete(head)) return;
 
   throw new Error(
@@ -651,6 +666,7 @@ async function sendAccountsSaleDcEmail({
   shipBy = null,
   dispatchMode = null,
   vehicleNumber = null,
+  userTriggered = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -714,6 +730,7 @@ async function sendAccountsSaleDcEmail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${customerName || 'Customer'} : Create Invoice`,
+    userTriggered,
     html,
     text,
     pdfRelativePath: pdfPath,
@@ -759,6 +776,7 @@ async function sendAccountsDemoEwayEmail({
   pdfPath = null,
   vehicleNumber = null,
   needsVehicle = false,
+  userTriggered = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -868,6 +886,7 @@ async function sendAccountsDemoEwayEmail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${customerName || 'Customer'} : Upload E-Way Bill`,
+    userTriggered,
     html,
     text,
     pdfRelativePath,
@@ -892,6 +911,98 @@ async function sendAccountsDemoEwayEmail({
 /** @deprecated Auto-send on DC create removed — use sendAccountsSaleDcEmail via API. */
 async function emailAccountsSaleDcCreated(params) {
   return sendAccountsSaleDcEmail(params);
+}
+
+/**
+ * Existing challan PDF for the mail, regenerated in its own format if absent.
+ *
+ * Never falls back to generateDocumentPdf for a service return: that is a
+ * different document from the SDC the warehouse printed.
+ */
+async function resolveChallanAttachment(dcNumber, head) {
+  const fsMod = require('fs');
+  const pathMod = require('path');
+  const stored = head?.pdf_path ? String(head.pdf_path) : null;
+  if (stored && fsMod.existsSync(pathMod.join(__dirname, '..', stored))) return stored;
+
+  if (String(head?.dc_purpose || '').toLowerCase() === 'service_return') {
+    const { regenerateServiceDcPdfByNumber } = require('./serviceDcPdfService');
+    const pool = require('../config/db');
+    return (await regenerateServiceDcPdfByNumber(pool, dcNumber)) || null;
+  }
+  return stored;
+}
+
+/**
+ * Ask Accounts for the e-way bill on an outbound DC whose value needs one.
+ *
+ * Extracted so a challan raised outside the sales pipeline can trigger the same
+ * mail the "Request E-Way Bill" button sends. Support raises a Service DC from
+ * the support shell and never sees that button, so nothing asked Accounts for
+ * the bill -- and the SDC is locked until they upload it, so it stayed locked.
+ * SDC/26-27/0009 and /0010 shipped that way.
+ *
+ * Reports why it did nothing rather than throwing, so a caller can treat the
+ * mail as best-effort; a genuine SMTP failure still throws.
+ *
+ * `force` is for a retrospective request on a consignment that has already left
+ * without the bill it needed. The normal guard suppresses requests after
+ * dispatch because they confuse Accounts, but a challan that shipped without an
+ * e-way bill is exactly the case where one still has to be raised.
+ */
+async function requestEwayFromAccounts(dcNumber, { actorUserId = null, force = false } = {}) {
+  const pool = require('../config/db');
+  const lines = await getDeliveryChallanLines(dcNumber);
+  if (!lines.length) return { sent: false, reason: 'dc_not_found' };
+  const head = lines[0];
+
+  const blocked = accountsMailBlockedReason(lines);
+  if (blocked && !force) return { sent: false, reason: 'status_blocked', message: blocked };
+
+  const asset = await computeDcAssetValue(dcNumber, lines);
+  const productValue = asset.total;
+  if (!requiresOutboundEway(head, productValue)) {
+    return { sent: false, reason: 'below_threshold', assetValue: productValue };
+  }
+
+  await markDcEwayRequired(dcNumber, true, productValue);
+
+  // Attach the challan itself, and make sure it is the RIGHT challan. A service
+  // return must go out as its Service Delivery Challan, never as a freshly
+  // generated plain DC: Accounts are entering this into the GST portal, so the
+  // attachment has to be the document the customer and the driver are holding.
+  const pdfRelative = await resolveChallanAttachment(dcNumber, head);
+
+  const { subtotal: billedSubtotal } = await resolveDcBilling(dcNumber, lines);
+  const mailResult = await sendAccountsDemoEwayEmail({
+    dcNumber,
+    salesOrderNumber: head.sales_order_number,
+    customerName: head.customer_name,
+    productValue,
+    billedValue: billedSubtotal,
+    laptops: asset.units,
+    pdfPath: pdfRelative,
+    vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
+    needsVehicle: requiresVehicleNumber(head, true),
+  });
+
+  await pool.query(
+    `UPDATE delivery_challan_lines SET
+        accounts_notified_at = NOW(),
+        accounts_notified_by = $1,
+        updated_at = NOW()
+      WHERE dc_number = $2`,
+    [actorUserId, dcNumber]
+  );
+
+  return {
+    sent: true,
+    assetValue: productValue,
+    to: mailResult.to,
+    cc: mailResult.cc,
+    from: mailResult.from,
+    resend: Boolean(head.accounts_notified_at),
+  };
 }
 
 async function markDcEwayRequired(dcNumber, required, assetValue = null) {
@@ -972,6 +1083,7 @@ module.exports = {
   ACCOUNTS_EMAIL,
   ACCOUNTS_EMAIL_CC,
   isSaleDc,
+  isServiceReturnDc,
   isDemoDc,
   isNewCustomerFirstOrder,
   isNewCustomerFirstDc,
@@ -993,6 +1105,7 @@ module.exports = {
   normalizeVehicleNumber,
   sendAccountsSaleDcEmail,
   sendAccountsDemoEwayEmail,
+  requestEwayFromAccounts,
   emailAccountsSaleDcCreated,
   canUploadSaleDcCompliance,
   canManageDcEwayBill,

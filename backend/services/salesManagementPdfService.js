@@ -6,6 +6,7 @@ const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
 const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
+const { cleanSpecValue, joinSpecParts } = require('../utils/specText');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -27,6 +28,7 @@ function ensureUploadDir() {
 }
 
 const mailTransport = require('./mailTransport');
+const { CUSTOMER_INVOICE } = require('./outboundMessagingGuard');
 
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
@@ -514,10 +516,15 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     y = drawTableHeader(y);
 
     const productText = (r) => {
-      const l1 = `${dash(r.brand)} ${dash(r.model_name)}${r.screen_size ? ` | ${r.screen_size}` : ''}`.trim();
-      const l2 = [r.processor, r.generation].filter(Boolean).join(' | ');
-      const l3 = [r.ram, r.storage].filter(Boolean).join(' | ');
-      const l4 = r.gpu || '';
+      // Brand/model go through joinSpecParts, not dash(): a quote that is not
+      // brand-specific carries "-" and printed as "- N/A". When neither is given
+      // the line is simply omitted — the processor and memory lines below already
+      // describe the machine.
+      const make = joinSpecParts([r.brand, r.model_name]);
+      const l1 = `${make}${r.screen_size ? `${make ? ' | ' : ''}${r.screen_size}` : ''}`.trim();
+      const l2 = joinSpecParts([r.processor, r.generation], ' | ');
+      const l3 = joinSpecParts([r.ram, r.storage], ' | ');
+      const l4 = cleanSpecValue(r.gpu);
       const l5 = [r.serial, r.ttspl].filter(Boolean).join('  ');
       return { l1, l2, l3, l4, l5 };
     };
@@ -914,6 +921,17 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
 }
 
 // ── Service Delivery Challan PDF ─────────────────────────────────────────────
+/** "himachal_pradesh" -> "Himachal Pradesh"; supply_state is stored in either shape. */
+function titleCaseState(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+// Same layout as the standard Delivery Challan (seller block, billing + shipping
+// boxes, laptop table) with a two-party sign-off: the delivering technician and
+// the customer receiving the unit. No pricing — a service return is not a sale.
 async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }) {
   ensureUploadDir();
   const fileName = `${String(serviceDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
@@ -924,7 +942,8 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     || (String(header.transaction_type || '').toLowerCase() === 'sale' ? 'gorefurbo' : 'rentfoxxy');
   const company = await loadCompany(entityCode);
   const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
-  const addr = normalizeDeliveryAddress(header.shipping_address) || {};
+  const shippingAddr = normalizeDeliveryAddress(header.shipping_address) || {};
+  const billing = normalizeDeliveryAddress(header.billing_address) || {};
 
   let gateQrPng = null;
   try {
@@ -937,105 +956,216 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
     const L = 36; const R = 559; const W = R - L;
-    let y = 40;
 
-    const logo = drawCompanyLogo(doc, company, L, y, { maxHeight: 36, maxWidth: 170 });
+    // ── Header band ──────────────────────────────────────────────────────
+    let y = 40;
+    const logo = drawCompanyLogo(doc, company, L, y, { maxHeight: 34, maxWidth: 160 });
     if (!logo.drawn) {
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code || 'rentfoxxy', L, y + 4);
     }
+    const num = (label, value, x, color) => {
+      if (!value) return;
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(color || C.ink).text(value, x, y + 2, { width: 104, align: 'center' });
+      doc.font('Helvetica').fontSize(7).fillColor(C.sub).text(label, x, y + 18, { width: 104, align: 'center' });
+    };
+    num('Service DC Number', serviceDcNumber, 192, C.docNum);
+    num('Original DC Number', header.original_dc_number, 298, C.teal);
+    num('Sales Order Number', header.sales_order_number, 404, C.ink);
     if (gateQrPng) {
       const { drawGateQr } = require('./gateQrService');
-      drawGateQr(doc, gateQrPng, { x: R - 40, y: 36, size: 36, caption: 'Gate scan' });
-      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
-        .text('SERVICE DELIVERY CHALLAN', 200, y, { width: 270, align: 'right' });
-      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-        .text('Repaired unit return to customer', 200, y + 20, { width: 270, align: 'right' });
-    } else {
-      doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
-        .text('SERVICE DELIVERY CHALLAN', 230, y, { width: 293, align: 'right' });
-      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-        .text('Repaired unit return to customer', 230, y + 20, { width: 293, align: 'right' });
+      drawGateQr(doc, gateQrPng, { x: R - 40, y: 38, size: 36, caption: 'Gate scan' });
     }
-    y += 46;
+    y += 50;
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
 
-    const num = (label, value, x, color) => {
-      doc.font('Helvetica-Bold').fontSize(12).fillColor(color || C.ink)
-        .text(value || 'N/A', x, y, { width: 165, align: 'center' });
-      doc.font('Helvetica').fontSize(7).fillColor(C.sub)
-        .text(label, x, y + 17, { width: 165, align: 'center' });
-    };
-    num('Service DC Number', serviceDcNumber, L, C.docNum);
-    num('Original DC Number', header.original_dc_number || 'N/A', L + 180, C.teal);
-    num('Sales Order Number', header.sales_order_number || 'N/A', L + 360, C.ink);
-    y += 38;
-    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
-    y += 12;
+    // ── Seller block + title ─────────────────────────────────────────────
+    const blockTop = y;
+    doc.font('Helvetica-Bold').fontSize(15).fillColor(accent)
+      .text('SERVICE DELIVERY CHALLAN', L + W / 2, blockTop, { width: W / 2, align: 'right' });
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+      .text('Repaired unit return to customer', L + W / 2, blockTop + 18, { width: W / 2, align: 'right' });
+    if (header.support_ticket_id) {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(`Support Ticket: #${header.support_ticket_id}`, L + W / 2, blockTop + 32, { width: W / 2, align: 'right' });
+    }
 
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
-      .text(`Support Ticket: #${header.support_ticket_id || '—'}`, L, y);
+    const docDate = formatPdfDateIst(header.dc_date || header.created_at, { withLabel: false })
+      || formatPdfNowIst({ withLabel: false });
+    const dispatchDate = formatPdfDateIst(header.dispatched_at, { fallback: null, withLabel: false });
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub).text(`Date: ${docDate}`, L, y);
+    y += 14;
+    if (dispatchDate) { doc.text(`Dispatch Date: ${dispatchDate}`, L, y); y += 14; }
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(C.ink).text(company.legal_name, L, y, { width: W / 2 });
+    y = doc.y + 4;
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    if (company.email) { doc.text(`Email: ${company.email}`, L, y); y += 12; }
+    if (company.phone) { doc.text(`Phone: ${company.phone}`, L, y); y += 12; }
+    if (company.gstin) { doc.text(`GSTIN: ${company.gstin}`, L, y); y += 12; }
+    if (company.address) {
+      doc.text(`Address: ${company.address}`, L, y, { width: W });
+      y += doc.heightOfString(`Address: ${company.address}`, { width: W });
+    }
+    y += 8;
+
+    // Type badge + dispatch tags
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Service Return', L, y);
     y += 16;
+    const tags = [];
+    const shipBy = String(header.dispatch_mode || '').toLowerCase();
+    if (shipBy === 'by_hand' || shipBy === 'inhouse' || shipBy === 'technician') tags.push('By Hand');
+    else if (shipBy === 'by_courier' || shipBy === 'courier') tags.push('By Courier');
+    else if (shipBy === 'by_porter' || shipBy === 'porter') tags.push('By Porter');
+    if (header.delivery_person_name) tags.push(header.delivery_person_name);
+    if (header.courier_name) tags.push(header.courier_name);
+    if (header.awb_number) tags.push(header.awb_number);
+    let tx = L;
+    for (const t of tags) {
+      const w = doc.font('Helvetica').fontSize(8).widthOfString(t) + 16;
+      doc.roundedRect(tx, y, w, 16, 8).strokeColor(accent).lineWidth(0.8).stroke();
+      doc.fillColor(accent).text(t, tx + 8, y + 4);
+      tx += w + 6;
+    }
+    y += tags.length ? 24 : 4;
 
-    const shipTitle = `Deliver to: ${header.customer_name || addr.name || 'Customer'}`;
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(shipTitle, L, y, { width: W });
-    y = doc.y + 6;
-    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
-    const row = (lab, val) => {
-      if (val == null || val === '') return;
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
-        .text(`${lab}: `, L, y, { continued: true, width: W })
-        .font('Helvetica').text(String(val), { width: W });
-      y = doc.y + 2;
+    // ── Billing + Shipping two-column ────────────────────────────────────
+    const colW = (W - 12) / 2;
+    const boxTop = y;
+    const addrBlock = (x, heading, name, a) => {
+      let yy = boxTop + 8;
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(heading, x + 10, yy, { width: colW - 20 });
+      yy = doc.y + 2;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(name, x + 10, yy, { width: colW - 20 });
+      yy = doc.y + 4;
+      const row = (lab, val) => {
+        if (val == null || val === '') return;
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+          .text(`${lab}: `, x + 10, yy, { continued: true, width: colW - 20 })
+          .font('Helvetica').text(String(val), { width: colW - 20 });
+        yy = doc.y + 2;
+      };
+      row('Email', a.email);
+      row('Phone', a.phone);
+      row('City', a.city);
+      row('State', a.state ? titleCaseState(a.state) : null);
+      row('Country', a.country || 'India');
+      row('Zip Code', a.zip_code || a.pincode);
+      row('Address', a.address);
+      if (a.gst) row('GSTIN', a.gst);
+      if (a.pos) row('Place of Supply', a.pos);
+      return yy;
     };
-    row('Phone', header.customer_phone || addr.phone);
-    row('Email', header.customer_email);
-    row('Address', formatDeliveryAddressLine(header.shipping_address));
-    y += 10;
+    const custName = header.customer_name || billing.name || shippingAddr.name || 'Customer';
+    const leftEnd = addrBlock(L, 'Billing Address:', billing.name || custName, {
+      ...billing,
+      email: header.customer_email || billing.email,
+      phone: billing.phone || header.customer_phone,
+      gst: String(header.gst_number || billing.gst_number || '').trim(),
+      pos: header.supply_state ? titleCaseState(header.supply_state) : null,
+    });
+    const rightEnd = addrBlock(L + colW + 12, 'Shipping Address:', shippingAddr.name || custName, {
+      ...shippingAddr,
+      phone: shippingAddr.phone || header.customer_phone,
+    });
+    const boxBottom = Math.max(leftEnd, rightEnd) + 8;
+    doc.roundedRect(L, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+    doc.roundedRect(L + colW + 12, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+    y = boxBottom + 14;
 
+    // ── Laptop details ───────────────────────────────────────────────────
     const sdcHsn = resolveHsnForDisplay(header.hsn_code, { transactionType: 'repair' }) || '847330';
     const cols = [
-      { key: 'idx', label: '#', w: 28, align: 'center' },
-      { key: 'product', label: 'Laptop / Product', w: 230, align: 'left' },
-      { key: 'hsn', label: 'HSN/SAC', w: 60, align: 'center' },
-      { key: 'ttspl', label: 'Machine No.', w: 100, align: 'left' },
-      { key: 'serial', label: 'Serial No.', w: 105, align: 'left' },
+      { key: 'idx', label: '#', w: 26, align: 'center' },
+      { key: 'product', label: 'Laptop Details', w: 211, align: 'left' },
+      { key: 'hsn', label: 'HSN/SAC', w: 58, align: 'center' },
+      { key: 'ttspl', label: 'Machine No.', w: 88, align: 'center' },
+      { key: 'serial', label: 'Serial No.', w: 98, align: 'center' },
+      { key: 'qty', label: 'Qty.', w: 42, align: 'center' },
     ];
-    const drawHeader = (yh) => {
-      doc.rect(L, yh, W, 22).fill(accent);
+    const drawTableHeader = (yy) => {
+      doc.rect(L, yy, W, 22).fill(C.teal);
       let cx = L;
       doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
-      for (const c of cols) { doc.text(c.label, cx + 6, yh + 6, { width: c.w - 12, align: c.align }); cx += c.w; }
-      return yh + 22;
+      for (const c of cols) { doc.text(c.label, cx + 6, yy + 6, { width: c.w - 12, align: c.align }); cx += c.w; }
+      return yy + 22;
     };
-    y = drawHeader(y);
-    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    y = drawTableHeader(y);
     units.forEach((u, i) => {
-      const l1 = `${dash(u.brand)} ${dash(u.model || u.model_name)}`.trim();
-      const l2 = [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' | ');
-      const rowH = Math.max(34, 14 + (l2 ? 11 : 0));
+      const model = u.model || u.model_name;
+      // Imported models often already start with the brand ("HP EliteBook 640").
+      const brandInModel = u.brand && model
+        && String(model).toLowerCase().startsWith(String(u.brand).toLowerCase());
+      const make = joinSpecParts([brandInModel ? null : u.brand, model]);
+      const l1 = `${make}${u.screen_size ? `${make ? ' | ' : ''}${u.screen_size}` : ''}`.trim() || 'Laptop';
+      const l2 = joinSpecParts([u.processor, u.generation], ' | ');
+      const l3 = joinSpecParts([u.ram, u.storage], ' | ');
+      const l4 = cleanSpecValue(u.gpu);
+      const sub = [l2, l3, l4].filter(Boolean);
+      const rowH = Math.max(40, 16 + sub.length * 10);
+      if (y + rowH > 760) { doc.addPage(); y = 40; y = drawTableHeader(y); }
       let cx = L;
       for (const c of cols) { doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke(); cx += c.w; }
-      doc.text(String(i + 1), L + 4, y + rowH / 2 - 5, { width: cols[0].w - 8, align: 'center' });
-      let px = L + cols[0].w + 6; let py = y + 6;
-      doc.font('Helvetica-Bold').fontSize(8.5).text(l1, px, py, { width: cols[1].w - 12 });
-      if (l2) doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(l2, px, py + 11, { width: cols[1].w - 12 });
-      doc.font('Helvetica').fontSize(8).fillColor(C.ink)
-        .text(sdcHsn, L + cols[0].w + cols[1].w + 4, y + rowH / 2 - 5, { width: cols[2].w - 8, align: 'center' });
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
-        .text(dash(u.ttspl), L + cols[0].w + cols[1].w + cols[2].w + 6, y + rowH / 2 - 5, { width: cols[3].w - 12 });
-      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
-        .text(dash(u.serial), L + cols[0].w + cols[1].w + cols[2].w + cols[3].w + 6, y + rowH / 2 - 5, { width: cols[4].w - 12 });
+      const mid = y + rowH / 2 - 5;
+      cx = L;
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(String(i + 1), cx + 4, mid, { width: cols[0].w - 8, align: 'center' });
+      cx += cols[0].w;
+      let py = y + 6;
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(l1, cx + 6, py, { width: cols[1].w - 12 });
+      py += 11;
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub);
+      for (const ln of sub) { doc.text(ln, cx + 6, py, { width: cols[1].w - 12 }); py += 10; }
+      cx += cols[1].w;
+      const cell = (text, c, bold) => {
+        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor(C.ink)
+          .text(text, cx + 6, mid, { width: c.w - 12, align: c.align });
+        cx += c.w;
+      };
+      cell(sdcHsn, cols[2]);
+      cell(dash(u.ttspl), cols[3], true);
+      cell(dash(u.serial), cols[4]);
+      cell('1 Pcs.', cols[5]);
       y += rowH;
     });
     y += 14;
 
+    // ── Remarks ──────────────────────────────────────────────────────────
     if (header.remarks) {
-      doc.font('Helvetica-Bold').fontSize(10).fillColor(accent).text('Remarks', L, y);
-      y += 12;
-      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text(String(header.remarks), L, y, { width: W });
-      y = doc.y + 12;
+      if (y > 720) { doc.addPage(); y = 40; }
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Remarks', L, y);
+      y += 16;
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text(String(header.remarks), L + 6, y, { width: W - 12 });
+      y = doc.y + 14;
     }
+
+    // ── Technician + Customer sign-off ───────────────────────────────────
+    if (y > 650) { doc.addPage(); y = 40; }
+    const half = (W - 12) / 2;
+    const boxH = 112;
+    const signBox = (x, title, note, { name, phone, signAbs, date }) => {
+      doc.roundedRect(x, y, half, boxH, 6).strokeColor(C.line).lineWidth(1).stroke();
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(title, x + 10, y + 8, { width: half - 20 });
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.sub).text(note, x + 10, y + 21, { width: half - 20 });
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text('Signature:', x + 10, y + 52);
+      let drawn = false;
+      if (signAbs) {
+        try { doc.image(signAbs, x + 62, y + 36, { fit: [110, 30], align: 'left' }); drawn = true; } catch (_) { /* fall through */ }
+      }
+      if (!drawn) doc.text('______________________', x + 62, y + 52);
+      doc.text(`Name: ${name || '______________________'}`, x + 10, y + 72, { width: half - 20 });
+      doc.text(phone ? `Phone: ${phone}` : `Date: ${date || '______________'}`, x + 10, y + 88, { width: half - 20 });
+      if (phone) doc.text(`Date: ${date || '______________'}`, x + half / 2 + 10, y + 88, { width: half / 2 - 20 });
+    };
+    const deliveredOn = formatPdfDateIst(header.delivered_at, { fallback: null, withLabel: false });
+    signBox(L, 'Technician Signature (Delivered by)',
+      'Handed over the above item(s) to the customer.',
+      { name: header.delivery_person_name, phone: header.delivery_person_phone, date: deliveredOn });
+    signBox(L + half + 12, 'Customer Signature (Received by)',
+      'Received the above item(s) in good condition.',
+      {
+        signAbs: resolveSignFile(header.esign_url),
+        date: header.esign_url ? deliveredOn : null,
+      });
+    y += boxH + 12;
 
     doc.font('Helvetica').fontSize(7).fillColor(C.sub)
       .text('This Service Delivery Challan records return of the repaired unit to the customer under the original rental/sale agreement. No new Sales Order is created.', L, y, { width: W, align: 'center' });
@@ -1053,8 +1183,10 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
  * 'dispatch' is the no-reply mailbox, used for OTP and delivery notifications so
  * they no longer leave (and land in) the sales inbox. Omitted = the general CRM
  * mailer, which is what invoices and e-invoices still use.
+ * `customerInvoice` marks an invoice going to a customer; outboundMessagingGuard
+ * blocks it unless CUSTOMER_INVOICE_EMAIL_ENABLED=true.
  */
-async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer }) {
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer, customerInvoice = false }) {
   const named = mailer ? mailTransport.getTransport(mailer) : null;
   const transport = named || getMailTransport();
   if (!transport || !to) return false;
@@ -1074,6 +1206,7 @@ async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, rep
   if (html) mail.html = html;
   if (cc) mail.cc = cc;
   if (replyTo) mail.replyTo = replyTo;
+  if (customerInvoice) mail[CUSTOMER_INVOICE] = true;
   await transport.sendMail(mail);
   return true;
 }

@@ -5,11 +5,12 @@
 import { canViewSection } from './permissionHelper';
 export const SUPPORT_ROLES = ['super_admin', 'admin', 'manager', 'support_lead', 'support_tech'];
 
-/** Sales / delivery sections a support_tech may open outside /support when granted. */
+/** Sales / delivery sections a support_tech may open outside /support when granted.
+ *  technicians_bucket_list is intentionally omitted — that is the admin "all techs"
+ *  view; field techs use technician_bucket → My Deliveries. */
 export const SUPPORT_TECH_DELIVERY_SECTIONS = [
   'technician_bucket',
   'delivery_my_deliveries',
-  'technicians_bucket_list',
   'delivery_challans',
   'delivery_register_management',
   'return_dc',
@@ -75,7 +76,9 @@ export const canAccessCustomerInventory = (user) => {
     return perms.includes('customer_inventory_access');
 };
 
-/** True when a support_tech may leave the /support shell for this path (permission-aware). */
+/** True when a support_tech may leave the /support shell for this path (permission-aware).
+ *  Routes that already pass a ProtectedRoute section/sections check are allowed
+ *  separately in ProtectedRoute — this list covers ungated / legacy paths only. */
 export function supportTechnicianMayAccessPath(pathname, canView) {
   if (!pathname) return false;
   if (pathname.startsWith('/support')) return true;
@@ -85,6 +88,38 @@ export function supportTechnicianMayAccessPath(pathname, canView) {
   }
   if (pathname.startsWith('/delivery-register-management')) {
     return canView('delivery_register_management');
+  }
+  // Production — if User Permissions grant any floor section, allow the module.
+  if (pathname.startsWith('/floor-pipeline')) {
+    return [
+      'floor_pipeline',
+      'floor_tickets',
+      'chip_level_repair',
+      'qc_management',
+      'dispatch_qc',
+      'pending_inventory',
+      'diagnosis_failed',
+    ].some((s) => canView(s));
+  }
+  if (pathname.startsWith('/support-parts')) {
+    return canView('support_part_requests') || canView('support_part_challan');
+  }
+  if (pathname.startsWith('/inventory-management')) {
+    return [
+      'inventory_management',
+      'inventory_asset_movement',
+      'customer_inventory',
+      'ttspl_history',
+      'parts_dashboard',
+      'parts_inventory',
+      'parts_approval',
+      'parts_history',
+      'parts_discarded',
+      'physical_dead_parts',
+      'scrap_challans',
+      'part_vendor_repair',
+      'dispatch_charger_warehouse',
+    ].some((s) => canView(s));
   }
   return false;
 }

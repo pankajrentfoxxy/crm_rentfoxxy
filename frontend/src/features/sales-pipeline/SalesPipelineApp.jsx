@@ -84,7 +84,14 @@ export default function SalesPipelineApp() {
       <Route
         path="technician-bucket"
         element={(
-          <ProtectedRoute sections={['technicians_bucket_list', 'technician_bucket']} action="view">
+          // Admin / ops view of ALL technicians. Field techs use My Deliveries.
+          // Do not also accept technician_bucket here — that section is assigned-only
+          // and used to open this URL incorrectly (support_tech saw every tech).
+          <ProtectedRoute
+            section="technicians_bucket_list"
+            action="view"
+            fallback="/sales-pipeline/my-deliveries"
+          >
             <TechnicianBucketPage />
           </ProtectedRoute>
         )}

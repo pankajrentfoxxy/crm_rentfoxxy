@@ -497,6 +497,7 @@ exports.sendAccountsVrdcEwayMail = async (req, res) => {
       vendorName: dc.vendor_name,
       productValue,
       laptops: vrdcEway.laptopRowsFromItems(dc.items || []),
+      userTriggered: true,
     });
 
     await pool.query(

@@ -58,7 +58,9 @@ const SECTION_ALIASES = {
   floor_pipeline: ['floor_pipeline', 'floor_tickets', 'tickets'],
   floor_tickets: ['floor_tickets', 'floor_pipeline', 'tickets'],
   tickets: ['tickets', 'floor_pipeline', 'floor_tickets'],
-  chip_level_repair: ['chip_level_repair', 'floor_pipeline', 'tickets'],
+  // Include floor_tickets so a user override of All Data on Floor Tickets
+  // is visible when resolving chip/floor list scope (not only floor_pipeline/tickets).
+  chip_level_repair: ['chip_level_repair', 'floor_pipeline', 'floor_tickets', 'tickets'],
   qc_management: ['qc_management', 'tickets'],
   dispatch: ['dispatch', 'delivery_challans'],
   delivery_challans: ['delivery_challans', 'dispatch'],
@@ -207,6 +209,13 @@ async function hasUnrestrictedSalesOrderAccess(userId, role, cache) {
   return false;
 }
 
+const TICKET_LIST_SCOPE_SECTIONS = [
+  'tickets',
+  'floor_pipeline',
+  'floor_tickets',
+  'chip_level_repair',
+];
+
 async function isRestrictedToAssignedAny(req, sections) {
   for (const section of sections) {
     if (await isRestrictedToAssigned(req, section)) return true;
@@ -214,23 +223,65 @@ async function isRestrictedToAssignedAny(req, sections) {
   return false;
 }
 
+/**
+ * True when the user can view at least one floor/ticket section with data_scope=all.
+ * Matches sales-order unrestricted access: one explicit All wins over sibling
+ * sections that still inherit role-default Assigned (e.g. chip_level_repair).
+ */
+async function hasUnrestrictedTicketListAccess(req) {
+  const role = req.user?.role;
+  if (role === 'super_admin' || role === 'admin') return true;
+  const userId = scopeUserId(req.user);
+  if (!userId) return false;
+  if (!req.dataScopeCache) req.dataScopeCache = {};
+  if (!req.permissionCache) req.permissionCache = {};
+
+  for (const section of TICKET_LIST_SCOPE_SECTIONS) {
+    // eslint-disable-next-line no-await-in-loop
+    const canView = await hasPermission(userId, role, section, 'can_view', req.permissionCache);
+    if (!canView) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const scope = await getEffectiveDataScope(userId, role, section, req.dataScopeCache);
+    if (scope === DATA_SCOPE_ALL) return true;
+  }
+  return false;
+}
+
+/**
+ * Ticket list visibility is decided by data_scope alone — All Data means every
+ * ticket, Assigned means the user's own.
+ *
+ * There was briefly a second, invisible gate here that intersected All Data with
+ * the user's user_teams membership. It could not work, because
+ * tickets.assigned_team_id is not a floor: it is whichever team owns the ticket
+ * at its CURRENT stage, and it changes every time the ticket moves (Warehouse →
+ * Diagnose → Chip Level → Assembly → Testing → QC1 → QC2 → Dispatch QC). So the
+ * filter hid any ticket parked with a team the viewer was not a member of --
+ * including all 121 open tickets at the "Floor Manager" stage, which sit on
+ * Warehouse Team (1) while no floor manager is a member of it. The queue named
+ * after floor managers was invisible to every floor manager, TTSPL7662 on
+ * ticket 3004 among them, while Inventory's QC view still showed it active.
+ *
+ * If floor-scoped visibility is wanted later it needs a real floor column and a
+ * visible setting, not an implicit AND on an explicit All Data grant.
+ */
 async function resolveTicketListScope(req) {
   if (req.user?.role === 'super_admin') {
     return { mode: 'all' };
   }
 
-  const assignedOnly = await isRestrictedToAssignedAny(req, [
-    'tickets',
-    'floor_pipeline',
-    'floor_tickets',
-    'chip_level_repair',
-  ]);
+  const userId = scopeUserId(req.user);
 
-  if (!assignedOnly) {
-    return { mode: 'all' };
+  // QC inspectors list the full QC1/QC2/Dispatch QC queue; the stage filter is
+  // applied in ticketController.
+  if (isQcInspectorRole(req.user?.role)) {
+    return { mode: 'all', userId };
   }
 
-  const userId = scopeUserId(req.user);
+  if (await hasUnrestrictedTicketListAccess(req)) {
+    return { mode: 'all', userId };
+  }
+
   const view = String(req.query?.view || '').toLowerCase();
   if (view === 'completed' && userId) {
     return { mode: 'assigned_or_worked', userId };
@@ -240,47 +291,38 @@ async function resolveTicketListScope(req) {
 }
 
 function buildTicketListAssignmentClause(scope, paramCount, params) {
-  if (scope.mode === 'all') return { clause: '', paramCount };
+  let clause = '';
+  let next = paramCount;
 
   if (scope.mode === 'assigned_or_worked' && scope.userId) {
     params.push(scope.userId);
-    const clause = ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
-      SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}
+    clause += ` AND (t.assigned_user_id = $${next} OR EXISTS (
+      SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${next}
         AND a.action IN ('stage_changed','stage_jumped')
     ))`;
-    return { clause, paramCount: paramCount + 1 };
-  }
-
-  if (scope.mode === 'assigned_strict' && scope.userId) {
+    next += 1;
+  } else if (scope.mode === 'assigned_strict' && scope.userId) {
     params.push(scope.userId);
-    return {
-      clause: ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`,
-      paramCount: paramCount + 1,
-    };
+    clause += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${next}`;
+    next += 1;
   }
 
-  return { clause: '', paramCount };
+  // mode 'all' adds no clause at all — that is what All Data means.
+
+  return { clause, paramCount: next };
 }
 
 async function canAccessTicketRecord(req, ticket) {
   if (req.user?.role === 'super_admin') return true;
 
+  const userId = scopeUserId(req.user);
+  if (userId && Number(ticket.assigned_user_id) === userId) return true;
+
   if (isQcInspectorRole(req.user?.role) && isQcInspectorQueueStage(ticket.stage_name)) {
     return true;
   }
 
-  const assignedOnly = await isRestrictedToAssignedAny(req, [
-    'tickets',
-    'floor_pipeline',
-    'floor_tickets',
-    'chip_level_repair',
-  ]);
-
-  if (!assignedOnly) return true;
-
-  const userId = scopeUserId(req.user);
-  if (!userId) return false;
-  return Number(ticket.assigned_user_id) === userId;
+  return hasUnrestrictedTicketListAccess(req);
 }
 
 function appendCreatedByFilter(alias, userId, params) {
@@ -313,6 +355,7 @@ module.exports = {
   SO_SERIAL_EDIT_SECTIONS,
   SO_SERIAL_VIEW_SECTIONS,
   SO_LAPTOPS_TAB_VIEW_SECTIONS,
+  TICKET_LIST_SCOPE_SECTIONS,
   sectionsToCheck,
   scopeUserId,
   getEffectiveDataScope,
@@ -323,6 +366,7 @@ module.exports = {
   assertReplacementSalesOrderAccessIfScoped,
   resolveSalesOrderListOrderType,
   hasUnrestrictedSalesOrderAccess,
+  hasUnrestrictedTicketListAccess,
   resolveTicketListScope,
   buildTicketListAssignmentClause,
   canAccessTicketRecord,

@@ -3,6 +3,10 @@ const path = require('path');
 const pool = require('../config/db');
 const { generateEInvoice, cancelEInvoice, generateEWayBill } = require('../services/zohoGspService');
 const { emailDocument, generateDocumentPdf } = require('../services/salesManagementPdfService');
+const {
+  isCustomerInvoiceEmailEnabled,
+  CUSTOMER_INVOICE_DISABLED_MESSAGE,
+} = require('../services/outboundMessagingGuard');
 
 async function fetchDcContext(dcNumber) {
   const dcRes = await pool.query(
@@ -156,6 +160,9 @@ exports.getDcEInvoiceStatus = async (req, res) => {
 
 exports.sendEInvoiceEmail = async (req, res) => {
   try {
+    if (!isCustomerInvoiceEmailEnabled()) {
+      return res.status(403).json({ success: false, email_sent: false, message: CUSTOMER_INVOICE_DISABLED_MESSAGE });
+    }
     const { dcNumber } = req.params;
     const { to_email, cc_emails } = req.body || {};
     const ctx = await fetchDcContext(dcNumber);
@@ -190,6 +197,7 @@ exports.sendEInvoiceEmail = async (req, res) => {
       subject: `E-Invoice for DC ${dcNumber} — IRN ${ctx.head.irn}`,
       text: `E-Invoice generated for delivery challan ${dcNumber}.\nIRN: ${ctx.head.irn}`,
       pdfRelativePath: pdfPath,
+      customerInvoice: true,
     });
     await pool.query(
       `UPDATE delivery_challan_lines

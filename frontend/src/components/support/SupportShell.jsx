@@ -56,7 +56,6 @@ export default function SupportShell() {
                   <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
                 </>
               )}
-              <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
             </nav>
           ) : (
             <nav>
@@ -113,9 +112,11 @@ export default function SupportShell() {
                 <Truck className="w-5 h-5" /> Deliveries
               </NavLink>
             )}
-            <NavLink to="/support/my-resolved" className={({ isActive }) => (isActive ? 'active' : '')}>
-              <CheckCircle2 className="w-5 h-5" /> Resolved
-            </NavLink>
+            {!warehouseLead && (
+              <NavLink to="/support/my-pickups" className={({ isActive }) => (isActive ? 'active' : '')}>
+                <Truck className="w-5 h-5" /> Pickups
+              </NavLink>
+            )}
           </>
         ) : (
           <>

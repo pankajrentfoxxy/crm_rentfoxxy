@@ -43,14 +43,42 @@ import {
 } from './utils';
 import './support.css';
 
+/**
+ * The pickup form only posts the specs it happens to hold, so an item can reach
+ * support with no processor and no generation — and GPU and screen size have no
+ * column on support_ticket_items at all. The backend now sends inv_* fields
+ * resolved from the asset record, so every field falls back to those rather
+ * than rendering a dash over a laptop whose configuration is perfectly well
+ * known.
+ */
+const pick = (...vals) => vals.find((v) => v != null && String(v).trim() !== '') || '';
+
+/** "HP" + "HP EliteBook 640" reads as "HP HP EliteBook 640" on screen. */
+function dedupeBrand(brand, model) {
+  const b = String(brand || '').trim();
+  const m = String(model || '').trim();
+  if (!b || !m) return m;
+  return m.toLowerCase().startsWith(b.toLowerCase() + ' ') ? m.slice(b.length + 1) : m;
+}
+
 function SpecGrid({ item }) {
+  const brand = pick(item.brand, item.inv_brand);
+  const model = dedupeBrand(brand, pick(item.model, item.inv_model_name));
+  const processor = pick(item.processor, item.inv_processor);
+  const generation = pick(item.generation, item.inv_generation);
+  const gpu = pick(item.gpu, item.inv_gpu);
+  const screen = pick(item.screen_size, item.inv_screen_size);
+
   const cells = [
-    { label: 'Brand', value: item.brand },
-    { label: 'Model', value: item.model },
+    { label: 'Brand', value: brand },
+    { label: 'Model', value: model },
     { label: 'Serial', value: item.unique_serial_number || item.serial_number, mono: true },
-    { label: 'Processor', value: [item.processor, item.generation].filter(Boolean).join(' ') || '—' },
-    { label: 'RAM', value: item.ram },
-    { label: 'Storage', value: item.storage }
+    { label: 'Processor', value: [processor, generation].filter(Boolean).join(' ') },
+    { label: 'RAM', value: pick(item.ram, item.inv_ram) },
+    { label: 'Storage', value: pick(item.storage, item.inv_storage) },
+    // Only shown when known — a dash on every ticket would be noise.
+    ...(gpu ? [{ label: 'Graphics', value: gpu }] : []),
+    ...(screen ? [{ label: 'Screen', value: screen }] : []),
   ];
   return (
     <div className="support-v3-spec-grid">

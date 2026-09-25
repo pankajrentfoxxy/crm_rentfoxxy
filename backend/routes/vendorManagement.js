@@ -328,6 +328,32 @@ router.get(...prefixedDcRoute(vrtdcBase, '/pdf', ...authorizeReturnToVendor, ven
 router.post(...prefixedDcRoute(vrtdcBase, '/dispatch', ...authorizeReturnToVendor, vendorReturn.dispatchDc));
 router.post(...prefixedDcRoute(vrtdcBase, '/complete', ...authorizeReturnToVendor, vendorReturn.completeDc));
 router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...authorizeReturnToVendor, vendorReturn.cancelDc));
+
+// ---------- VRTDC E-way Bill ----------
+// MUST be registered before the catch-all getDc below. A VRTDC number contains
+// slashes (VRTDC/26-27/0001), so these use prefixedDcRoute's `^/dc/(.+)/eway$`
+// form; a plain :dcNumber route only matches one path segment and the catch-all
+// then swallows the whole thing, handing getDc the DC number with "/eway" still
+// glued on. `/eway` and `/request-eway` are also in DC_ACTION_SUFFIXES so that
+// normalizeDcNumber strips them if anything else ever falls through to here.
+//
+// The document lands in backend/uploads/vendor-return-eway/<dc>/, behind
+// uploadsAuth like the rest of /uploads, so it is not world-readable. Saving is
+// NOT gated on vendor_return_to_vendor — it is the Accounts team's job, and the
+// controller checks the dc_eway_bill permission itself.
+const vrtdcEwayUpload = vendorReturn.createEwayUpload();
+router.get(...prefixedDcRoute(vrtdcBase, '/eway', ...authorizeReturnToVendor, vendorReturn.getEwayCompliance));
+router.post(...prefixedDcRoute(vrtdcBase, '/request-eway', ...authorizeReturnToVendor, vendorReturn.requestEwayBill));
+router.post(...prefixedDcRoute(
+  vrtdcBase,
+  '/eway',
+  authMiddleware,
+  wrapMulter(vrtdcEwayUpload.single('eway_bill_pdf')),
+  vendorReturn.saveEwayBill
+));
+router.post(...prefixedDcRoute(vrtdcBase, '/item-values', ...authorizeReturnToVendor, vendorReturn.setItemValues));
+router.get(...prefixedDcRoute(vrtdcBase, '/eway-pdf', ...authorizeReturnToVendor, vendorReturn.downloadEwayPdf));
+
 router.get(...prefixedDcRoute(vrtdcBase, '', ...authorizeReturnToVendor, vendorReturn.getDc));
 router.get('/return-to-vendor/dc/:dcNumber', authorizeReturnToVendor, vendorReturn.getDc);
 router.post('/return-to-vendor/dc/:dcNumber/dispatch', rtvEdit, vendorReturn.dispatchDc);

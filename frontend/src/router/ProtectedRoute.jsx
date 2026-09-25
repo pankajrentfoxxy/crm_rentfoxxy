@@ -55,9 +55,17 @@ export default function ProtectedRoute({
   }
 
   if (isSupportTechnician(user)) {
-    const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
-    if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
-      return <Navigate to="/support/my-tickets" replace />;
+    // If this route already passed a section/sections RBAC check, honour it.
+    // The Support shell lock only applies to ungated paths (legacy routes),
+    // otherwise granting Production / Inventory / Parts to a support_tech in
+    // User Permissions still redirects them to /support/my-tickets on click.
+    const sectionGateApplied = Boolean(section)
+      || (Array.isArray(sections) && sections.length > 0);
+    if (!sectionGateApplied) {
+      const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
+      if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
+        return <Navigate to="/support/my-tickets" replace />;
+      }
     }
   }
 

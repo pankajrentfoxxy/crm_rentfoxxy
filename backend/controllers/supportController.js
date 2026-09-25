@@ -965,12 +965,41 @@ const getTicketWithItems = async (ticketId, user) => {
     if (ticketRes.rows.length === 0) return null;
     const ticket = ticketRes.rows[0];
 
+    // Specs come from customer_inventory when the item is linked to an ERP
+    // inventory row, and from the asset itself when it is not.
+    //
+    // customer_inventory_id is null on most items — it is only set for the ERP
+    // rental path, and no sold asset has a row there at all — so every inv_*
+    // field came back empty and support saw whatever partial spec the pickup
+    // form happened to post. TTSPL7427 arrived with no processor and no
+    // generation, and GPU and screen size cannot even be stored: those two
+    // columns do not exist on support_ticket_items.
+    //
+    // vendor_serial_numbers holds the real configuration, captured at GRN and
+    // corrected since, so it is joined as the fallback. COALESCE order is
+    // deliberate: the item's own value wins where it has one (someone may have
+    // corrected it on the ticket), then the ERP row, then the asset.
     let itemsSql = `
         SELECT i.*, u.name AS assigned_to_name, c.name AS issue_category_name,
-               ci.processor AS inv_processor, ci.model_name AS inv_model_name,
-               ci.ram AS inv_ram, ci.storage AS inv_storage, ci.generation AS inv_generation,
-               ci.gpu AS inv_gpu, ci.screen_size AS inv_screen_size,
-               ci.asset_bucket AS inv_asset_bucket, ci.customer_id AS inv_customer_id,
+               COALESCE(ci.processor,   vsn.extra->>'processor',
+                        vsn.grn_received_config->>'processor')            AS inv_processor,
+               COALESCE(ci.model_name,  vsn.extra->>'model',
+                        vsn.extra->>'model_name')                          AS inv_model_name,
+               COALESCE(ci.ram,         vsn.extra->>'ram',
+                        vsn.grn_received_config->>'ram')                   AS inv_ram,
+               COALESCE(ci.storage,     vsn.extra->>'storage', vsn.extra->>'ssd',
+                        vsn.grn_received_config->>'storage')               AS inv_storage,
+               COALESCE(ci.generation,  vsn.extra->>'generation',
+                        vsn.grn_received_config->>'generation')            AS inv_generation,
+               COALESCE(ci.gpu,         vsn.extra->>'gpu',
+                        vsn.grn_received_config->>'gpu')                   AS inv_gpu,
+               COALESCE(ci.screen_size, vsn.extra->>'screen_size',
+                        vsn.grn_received_config->>'screen_size')           AS inv_screen_size,
+               COALESCE(vsn.extra->>'brand',
+                        vsn.grn_received_config->>'brand')                 AS inv_brand,
+               vsn.inventory_status                                        AS inv_inventory_status,
+               COALESCE(ci.asset_bucket, vsn.inventory_status) AS inv_asset_bucket,
+               COALESCE(ci.customer_id, vsn.current_customer_id) AS inv_customer_id,
                rdc.pdf_path AS return_dc_pdf_path,
                rdc.sales_order_number AS return_so_number,
                rdc.original_dc_number AS original_dc_number,
@@ -981,6 +1010,19 @@ const getTicketWithItems = async (ticketId, user) => {
         LEFT JOIN users u ON u.user_id = i.assigned_to
         LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
         LEFT JOIN customer_inventory ci ON ci.id = i.customer_inventory_id
+        LEFT JOIN LATERAL (
+            SELECT v.extra, v.grn_received_config, v.inventory_status, v.current_customer_id
+              FROM vendor_serial_numbers v
+             WHERE v.deleted_at IS NULL
+               AND (
+                 v.inventory_asset_code = i.ttspl_id
+                 OR v.inventory_asset_code = i.unique_serial_number
+                 OR v.serial_number = i.serial_number
+                 OR v.extra->>'ttspl_id' = i.ttspl_id
+               )
+             ORDER BY v.serial_id DESC
+             LIMIT 1
+        ) vsn ON TRUE
         LEFT JOIN LATERAL (
             SELECT pdf_path, sales_order_number, original_dc_number,
                    dispatch_mode AS return_dc_dispatch_mode,
@@ -4035,6 +4077,11 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                     AND sti.warehouse_esign_url IS NULL
                   )
                 )
+                -- Received, and the unit has since gone to a vendor / scrap or been sold.
+                AND NOT (
+                  sti.warehouse_received_at IS NOT NULL
+                  AND COALESCE(vsn.inventory_status, '') IN ('scrapped', 'sold')
+                )
               ORDER BY sti.id ASC LIMIT 1`,
             [rdcNumber]
         );
@@ -5756,20 +5803,22 @@ exports.createServiceDc = async (req, res) => {
             dispatch: req.body || {},
             actor: req.user,
         });
-        const pickupItemId = result.item_ids?.[0] || null;
-        await logAudit(client, {
-            itemId: pickupItemId,
-            ticketId,
-            userId: req.user.user_id,
-            action: 'service_dc_created',
-            detail: {
-                service_dc_number: result.sdcNumber,
-                sales_order_number: result.sales_order_number,
-                original_dc_number: result.original_dc_number,
-                item_ids: result.item_ids,
-                dispatch_mode: result.dispatch_mode,
-            },
-        });
+        // One SDC per original sales order — audit each separately.
+        for (const sdc of result.service_dcs || [result]) {
+            await logAudit(client, {
+                itemId: sdc.item_ids?.[0] || null,
+                ticketId,
+                userId: req.user.user_id,
+                action: 'service_dc_created',
+                detail: {
+                    service_dc_number: sdc.sdcNumber,
+                    sales_order_number: sdc.sales_order_number,
+                    original_dc_number: sdc.original_dc_number,
+                    item_ids: sdc.item_ids,
+                    dispatch_mode: sdc.dispatch_mode,
+                },
+            });
+        }
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
     } catch (e) {
@@ -5779,16 +5828,27 @@ exports.createServiceDc = async (req, res) => {
     } finally {
         client.release();
     }
-    try {
-        await regenerateServiceDcPdfByNumber(pool, result.sdcNumber);
-    } catch (pdfErr) {
-        console.error('[support] service DC pdf:', pdfErr.message);
+    const sdcNumbers = (result.service_dcs || [result]).map((sdc) => sdc.sdcNumber);
+    for (const sdcNumber of sdcNumbers) {
+        try {
+            await regenerateServiceDcPdfByNumber(pool, sdcNumber);
+        } catch (pdfErr) {
+            console.error('[support] service DC pdf:', sdcNumber, pdfErr.message);
+        }
     }
+
+    // The E-Way Bill request is NOT sent from here. Dispatch raise it themselves
+    // from the DC page, because they are the ones who have to hand the
+    // consignment over: mailing Accounts silently at creation leaves dispatch
+    // with no idea a bill is outstanding, and the delivery gets missed.
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({
         success: true,
-        message: 'Service Delivery Challan created',
+        message: sdcNumbers.length > 1
+            ? `${sdcNumbers.length} Service Delivery Challans created (one per sales order)`
+            : 'Service Delivery Challan created',
         service_dc_number: result.sdcNumber,
+        service_dc_numbers: sdcNumbers,
         ...data,
     });
 };
@@ -6062,13 +6122,21 @@ exports.changeServiceDcTechnician = async (req, res) => {
 exports.regenerateServiceDcPdf = async (req, res) => {
     const sdcNumber = decodeURIComponent(req.params.sdcNumber || '');
     try {
+        // Same e-way gate the sales-pipeline download enforces. Without it this
+        // route was a way round the lock: the DC page would refuse the PDF on a
+        // consignment over the threshold while the support shell handed it over.
+        const { assertCanDownloadSaleDcPdf } = require('../services/saleDcComplianceService');
+        await assertCanDownloadSaleDcPdf(req.user, sdcNumber);
+
         const pdfPath = await regenerateServiceDcPdfByNumber(pool, sdcNumber);
         if (!pdfPath) {
             return res.status(404).json({ success: false, message: 'Service DC not found' });
         }
         res.json({ success: true, pdf_path: pdfPath });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message || 'PDF generation failed' });
+        const locked = /E-Way Bill must be uploaded|E-Invoice must be uploaded/.test(e.message || '');
+        res.status(locked ? 403 : 500)
+           .json({ success: false, message: e.message || 'PDF generation failed' });
     }
 };
 

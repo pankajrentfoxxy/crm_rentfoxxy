@@ -106,10 +106,30 @@ function vendorDisplayName(vendor) {
     || '';
 }
 
+/**
+ * Join an address with its city/state/pincode, skipping any part the address
+ * line already contains.
+ *
+ * Vendor `address` is free text typed by whoever onboarded them, and most of it
+ * already ends with the city, state and PIN. Appending the columns blindly
+ * produced "... Secunderabad, Hyderabad, Telangana, 500003, Hyderabad,
+ * telangana, 500003" on the challan. Matching is case-insensitive because the
+ * columns are stored lower-case ("telangana") while the address is not.
+ */
+function joinAddressParts(address, ...parts) {
+  const base = String(address || '').replace(/\r\n?/g, '\n').replace(/\s+/g, ' ').trim();
+  const haystack = base.toLowerCase();
+  const extra = parts
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .filter((p) => !haystack.includes(p.toLowerCase()));
+  return [base, ...extra].filter(Boolean).join(', ');
+}
+
 function formatVendorBillingFromRow(vendor) {
   if (!vendor) return '';
   const lines = [vendorDisplayName(vendor)].filter(Boolean);
-  const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
+  const street = joinAddressParts(vendor.address, vendor.city, vendor.state, vendor.pincode);
   if (street) lines.push(street);
   if (vendor.gst_number) lines.push(`GSTIN: ${vendor.gst_number}`);
   return lines.join('\n');
@@ -119,8 +139,9 @@ function formatVendorShippingFromRow(vendor) {
   if (!vendor) return '';
   if (vendor.shipping_same !== false) return formatVendorBillingFromRow(vendor);
   const lines = [vendorDisplayName(vendor)].filter(Boolean);
-  const street = [vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode]
-    .filter(Boolean).join(', ');
+  const street = joinAddressParts(
+    vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode
+  );
   if (street) lines.push(street);
   return lines.join('\n');
 }
@@ -903,4 +924,9 @@ module.exports = {
   drawDispatchSignatures,
   dispatchTagsForDc,
   drawDispatchTags,
+  // Shared with the Return-to-Vendor flow so a vendor's "Bill to" block is
+  // built one way everywhere: name, full address, GSTIN.
+  vendorDisplayName,
+  formatVendorBillingFromRow,
+  formatVendorShippingFromRow,
 };

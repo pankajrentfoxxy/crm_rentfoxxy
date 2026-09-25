@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const { USER_TRIGGERED } = require('./outboundMessagingGuard');
 
 function getDispatchMailTransport() {
   const host = process.env.DISPATCH_SMTP_HOST;
@@ -30,7 +31,13 @@ function isDispatchMailConfigured() {
  * Send email using the dispatch SMTP account only.
  * @returns {Promise<boolean>}
  */
-async function sendDispatchMail({ to, subject, text, html, pdfRelativePath, cc, replyTo, extraAttachments = [] }) {
+/**
+ * `userTriggered`: the mail was sent from a Send/Resend button, so the outbound kill
+ * switch lets it through (internal recipients only -- see outboundMessagingGuard).
+ */
+async function sendDispatchMail({
+  to, subject, text, html, pdfRelativePath, cc, replyTo, extraAttachments = [], userTriggered = false,
+}) {
   const transport = getDispatchMailTransport();
   const from = getDispatchFromAddress();
   if (!transport || !from || !to) return false;
@@ -55,6 +62,7 @@ async function sendDispatchMail({ to, subject, text, html, pdfRelativePath, cc, 
   if (html) mail.html = html;
   if (cc) mail.cc = cc;
   if (replyTo) mail.replyTo = replyTo;
+  if (userTriggered) mail[USER_TRIGGERED] = true;
 
   await transport.sendMail(mail);
   return true;

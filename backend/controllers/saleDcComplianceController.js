@@ -139,10 +139,10 @@ exports.uploadSaleDcCompliance = async (req, res) => {
     }
 
     const firstDc = await isNewCustomerFirstDc(pool, head.customer_id, dcNumber);
-    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) {
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc, head.dc_purpose)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Invoice upload applies to Sale DCs and new-customer first DCs only',
+        message: 'E-Invoice upload applies to Sale DCs and new-customer first DCs only (not service returns)',
       });
     }
 
@@ -296,10 +296,10 @@ exports.sendAccountsNotification = async (req, res) => {
     }
 
     const firstDc = await isNewCustomerFirstDc(pool, head.customer_id, dcNumber);
-    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc)) {
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstDc, head.dc_purpose)) {
       return res.status(400).json({
         success: false,
-        message: 'Accounts notification applies to Sale DCs and new-customer first DCs only',
+        message: 'Accounts notification applies to Sale DCs and new-customer first DCs only (not service returns)',
       });
     }
 
@@ -334,6 +334,7 @@ exports.sendAccountsNotification = async (req, res) => {
       shipBy: head.ship_by,
       dispatchMode: head.dispatch_mode,
       vehicleNumber: head.vehicle_number,
+      userTriggered: true,
     });
 
     await pool.query(
@@ -441,6 +442,7 @@ exports.requestDemoEway = async (req, res) => {
       pdfPath: head.pdf_path || null,
       vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
       needsVehicle: requiresVehicleNumber(head, true),
+      userTriggered: true,
     });
 
     await pool.query(

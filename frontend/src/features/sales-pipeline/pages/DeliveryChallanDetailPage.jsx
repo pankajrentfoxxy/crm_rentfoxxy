@@ -169,7 +169,15 @@ export default function DeliveryChallanDetailPage() {
   const warehouseReturnOtpCode = apiWarehouseOtp || head.warehouse_return_otp || null;
   const summaryLines = billingLines.length ? billingLines : lines;
   const isSale = head.entity_code === 'gorefurbo' || head.quotation_type === 'sale' || head.quotation_type === 'sales';
-  const needsInvoice = Boolean(saleCompliance?.requires_invoice_compliance) || isSale;
+  // A service return is the customer's own machine going back after repair, so
+  // there is no supply to invoice however the DC is branded. Without this the
+  // entity_code check alone re-imposed the E-Invoice tab and the download lock
+  // on a gorefurbo repair return even though the API had already exempted it
+  // (requiresInvoiceCompliance in saleDcComplianceService). The e-way bill is
+  // separate and still applies above the value threshold.
+  const isServiceReturn = head.dc_purpose === 'service_return';
+  const needsInvoice = !isServiceReturn
+    && (Boolean(saleCompliance?.requires_invoice_compliance) || isSale);
   const needsDemoEway = Boolean(demoEwayCompliance?.applies || demoEwayCompliance?.requires_eway_bill);
 
   const loadQc = useCallback(async () => {
