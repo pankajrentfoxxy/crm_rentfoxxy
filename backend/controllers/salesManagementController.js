@@ -6340,7 +6340,9 @@ exports.markDcRejected = async (req, res) => {
         await client.query('COMMIT');
         return res.json({
           success: true,
-          message: 'Delivery rejected and returned to warehouse',
+          message: result.guard_inward_pending
+            ? 'Delivery rejected. Guard must scan it INWARD at the gate before the warehouse can receive it.'
+            : 'Delivery rejected and returned to warehouse',
           ...result,
         });
       }

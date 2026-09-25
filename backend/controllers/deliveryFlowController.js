@@ -938,11 +938,16 @@ exports.getRefusedReturnUnits = async (req, res) => {
     if (!head) return res.status(404).json({ success: false, message: 'Delivery challan not found' });
 
     const units = await rejectionSvc.listRefusedReturnUnits(pool, dcNumber);
+    const guardInward = head.status === 'rejected'
+      ? await rejectionSvc.findGuardInwardForRefusedDc(pool, dcNumber, head.rejected_at)
+      : null;
     res.json({
       success: true,
       dc: head,
       refusal_stage: refusalStage(head),
       warehouse_return_pending: head.status === 'rejected' && !head.return_to_warehouse_at,
+      guard_inward_at: guardInward?.confirmed_at || null,
+      guard_inward_pending: head.status === 'rejected' && !head.return_to_warehouse_at && !guardInward,
       units,
     });
   } catch (error) {

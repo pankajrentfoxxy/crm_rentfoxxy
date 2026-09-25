@@ -638,6 +638,16 @@ async function loadRefusedDeliveryReturn(db, dcNumber) {
   if (head.return_to_warehouse_at || head.warehouse_received_at) {
     active = false;
     inactive_reason = 'This refused delivery has already been received at the warehouse.';
+  } else {
+    const deliveryRejection = require('./deliveryRejectionService');
+    const rejectedRes = await db.query(
+      'SELECT rejected_at FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1',
+      [dcNumber]
+    );
+    if (await deliveryRejection.findGuardInwardForRefusedDc(db, dcNumber, rejectedRes.rows[0]?.rejected_at)) {
+      active = false;
+      inactive_reason = 'Already scanned INWARD at the gate — waiting for the warehouse to receive it.';
+    }
   }
 
   return {
@@ -2498,15 +2508,10 @@ async function applyInwardRefusedDeliveryGate(client, { session, actor }) {
   if (head.return_to_warehouse_at || head.warehouse_received_at) return { already_completed: true };
   if (head.status !== 'rejected') throw new Error('DC is not in rejected status');
 
-  return deliveryRejection.completeRejectedReturnToWarehouse(client, {
-    dcNumber,
-    actorUserId: actor.userId,
-    actorName: actor.name,
-    warehouse: {
-      receiverName: actor.name,
-      remarks: `Guard gate inward confirmed (session ${session.session_id})`,
-    },
-  });
+  // The gate only records the laptop coming in (this confirmed session). Moving it
+  // back to stock is the warehouse's e-sign receipt, which is unlocked by this scan
+  // — the guard is not the warehouse receiver.
+  return { guard_inward: true, warehouse_receipt_pending: true, session_id: session.session_id };
 }
 
 async function applyInwardReturnDcGate(client, { session, actor }) {

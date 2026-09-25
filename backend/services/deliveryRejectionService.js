@@ -480,6 +480,40 @@ async function markDeliveryRejectedByCustomer(client, {
   };
 }
 
+/**
+ * The guard's confirmed INWARD scan of a refused DC, made after the refusal, or null.
+ *
+ * A refused laptop has to come in through the gate before the warehouse can take
+ * it: SDC/26-27/0015 was refused at 13:27 and "received" by the warehouse at 13:39
+ * with no gate inward at all, so the asset went back to stock on paper only.
+ */
+async function findGuardInwardForRefusedDc(client, dcNumber, rejectedAt = null) {
+  const r = await client.query(
+    `SELECT session_id, guard_user_id, confirmed_at
+       FROM gate_scan_sessions
+      WHERE direction = 'inward'
+        AND source_type = 'refused_delivery'
+        AND reference_number = $1
+        AND status = 'confirmed'
+        AND ($2::timestamptz IS NULL OR confirmed_at >= $2::timestamptz)
+      ORDER BY confirmed_at DESC
+      LIMIT 1`,
+    [dcNumber, rejectedAt]
+  );
+  return r.rows[0] || null;
+}
+
+async function assertGuardInwardForRefusedDc(client, head) {
+  const inward = await findGuardInwardForRefusedDc(client, head.dc_number, head.rejected_at);
+  if (!inward) {
+    throw Object.assign(
+      new Error(`Guard has not scanned ${head.dc_number} in at the gate yet. The guard must do the INWARD scan first; the warehouse can receive it after that.`),
+      { status: 409, code: 'GUARD_INWARD_PENDING' }
+    );
+  }
+  return inward;
+}
+
 async function completeRejectedReturnToWarehouse(client, {
   dcNumber,
   actorUserId,
@@ -492,6 +526,8 @@ async function completeRejectedReturnToWarehouse(client, {
   if (head.return_to_warehouse_at) {
     return { already_completed: true, sales_order_numbers: await dcSalesOrderNumbers(client, dcNumber) };
   }
+  // Every warehouse receipt path (e-sign, OTP, courier) ends here.
+  await assertGuardInwardForRefusedDc(client, head);
 
   const reason = head.rejection_reason || 'Customer refused delivery';
   const serialResults = await processSerialsToQc(client, {
@@ -556,6 +592,7 @@ async function receiveRefusedReturnWithEsign(client, {
     return { already_completed: true, sales_order_numbers: await dcSalesOrderNumbers(client, dcNumber) };
   }
   if (!receiverName?.trim()) throw new Error('Warehouse receiver name is required');
+  await assertGuardInwardForRefusedDc(client, head);
 
   const units = await listRefusedReturnUnits(client, dcNumber);
   const verified = assertRefusedUnitsVerified(units, verifiedUnits);
@@ -585,6 +622,17 @@ async function rejectCourierAndComplete(client, {
     source: 'warehouse',
     actorUserId,
   });
+  // The rejection stands on its own; the receipt waits for the guard's INWARD scan
+  // (which can only happen once the DC is rejected).
+  const head = await getDcHead(client, dcNumber);
+  if (!(await findGuardInwardForRefusedDc(client, dcNumber, head?.rejected_at))) {
+    return {
+      rejected: true,
+      warehouse_return_pending: true,
+      guard_inward_pending: true,
+      sales_order_numbers: await dcSalesOrderNumbers(client, dcNumber),
+    };
+  }
   return completeRejectedReturnToWarehouse(client, {
     dcNumber,
     actorUserId,
@@ -729,6 +777,7 @@ module.exports = {
   collectDcSerials,
   markDeliveryRejectedByCustomer,
   completeRejectedReturnToWarehouse,
+  findGuardInwardForRefusedDc,
   receiveRefusedReturnWithEsign,
   listRefusedReturnUnits,
   assertRefusedUnitsVerified,
