@@ -28,6 +28,7 @@ function ensureUploadDir() {
 }
 
 const mailTransport = require('./mailTransport');
+const { CUSTOMER_INVOICE } = require('./outboundMessagingGuard');
 
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
@@ -1182,8 +1183,10 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
  * 'dispatch' is the no-reply mailbox, used for OTP and delivery notifications so
  * they no longer leave (and land in) the sales inbox. Omitted = the general CRM
  * mailer, which is what invoices and e-invoices still use.
+ * `customerInvoice` marks an invoice going to a customer; outboundMessagingGuard
+ * blocks it unless CUSTOMER_INVOICE_EMAIL_ENABLED=true.
  */
-async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer }) {
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo, mailer, customerInvoice = false }) {
   const named = mailer ? mailTransport.getTransport(mailer) : null;
   const transport = named || getMailTransport();
   if (!transport || !to) return false;
@@ -1203,6 +1206,7 @@ async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, rep
   if (html) mail.html = html;
   if (cc) mail.cc = cc;
   if (replyTo) mail.replyTo = replyTo;
+  if (customerInvoice) mail[CUSTOMER_INVOICE] = true;
   await transport.sendMail(mail);
   return true;
 }

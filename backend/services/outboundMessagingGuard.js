@@ -14,13 +14,27 @@
  * Off by default. Sending resumes only with OUTBOUND_MESSAGING_ENABLED=true in
  * backend/.env (and a restart). Must be required before any service creates a
  * transport — server.js loads it straight after dotenv.
+ *
+ * Invoices to customers have their own switch. A mail flagged CUSTOMER_INVOICE is
+ * blocked even while outbound messaging is on, unless
+ * CUSTOMER_INVOICE_EMAIL_ENABLED=true.
  */
 const nodemailer = require('nodemailer');
 
 /** Set on a mail options object when a user clicked Send/Resend for it. */
 const USER_TRIGGERED = Symbol('outboundUserTriggered');
 
-const INTERNAL_DOMAINS = ['rentfoxxy.com', 'truetechservices.in'];
+/** Set on a mail options object that carries an invoice to a customer. */
+const CUSTOMER_INVOICE = Symbol('outboundCustomerInvoice');
+
+const CUSTOMER_INVOICE_DISABLED_MESSAGE =
+  'Emailing invoices to customers is turned off (CUSTOMER_INVOICE_EMAIL_ENABLED is not true)';
+
+function isCustomerInvoiceEmailEnabled() {
+  return String(process.env.CUSTOMER_INVOICE_EMAIL_ENABLED || '').toLowerCase() === 'true';
+}
+
+const INTERNAL_DOMAINS =['rentfoxxy.com', 'truetechservices.in'];
 
 function recipientAddresses(value) {
   if (!value) return [];
@@ -54,6 +68,15 @@ function install() {
     const transport = originalCreateTransport(...args);
     const originalSendMail = transport.sendMail.bind(transport);
     transport.sendMail = (mail, callback) => {
+      if (mail?.[CUSTOMER_INVOICE] && !isCustomerInvoiceEmailEnabled()) {
+        console.warn(`[outboundGuard] blocked customer invoice email to "${mail?.to || ''}" subject "${mail?.subject || ''}"`);
+        const err = new Error(CUSTOMER_INVOICE_DISABLED_MESSAGE);
+        if (typeof callback === 'function') {
+          process.nextTick(() => callback(err));
+          return undefined;
+        }
+        return Promise.reject(err);
+      }
       if (isOutboundMessagingEnabled() || transport.__outboundExempt) return originalSendMail(mail, callback);
       if (mail?.[USER_TRIGGERED] && allRecipientsInternal(mail)) return originalSendMail(mail, callback);
       const to = [mail?.to, mail?.cc, mail?.bcc].filter(Boolean).join(', ');
@@ -80,4 +103,5 @@ install();
 
 module.exports = {
   isOutboundMessagingEnabled, exemptFromGuard, allRecipientsInternal, USER_TRIGGERED, DISABLED_MESSAGE,
+  isCustomerInvoiceEmailEnabled, CUSTOMER_INVOICE, CUSTOMER_INVOICE_DISABLED_MESSAGE,
 };
