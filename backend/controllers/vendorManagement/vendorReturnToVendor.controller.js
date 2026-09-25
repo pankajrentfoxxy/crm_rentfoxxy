@@ -235,7 +235,7 @@ exports.requestEwayBill = async (req, res) => {
     }
 
     const result = await eway.sendAccountsVrtdcEwayEmail({
-      dcNumber, head: dc, items: dc.items, actorUserId: req.user?.user_id || null,
+      dcNumber, head: dc, items: dc.items, actorUserId: req.user?.user_id || null, userTriggered: true,
     });
     res.json({ success: true, ...result });
   } catch (err) {

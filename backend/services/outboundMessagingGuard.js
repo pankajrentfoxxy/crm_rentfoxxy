@@ -7,11 +7,38 @@
  *
  * Transports passed to exemptFromGuard() (the quotation mailer) keep sending.
  *
+ * A single mail flagged with USER_TRIGGERED (the "Send / Resend mail to Accounts"
+ * buttons for e-way bill and invoice requests) also goes out, but only when every
+ * recipient is an internal address -- a flagged mail can never reach a customer.
+ *
  * Off by default. Sending resumes only with OUTBOUND_MESSAGING_ENABLED=true in
  * backend/.env (and a restart). Must be required before any service creates a
  * transport — server.js loads it straight after dotenv.
  */
 const nodemailer = require('nodemailer');
+
+/** Set on a mail options object when a user clicked Send/Resend for it. */
+const USER_TRIGGERED = Symbol('outboundUserTriggered');
+
+const INTERNAL_DOMAINS = ['rentfoxxy.com', 'truetechservices.in'];
+
+function recipientAddresses(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(recipientAddresses);
+  if (typeof value === 'object') return value.address ? [String(value.address)] : [];
+  return String(value).split(/[,;]/).map((part) => {
+    const angled = part.match(/<([^>]+)>/);
+    return (angled ? angled[1] : part).trim();
+  }).filter(Boolean);
+}
+
+function allRecipientsInternal(mail) {
+  const addrs = recipientAddresses([mail?.to, mail?.cc, mail?.bcc]);
+  return addrs.length > 0 && addrs.every((a) => {
+    const domain = a.toLowerCase().split('@')[1];
+    return INTERNAL_DOMAINS.includes(domain);
+  });
+}
 
 const DISABLED_MESSAGE = 'Outbound messaging is disabled (OUTBOUND_MESSAGING_ENABLED is not true)';
 
@@ -28,6 +55,7 @@ function install() {
     const originalSendMail = transport.sendMail.bind(transport);
     transport.sendMail = (mail, callback) => {
       if (isOutboundMessagingEnabled() || transport.__outboundExempt) return originalSendMail(mail, callback);
+      if (mail?.[USER_TRIGGERED] && allRecipientsInternal(mail)) return originalSendMail(mail, callback);
       const to = [mail?.to, mail?.cc, mail?.bcc].filter(Boolean).join(', ');
       console.warn(`[outboundGuard] blocked email to "${to}" subject "${mail?.subject || ''}"`);
       const err = new Error(DISABLED_MESSAGE);
@@ -50,4 +78,6 @@ function exemptFromGuard(transport) {
 
 install();
 
-module.exports = { isOutboundMessagingEnabled, exemptFromGuard, DISABLED_MESSAGE };
+module.exports = {
+  isOutboundMessagingEnabled, exemptFromGuard, allRecipientsInternal, USER_TRIGGERED, DISABLED_MESSAGE,
+};

@@ -334,6 +334,7 @@ exports.sendAccountsNotification = async (req, res) => {
       shipBy: head.ship_by,
       dispatchMode: head.dispatch_mode,
       vehicleNumber: head.vehicle_number,
+      userTriggered: true,
     });
 
     await pool.query(
@@ -441,6 +442,7 @@ exports.requestDemoEway = async (req, res) => {
       pdfPath: head.pdf_path || null,
       vehicleNumber: normalizeVehicleNumber(head.vehicle_number) || null,
       needsVehicle: requiresVehicleNumber(head, true),
+      userTriggered: true,
     });
 
     await pool.query(

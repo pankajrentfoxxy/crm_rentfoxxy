@@ -666,6 +666,7 @@ async function sendAccountsSaleDcEmail({
   shipBy = null,
   dispatchMode = null,
   vehicleNumber = null,
+  userTriggered = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -729,6 +730,7 @@ async function sendAccountsSaleDcEmail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${customerName || 'Customer'} : Create Invoice`,
+    userTriggered,
     html,
     text,
     pdfRelativePath: pdfPath,
@@ -774,6 +776,7 @@ async function sendAccountsDemoEwayEmail({
   pdfPath = null,
   vehicleNumber = null,
   needsVehicle = false,
+  userTriggered = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -883,6 +886,7 @@ async function sendAccountsDemoEwayEmail({
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${customerName || 'Customer'} : Upload E-Way Bill`,
+    userTriggered,
     html,
     text,
     pdfRelativePath,

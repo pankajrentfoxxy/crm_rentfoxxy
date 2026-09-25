@@ -238,7 +238,7 @@ function describeTransport(head) {
  * Everything the GST portal needs is in the body — vendor, transport, per-laptop
  * value and the total — because Accounts raises the bill on the portal, not here.
  */
-async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUserId = null }) {
+async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUserId = null, userTriggered = false }) {
   const laptops = laptopRowsFromItems(items);
   const productValue = items.reduce((s, r) => s + (Number.isFinite(Number(r.declared_value)) ? Number(r.declared_value) : 0), 0);
   const vendorName = head.vendor_name || head.vendor_business_name || 'Vendor';
@@ -320,6 +320,7 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
     to: ACCOUNTS_EMAIL,
     cc: ACCOUNTS_EMAIL_CC,
     subject: `${dcNumber} : ${vendorName} : E-way Bill required (${money(productValue)})`,
+    userTriggered,
     html,
     text,
     pdfRelativePath,
