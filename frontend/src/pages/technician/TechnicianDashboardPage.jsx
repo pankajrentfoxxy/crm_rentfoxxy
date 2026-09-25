@@ -2,6 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Package, Truck } from 'lucide-react';
 import { fetchTechnicianDashboard } from '../../utils/technicianApi';
 
+const STATUS_LABEL = {
+  dispatch_ready: 'Waiting at the gate',
+  in_transit: 'Out for delivery',
+  shipped: 'Out for delivery',
+  reached: 'Reached customer',
+  rejected: 'Refused — bring back to warehouse',
+};
+
 export default function TechnicianDashboardPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -51,14 +59,11 @@ export default function TechnicianDashboardPage() {
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b">
-          <h2 className="font-semibold text-slate-800">Assigned In-Transit Challans</h2>
+          <h2 className="font-semibold text-slate-800">Your deliveries</h2>
+          <p className="text-xs text-slate-500 mt-1">{data?.pending_count || 0} out now · {data?.upcoming_count || 0} waiting at the gate</p>
         </div>
-        {!data?.technician?.user_id ? (
-          <p className="px-5 py-8 text-sm text-slate-500 text-center">
-            No CRM user linked to this technician account. Ask admin to link a user for delivery assignments.
-          </p>
-        ) : !data?.deliveries?.length ? (
-          <p className="px-5 py-8 text-sm text-slate-500 text-center">No pending deliveries assigned to you.</p>
+        {!data?.deliveries?.length ? (
+          <p className="px-5 py-8 text-sm text-slate-500 text-center">Nothing assigned to you right now.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -76,7 +81,7 @@ export default function TechnicianDashboardPage() {
                     <td className="px-4 py-3 font-medium text-cyan-700">{row.dc_number}</td>
                     <td className="px-4 py-3">{row.customer_name}</td>
                     <td className="px-4 py-3 capitalize">{row.ship_by?.replace('_', ' ') || '—'}</td>
-                    <td className="px-4 py-3">{row.status}</td>
+                    <td className="px-4 py-3">{STATUS_LABEL[row.status] || row.status}</td>
                   </tr>
                 ))}
               </tbody>

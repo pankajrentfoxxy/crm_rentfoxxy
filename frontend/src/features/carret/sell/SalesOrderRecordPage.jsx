@@ -237,6 +237,12 @@ export default function SalesOrderRecordPage() {
                     <div><span>Shipping</span><span><Money value={totals.shipping} /></span></div>
                     <div><span>Security deposit</span><span><Money value={totals.security} /></span></div>
                     <div className="is-grand"><span>Grand total</span><span><Money value={totals.grand_total} /></span></div>
+                    {Number(head.advance_amount) > 0 && (
+                      <div>
+                        <span>Advance before dispatch{head.advance_due_date ? <> · due <DateTime value={head.advance_due_date} /></> : ''}</span>
+                        <span><Money value={head.advance_amount} /></span>
+                      </div>
+                    )}
                     {canSeePay && <div><span>Collected</span><span><Money value={summary.total_paid} /></span></div>}
                     {canSeePay && <div><span>Balance due</span><span><Money value={summary.balance_due} /></span></div>}
                   </div>

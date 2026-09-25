@@ -704,15 +704,20 @@ async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
   if (head.status !== 'rejected') throw new Error('DC must be marked rejected first');
   if (head.return_to_warehouse_at) throw new Error('Return to warehouse already completed');
 
-  // CSPRNG, like the delivery OTP; Math.random is guessable.
-  const otp = require('./deliveryOtpService').generateOtp();
+  // Migration 328: CSPRNG code, only its HMAC stored, 24-hour expiry,
+  // attempts reset. Plaintext is cleared, never written.
+  const otpSvc = require('./deliveryOtpService');
+  const otp = otpSvc.generateOtp();
   await pool.query(
     `UPDATE delivery_challan_lines SET
-        warehouse_return_otp = $1,
+        warehouse_return_otp = NULL,
+        warehouse_return_otp_hash = $1,
+        warehouse_return_otp_expires_at = NOW() + ($3 || ' hours')::interval,
+        warehouse_return_otp_attempts = 0,
         warehouse_return_otp_sent_at = NOW(),
         updated_at = NOW()
       WHERE dc_number = $2`,
-    [otp, dcNumber]
+    [warehouseOtpHash(dcNumber, otp), dcNumber, String(WAREHOUSE_OTP_TTL_HOURS)]
   );
 
   const warehouseEmail = process.env.WAREHOUSE_LEAD_EMAIL
@@ -754,28 +759,92 @@ async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
   };
 }
 
+const WAREHOUSE_OTP_TTL_HOURS = 24;
+const WAREHOUSE_OTP_MAX_ATTEMPTS = 5;
+
+/** Salted apart from the delivery OTP so the two codes can never be swapped. */
+function warehouseOtpHash(dcNumber, code) {
+  return require('./deliveryOtpService').hashOtp(`warehouse-return:${dcNumber}`, code);
+}
+
+/**
+ * Check a warehouse-return code in its OWN committed transaction, so a wrong
+ * attempt is counted even though the receipt that would follow never runs.
+ * Returns { ok, reason, message, remaining }.
+ */
+async function checkWarehouseReturnOtp(dcNumber, otp) {
+  const crypto = require('crypto');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT status, return_to_warehouse_at, warehouse_return_otp_hash, warehouse_return_otp_attempts,
+              (warehouse_return_otp_expires_at IS NOT NULL AND warehouse_return_otp_expires_at < NOW()) AS expired
+         FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id LIMIT 1 FOR UPDATE`,
+      [dcNumber]
+    );
+    const h = rows[0];
+    let out;
+    if (!h) out = { ok: false, reason: 'not_found', message: 'Delivery challan not found' };
+    else if (h.status !== 'rejected') out = { ok: false, reason: 'state', message: 'DC is not rejected' };
+    else if (h.return_to_warehouse_at) out = { ok: true, already_completed: true };
+    else if (!h.warehouse_return_otp_hash) out = { ok: false, reason: 'not_issued', message: 'Request warehouse return OTP first' };
+    else if (h.expired) out = { ok: false, reason: 'expired', message: `That code has expired (valid ${WAREHOUSE_OTP_TTL_HOURS} hours). Request a new one.` };
+    else if (Number(h.warehouse_return_otp_attempts) >= WAREHOUSE_OTP_MAX_ATTEMPTS) {
+      out = { ok: false, reason: 'locked', message: 'Too many incorrect attempts. Request a new code.' };
+    } else {
+      const supplied = warehouseOtpHash(dcNumber, String(otp || '').trim());
+      const match = supplied.length === h.warehouse_return_otp_hash.length
+        && crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(h.warehouse_return_otp_hash));
+      if (match) {
+        out = { ok: true };
+      } else {
+        const up = await client.query(
+          `UPDATE delivery_challan_lines SET warehouse_return_otp_attempts = warehouse_return_otp_attempts + 1, updated_at = NOW()
+            WHERE dc_number = $1 RETURNING warehouse_return_otp_attempts`,
+          [dcNumber]
+        );
+        const attempts = Number(up.rows[0]?.warehouse_return_otp_attempts || 0);
+        const remaining = Math.max(0, WAREHOUSE_OTP_MAX_ATTEMPTS - attempts);
+        out = {
+          ok: false,
+          reason: remaining ? 'mismatch' : 'locked',
+          remaining,
+          message: remaining ? `Invalid warehouse return OTP. ${remaining} attempt(s) left.` : 'Too many incorrect attempts. Request a new code.',
+        };
+      }
+    }
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Complete the return after checkWarehouseReturnOtp passed. Runs inside the
+ * caller's transaction; the code itself is never compared here.
+ */
 async function verifyWarehouseReturnOtp(client, {
   dcNumber,
-  otp,
   actorUserId,
   actorName,
 }) {
   const headRes = await client.query(
-    `SELECT status, warehouse_return_otp, return_to_warehouse_at, rejection_reason
-       FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+    `SELECT status, return_to_warehouse_at FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
     [dcNumber]
   );
   const head = headRes.rows[0];
   if (!head) throw new Error('Delivery challan not found');
   if (head.status !== 'rejected') throw new Error('DC is not rejected');
   if (head.return_to_warehouse_at) return { already_completed: true };
-  if (!head.warehouse_return_otp) throw new Error('Request warehouse return OTP first');
-  if (String(otp || '').trim() !== String(head.warehouse_return_otp)) {
-    throw new Error('Invalid warehouse return OTP');
-  }
 
   await client.query(
-    `UPDATE delivery_challan_lines SET warehouse_return_otp_verified_at = NOW(), updated_at = NOW()
+    `UPDATE delivery_challan_lines
+        SET warehouse_return_otp_verified_at = NOW(), warehouse_return_otp_hash = NULL, updated_at = NOW()
       WHERE dc_number = $1`,
     [dcNumber]
   );
@@ -831,6 +900,9 @@ async function getSoCancelDcEligibility(client, soNumber) {
 }
 
 module.exports = {
+  checkWarehouseReturnOtp,
+  warehouseOtpHash,
+  WAREHOUSE_OTP_MAX_ATTEMPTS,
   ensureDeliveryRejectionSchema,
   getDcHead,
   collectDcSerials,

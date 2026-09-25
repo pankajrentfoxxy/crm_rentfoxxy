@@ -1054,10 +1054,16 @@ exports.verifyWarehouseReturnOtp = async (req, res) => {
   try {
     await rejectionSvc.ensureDeliveryRejectionSchema();
     const otp = req.body?.otp || req.body?.warehouse_return_otp;
+    // Migration 328: hashed, expiring, attempt-limited — checked and counted
+    // in its own transaction before the receipt runs.
+    const check = await rejectionSvc.checkWarehouseReturnOtp(req.params.dcNumber, otp);
+    if (!check.ok) {
+      return res.status(check.reason === 'not_found' ? 404 : (check.reason === 'locked' ? 429 : 400))
+        .json({ success: false, code: `OTP_${String(check.reason).toUpperCase()}`, message: check.message, remaining: check.remaining });
+    }
     await client.query('BEGIN');
     const result = await rejectionSvc.verifyWarehouseReturnOtp(client, {
       dcNumber: req.params.dcNumber,
-      otp,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
     });

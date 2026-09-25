@@ -596,6 +596,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     totRow('Security Amount:', money(security));
     doc.moveTo(tx2, y).lineTo(R, y).strokeColor(C.line).stroke(); y += 6;
     totRow('Total:', money(total), true);
+    // Migration 329: the advance to collect before dispatch, when the order asks for one.
+    if (docType === 'sales_order' && Number(header.advance_amount) > 0) {
+      const due = header.advance_due_date ? formatPdfDateIst(header.advance_due_date, { fallback: null, withLabel: false }) : null;
+      totRow(due ? `Advance due by ${due}:` : 'Advance required:', money(Number(header.advance_amount)));
+    }
     y += 10;
 
     // ── Remarks (one entry per DC line — falls back to SO line remark) ─────

@@ -1001,6 +1001,28 @@ exports.getSalesOrder = async (req, res) => {
   }
 };
 
+/**
+ * The advance an order asks for before dispatch (migration 329). The form
+ * always collected it and the server dropped it. Header fields, repeated on
+ * every line. An empty amount clears it; a negative one is refused.
+ */
+async function applySoAdvance(client, soNumber, body = {}) {
+  if (!('advance_amount' in body) && !('advance_due_date' in body)) return;
+  const raw = body.advance_amount;
+  const amount = raw === '' || raw == null ? null : Number(raw);
+  if (amount != null && (!Number.isFinite(amount) || amount < 0)) {
+    const err = new Error('Advance amount must be zero or more');
+    err.statusCode = 400;
+    throw err;
+  }
+  const due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.advance_due_date || '')) ? body.advance_due_date : null;
+  await client.query(
+    `UPDATE sales_order_lines SET advance_amount = $1, advance_due_date = $2::date
+      WHERE sales_order_number = $3`,
+    [amount && amount > 0 ? amount : null, amount && amount > 0 ? due : null, soNumber]
+  );
+}
+
 exports.storeSalesOrder = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1263,6 +1285,7 @@ exports.storeSalesOrder = async (req, res) => {
       [entityForQuotationType(body.quotation_type || 'rental', body.branch), salesOrderNumber,
         isInPlace ? 'in_place' : 'dispatch']
     );
+    await applySoAdvance(client, salesOrderNumber, body);
 
     // Security: 'one_month_rental' auto-computes from the sum of each line's
     // monthly rate x qty (server-authoritative). 'none' = 0.
@@ -1341,6 +1364,7 @@ exports.storeSalesOrder = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK');
     if (respondIfRefused(error, res)) return;
+    if (error.statusCode === 400) return res.status(400).json({ success: false, message: error.message });
     console.error('storeSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -1618,6 +1642,7 @@ exports.updateSalesOrder = async (req, res) => {
       );
     }
 
+    await applySoAdvance(client, soNumber, body);
     await client.query('COMMIT');
 
     let pdfPath = null;
@@ -1648,6 +1673,7 @@ exports.updateSalesOrder = async (req, res) => {
     if (error.status === 403) {
       return res.status(403).json({ success: false, message: error.message });
     }
+    if (error.statusCode === 400) return res.status(400).json({ success: false, message: error.message });
     console.error('updateSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {

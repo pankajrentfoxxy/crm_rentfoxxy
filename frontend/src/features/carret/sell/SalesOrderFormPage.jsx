@@ -32,7 +32,8 @@ import { parseJson } from './sellShared';
  * - "From a quotation" lists ACCEPTED quotations. The old picker listed
  *   approved ones, which the server then refused (it requires accepted, Part
  *   4.3), so every order raised that way failed at the last step.
- * - The advance fields are not offered: the server never stored them.
+ * - The advance (amount and due date) is stored since migration 329 and
+ *   printed on the order PDF; the server used to drop it.
  *
  * Processor, generation, RAM and storage are required on every line because
  * the attach step matches stock on exactly those four.
@@ -94,6 +95,7 @@ export default function SalesOrderFormPage() {
   const [inPlace, setInPlace] = useState(false);
   const [wfh, setWfh] = useState({ on: false, name: '', phone: '' });
   const [shipChoice, setShipChoice] = useState({ key: 'billing', manual: null });
+  const [advance, setAdvance] = useState({ on: false, amount: '', due: '' });
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -159,6 +161,9 @@ export default function SalesOrderFormPage() {
       const isW = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
       const delivery = parseJson(h.delivery_address) || {};
       setWfh({ on: isW, name: delivery.employee_name || '', phone: delivery.employee_phone || '' });
+      setAdvance(Number(h.advance_amount) > 0
+        ? { on: true, amount: String(h.advance_amount), due: h.advance_due_date ? String(h.advance_due_date).slice(0, 10) : '' }
+        : { on: false, amount: '', due: '' });
       const ship = parseJson(h.customer_shipping_address);
       if (ship?.address) setShipChoice({ key: 'manual', manual: { ...ship, zip_code: ship.zip_code || ship.pincode || '' } });
     }).catch((e) => setLoadError(e?.response?.data?.message || 'Could not load the order.'));
@@ -211,9 +216,10 @@ export default function SalesOrderFormPage() {
       }
       if (wfh.on && !(Number(shipping) > 0)) e.shipping = 'Work-from-home delivery needs a shipping charge (GST applies to it)';
     }
+    if (advance.on && !(Number(advance.amount) > 0)) e.advance = 'Enter the advance amount, or untick it';
     setErrors(e);
     if (Object.keys(e).length) {
-      toast.error(e.customer || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
+      toast.error(e.advance || e.customer || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
       return;
     }
 
@@ -236,6 +242,8 @@ export default function SalesOrderFormPage() {
       supply_state: supplyState,
       customer_shipping_address: shipPayload,
       customer_billing_address: addr.billing,
+      advance_amount: advance.on ? Number(advance.amount) || 0 : '',
+      advance_due_date: advance.on ? advance.due || null : null,
       is_wfh: wfh.on,
       wfh_employee_name: wfh.on ? wfh.name || undefined : undefined,
       wfh_employee_phone: wfh.on ? wfh.phone || undefined : undefined,
@@ -401,6 +409,19 @@ export default function SalesOrderFormPage() {
                 </Field>
               )}
             </FormGrid>
+            <div style={{ marginTop: '14px' }}>
+              <Checkbox label="Advance required before dispatch" checked={advance.on} onChange={(e) => setAdvance((a) => ({ ...a, on: e.target.checked }))} />
+              {advance.on && (
+                <FormGrid cols={3}>
+                  <Field label="Advance amount (₹)" required error={errors.advance}>
+                    <Input type="number" min="0" step="0.01" value={advance.amount} onChange={(e) => setAdvance((a) => ({ ...a, amount: e.target.value }))} />
+                  </Field>
+                  <Field label="Due by">
+                    <Input type="date" value={advance.due} onChange={(e) => setAdvance((a) => ({ ...a, due: e.target.value }))} />
+                  </Field>
+                </FormGrid>
+              )}
+            </div>
           </Section>
         </div>
 
@@ -414,6 +435,7 @@ export default function SalesOrderFormPage() {
               <div><span>Shipping{wfh.on ? ' (taxed)' : ''}</span><span><Money value={totals.shipping} /></span></div>
               {!isSale && <div><span>Security deposit</span><span><Money value={totals.security} /></span></div>}
               <div className="is-grand"><span>{isSale ? 'Total' : 'First payment'}</span><span><Money value={totals.grand_total} /></span></div>
+              {advance.on && Number(advance.amount) > 0 && <div><span>Advance before dispatch</span><span><Money value={Number(advance.amount)} /></span></div>}
             </div>
             <p className="font-ui text-ink-3" style={{ fontSize: 'var(--d-sm)', margin: '10px 0 0' }}>
               Place of supply: {supplyState ? formatSupplyStateLabel(supplyState) : 'from the delivery address'}. Security is not taxed.

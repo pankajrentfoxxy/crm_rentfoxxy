@@ -62,17 +62,17 @@ API base unless noted: `/api/sales-management` (FE: `features/sales-pipeline/sal
 - [x] accepted_at not set by staff accept; rejected quote re-openable via email link — 25 Sep
 - [x] SO form listed `approved` quotes but backend needs `accepted` — Carret form lists accepted (old form unchanged)
 - [x] Quotation validity/terms/remarks persisted (migration 327, applied to QA 26 Sep), printed on the PDF; header remark travels as `quotation_remarks` (`remarks` is the line array)
-- [ ] SO advance_* still not persisted (no columns) — Carret SO form does not offer them
+- [x] SO advance amount/due date persisted (migration 329), on the PDF and both SO screens — 26 Sep
 - [x] `attachSerial` early returns after BEGIN with no ROLLBACK — fixed + test 25 Sep
 - [x] Carret `useChallans` read the wrong keys — fixed; returns read /return-dc
 - [x] Porter DCs refused at gate with AWB_MISSING — porter_tracking_id accepted, test 25 Sep
 - [x] Gate confirm refusal: event re-recorded after ROLLBACK, 409 with failures — 25 Sep
 - [x] ProofRejected now answers 400 with what is missing; Carret never calls PATCH /delivered without proof
 - [x] Hardened OTP wired into all six issue/verify sites; plaintext no longer stored — 26 Sep
-- [ ] Warehouse-return OTP is still plaintext (now CSPRNG); hashing it needs columns
+- [x] Warehouse-return OTP hashed, 24h expiry, 5 attempts (migration 328) — 26 Sep
 - [x] Register POD upload goes through completeDelivery / the rejection service; mixed POD refused (409) — 26 Sep
 - [x] BlueDart auto-delivery now sends the delivered WhatsApp (no PDF regen yet)
-- [ ] Technician portal dashboard filters legacy status='pending'
+- [x] Technician portal dashboard uses My Deliveries' rules (technician or user id; live statuses) — 26 Sep
 - [x] Accept via PATCH status 500'd (`inconsistent types deduced for parameter $1`) — cast, DB test, 25 Sep
 - [x] Challan PDF e-way lock answered 500 — now 403 with the reason
 

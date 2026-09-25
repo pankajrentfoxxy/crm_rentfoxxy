@@ -80,23 +80,37 @@ async function getTechnicianProfile(technicianId) {
 }
 
 async function getTechnicianDashboard(technicianId, userId) {
-  if (!userId) {
-    return { pending_count: 0, deliveries: [] };
+  if (!userId && !technicianId) {
+    return { pending_count: 0, upcoming_count: 0, deliveries: [] };
   }
 
+  // Same rules as My Deliveries (GET /my-deliveries): a challan is assigned by
+  // technician_id (current flow) or user_id (older rows). It used to match only
+  // user_id and only status 'pending', which no current challan ever has, so
+  // the portal always said "no deliveries".
   const linesR = await pool.query(
     `SELECT DISTINCT ON (dc_number)
-       dc_number, customer_name, email, status, ship_by, courier_name, awb_number, created_at
+       dc_number, customer_name, email, status, ship_by, dispatch_mode, courier_name, awb_number,
+       dispatched_at, reached_at, created_at, rejected_at, return_to_warehouse_at
      FROM delivery_challan_lines
-     WHERE status = 'pending' AND delivery_person_id = $1
+     WHERE (delivery_person_id = $1 OR delivery_person_id = $2)
+       AND COALESCE(movement_type, 'outbound') = 'outbound'
+       AND (
+         status IN ('dispatch_ready', 'in_transit', 'shipped', 'reached')
+         OR (status = 'rejected' AND return_to_warehouse_at IS NULL)
+       )
      ORDER BY dc_number, id DESC
-     LIMIT 50`,
-    [userId]
+     LIMIT 100`,
+    [technicianId || -1, userId || -1]
   );
 
+  const active = linesR.rows.filter((r) => ['in_transit', 'shipped', 'reached', 'rejected'].includes(r.status));
+  const upcoming = linesR.rows.filter((r) => r.status === 'dispatch_ready');
   return {
-    pending_count: linesR.rows.length,
-    deliveries: linesR.rows,
+    pending_count: active.length,
+    upcoming_count: upcoming.length,
+    // Out for delivery first, then refused ones to bring back, then upcoming.
+    deliveries: [...active, ...upcoming],
   };
 }
 
