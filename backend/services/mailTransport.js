@@ -19,6 +19,7 @@
  * transport rather than only the From address.
  */
 const nodemailer = require('nodemailer');
+const { exemptFromGuard } = require('./outboundMessagingGuard');
 
 function buildFromPrefix(prefix) {
   const host = process.env[`${prefix}HOST`];
@@ -52,7 +53,9 @@ function resolveMailer(name = 'default') {
 }
 
 function getTransport(name = 'default') {
-  return resolveMailer(name)?.transport || null;
+  const transport = resolveMailer(name)?.transport || null;
+  // Quotations must keep reaching customers while other outbound mail is blocked.
+  return name === 'quotation' ? exemptFromGuard(transport) : transport;
 }
 
 /** Explicit override first, then the mailbox we actually authenticate as. */

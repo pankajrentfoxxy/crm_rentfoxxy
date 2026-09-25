@@ -5,6 +5,8 @@
  * each call site this wraps nodemailer.createTransport itself: every transport
  * created anywhere in the process refuses to send while outbound messaging is off.
  *
+ * Transports passed to exemptFromGuard() (the quotation mailer) keep sending.
+ *
  * Off by default. Sending resumes only with OUTBOUND_MESSAGING_ENABLED=true in
  * backend/.env (and a restart). Must be required before any service creates a
  * transport — server.js loads it straight after dotenv.
@@ -25,7 +27,7 @@ function install() {
     const transport = originalCreateTransport(...args);
     const originalSendMail = transport.sendMail.bind(transport);
     transport.sendMail = (mail, callback) => {
-      if (isOutboundMessagingEnabled()) return originalSendMail(mail, callback);
+      if (isOutboundMessagingEnabled() || transport.__outboundExempt) return originalSendMail(mail, callback);
       const to = [mail?.to, mail?.cc, mail?.bcc].filter(Boolean).join(', ');
       console.warn(`[outboundGuard] blocked email to "${to}" subject "${mail?.subject || ''}"`);
       const err = new Error(DISABLED_MESSAGE);
@@ -40,6 +42,12 @@ function install() {
   nodemailer.__outboundGuardInstalled = true;
 }
 
+/** Let this transport send even while outbound messaging is off. */
+function exemptFromGuard(transport) {
+  if (transport) transport.__outboundExempt = true;
+  return transport;
+}
+
 install();
 
-module.exports = { isOutboundMessagingEnabled, DISABLED_MESSAGE };
+module.exports = { isOutboundMessagingEnabled, exemptFromGuard, DISABLED_MESSAGE };
