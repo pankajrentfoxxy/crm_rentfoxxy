@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
 const { escapeHtml } = require('../utils/escapeHtml');
+const { isOutboundMessagingEnabled } = require('./outboundMessagingGuard');
 
 const QUEUE_POLL_INTERVAL_MS = parseInt(process.env.EMAIL_QUEUE_POLL_INTERVAL_MS || '60000', 10);
 const FOLLOWUP_SCAN_INTERVAL_MS = parseInt(process.env.FOLLOWUP_SCAN_INTERVAL_MS || '60000', 10);
@@ -130,6 +131,8 @@ const reclaimStaleProcessing = async () => {
 };
 
 const processQueue = async () => {
+  // Leave queued mail pending (don't burn attempts) while outbound messaging is off.
+  if (!isOutboundMessagingEnabled()) return;
   const transporter = getTransporter();
   if (!transporter) return;
 
