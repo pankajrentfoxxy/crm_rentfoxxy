@@ -14,6 +14,8 @@ const {
   drawDispatchTags,
   resolveSignFile,
   fmtIst,
+  formatVendorBillingFromRow,
+  formatVendorShippingFromRow,
 } = require('./vendorRepairPdfService');
 const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
 
@@ -31,6 +33,11 @@ async function loadReturnDcPdfData(dcNumber) {
             v.business_name AS vendor_business_name,
             v.address AS vendor_reg_address,
             v.shipping_address AS vendor_ship_address,
+            v.first_name AS vendor_first_name, v.last_name AS vendor_last_name,
+            v.city AS vendor_city, v.state AS vendor_state, v.pincode AS vendor_pincode,
+            v.gst_number AS vendor_gst_number, v.shipping_same AS vendor_shipping_same,
+            v.shipping_city AS vendor_shipping_city, v.shipping_state AS vendor_shipping_state,
+            v.shipping_pincode AS vendor_shipping_pincode,
             v.contact_person_name, v.contact_person_phone, v.phone,
             dt.first_name AS delivery_person_first_name,
             dt.last_name AS delivery_person_last_name
@@ -62,20 +69,29 @@ function productLabel(item) {
   return '—';
 }
 
+const fmtMoney = (n) => Number(n || 0).toLocaleString('en-IN', {
+  minimumFractionDigits: 2, maximumFractionDigits: 2,
+});
+
 function writeReturnItemsTable(doc, y, items) {
   const L = 40;
   const R = 555;
   const W = R - L;
+  let total = 0;
 
   doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text('Laptops returned to vendor', L, y);
   y += 14;
 
+  // Value is on the challan because an e-way bill is raised against it: a
+  // transporter stopped at a checkpoint has to show the declared consignment
+  // value, and a return DC with no value on it is not a defensible document.
   const cols = [
-    { label: 'Asset ID', w: 80 },
-    { label: 'Serial', w: 90 },
-    { label: 'Product', w: 130 },
-    { label: 'PO', w: 70 },
-    { label: 'Reason', w: W - 370 },
+    { label: 'Asset ID', w: 78 },
+    { label: 'Serial', w: 84 },
+    { label: 'Product', w: 118 },
+    { label: 'PO', w: 62 },
+    { label: 'Reason', w: W - 412 },
+    { label: 'Value (Rs)', w: 70, align: 'right' },
   ];
 
   const drawHeader = (yy) => {
@@ -83,7 +99,7 @@ function writeReturnItemsTable(doc, y, items) {
     let cx = L;
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
     for (const c of cols) {
-      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8 });
+      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8, align: c.align || 'left' });
       cx += c.w;
     }
     return yy + 22;
@@ -118,9 +134,25 @@ function writeReturnItemsTable(doc, y, items) {
     x += cols[3].w;
     doc.font('Helvetica').fontSize(7.5)
       .text(reason, x + 4, y + 8, { width: cols[4].w - 8 });
+    x += cols[4].w;
+    const dv = Number(item.declared_value);
+    total += Number.isFinite(dv) ? dv : 0;
+    doc.font('Helvetica').fontSize(8)
+      .text(Number.isFinite(dv) ? fmtMoney(dv) : '—', x + 4, y + 10,
+        { width: cols[5].w - 8, align: 'right' });
 
     y += rowH;
   }
+
+  // Total row — the figure the e-way threshold is measured against.
+  doc.rect(L, y, W, 20).fillColor('#f1f5f9').fill();
+  doc.strokeColor(C.line).lineWidth(0.6).rect(L, y, W, 20).stroke();
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+    .text('Total declared value', L + 4, y + 6, { width: W - cols[5].w - 12, align: 'right' });
+  doc.text(fmtMoney(total), L + W - cols[5].w + 4, y + 6,
+    { width: cols[5].w - 8, align: 'right' });
+  y += 20;
+
   return y + 10;
 }
 
@@ -157,10 +189,31 @@ async function generateVendorReturnDcPdf(dcNumber) {
 
   const company = await loadCompany();
   const vendorName = dc.vendor_name || dc.vendor_business_name || '—';
-  const vendorBilling = [vendorName, dc.billing_address || dc.vendor_address || dc.vendor_reg_address]
-    .filter(Boolean).join('\n');
-  const vendorShipping = [vendorName, dc.shipping_address || dc.vendor_ship_address || dc.vendor_address]
-    .filter(Boolean).join('\n');
+  // The stored billing_address used to default to our own TrueTech block, so
+  // older DCs carry our address in the vendor's "Bill to" box. Rebuild both
+  // blocks from the vendor master, and fall back to the stored snapshot only if
+  // the vendor row has gone. formatVendorBillingFromRow already leads with the
+  // vendor's name, so the name is not prepended again — that is what produced
+  // "C PROMPT ... / TRUETECH SERVICES ..." stacked in one box.
+  const vendorRow = {
+    business_name: dc.vendor_business_name,
+    first_name: dc.vendor_first_name,
+    last_name: dc.vendor_last_name,
+    address: dc.vendor_reg_address,
+    city: dc.vendor_city,
+    state: dc.vendor_state,
+    pincode: dc.vendor_pincode,
+    gst_number: dc.vendor_gst_number,
+    shipping_same: dc.vendor_shipping_same,
+    shipping_address: dc.vendor_ship_address,
+    shipping_city: dc.vendor_shipping_city,
+    shipping_state: dc.vendor_shipping_state,
+    shipping_pincode: dc.vendor_shipping_pincode,
+  };
+  const vendorBilling = formatVendorBillingFromRow(vendorRow)
+    || [vendorName, dc.billing_address || dc.vendor_address].filter(Boolean).join('\n');
+  const vendorShipping = formatVendorShippingFromRow(vendorRow)
+    || [vendorName, dc.shipping_address || dc.vendor_address].filter(Boolean).join('\n');
 
   const dir = path.join(__dirname, '../uploads/vendor-return');
   fs.mkdirSync(dir, { recursive: true });
@@ -192,6 +245,23 @@ async function generateVendorReturnDcPdf(dcNumber) {
     doc.text(`Return date: ${formatPdfDateIstOrDash(dc.return_date || dc.created_at)}`, 40, y + 12);
     doc.text(`Dispatched: ${formatPdfDateIstOrDash(dc.dispatched_at)}`, 280, y + 12);
     y += 28;
+
+    // E-way Bill, printed only once it exists. A transporter stopped at a
+    // checkpoint shows this challan, so the number and date belong on the face
+    // of the document rather than only in the CRM.
+    if (dc.eway_bill_number) {
+      doc.rect(40, y, 515, 22).fillColor('#eef6f5').fill();
+      doc.strokeColor(C.line).lineWidth(0.6).rect(40, y, 515, 22).stroke();
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text('E-Way Bill', 46, y + 6, { width: 70 });
+      doc.font('Helvetica').fontSize(9)
+        .text(String(dc.eway_bill_number), 116, y + 6, { width: 200 });
+      if (dc.eway_bill_date) {
+        doc.fillColor(C.sub)
+          .text(`Dated ${formatPdfDateIstOrDash(dc.eway_bill_date)}`, 330, y + 6, { width: 220 });
+      }
+      y += 30;
+    }
 
     y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
     y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);

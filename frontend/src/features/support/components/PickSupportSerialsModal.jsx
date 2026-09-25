@@ -21,7 +21,9 @@ import FitmentControls, {
  *
  * onConfirm(instanceMap) — { [request_id]: instance_id }.
  */
-export default function PickSupportSerialsModal({ open, requests = [], busy = false, onClose, onConfirm }) {
+export default function PickSupportSerialsModal({
+  open, requests = [], busy = false, onClose, onConfirm, onViewReserved,
+}) {
   const [loading, setLoading] = useState(false);
   const [unitsByReq, setUnitsByReq] = useState({});
   const [choice, setChoice] = useState({}); // { [request_id]: instance_id }
@@ -59,7 +61,8 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
           try {
             const { data } = await listPartInstances(params);
             return [r.id, data.instances || []];
-          } catch {
+          } catch (err) {
+            toast.error(err.response?.data?.message || 'Could not load stocked units');
             return [r.id, []];
           }
         })
@@ -223,7 +226,28 @@ export default function PickSupportSerialsModal({ open, requests = [], busy = fa
                   ) : null}
 
                   {!units.length ? (
-                    <p className="mt-2 text-[11px] text-amber-600">No stocked units for this part.</p>
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 space-y-1">
+                      <p className="font-semibold">No pickable units in stock</p>
+                      <p>
+                        Approve needs a unit with status <span className="font-mono">in_stock</span>.
+                        {Number(r.instances_reserved) > 0
+                          ? ` ${r.instances_reserved} unit(s) of this part are reserved for other (floor) requests.`
+                          : null}
+                        {Number(r.stock_qty) > 0 && Number(r.instances_available || r.available || 0) === 0
+                          ? ` Catalog counter still shows ${r.stock_qty} — that is not pickable serial stock.`
+                          : null}
+                        {' '}Receive new stock, or release a reserved unit from Parts Approval / floor PRQ first.
+                      </p>
+                      {Number(r.instances_reserved) > 0 && typeof onViewReserved === 'function' && (
+                        <button
+                          type="button"
+                          className="mt-1 text-[11px] font-semibold text-[#534AB7] hover:underline"
+                          onClick={() => onViewReserved(r.part_id, r.part_name)}
+                        >
+                          View reserved units →
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <>
                       <div className="mt-2 flex items-center justify-between gap-2">

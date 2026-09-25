@@ -3,6 +3,8 @@ const cors = require('cors');
 const path = require('path');
 // Always load backend/.env (cwd may be repo root when starting via scripts/PM2)
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+// Block all outbound email unless OUTBOUND_MESSAGING_ENABLED=true. Load before any mailer.
+require('./services/outboundMessagingGuard');
 
 const errorHandler = require('./middleware/errorHandler');
 const { BODY_PARSER_LIMIT } = require('./config/uploadLimits');

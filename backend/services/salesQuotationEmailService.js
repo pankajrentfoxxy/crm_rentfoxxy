@@ -7,6 +7,7 @@ const pool = require('../config/db');
 const { generateToken } = require('./salesManagementService');
 const { generateDocumentPdf } = require('./salesManagementPdfService');
 const mailTransport = require('./mailTransport');
+const { cleanSpecValue, joinSpecParts } = require('../utils/specText');
 const {
   getDefaultQuotationCc,
   parseCcList,
@@ -41,10 +42,10 @@ function configsFromQuotationLines(lines = []) {
   const unique = [];
   const seen = new Set();
   for (const line of lines) {
-    const procCore = [line.processor, line.generation].filter(Boolean).join(' - ');
-    const processor = [line.brand, procCore].filter(Boolean).join(' — ') || '—';
-    const ram = line.ram || '—';
-    const storage = line.storage || '—';
+    const procCore = joinSpecParts([line.processor, line.generation], ' - ');
+    const processor = joinSpecParts([line.brand, procCore], ' — ') || '—';
+    const ram = cleanSpecValue(line.ram) || '—';
+    const storage = cleanSpecValue(line.storage) || '—';
     const monthlyRate = Number(line.rate) || 0;
     const key = `${processor}|${ram}|${storage}|${monthlyRate}`;
     if (seen.has(key)) continue;

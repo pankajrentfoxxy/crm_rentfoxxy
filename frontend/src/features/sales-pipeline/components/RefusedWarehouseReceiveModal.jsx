@@ -27,6 +27,7 @@ export default function RefusedWarehouseReceiveModal({ dcNumber, customerName, o
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState(() => user?.name || user?.email || '');
   const [remarks, setRemarks] = useState('');
+  const [guardPending, setGuardPending] = useState(false);
 
   useEffect(() => {
     const loginName = user?.name || user?.email || '';
@@ -40,6 +41,7 @@ export default function RefusedWarehouseReceiveModal({ dcNumber, customerName, o
       const r = await getRefusedReturnUnits(dcNumber);
       const list = r.data?.units || [];
       setUnits(list);
+      setGuardPending(Boolean(r.data?.guard_inward_pending));
       setEntries(Object.fromEntries(list.map((_, i) => [i, { ttspl: '', serial_number: '' }])));
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load units on this challan');
@@ -83,6 +85,7 @@ export default function RefusedWarehouseReceiveModal({ dcNumber, customerName, o
   const allVerified = units.length > 0 && units.every(unitMatches);
 
   const submit = async () => {
+    if (guardPending) { toast.error('Guard must scan this DC INWARD at the gate first'); return; }
     if (!allVerified) { toast.error('Verify the TTSPL ID and serial number of every unit'); return; }
     if (!name.trim()) { toast.error('Enter the warehouse receiver name'); return; }
     if (!padRef.current || padRef.current.isEmpty()) { toast.error('Warehouse e-signature is required'); return; }
@@ -119,6 +122,15 @@ export default function RefusedWarehouseReceiveModal({ dcNumber, customerName, o
           Customer refused this delivery{customerName ? ` (${customerName})` : ''}. Verify each unit, then sign the
           inward — the laptops go back to warehouse stock and re-enter QC.
         </p>
+        {!loading && guardPending && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 flex gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>
+              Waiting for the guard. The laptop must be scanned <b>INWARD at the gate</b> on {dcNumber} before
+              the warehouse can receive it.
+            </span>
+          </div>
+        )}
 
         {loading ? (
           <p className="text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading units…</p>
@@ -185,10 +197,10 @@ export default function RefusedWarehouseReceiveModal({ dcNumber, customerName, o
               <button
                 type="button"
                 onClick={submit}
-                disabled={saving || !allVerified}
+                disabled={saving || !allVerified || guardPending}
                 className="flex-[2] py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
               >
-                {saving ? 'Receiving…' : 'Confirm receipt'}
+                {saving ? 'Receiving…' : guardPending ? 'Awaiting guard inward' : 'Confirm receipt'}
               </button>
             </div>
           </>

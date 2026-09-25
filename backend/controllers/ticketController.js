@@ -24,8 +24,6 @@ const {
   resolveTicketListScope,
   buildTicketListAssignmentClause,
   canAccessTicketRecord,
-  isRestrictedToAssignedAny,
-  isQcInspectorRole,
 } = require('../services/dataScopeService');
 const { appendDateRangeClauses, resolveDatePeriod } = require('../utils/dateRangeFilter');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
@@ -280,9 +278,7 @@ exports.getTickets = async (req, res) => {
       query += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    const ticketScope = isQcInspectorRole(req.user?.role)
-      ? { mode: 'all' }
-      : await resolveTicketListScope(req);
+    const ticketScope = await resolveTicketListScope(req);
     const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
     query += assignmentFilter.clause;
     paramCount = assignmentFilter.paramCount;
@@ -424,9 +420,7 @@ exports.getFloorStatusCounts = async (req, res) => {
       where += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    const ticketScope = isQcInspectorRole(req.user?.role)
-      ? { mode: 'all' }
-      : await resolveTicketListScope(req);
+    const ticketScope = await resolveTicketListScope(req);
     const assignmentFilter = buildTicketListAssignmentClause(ticketScope, 1, params);
     where += assignmentFilter.clause;
 
@@ -495,9 +489,7 @@ exports.getFloorNavCounts = async (req, res) => {
       where += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    const ticketScope = isQcInspectorRole(req.user?.role)
-      ? { mode: 'all' }
-      : await resolveTicketListScope(req);
+    const ticketScope = await resolveTicketListScope(req);
     const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
     where += assignmentFilter.clause;
     paramCount = assignmentFilter.paramCount;

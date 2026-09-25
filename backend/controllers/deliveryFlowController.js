@@ -283,6 +283,8 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
   return out;
 }
 
+const { hasPermission } = require('../services/permissionService');
+
 // GET /delivery-flow?status=in_transit|reached|shipped|delivered|all&technician_id=&page=&limit=
 exports.listDeliveryFlow = async (req, res) => {
   try {
@@ -321,8 +323,31 @@ exports.listDeliveryFlow = async (req, res) => {
       conditions.push(`d.status = $${params.length}`);
     }
 
-    if (req.query.technician_id) {
-      params.push(parseInt(req.query.technician_id, 10));
+    // Admin bucket list (all technicians) vs field tech (own jobs only).
+    // status=inhouse is the Technician Delivery Bucket — only
+    // technicians_bucket_list (or admin roles) may see every tech.
+    // delivery_register_management still unlocks other status filters.
+    const hasAdminBucketList = ADMIN_ROLES.includes(req.user?.role)
+      || (await hasPermission(req.user.user_id, req.user.role, 'technicians_bucket_list', 'can_view', permissionCache));
+    const hasDeliveryRegister = await hasPermission(
+      req.user.user_id, req.user.role, 'delivery_register_management', 'can_view', permissionCache
+    );
+    const canSeeAllTechnicians = status === 'inhouse'
+      ? hasAdminBucketList
+      : (hasAdminBucketList || hasDeliveryRegister);
+
+    let scopedTechnicianId = req.query.technician_id
+      ? parseInt(req.query.technician_id, 10)
+      : null;
+    if (!canSeeAllTechnicians) {
+      const ownTechId = await resolveTechnicianId(req.user.user_id);
+      scopedTechnicianId = ownTechId || -1;
+      params.push(scopedTechnicianId, req.user.user_id);
+      conditions.push(
+        `(d.delivery_person_id = $${params.length - 1} OR d.delivery_person_id = $${params.length})`
+      );
+    } else if (scopedTechnicianId) {
+      params.push(scopedTechnicianId);
       conditions.push(`d.delivery_person_id = $${params.length}`);
     }
 
@@ -387,7 +412,10 @@ exports.listDeliveryFlow = async (req, res) => {
     let merged = items;
     if (includeVendorReturn && !paginate) {
       const vendorReturns = await vrtdcFlow.listBucketVendorReturns({
-        technicianId: req.query.technician_id ? parseInt(req.query.technician_id, 10) : null,
+        technicianId: canSeeAllTechnicians
+          ? (req.query.technician_id ? parseInt(req.query.technician_id, 10) : null)
+          : scopedTechnicianId,
+        userId: canSeeAllTechnicians ? null : req.user.user_id,
       });
       merged = [...items, ...vendorReturns].sort((a, b) => latestActivityMs(b) - latestActivityMs(a));
     }
@@ -936,11 +964,16 @@ exports.getRefusedReturnUnits = async (req, res) => {
     if (!head) return res.status(404).json({ success: false, message: 'Delivery challan not found' });
 
     const units = await rejectionSvc.listRefusedReturnUnits(pool, dcNumber);
+    const guardInward = head.status === 'rejected'
+      ? await rejectionSvc.findGuardInwardForRefusedDc(pool, dcNumber, head.rejected_at)
+      : null;
     res.json({
       success: true,
       dc: head,
       refusal_stage: refusalStage(head),
       warehouse_return_pending: head.status === 'rejected' && !head.return_to_warehouse_at,
+      guard_inward_at: guardInward?.confirmed_at || null,
+      guard_inward_pending: head.status === 'rejected' && !head.return_to_warehouse_at && !guardInward,
       units,
     });
   } catch (error) {

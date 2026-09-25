@@ -164,9 +164,8 @@ exports.raiseSupportPartRequest = async (req, res) => {
     const spr = rows[0];
 
     await client.query('COMMIT');
-    // Stock is "available" if we have tracked part_instances OR legacy catalog
-    // quantity (parts.quantity), since approval can issue from either source.
-    const available = Math.max(Number(part.available || 0), Number(part.quantity || 0));
+    // Pickable stock = in_stock instances only (matches approve + serial picker).
+    const available = Number(part.available || 0);
     res.status(201).json({
       success: true,
       request: { ...spr, part_name: part.part_name, stock_available: available },
@@ -1481,6 +1480,115 @@ exports.getChallan = async (req, res) => {
   }
 };
 
+// ── RESERVED UNITS FOR A PART (warehouse queue drill-down) ─────────────────────
+
+/**
+ * GET /support-parts/parts/:partId/reserved
+ * Lists reserved part_instances for a catalog part, with the floor PRQ or
+ * support SPR that is holding each unit — so warehouse can see why approve
+ * has nothing pickable.
+ */
+exports.getReservedPartUnits = async (req, res) => {
+  try {
+    const partId = parseInt(req.params.partId, 10);
+    if (!Number.isInteger(partId) || partId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid part id' });
+    }
+
+    const partRes = await pool.query(
+      `SELECT part_id, part_name, quantity AS catalog_qty
+         FROM parts WHERE part_id = $1 AND NOT COALESCE(archived, FALSE)`,
+      [partId]
+    );
+    if (!partRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.status, pi.asset_code,
+              pi.location_code, pi.unit_cost, pi.received_at, pi.updated_at,
+              pr.request_id AS floor_request_id,
+              pr.request_number AS floor_request_number,
+              pr.status AS floor_request_status,
+              pr.ticket_id AS floor_ticket_id,
+              pr.stage_name AS floor_stage_name,
+              t.ttspl_id AS floor_ttspl_id,
+              spr.id AS support_request_id,
+              spr.request_number AS support_request_number,
+              spr.status AS support_request_status,
+              spr.ttspl_id AS support_ttspl_id,
+              st.customer_name AS support_customer_name
+         FROM part_instances pi
+         LEFT JOIN LATERAL (
+           SELECT pr2.*
+             FROM part_requests pr2
+            WHERE pr2.instance_id = pi.instance_id
+              AND pr2.status IN ('approved','pending','escalated','in_transit','issued','attached')
+            ORDER BY pr2.updated_at DESC NULLS LAST, pr2.request_id DESC
+            LIMIT 1
+         ) pr ON TRUE
+         LEFT JOIN tickets t ON t.ticket_id = pr.ticket_id
+         LEFT JOIN LATERAL (
+           SELECT spr2.*
+             FROM support_part_requests spr2
+            WHERE spr2.instance_id = pi.instance_id
+              AND spr2.status NOT IN ('cancelled','rejected','returned')
+            ORDER BY spr2.updated_at DESC NULLS LAST, spr2.id DESC
+            LIMIT 1
+         ) spr ON TRUE
+         LEFT JOIN support_tickets st ON st.id = spr.support_ticket_id
+        WHERE pi.part_id = $1 AND pi.status = 'reserved'
+        ORDER BY pi.updated_at DESC NULLS LAST, pi.instance_id DESC`,
+      [partId]
+    );
+
+    const units = rows.map((row) => {
+      let held_by = null;
+      if (row.floor_request_number) {
+        held_by = {
+          kind: 'floor_prq',
+          label: row.floor_request_number,
+          status: row.floor_request_status,
+          ticket_id: row.floor_ticket_id,
+          stage_name: row.floor_stage_name,
+          ttspl_id: row.floor_ttspl_id,
+          href: row.floor_ticket_id ? `/floor-pipeline/tickets/${row.floor_ticket_id}` : null,
+        };
+      } else if (row.support_request_number) {
+        held_by = {
+          kind: 'support_spr',
+          label: row.support_request_number,
+          status: row.support_request_status,
+          ttspl_id: row.support_ttspl_id,
+          customer_name: row.support_customer_name,
+          href: null,
+        };
+      }
+      return {
+        instance_id: row.instance_id,
+        prt_id: row.prt_id,
+        serial_number: row.serial_number,
+        asset_code: row.asset_code,
+        location_code: row.location_code,
+        unit_cost: row.unit_cost,
+        received_at: row.received_at,
+        updated_at: row.updated_at,
+        held_by,
+      };
+    });
+
+    res.json({
+      success: true,
+      part: partRes.rows[0],
+      count: units.length,
+      units,
+    });
+  } catch (e) {
+    console.error('getReservedPartUnits:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // ── WAREHOUSE QUEUE ───────────────────────────────────────────────────────────
 
 exports.getWarehouseQueue = async (req, res) => {
@@ -1519,12 +1627,17 @@ exports.getWarehouseQueue = async (req, res) => {
       }
     }
 
+    // `available` = pickable in_stock instances only. Do NOT inflate with
+    // parts.quantity — that legacy counter drifts (Cooling Fan showed 2 while
+    // every tracked unit was reserved/installed). Approve + serial pick uses
+    // part_instances status='in_stock'; the badge must match that list.
     const { rows } = await pool.query(`
       SELECT spr.*,
              p.part_name, p.category, p.quantity AS stock_qty,
              p.location_code, p.cost AS unit_cost,
-             COALESCE(pi_count.available, 0) AS instances_available,
-             GREATEST(COALESCE(pi_count.available, 0), COALESCE(p.quantity, 0))::int AS available,
+             COALESCE(pi_count.available, 0)::int AS instances_available,
+             COALESCE(pi_count.available, 0)::int AS available,
+             COALESCE(pi_other.reserved_count, 0)::int AS instances_reserved,
              u.user_id AS tech_id,
              u.name AS tech_name,
              st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number,
@@ -1535,6 +1648,11 @@ exports.getWarehouseQueue = async (req, res) => {
         SELECT part_id, COUNT(*) AS available
         FROM part_instances WHERE status='in_stock' GROUP BY part_id
       ) pi_count ON pi_count.part_id = p.part_id
+      LEFT JOIN (
+        SELECT part_id, COUNT(*) FILTER (WHERE status = 'reserved') AS reserved_count
+        FROM part_instances
+        GROUP BY part_id
+      ) pi_other ON pi_other.part_id = p.part_id
       JOIN users u ON u.user_id = spr.assigned_to_tech
       JOIN support_tickets st ON st.id = spr.support_ticket_id
       LEFT JOIN support_ticket_items sti ON sti.id = spr.support_item_id

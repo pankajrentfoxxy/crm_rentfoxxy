@@ -4,6 +4,10 @@
  */
 const pool = require('../config/db');
 const { formatCompanyBlock } = require('../utils/companyDefaults');
+const {
+  formatVendorBillingFromRow,
+  formatVendorShippingFromRow,
+} = require('./vendorRepairPdfService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { transitionAsset, STATUS } = require('./inventoryStateMachine');
 const {
@@ -14,17 +18,24 @@ const {
 const WAREHOUSE_STATUSES = new Set(['in_stock', 'returned', 'qc_failed']);
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'procurement']);
 
+// Two different meanings of "returned" were being conflated. A unit whose
+// inventory_status is 'returned' came back from a CUSTOMER and is sitting in our
+// warehouse — the single most common reason to send a rented machine back to its
+// vendor and stop paying rent on it. A unit already sent back to the vendor is a
+// separate thing, and ALREADY_RETURNED_TO_VENDOR_SQL below excludes those from
+// every query here regardless of the filter. So 'returned' belongs in the default
+// set; 'hide_returned' stays available as an explicit opt-out.
 const INVENTORY_STATUS_FILTERS = {
+  all: [...WAREHOUSE_STATUSES],
   hide_returned: ['in_stock', 'qc_failed'],
-  all: ['in_stock', 'returned', 'qc_failed'],
   in_stock: ['in_stock'],
   returned: ['returned'],
   qc_failed: ['qc_failed'],
 };
 
 function resolveInventoryStatuses(filter) {
-  const key = String(filter || 'hide_returned').trim().toLowerCase();
-  return INVENTORY_STATUS_FILTERS[key] || INVENTORY_STATUS_FILTERS.hide_returned;
+  const key = String(filter || 'all').trim().toLowerCase();
+  return INVENTORY_STATUS_FILTERS[key] || INVENTORY_STATUS_FILTERS.all;
 }
 
 /** Already sent back to vendor (any open or completed VRTDC). Cancelled DCs do not block. */
@@ -205,22 +216,38 @@ async function listEligibleLaptops({ vendorId, poId, search, inventoryStatus, pa
   };
 }
 
-/** Vendors that currently have inward / warehouse laptops eligible to return. */
+/**
+ * Vendors that currently have inward / warehouse laptops eligible to return.
+ *
+ * Counts every warehouse status the DC itself accepts, 'returned' included. It
+ * previously counted only in_stock and qc_failed, which made this a dead end:
+ * a vendor whose returnable units had all come back from customers scored zero,
+ * dropped out of the step-1 dropdown, and could never be reached — even though
+ * step 2 had a "Returned only" filter and createReturnDc would have accepted
+ * every one of those units.
+ *
+ * The per-status breakdown rides along so the dropdown can say what the count is
+ * made of instead of just "N inward".
+ */
 async function listEligibleVendors() {
   const { rows } = await pool.query(
     `SELECT v.vendor_id,
             v.business_name,
             v.first_name,
-            COUNT(*)::int AS inward_count
+            COUNT(*)::int AS inward_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'in_stock')::int AS in_stock_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned_count,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'qc_failed')::int AS qc_failed_count
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
        JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL
       WHERE vsn.deleted_at IS NULL
         AND vsn.po_id IS NOT NULL
-        AND vsn.inventory_status IN ('in_stock', 'qc_failed')
+        AND vsn.inventory_status = ANY($1::text[])
         AND NOT ${ALREADY_RETURNED_TO_VENDOR_SQL}
       GROUP BY v.vendor_id, v.business_name, v.first_name
-      ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`
+      ORDER BY v.business_name NULLS LAST, v.first_name NULLS LAST`,
+    [[...WAREHOUSE_STATUSES]]
   );
   return rows;
 }
@@ -342,8 +369,17 @@ async function createReturnDc(client, {
   const whAddr = warehouseAddress || formatCompanyBlock();
   const vName = (vendorName || vendor.business_name || '').trim();
   const vAddr = (vendorAddress || vendor.address || '').trim();
-  const billAddr = billingAddress || formatCompanyBlock();
-  const shipAddr = (shippingAddress || vendor.shipping_address || vAddr).trim();
+  // Bill to = the VENDOR. This defaulted to formatCompanyBlock(), which is our
+  // own TrueTech block and identical to warehouse_address — so every return DC
+  // carried our address in the vendor's "Bill to" box, and the PDF printed the
+  // vendor's name above our address and GSTIN. On a return the vendor is the
+  // counterparty being billed, so it is their registered address and their
+  // GSTIN that belong here.
+  const billAddr = (billingAddress || formatVendorBillingFromRow(vendor) || vAddr).trim();
+  // Ship to honours shipping_same: a vendor with shipping_same true has no
+  // shipping_address row at all, so falling through to the registered address is
+  // the correct behaviour, not a fallback.
+  const shipAddr = (shippingAddress || formatVendorShippingFromRow(vendor) || vAddr).trim();
   if (!vName) throw new Error('Vendor name is required');
   if (!shipAddr) throw new Error('Vendor shipping address is required');
 
@@ -422,6 +458,8 @@ async function dispatchReturnDc(client, {
   vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
+  declared_values,
+  declaredValues,
   actorUserId,
   actorName,
 }) {
@@ -432,6 +470,13 @@ async function dispatchReturnDc(client, {
   const head = headRes.rows[0];
   if (!head) throw new Error('Return DC not found');
   if (head.status !== 'draft') throw new Error(`Cannot send to gate — DC status is ${head.status}`);
+
+  // Declared value per laptop, entered alongside the delivery partner. This is
+  // what the Rs 50,000 e-way threshold is measured against, so it is captured
+  // here rather than asked for later — by the time Accounts sees the request the
+  // dispatcher has gone.
+  const { saveDeclaredValues } = require('./vrtdcEwayComplianceService');
+  await saveDeclaredValues(client, dcNumber, declared_values || declaredValues || {});
 
   const dispatch = dispatchPayloadFromBody({
     ship_by: ship_by || shipBy,
@@ -495,6 +540,13 @@ async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorNam
   if (head.status !== 'dispatch_ready') {
     throw new Error(`Cannot confirm gate outward — DC status is ${head.status}`);
   }
+
+  // The gate is where the e-way bill is enforced, not DC creation: a return is
+  // picked and packed before anyone knows the transporter, and blocking creation
+  // would stop the warehouse working. What must not happen without an e-way bill
+  // is the consignment physically leaving.
+  const { assertVrtdcCanLeaveGate } = require('./vrtdcEwayComplianceService');
+  await assertVrtdcCanLeaveGate(dcNumber, client);
 
   const items = await client.query(
     `SELECT * FROM vendor_return_dc_items WHERE dc_number = $1 FOR UPDATE`,

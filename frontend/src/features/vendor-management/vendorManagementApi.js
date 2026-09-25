@@ -351,6 +351,53 @@ export function cancelReturnToVendorDc(dcNumber) {
   return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/cancel`);
 }
 
+/**
+ * Set declared values on a draft VRTDC.
+ * Pass `apply_to_all` for one price across every laptop, or `declared_values`
+ * as a serial_id -> value map. `overwrite` replaces values already set.
+ */
+export function setReturnToVendorItemValues(dcNumber, payload) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/item-values`, payload);
+}
+
+/* ── VRTDC E-way Bill ─────────────────────────────────────────────────────── */
+
+export function fetchReturnToVendorEway(dcNumber) {
+  return api.get(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/eway`);
+}
+
+/** Warehouse → Accounts: raise the E-way Bill for this consignment. */
+export function requestReturnToVendorEway(dcNumber) {
+  return api.post(`${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/request-eway`);
+}
+
+/** Download the E-way Bill document Accounts uploaded, for the gate/transporter. */
+export async function downloadReturnToVendorEwayPdf(dcNumber) {
+  try {
+    const response = await api.get(
+      `${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/eway-pdf`,
+      { responseType: 'blob' }
+    );
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    downloadBlobResponse(response, `EWAY_${safe}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
+/** Accounts saves the bill. Multipart because the document is attached. */
+export function saveReturnToVendorEway(dcNumber, { eway_bill_number, eway_bill_date, file }) {
+  const form = new FormData();
+  form.append('eway_bill_number', eway_bill_number || '');
+  if (eway_bill_date) form.append('eway_bill_date', eway_bill_date);
+  if (file) form.append('eway_bill_pdf', file);
+  return api.post(
+    `${base}/return-to-vendor/dc/${encodeURIComponent(dcNumber)}/eway`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
+}
+
 async function parseBlobError(err) {
   const data = err?.response?.data;
   if (data instanceof Blob) {

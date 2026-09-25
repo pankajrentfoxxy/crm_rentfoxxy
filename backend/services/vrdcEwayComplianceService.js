@@ -193,7 +193,7 @@ async function assertCanDownloadVrdcPdf(user, dcNumber) {
   );
 }
 
-async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, laptops = [] }) {
+async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, laptops = [], userTriggered = false }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
       'Dispatch mail is not configured. Set DISPATCH_SMTP_HOST, DISPATCH_SMTP_USER, DISPATCH_SMTP_PASS, and DISPATCH_SMTP_FROM in backend/.env'
@@ -273,6 +273,7 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
       to: ACCOUNTS_EMAIL,
       cc: ACCOUNTS_EMAIL_CC,
       subject: `${dcNumber} : ${vendorName || 'Vendor'} : VRDC E-Way Bill Required`,
+      userTriggered,
       text: [
         'Hi Accounts Team,',
         '',

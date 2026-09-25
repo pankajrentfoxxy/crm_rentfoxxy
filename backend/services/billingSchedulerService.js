@@ -5,6 +5,7 @@ const cron = require('node-cron');
 const pool = require('../config/db');
 const logger = require('../utils/logger');
 const { enqueueEmail } = require('./emailQueueService');
+const { isCustomerInvoiceEmailEnabled } = require('./outboundMessagingGuard');
 const {
   toLocalYmd,
   addDays,
@@ -3104,8 +3105,10 @@ async function maybeInvoiceFirstRentalPeriod({
     }
 
     // Always email + mark sent after a new/appended first-period invoice.
-    // Opt out with INVOICE_EMAIL_ON_DELIVERY=false.
-    const emailDisabled = String(process.env.INVOICE_EMAIL_ON_DELIVERY || 'true').toLowerCase() === 'false';
+    // Opt out with INVOICE_EMAIL_ON_DELIVERY=false. Also off while customer invoice
+    // email is switched off (CUSTOMER_INVOICE_EMAIL_ENABLED) -- the invoice stays draft.
+    const emailDisabled = String(process.env.INVOICE_EMAIL_ON_DELIVERY || 'true').toLowerCase() === 'false'
+      || !isCustomerInvoiceEmailEnabled();
     if (!emailDisabled && result.invoice_id && !result.skipped) {
       try {
         const sent = await sendGeneratedCustomerInvoice(result.invoice_id);
@@ -3269,6 +3272,7 @@ async function sendGeneratedCustomerInvoice(invoiceId, actorUserId = null) {
       subject: `Invoice ${invoice.invoice_number} — Rentfoxxy`,
       text: `Please find attached invoice ${invoice.invoice_number} for the billing period ${invoice.from_date} to ${invoice.to_date}.`,
       pdfRelativePath: pdfPath,
+      customerInvoice: true,
     });
   }
 

@@ -30,6 +30,9 @@ const DC_ACTION_SUFFIXES = [
   '/bluedart-awb/pdf',
   '/request-demo-eway',
   '/demo-eway',
+  '/request-eway',
+  '/eway-pdf',
+  '/eway',
 ];
 
 /**

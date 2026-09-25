@@ -249,6 +249,17 @@ async function regenerateSoAndLinkedDcPdfs(salesOrderNumber) {
 async function regenerateDcPdfForNumber(dcNumber) {
   const lines = await getDeliveryChallanLines(dcNumber);
   if (!lines.length) return null;
+
+  // A service return has its own document. Regenerating it through the standard
+  // delivery-challan layout overwrote pdf_path with a plain DC -- no "Service
+  // Delivery Challan" heading, no Deliver-to and no Bill-to block -- and that
+  // was then what Accounts received on the e-way request. SDC/26-27/0010 was
+  // sitting in exactly that state.
+  if (String(lines[0]?.dc_purpose || '').toLowerCase() === 'service_return') {
+    const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
+    return regenerateServiceDcPdfByNumber(pool, dcNumber);
+  }
+
   const pdfPath = await generateDocumentPdf({
     docType: 'delivery_challan',
     docNumber: dcNumber,
@@ -1700,8 +1711,10 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
 
 exports.listDeliveryChallans = async (req, res) => {
   try {
-    const assignedOnly = await isRestrictedToAssigned(req, 'dispatch')
-      || await isRestrictedToAssigned(req, 'delivery_challans');
+    // The Delivery Challans grant decides this list. Its own override is
+    // resolved first; Dispatch is only consulted (via the alias) when there
+    // is none, so an Assigned Dispatch scope cannot narrow an All DC grant.
+    const assignedOnly = await isRestrictedToAssigned(req, 'delivery_challans');
     const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
     const canSeeLockedEway = await canViewEwayLockedDc(req.user, req.permissionCache || {});
     const data = await listDeliveryChallansGrouped({
@@ -2878,7 +2891,9 @@ exports.getDeliveryChallan = async (req, res) => {
       son || headLine.sales_order_number
     );
     const firstCustomerDc = await isNewCustomerFirstDc(pool, headLine.customer_id, dcNumber);
-    const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType, firstCustomerDc);
+    const needsInvoice = requiresInvoiceCompliance(
+      headLine.entity_code, soQuotationType, firstCustomerDc, headLine.dc_purpose
+    );
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
     const billedValue = Number(totals?.subtotal ?? 0);
     const asset = await computeDcAssetValue(dcNumber, lines);
@@ -6600,7 +6615,9 @@ exports.markDcRejected = async (req, res) => {
         await client.query('COMMIT');
         return res.json({
           success: true,
-          message: 'Delivery rejected and returned to warehouse',
+          message: result.guard_inward_pending
+            ? 'Delivery rejected. Guard must scan it INWARD at the gate before the warehouse can receive it.'
+            : 'Delivery rejected and returned to warehouse',
           ...result,
         });
       }

@@ -21,6 +21,7 @@ const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 500;
 
 function isEnabled() {
+  if (!require('./outboundMessagingGuard').isOutboundMessagingEnabled()) return false;
   const flag = String(process.env.INTERAKT_WHATSAPP_ENABLED || '').toLowerCase();
   if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false;
   return Boolean(buildAuthHeader());
