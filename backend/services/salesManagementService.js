@@ -1308,9 +1308,14 @@ async function ensureReturnDcPickupItems(db, dcl) {
 }
 
 /** Pickup marked received but unit still held by the return customer / no floor ticket. */
+const UNIT_GONE_STATUSES = ['scrapped', 'sold'];
+
 function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
   if (!item) return false;
   if (!item.warehouse_received_at) return false;
+  // Received, and the unit has since left for good (returned to vendor / scrapped, or
+  // sold on). The return is closed: re-receiving would drag it back to 'returned'.
+  if (UNIT_GONE_STATUSES.includes(String(item.inventory_status || '').toLowerCase())) return false;
   // ERP/backfill may set warehouse_received_at without warehouse e-sign — allow receive + sign.
   if (!item.warehouse_esign_at && !item.warehouse_esign_url) return true;
   if (!item.floor_ticket_id) return true;
@@ -1582,11 +1587,23 @@ function returnDcListCteSql(baseWhere, statusSql) {
          AND (
            COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
            OR (
-             COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
-             AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
-             AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+             (
+               (
+                 COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
+                 AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+               )
+               OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
+             )
+             -- Received and the unit has since gone to a vendor / scrap or been sold: closed.
+             AND NOT EXISTS (
+               SELECT 1 FROM vendor_serial_numbers gone
+                WHERE gone.deleted_at IS NULL
+                  AND gone.inventory_asset_code = COALESCE(
+                        sti_rdc.ttspl_id, sti_tkt.ttspl_id,
+                        NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
+                  AND gone.inventory_status IN ('scrapped', 'sold')
+             )
            )
-           OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
          )
        ) AS warehouse_receive_pending,
        COALESCE(

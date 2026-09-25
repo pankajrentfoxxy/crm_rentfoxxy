@@ -4037,6 +4037,11 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                     AND sti.warehouse_esign_url IS NULL
                   )
                 )
+                -- Received, and the unit has since gone to a vendor / scrap or been sold.
+                AND NOT (
+                  sti.warehouse_received_at IS NOT NULL
+                  AND COALESCE(vsn.inventory_status, '') IN ('scrapped', 'sold')
+                )
               ORDER BY sti.id ASC LIMIT 1`,
             [rdcNumber]
         );
