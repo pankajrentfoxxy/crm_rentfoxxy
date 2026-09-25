@@ -1,3 +1,4 @@
+const { issueOtpCommitted, verifyOtpCommitted, verifyFailureStatus } = require('../services/deliveryOtpService');
 const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRecipients');
 const { completeDelivery, MODE: DELIVERY_MODE, ProofRejected } = require('../services/deliveryCompletionService');
 /**
@@ -18,7 +19,6 @@ const { getDeliveryChallanLines } = require('../services/salesManagementService'
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 const sm = require('./salesManagementController');
 const vrtdcFlow = require('../services/vendorReturnDeliveryFlow');
-const { secureOtp } = require('../utils/secureRandom');
 
 function latestActivityMs(row) {
   const times = [row?.updated_at, row?.reached_at, row?.serial_verified_at, row?.dispatched_at, row?.created_at];
@@ -529,13 +529,20 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       });
     }
 
-    const otp = secureOtp();
+    // Part 3.4: one hashed, 15-minute, 5-attempt code for the whole challan.
+    const issued = await issueOtpCommitted({
+      dcNumber,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!issued.ok) {
+      return res.status(issued.statusCode || 409).json({ success: false, message: issued.message });
+    }
+    const otp = issued.code;
     await pool.query(
       `UPDATE delivery_challan_lines
-          SET otp_code = $1, otp_sent_at = NOW(), otp_verified_at = NULL,
-              serial_verified_at = NOW(), serial_verified_no = $2, updated_at = NOW()
-        WHERE dc_number = $3`,
-      [otp, matched.serialNumber || matched.ttsplId || input, dcNumber]
+          SET serial_verified_at = NOW(), serial_verified_no = $1, updated_at = NOW()
+        WHERE dc_number = $2`,
+      [matched.serialNumber || matched.ttsplId || input, dcNumber]
     );
 
     const spec = specs.find((s) =>
@@ -637,18 +644,23 @@ exports.submitDeliveryWithPod = async (req, res) => {
     if (agg.rows[0].delivered === agg.rows[0].total) {
       return res.status(409).json({ success: false, message: 'DC already delivered' });
     }
-    const otpRes = await client.query(
-      `SELECT COALESCE(otp_code, d_otp) AS otp_code, otp_verified_at, status FROM delivery_challan_lines
-        WHERE dc_number = $1 AND status <> 'delivered'
-        ORDER BY id ASC LIMIT 1`,
-      [dcNumber]
-    );
-    const dc = otpRes.rows[0] || {};
-    if (!dc.otp_code) {
-      return res.status(400).json({ success: false, message: 'Verify the laptop serial to generate an OTP first' });
+    if (!otp) {
+      return res.status(400).json({ success: false, message: 'Enter the OTP the customer received' });
     }
-    if (!otp || otp !== String(dc.otp_code)) {
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    // Part 3.4: hashed compare, 15-minute expiry, 5 attempts. Committed on its
+    // own so a wrong attempt is counted even if the delivery below fails.
+    const otpCheck = await verifyOtpCommitted({
+      dcNumber,
+      code: otp,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!otpCheck.ok) {
+      return res.status(verifyFailureStatus(otpCheck)).json({
+        success: false,
+        code: `OTP_${String(otpCheck.reason || 'invalid').toUpperCase()}`,
+        message: otpCheck.reason === 'not_issued' ? 'Scan the laptop first — that sends the customer an OTP.' : otpCheck.message,
+        remaining: otpCheck.remaining,
+      });
     }
 
     let podPhotoUrl = null;

@@ -61,14 +61,16 @@ API base unless noted: `/api/sales-management` (FE: `features/sales-pipeline/sal
 - [x] Quotation form burned a number per open (peek now) — 25 Sep
 - [x] accepted_at not set by staff accept; rejected quote re-openable via email link — 25 Sep
 - [x] SO form listed `approved` quotes but backend needs `accepted` — Carret form lists accepted (old form unchanged)
-- [ ] Quotation validity/terms/remarks and SO advance_* are not persisted (no columns) — Carret forms do not offer them
+- [x] Quotation validity/terms/remarks persisted (migration 327, applied to QA 26 Sep), printed on the PDF; header remark travels as `quotation_remarks` (`remarks` is the line array)
+- [ ] SO advance_* still not persisted (no columns) — Carret SO form does not offer them
 - [x] `attachSerial` early returns after BEGIN with no ROLLBACK — fixed + test 25 Sep
 - [x] Carret `useChallans` read the wrong keys — fixed; returns read /return-dc
 - [x] Porter DCs refused at gate with AWB_MISSING — porter_tracking_id accepted, test 25 Sep
 - [x] Gate confirm refusal: event re-recorded after ROLLBACK, 409 with failures — 25 Sep
 - [x] ProofRejected now answers 400 with what is missing; Carret never calls PATCH /delivered without proof
-- [ ] Hardened OTP service (deliveryOtpService, migration 261) is not wired to any path
-- [ ] Register POD upload (`/delivery-register-management/:dc/pod`) bypasses completeDelivery
+- [x] Hardened OTP wired into all six issue/verify sites; plaintext no longer stored — 26 Sep
+- [ ] Warehouse-return OTP is still plaintext (now CSPRNG); hashing it needs columns
+- [x] Register POD upload goes through completeDelivery / the rejection service; mixed POD refused (409) — 26 Sep
 - [x] BlueDart auto-delivery now sends the delivered WhatsApp (no PDF regen yet)
 - [ ] Technician portal dashboard filters legacy status='pending'
 - [x] Accept via PATCH status 500'd (`inconsistent types deduced for parameter $1`) — cast, DB test, 25 Sep

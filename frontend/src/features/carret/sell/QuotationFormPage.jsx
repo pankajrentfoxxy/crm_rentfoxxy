@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, Field, Input, Select, FormGrid, Section, Notice, Segmented, Money, Checkbox,
+  Button, Field, Input, Select, FormGrid, Section, Notice, Segmented, Money, Checkbox, Textarea,
 } from '../../../components/carret';
 import { ENTITIES } from '../../../config/entities';
 import { getQuotationMeta, createQuotation, sendQuotationEmail } from '../../sales-pipeline/salesPipelineApi';
@@ -24,9 +24,9 @@ import {
  * Same endpoint and payload as the old drawer (POST /sales-management/quotations),
  * so a quotation raised here is indistinguishable from one raised there.
  *
- * Fields the old drawer showed but the server silently dropped (validity date,
- * terms, header remarks) are not offered: a field that is thrown away on save
- * teaches people that the form lies. Per-line remarks do persist and are here.
+ * Validity date, terms and header remarks are stored since migration 327 and
+ * print on the quotation PDF (the old drawer asked for them and the server used
+ * to drop them). Per-line remarks are on each line.
  */
 const TYPES = [
   { value: 'rental', label: 'Rental', entity: ENTITIES.rental },
@@ -65,6 +65,12 @@ export default function QuotationFormPage() {
   const [supplyState, setSupplyState] = useState(slugifyState('Haryana'));
   const [supplyTouched, setSupplyTouched] = useState(false);
   const [send, setSend] = useState({ to: prefill.email || '', cc: '' });
+  const [validity, setValidity] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() + 7);
+    return d.toISOString().slice(0, 10);
+  });
+  const [terms, setTerms] = useState('');
+  const [remarks, setRemarks] = useState('');
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
 
@@ -167,6 +173,9 @@ export default function QuotationFormPage() {
         security_amount: security,
         shiping_charges: shippingCharge,
         source_lead_id: prefill.lead_id || null,
+        validity_date: validity || null,
+        terms: terms.trim() || null,
+        quotation_remarks: remarks.trim() || null,
         customer_billing_address: party.customer_id ? addr.billing : null,
         customer_shipping_address: shippingAddress,
         ...linesToPayload(lines),
@@ -310,6 +319,20 @@ export default function QuotationFormPage() {
               )}
               <Field label="Shipping charges (₹)">
                 <Input type="number" min="0" step="0.01" value={shipping} onChange={(e) => setShipping(e.target.value)} />
+              </Field>
+            </FormGrid>
+          </Section>
+
+          <Section title="Terms">
+            <FormGrid cols={3}>
+              <Field label="Valid until" hint="Printed on the quotation.">
+                <Input type="date" value={validity} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setValidity(e.target.value)} />
+              </Field>
+              <Field label="Terms for this quotation" span={2} hint="One per line. Printed above the standard terms, which always appear.">
+                <Textarea rows={3} value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="e.g. Delivery within 5 working days of the order" />
+              </Field>
+              <Field label="Remarks" span={3} hint="Printed in the quotation’s remarks.">
+                <Textarea rows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
               </Field>
             </FormGrid>
           </Section>

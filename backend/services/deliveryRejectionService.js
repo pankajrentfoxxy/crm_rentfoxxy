@@ -704,7 +704,8 @@ async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
   if (head.status !== 'rejected') throw new Error('DC must be marked rejected first');
   if (head.return_to_warehouse_at) throw new Error('Return to warehouse already completed');
 
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  // CSPRNG, like the delivery OTP; Math.random is guessable.
+  const otp = require('./deliveryOtpService').generateOtp();
   await pool.query(
     `UPDATE delivery_challan_lines SET
         warehouse_return_otp = $1,

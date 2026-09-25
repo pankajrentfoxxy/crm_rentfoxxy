@@ -12,9 +12,11 @@
  *   attempts  5 then re-issue, so guessing is bounded
  *   scope     one issue per CHALLAN, so verifying is about the consignment
  *
- * The legacy plaintext columns (otp_code, d_otp, delivery_otp — V7 is that
- * there are three families) are still written for one release so older screens
- * keep working. They are retired separately, once every reader has moved.
+ * Every issuer and verifier now goes through here (25 Sep 2026): the serial
+ * scan, the desk's Send OTP, and the old register's Send OTP; the technician's
+ * deliver, the desk's verify, and the register's verify. With no plaintext
+ * reader left, the legacy columns (otp_code, d_otp) are no longer written —
+ * issuing clears them — so the database holds only the hash.
  */
 const crypto = require('crypto');
 const { recordEvent, ENTITY } = require('./eventService');
@@ -61,14 +63,16 @@ async function issueOtp(client, { dcNumber, actor = null, correlationId = null }
             otp_attempts = 0,
             otp_last_attempt_at = NULL,
             otp_sent_at = NOW(),
-            -- Legacy families, written for one release so older screens still
-            -- work. New code must read otp_hash.
-            otp_code = $5,
-            d_otp = $5,
+            -- A new code supersedes any earlier verification.
+            otp_verified_at = NULL,
+            d_otp_verified_at = NULL,
+            -- Only the hash is stored; clear any plaintext left by old code.
+            otp_code = NULL,
+            d_otp = NULL,
             updated_at = NOW()
       WHERE dc_number = $1
         AND LOWER(COALESCE(status, '')) NOT IN ('delivered', 'cancelled', 'rejected')`,
-    [dcNumber, hash, issueId, String(OTP_TTL_MINUTES), code]
+    [dcNumber, hash, issueId, String(OTP_TTL_MINUTES)]
   );
 
   if (!rowCount) {
@@ -193,7 +197,37 @@ async function verifyOtp(client, { dcNumber, code, actor = null, correlationId =
   return { ok: true, issueId: row.otp_issue_id };
 }
 
+/**
+ * issueOtp / verifyOtp in their own committed transaction, for callers that
+ * have none. A wrong attempt must be COUNTED even when the delivery that
+ * follows fails and rolls back — otherwise the attempt limit is only advisory.
+ */
+async function inOwnTransaction(fn) {
+  const pool = require('../config/db');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+const issueOtpCommitted = (args) => inOwnTransaction((c) => issueOtp(c, args));
+const verifyOtpCommitted = (args) => inOwnTransaction((c) => verifyOtp(c, args));
+
+/** HTTP status for a failed verification. */
+const verifyFailureStatus = (r) => (r.reason === 'not_found' ? 404 : (r.reason === 'locked' ? 429 : 400));
+
 module.exports = {
+  issueOtpCommitted,
+  verifyOtpCommitted,
+  verifyFailureStatus,
   OTP_TTL_MINUTES,
   MAX_ATTEMPTS,
   hashOtp,

@@ -184,6 +184,7 @@ export default function QuotationRecordPage() {
               { label: 'Raised', value: <DateTime value={head.created_at} /> },
               { label: 'Sent', value: head.quotation_sent_at ? <DateTime value={head.quotation_sent_at} /> : '—' },
               { label: 'Accepted', value: head.accepted_at ? <DateTime value={head.accepted_at} /> : '—' },
+              { label: 'Valid until', value: head.validity_date ? <DateTime value={head.validity_date} /> : '—' },
             ]}
           />
           <FlowSteps steps={flow} />
@@ -194,6 +195,25 @@ export default function QuotationRecordPage() {
               <Section title={`Laptops · ${lines.reduce((n, l) => n + (Number(l.quantity ?? l.main_quantity) || 0), 0)}`}>
                 <DataTable columns={columns} rows={lines} rowKey={(l, i) => l.id || i} />
               </Section>
+              {(head.validity_date || head.terms || head.quotation_remarks) && (
+                <Section title="Terms">
+                  <KeyValue cols={1} items={[
+                    head.validity_date && {
+                      label: 'Valid until',
+                      value: (
+                        <span>
+                          <DateTime value={head.validity_date} />
+                          {new Date(head.validity_date) < new Date(new Date().toDateString()) && !['accepted', 'rejected'].includes(status)
+                            ? <span style={{ color: 'var(--alert-crit)', marginLeft: '8px' }}>expired</span> : null}
+                        </span>
+                      ),
+                    },
+                    head.terms && { label: 'Terms for this quotation', value: <span style={{ whiteSpace: 'pre-line' }}>{head.terms}</span> },
+                    head.quotation_remarks && { label: 'Remarks', value: <span style={{ whiteSpace: 'pre-line' }}>{head.quotation_remarks}</span> },
+                  ]}
+                  />
+                </Section>
+              )}
               <Section title="Addresses">
                 <div className="c-form-grid" style={{ '--c-cols': 2 }}>
                   <div><div className="c-label" style={{ marginBottom: '6px' }}>Bill to</div><AddressText address={parseJson(head.customer_billing_address)} empty="Not set (prospect)" /></div>

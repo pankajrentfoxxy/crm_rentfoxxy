@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
-const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
+const { QUOTATION_TAX_NOTE, quotationTermsFor } = require('../constants/quotationTerms');
 const { cleanSpecValue, joinSpecParts } = require('../utils/specText');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
@@ -397,6 +397,10 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
       .text(`Date: ${docDate}`, L, y);
     y += 14;
+    if (docType === 'quotation' && header.validity_date) {
+      const validTill = formatPdfDateIst(header.validity_date, { fallback: null, withLabel: false });
+      if (validTill) { doc.text(`Valid until: ${validTill}`, L, y); y += 14; }
+    }
     if (dispatchDate) {
       doc.text(`Dispatch Date: ${dispatchDate}`, L, y);
       y += 14;
@@ -597,6 +601,10 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     // ── Remarks (one entry per DC line — falls back to SO line remark) ─────
     doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Remarks', L, y); y += 16;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    if (docType === 'quotation' && String(header.quotation_remarks || '').trim()) {
+      doc.text(String(header.quotation_remarks).trim(), L + 6, y, { width: W - 12 });
+      y = doc.y + 6;
+    }
     const remarkLines = docType === 'delivery_challan' ? dcLines : lines;
     for (const line of remarkLines) {
       const rk = String(line.remarks || line.remark || '').trim();
@@ -629,7 +637,16 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Terms and Conditions', L, y);
       y += 15;
       doc.font('Helvetica').fontSize(8).fillColor(C.ink);
-      for (const term of QUOTATION_TERMS) {
+      // This quotation's own terms first, then the standard ones.
+      const ownTerms = String(header.terms || '').split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+      for (const term of ownTerms) {
+        if (y > 770) { doc.addPage(); y = 40; }
+        doc.font('Helvetica-Bold').text(term, L + 6, y, { width: W - 12 });
+        y = doc.y + 3;
+      }
+      doc.font('Helvetica');
+      const validTillText = header.validity_date ? formatPdfDateIst(header.validity_date, { fallback: null, withLabel: false }) : null;
+      for (const term of quotationTermsFor(validTillText)) {
         if (y > 770) { doc.addPage(); y = 40; }
         doc.text(term, L + 6, y, { width: W - 12 });
         y = doc.y + 3;

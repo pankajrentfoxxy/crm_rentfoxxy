@@ -96,3 +96,16 @@ describe('4.3 — the status handler against the database', () => {
 
   it('closes the pool', async () => { await pool.end(); });
 });
+
+describe('migration 327 — quotation terms follow the validity date', () => {
+  const { quotationTermsFor, QUOTATION_TERMS } = require('../constants/quotationTerms');
+  it('states the date instead of the generic 10 days', () => {
+    const t = quotationTermsFor('02 Oct 2026');
+    assert.equal(t[0], '1. The quotation is valid until 02 Oct 2026.');
+    assert.equal(t.length, QUOTATION_TERMS.length);
+    assert.deepEqual(t.slice(1), QUOTATION_TERMS.slice(1));
+  });
+  it('keeps the standard terms when there is no date', () => {
+    assert.deepEqual(quotationTermsFor(null), QUOTATION_TERMS);
+  });
+});

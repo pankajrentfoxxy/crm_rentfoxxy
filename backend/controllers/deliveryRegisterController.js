@@ -16,7 +16,6 @@ const {
 } = require('../services/deliveryRegisterService');
 const technicianService = require('../services/deliveryTechnicianService');
 const { loginAsTechnician } = require('../services/technicianAuthService');
-const { secureOtp } = require('../utils/secureRandom');
 
 const podUploadDir = path.join(__dirname, '..', '..', 'uploads', 'pod_files');
 if (!fs.existsSync(podUploadDir)) {
@@ -130,11 +129,19 @@ exports.sendOtp = async (req, res) => {
     const { dcNumber } = req.params;
     const { email, name } = req.body;
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
-    const otp = secureOtp();
+    // Part 3.4: the register issues the same hashed, expiring code as every
+    // other path (it used to write its own plaintext d_otp).
+    const { issueOtpCommitted } = require('../services/deliveryOtpService');
+    const issued = await issueOtpCommitted({
+      dcNumber,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!issued.ok) return res.status(issued.statusCode || 409).json({ success: false, status: 'error', message: issued.message });
+    const otp = issued.code;
     await pool.query(
-      `UPDATE delivery_challan_lines SET d_otp = $1, d_customer_email = $2, d_customer_name = $3, updated_at = NOW()
-       WHERE dc_number = $4`,
-      [otp, email, name || null, dcNumber]
+      `UPDATE delivery_challan_lines SET d_customer_email = $1, d_customer_name = $2, updated_at = NOW()
+       WHERE dc_number = $3`,
+      [email, name || null, dcNumber]
     );
     await emailDocument({
       to: email,
@@ -157,18 +164,15 @@ exports.sendOtp = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
   try {
     const { dcNumber } = req.params;
-    const { otp } = req.body;
-    const r = await pool.query(
-      `SELECT d_otp FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
-      [dcNumber]
-    );
-    if (!r.rows.length || r.rows[0].d_otp !== String(otp)) {
-      return res.status(400).json({ success: false, status: 'error', message: 'Invalid OTP' });
-    }
-    await pool.query(
-      `UPDATE delivery_challan_lines SET d_otp_verified_at = NOW(), updated_at = NOW() WHERE dc_number = $1`,
-      [dcNumber]
-    );
+    const otp = String(req.body?.otp || '').trim();
+    if (!otp) return res.status(400).json({ success: false, status: 'error', message: 'Enter the OTP' });
+    const { verifyOtpCommitted, verifyFailureStatus } = require('../services/deliveryOtpService');
+    const r = await verifyOtpCommitted({
+      dcNumber,
+      code: otp,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!r.ok) return res.status(verifyFailureStatus(r)).json({ success: false, status: 'error', message: r.message, remaining: r.remaining });
     res.json({ success: true, status: 'success', message: 'OTP verified successfully' });
   } catch (e) {
     res.status(500).json({ success: false, status: 'error', message: e.message });
@@ -220,15 +224,34 @@ exports.submitPod = [
       const longitude = req.body.longitude || null;
       const mobile = req.body.mobile || req.body.d_customer_mobile || null;
 
+      const isReturn = linesR.rows[0].movement_type === 'return';
       let nextStatus = 'processing';
       if (deliveredSerials.length && !rejectedSerials.length) nextStatus = 'delivered';
       else if (rejectedSerials.length && !deliveredSerials.length) nextStatus = 'rejected';
       else if (deliveredSerials.length && rejectedSerials.length) nextStatus = 'delivered';
 
+      // An outbound challan is delivered or refused as a whole. A mixed POD used
+      // to mark it delivered while leaving every laptop in_transit for ever (no
+      // rent, no invoice); nothing downstream can finalise part of a challan.
+      if (!isReturn && deliveredSerials.length && rejectedSerials.length) {
+        return res.status(409).json({
+          success: false,
+          code: 'PARTIAL_DELIVERY_UNSUPPORTED',
+          message: 'A challan is delivered or refused as a whole. Record the refusal for this challan, let the '
+            + 'warehouse receive the laptops back, then raise a new challan for the ones the customer keeps.',
+        });
+      }
+      if (!isReturn && nextStatus === 'rejected' && !String(remark).trim()) {
+        return res.status(400).json({ success: false, message: 'Give the customer’s reason for refusing in the remark.' });
+      }
+
       let outboundFinalized = false;
 
       await client.query('BEGIN');
 
+      // The register's own record of the POD (who, when, where, files) — kept on
+      // every path. Status is NOT written here for outbound: the delivery
+      // routine and the rejection service own it.
       for (const line of linesR.rows) {
         const lineSerials = parseJsonArray(line.serial_number);
         const lineDelivered = lineSerials.filter((s) => deliveredSerials.includes(s));
@@ -247,11 +270,9 @@ exports.submitPod = [
              longitude = $9,
              d_customer_mobile = COALESCE($10, d_customer_mobile),
              file_path = COALESCE($11::text, file_path),
-             status = $12::varchar,
-             delivery_completed_at = CASE WHEN $12::varchar = 'delivered' THEN NOW() ELSE delivery_completed_at END,
-             -- The billing catch-up only counts a DC as delivered when delivered_at
-             -- is stamped; without it the pre-month span is silently never billed.
-             delivered_at = CASE WHEN $12::varchar = 'delivered' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+             status = CASE WHEN $14::boolean THEN $12::varchar ELSE status END,
+             delivery_completed_at = CASE WHEN $14::boolean AND $12::varchar = 'delivered' THEN NOW() ELSE delivery_completed_at END,
+             delivered_at = CASE WHEN $14::boolean AND $12::varchar = 'delivered' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
              updated_at = NOW()
            WHERE id = $13`,
           [
@@ -268,47 +289,65 @@ exports.submitPod = [
             filePaths.length ? JSON.stringify(filePaths) : null,
             nextStatus,
             line.id,
+            isReturn,
           ]
         );
       }
 
-      // Return DC completed by courier/porter (warehouse uploaded POD): fire the
-      // return lifecycle (mark returned -> QC re-entry -> credit note).
-      if (nextStatus === 'delivered') {
-        const mv = await client.query(
-          `SELECT movement_type, support_ticket_id FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
-          [dcNumber]
+      if (isReturn && nextStatus === 'delivered') {
+        // Return DC completed by courier/porter (warehouse uploaded POD): fire the
+        // return lifecycle (mark returned -> QC re-entry -> credit note).
+        const idsRes = await client.query(
+          `SELECT serial_id FROM vendor_serial_numbers
+            WHERE deleted_at IS NULL
+              AND (serial_number = ANY($1::text[]) OR inventory_asset_code = ANY($1::text[]))`,
+          [deliveredSerials.length ? deliveredSerials : ['']]
         );
-        if (mv.rows[0]?.movement_type === 'return') {
-          const idsRes = await client.query(
-            `SELECT serial_id FROM vendor_serial_numbers
-              WHERE deleted_at IS NULL
-                AND (serial_number = ANY($1::text[]) OR inventory_asset_code = ANY($1::text[]))`,
-            [deliveredSerials.length ? deliveredSerials : ['']]
-          );
-          const returnSvc = require('../services/returnCompletionService');
-          await returnSvc.processReturnedSerials(client, {
-            serialIds: idsRes.rows.map((r) => r.serial_id),
-            dcNumber,
-            supportTicketId: mv.rows[0].support_ticket_id || null,
-            actorUserId: req.user?.user_id || null,
-            actorName: req.user?.name || null,
-          });
-        } else if (!rejectedSerials.length) {
-          // Outbound DC delivered through the Delivery Register (porter / manual POD).
-          // Without this the unit stays 'in_transit' forever: no rented state, no
-          // rent_start_date, no delivered_at, and therefore no rental invoice —
-          // silent revenue leakage. deliveryFlowController and bluedartAwbSyncService
-          // both already call this on their own delivery paths.
-          //
-          // Full deliveries only: finalizeDeliveryInventory works from the DC's own
-          // serial list, not from `deliveredSerials`, so on a partial delivery it
-          // would also mark the rejected units delivered and start billing them.
-          // Partial PODs keep the existing behaviour and are finalised elsewhere.
-          const sm = require('./salesManagementController');
-          await sm.finalizeDeliveryInventory(client, dcNumber, req.user || {});
-          outboundFinalized = true;
+        const returnSvc = require('../services/returnCompletionService');
+        await returnSvc.processReturnedSerials(client, {
+          serialIds: idsRes.rows.map((r) => r.serial_id),
+          dcNumber,
+          supportTicketId: linesR.rows[0].support_ticket_id || null,
+          actorUserId: req.user?.user_id || null,
+          actorName: req.user?.name || null,
+        });
+      } else if (!isReturn && nextStatus === 'delivered') {
+        // Part 3.3: the register was the sixth delivery path, writing the status
+        // itself. It now goes through the one routine: row lock, proof rules
+        // (OTP verified above + the uploaded POD), finalisation, one event set.
+        const { completeDelivery, MODE } = require('../services/deliveryCompletionService');
+        const done = await completeDelivery(client, {
+          dcNumber,
+          mode: MODE.BY_HAND,
+          proof: {
+            otpVerified: true,
+            podPhotoUrl: filePaths[0] || null,
+            podType: filePaths.length ? 'photo' : null,
+            notes: remark || null,
+          },
+          actor: req.user,
+          correlationId: req.correlationId,
+          deliveredSerialNumbers: deliveredSerials,
+          rejectedSerialNumbers: [],
+          submittedRemark: remark,
+          source: 'deliveryRegisterController.submitPod',
+        });
+        if (!done.ok) {
+          await client.query('ROLLBACK');
+          return res.status(done.statusCode || 409).json({ success: false, message: done.message });
         }
+        outboundFinalized = true;
+      } else if (!isReturn && nextStatus === 'rejected') {
+        // Part 3.6: one rejection service. The bare status write left the units
+        // on the order and in transit with no QC re-entry.
+        const rejection = require('../services/deliveryRejectionService');
+        await rejection.markDeliveryRejectedByCustomer(client, {
+          dcNumber,
+          reason: String(remark).trim(),
+          remarks: null,
+          source: 'delivery_register',
+          actorUserId: req.user?.user_id || null,
+        });
       }
 
       await client.query('COMMIT');
@@ -354,6 +393,7 @@ exports.submitPod = [
       } catch (_) {
         /* ignore */
       }
+      if (require('../utils/transitionRefusal').respondIfRefused(e, res)) return;
       console.error('submitPod', e);
       res.status(500).json({ success: false, message: e.message || 'POD upload failed' });
     } finally {

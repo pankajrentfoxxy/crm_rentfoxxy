@@ -50,7 +50,6 @@ const {
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
-const { secureOtp } = require('../utils/secureRandom');
 const {
   sendSalesQuotationEmail,
   assertQuotationSendFields,
@@ -629,6 +628,24 @@ exports.storeQuotation = async (req, res) => {
     await client.query(
       `UPDATE sales_quotations SET entity_code = $1 WHERE quotation_number = $2`,
       [quoteEntity, quotationNumber]
+    );
+
+    // Header fields the form always collected and the server used to drop
+    // (migration 327). Repeated on every line like the rest of the header.
+    const validity = /^\d{4}-\d{2}-\d{2}$/.test(String(body.validity_date || '')) ? body.validity_date : null;
+    await client.query(
+      `UPDATE sales_quotations
+          SET validity_date = $1::date, terms = $2, quotation_remarks = $3
+        WHERE quotation_number = $4`,
+      [
+        validity,
+        String(body.terms || '').trim() || null,
+        // `remarks` is also the per-line array in the line payload, so the
+        // header remark travels as quotation_remarks; a string `remarks` is
+        // still honoured for older callers.
+        String(body.quotation_remarks || (typeof body.remarks === 'string' ? body.remarks : '') || '').trim() || null,
+        quotationNumber,
+      ]
     );
 
     // Security: 'one_month_rental' = sum(rate x qty) of all lines; 'none' = 0.
@@ -4066,17 +4083,25 @@ exports.sendDeliveryOtp = async (req, res) => {
     const first = lines[0];
     const customerEmail = body.email || first.email || null;
     const customerName = body.name || first.customer_name || null;
-    const otp = secureOtp();
+    // Part 3.4: one hashed, 15-minute, 5-attempt code for the challan.
+    const { issueOtpCommitted } = require('../services/deliveryOtpService');
+    const issued = await issueOtpCommitted({
+      dcNumber,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!issued.ok) {
+      return res.status(issued.statusCode || 409).json({ success: false, message: issued.message });
+    }
+    const otp = issued.code;
 
     await pool.query(
       `UPDATE delivery_challan_lines
-          SET otp_code = $1, otp_sent_at = NOW(), otp_verified_at = NULL,
-              d_otp = $1, delivery_otp_sent_at = NOW(),
-              d_customer_email = COALESCE($2, d_customer_email, email),
-              d_customer_name = COALESCE($3, d_customer_name, customer_name),
+          SET delivery_otp_sent_at = NOW(),
+              d_customer_email = COALESCE($1, d_customer_email, email),
+              d_customer_name = COALESCE($2, d_customer_name, customer_name),
               updated_at = NOW()
-        WHERE dc_number = $4`,
-      [otp, customerEmail, customerName, dcNumber]
+        WHERE dc_number = $3`,
+      [customerEmail, customerName, dcNumber]
     );
 
     if (customerEmail) {
@@ -4138,23 +4163,21 @@ exports.sendDeliveryOtp = async (req, res) => {
 exports.verifyDeliveryOtp = async (req, res) => {
   try {
     const { dcNumber } = req.params;
-    const { otp } = req.body;
-    const result = await pool.query(
-      `SELECT COALESCE(otp_code, d_otp) AS stored_otp
-         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
-      [dcNumber]
-    );
-    if (!result.rows.length || result.rows[0].stored_otp !== String(otp)) {
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    const otp = String(req.body?.otp || '').trim();
+    if (!otp) return res.status(400).json({ success: false, message: 'Enter the OTP' });
+    // Part 3.4: hashed compare with expiry and an attempt limit; sets
+    // otp_verified_at and d_otp_verified_at on success.
+    const { verifyOtpCommitted, verifyFailureStatus } = require('../services/deliveryOtpService');
+    const r = await verifyOtpCommitted({
+      dcNumber,
+      code: otp,
+      actor: req.user?.user_id ? { actor_type: 'user', actor_id: req.user.user_id, actor_name: req.user.name } : null,
+    });
+    if (!r.ok) {
+      return res.status(verifyFailureStatus(r)).json({
+        success: false, code: `OTP_${String(r.reason || 'invalid').toUpperCase()}`, message: r.message, remaining: r.remaining,
+      });
     }
-    await pool.query(
-      `UPDATE delivery_challan_lines
-          SET otp_verified_at = COALESCE(otp_verified_at, NOW()),
-              d_otp_verified_at = COALESCE(d_otp_verified_at, NOW()),
-              updated_at = NOW()
-        WHERE dc_number = $1`,
-      [dcNumber]
-    );
     res.json({ success: true, message: 'OTP verified' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

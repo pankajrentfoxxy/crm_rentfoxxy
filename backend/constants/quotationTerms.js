@@ -17,4 +17,15 @@ const QUOTATION_TERMS = [
 /** Printed above the terms; the quoted rates never include GST. */
 const QUOTATION_TAX_NOTE = 'Note: Prices are exclusive of taxes.';
 
-module.exports = { QUOTATION_TERMS, QUOTATION_TAX_NOTE };
+/**
+ * The terms for one quotation. When it carries its own validity date, term 1
+ * states that date instead of the generic "10 days", so the PDF never says two
+ * different things about how long the offer stands.
+ * validTill: an already-formatted date string, or null.
+ */
+function quotationTermsFor(validTill) {
+  if (!validTill) return QUOTATION_TERMS;
+  return QUOTATION_TERMS.map((t) => (/^1\.\s.*valid for/i.test(t) ? `1. The quotation is valid until ${validTill}.` : t));
+}
+
+module.exports = { QUOTATION_TERMS, QUOTATION_TAX_NOTE, quotationTermsFor };

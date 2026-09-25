@@ -288,6 +288,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
         GST_number: form.GST_number || null,
         security_amount: security,
         source_lead_id: form.source_lead_id || prefill.lead_id || null,
+        quotation_remarks: form.remarks || null,
         ...lineItemsToPayload(lines),
         customer_shipping_address: selectedShippingAddress || null,
         customer_billing_address: billingAddress || null,
