@@ -525,6 +525,9 @@ async function dispatchReturnDc(client, {
         vehicle_number = $9,
         vendor_pickup_person = $10,
         vendor_pickup_mobile = $11,
+        -- B13: accepted at dispatch and then dropped before migration 335.
+        porter_order_id = $12,
+        porter_booking_url = $13,
         updated_at = NOW()
       WHERE dc_number = $1`,
     [
@@ -539,13 +542,15 @@ async function dispatchReturnDc(client, {
       dispatch.vehicle_number,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
+      dispatch.porter_order_id || null,
+      dispatch.porter_booking_url || null,
     ]
   );
 
   return getReturnDc(dcNumber);
 }
 
-/** Guard outward confirm — scrap inventory and mark dispatched. */
+/** Guard outward confirm — the laptops are the vendor's again (D9); DC dispatched. */
 async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorName }) {
   const headRes = await client.query(
     `SELECT * FROM vendor_return_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
@@ -575,7 +580,9 @@ async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorNam
   for (const item of items.rows) {
     await transitionAsset(client, {
       serialId: item.serial_id,
-      toStatus: STATUS.SCRAPPED,
+      // D9: a returned laptop is the vendor's again, not scrap (it used to be
+      // recorded as scrapped, which dropped its last part-month of rent).
+      toStatus: STATUS.RETURNED_TO_VENDOR,
       reason: `Returned to vendor via ${dcNumber}`,
       dcNumber,
       actorUserId,
@@ -597,6 +604,11 @@ async function confirmGateOutwardVrtdc(client, { dcNumber, actorUserId, actorNam
       `UPDATE vendor_return_dc_items SET item_status = 'dispatched' WHERE id = $1`,
       [item.id]
     );
+    // D12: every laptop that goes back gets a draft debit note (skipped when
+    // it already has a pending one, e.g. from floor QC fail).
+    await require('./vendorDebitNoteService').draftForReturn(client, {
+      serialId: item.serial_id, source: 'return_challan', sourceRef: dcNumber, actorUserId,
+    });
     await logTtsplEvent({
       db: client,
       vendorSerialId: item.serial_id,
@@ -705,6 +717,11 @@ async function cancelReturnDc(client, { dcNumber, actorUserId, actorName }) {
   await client.query(
     `UPDATE vendor_return_delivery_challans SET status = 'cancelled', updated_at = NOW()
      WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  // B14: the items are cancelled too (migration 336 allows it).
+  await client.query(
+    `UPDATE vendor_return_dc_items SET item_status = 'cancelled' WHERE dc_number = $1 AND item_status = 'draft'`,
     [dcNumber]
   );
   if (head.return_ticket_number) {

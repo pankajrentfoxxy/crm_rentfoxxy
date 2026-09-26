@@ -316,66 +316,84 @@ async function upsertReplacementSerial(client, {
   const sn = String(serialNumber || '').trim();
   if (!sn) throw new Error('Replacement serial number is required');
 
+  // B18: matching any row by serial text either scrapped the original (when
+  // the vendor sent the same laptop back) and then failed, or silently
+  // re-tagged an unrelated laptop. Now: the same laptop is not a replacement;
+  // a laptop we hold is refused; one we returned to this vendor earlier may
+  // come back as the replacement.
   const existing = await client.query(
-    `SELECT serial_id, inventory_asset_code, serial_number
+    `SELECT serial_id, inventory_asset_code, serial_number, inventory_status
        FROM vendor_serial_numbers
       WHERE deleted_at IS NULL AND UPPER(TRIM(serial_number)) = UPPER($1)
-      LIMIT 1`,
+      ORDER BY serial_id DESC LIMIT 1
+      FOR UPDATE`,
     [sn]
   );
-  if (existing.rows[0]) {
+  const ex = existing.rows[0];
+  if (ex && originalSerialId && Number(ex.serial_id) === Number(originalSerialId)) {
+    const err = new Error(`Serial ${sn} is the laptop that went for repair — receive it as repaired, not as a replacement.`);
+    err.status = 400;
+    throw err;
+  }
+  if (ex && !['returned_to_vendor', 'scrapped'].includes(String(ex.inventory_status || ''))) {
+    const err = new Error(`Serial ${sn} already belongs to ${ex.inventory_asset_code || 'another laptop'} (${ex.inventory_status || 'no status'}). Check the serial on the replacement.`);
+    err.status = 409;
+    throw err;
+  }
+
+  // The replacement takes the original's place: same PO line (so vendor
+  // billing reads the right rate), same acquisition type, rent from today.
+  const orig = originalSerialId ? (await client.query(
+    `SELECT acquisition_type, extra FROM vendor_serial_numbers WHERE serial_id = $1`, [originalSerialId]
+  )).rows[0] : null;
+  const oex = orig?.extra && typeof orig.extra === 'object' ? orig.extra : {};
+  const today = new Date().toISOString().slice(0, 10);
+  const tag = {
+    asset_tag: 'replacement',
+    brand: brand || null,
+    model: model || null,
+    generation: generation || null,
+    source: 'vendor_repair_replacement',
+    vendor_id: vendorId || null,
+    configuration: [brand, model, generation].filter(Boolean).join(' · '),
+    replaced_ttspl_id: originalTtsplId || null,
+    replaced_serial: originalSerial || null,
+    replacement_dc_number: replacementDcNumber || null,
+    received_at: today,
+    ...(oex.line_index != null ? { line_index: oex.line_index } : {}),
+    ...(oex.product_detail_id != null ? { product_detail_id: oex.product_detail_id } : {}),
+  };
+
+  if (ex) {
+    // A laptop we returned earlier, now sent back as the replacement.
     await client.query(
       `UPDATE vendor_serial_numbers SET
           extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+          rental_start_date = $3::date, vendor_rent_end_date = NULL,
+          acquisition_type = COALESCE($4, acquisition_type),
           updated_at = NOW()
         WHERE serial_id = $1`,
-      [
-        existing.rows[0].serial_id,
-        JSON.stringify({
-          asset_tag: 'replacement',
-          brand: brand || null,
-          model: model || null,
-          generation: generation || null,
-          replaced_ttspl_id: originalTtsplId || null,
-          replaced_serial: originalSerial || null,
-          replacement_dc_number: replacementDcNumber || null,
-        }),
-      ]
+      [ex.serial_id, JSON.stringify(tag), today, orig?.acquisition_type || null]
     );
-    return existing.rows[0];
+    return ex;
   }
 
   const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
   const [ttspl] = await allocateTtsplCodes(client, 1);
-  const configuration = [brand, model, generation].filter(Boolean).join(' · ');
   const { poId, grnId } = await resolveReplacementPoGrn(client, {
     originalSerialId,
     vendorId,
     replacementDcNumber,
   });
+  // No status here: the caller moves it through the state machine, so the
+  // replacement has a transitions row like every other laptop.
   const ins = await client.query(
     `INSERT INTO vendor_serial_numbers (
-        po_id, grn_id, serial_number, inventory_asset_code, qc_status, inventory_status, extra, updated_at
-     ) VALUES ($1, $2, $3, $4, 'pending', 'in_stock', $5::jsonb, NOW())
+        po_id, grn_id, serial_number, inventory_asset_code, qc_status, extra,
+        rental_start_date, acquisition_type, updated_at
+     ) VALUES ($1, $2, $3, $4, 'pending', $5::jsonb, $6::date, $7, NOW())
      RETURNING serial_id, inventory_asset_code, serial_number`,
-    [
-      poId,
-      grnId,
-      sn,
-      ttspl,
-      JSON.stringify({
-        asset_tag: 'replacement',
-        brand: brand || null,
-        model: model || null,
-        generation: generation || null,
-        source: 'vendor_repair_replacement',
-        vendor_id: vendorId || null,
-        configuration,
-        replaced_ttspl_id: originalTtsplId || null,
-        replaced_serial: originalSerial || null,
-        replacement_dc_number: replacementDcNumber || null,
-      }),
-    ]
+    [poId, grnId, sn, ttspl, JSON.stringify(tag), today, orig?.acquisition_type || null]
   );
   return ins.rows[0];
 }
@@ -937,6 +955,60 @@ async function dedupeDraftVrdcItems(dcNumber) {
   }
 
   return { removed, cancelled_ticket_ids: cancelledTicketIds };
+}
+
+/**
+ * B23 — cancel a repair challan that has not left the building (draft, or
+ * signed and waiting at the gate). Its laptops go back to the Diagnosis
+ * Failed list, where they can go on another challan.
+ */
+async function cancelVendorRepairDc(client, { dcNumber, reason, actorUserId, actorName }) {
+  const why = String(reason || '').trim();
+  if (why.length < 3) {
+    const err = new Error('Give a reason for cancelling');
+    err.status = 400;
+    throw err;
+  }
+  const head = (await client.query(
+    'SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE', [dcNumber]
+  )).rows[0];
+  if (!head) {
+    const err = new Error('Vendor repair DC not found');
+    err.status = 404;
+    throw err;
+  }
+  if (!['draft', 'dispatch_ready'].includes(head.status)) {
+    const err = new Error(`This challan is ${head.status} — only one that has not gone out can be cancelled.`);
+    err.status = 409;
+    throw err;
+  }
+  const items = (await client.query(
+    `UPDATE vendor_repair_dc_items SET item_status = 'cancelled' WHERE dc_number = $1 RETURNING ticket_id, serial_id, ttspl_id`,
+    [dcNumber]
+  )).rows;
+  for (const it of items) {
+    await client.query(
+      `UPDATE tickets SET vendor_repair_dc_number = NULL, current_location = 'Warehouse — diagnosis failed', updated_at = NOW()
+        WHERE ticket_id = $1 AND vendor_repair_dc_number = $2`,
+      [it.ticket_id, dcNumber]
+    );
+    await logTicketActivity(client, {
+      ticketId: it.ticket_id, userId: actorUserId, action: 'vendor_repair_dc_cancelled',
+      notes: `Repair challan ${dcNumber} cancelled: ${why}`, stageId: null,
+    });
+    await safeLogTtsplEvent({
+      ttsplId: it.ttspl_id, vendorSerialId: it.serial_id, eventType: 'vendor_repair_dc_cancelled',
+      description: `Repair challan ${dcNumber} cancelled — ${why}`, metadata: { dc_number: dcNumber },
+      actorUserId, actorName, db: client,
+    });
+  }
+  await client.query(
+    `UPDATE vendor_repair_delivery_challans
+        SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, cancel_reason = $3, updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber, actorUserId || null, why]
+  );
+  return { dc_number: dcNumber, status: 'cancelled', laptops: items.length };
 }
 
 async function getVendorRepairDc(dcNumber) {
@@ -1607,21 +1679,32 @@ async function receiveItemsFromVendor(client, {
     }
 
     if (isReplacement && (item.vendor_serial_id || item.serial_id)) {
+      // D9: the vendor kept the original and sent a replacement — the original
+      // is the vendor's again, not scrap. Its rent stops the day the
+      // replacement's starts, so the vendor is never paid twice for one slot.
       await transitionRepairSerial(client, {
         serialId: item.vendor_serial_id || item.serial_id,
-        toStatus: STATUS.SCRAPPED,
-        reason: `Vendor replacement on ${replacementDcNumber} — original unit scrapped`,
+        toStatus: STATUS.RETURNED_TO_VENDOR,
+        reason: `Vendor replacement on ${replacementDcNumber} — the vendor kept the original`,
         dcNumber,
         actorUserId,
         actorName: itemWhSigner,
-        qcStatus: 'unrepairable',
+        qcStatus: 'returned_to_vendor',
         extraPatch: {
-          location: 'scrapped',
+          location: 'with_vendor',
           vendor_repair_dc: dcNumber,
           replaced_by_serial: replacementRow.serial_number,
           replaced_by_ttspl: replacementRow.inventory_asset_code,
           replacement_dc_number: replacementDcNumber,
         },
+      });
+      await client.query(
+        `UPDATE vendor_serial_numbers SET vendor_rent_end_date = COALESCE(vendor_rent_end_date, $2::date), updated_at = NOW()
+          WHERE serial_id = $1`,
+        [item.vendor_serial_id || item.serial_id, signedAt.toISOString().slice(0, 10)]
+      );
+      await require('./vendorDebitNoteService').draftForReturn(client, {
+        serialId: item.vendor_serial_id || item.serial_id, source: 'replacement', sourceRef: replacementDcNumber, actorUserId,
       });
       await safeLogTtsplEvent({
         ttsplId: item.ttspl_id,
@@ -1661,19 +1744,23 @@ async function receiveItemsFromVendor(client, {
           }),
         ]
       );
-      // If the replacement row already existed with a non-stock status, move via SM.
+      // B20: the replacement goes to the Floor Manager's triage with the ticket,
+      // so it is in production (in_repair) — floor QC puts it in stock, not this.
       await transitionRepairSerial(client, {
         serialId: replacementRow.serial_id,
-        toStatus: STATUS.IN_STOCK,
+        toStatus: STATUS.IN_REPAIR,
         reason: `Vendor replacement received on ${replacementDcNumber}`,
         dcNumber: replacementDcNumber,
         actorUserId,
         actorName: itemWhSigner,
       });
     } else if (item.vendor_serial_id || item.serial_id) {
+      // B20: a repaired laptop goes back to the Floor Manager's triage desk
+      // with its ticket. It was booked in_stock here, so it could be sold while
+      // still on the floor; floor QC is what puts it in stock.
       await transitionRepairSerial(client, {
         serialId: item.vendor_serial_id || item.serial_id,
-        toStatus: STATUS.IN_STOCK,
+        toStatus: STATUS.IN_REPAIR,
         reason: `Repaired return via ${receiveDcNumber}`,
         dcNumber: receiveDcNumber,
         actorUserId,
@@ -2298,6 +2385,7 @@ module.exports = {
   receiveErpRepairBack,
   dedupeDraftVrdcItems,
   transitionRepairSerial,
+  cancelVendorRepairDc,
   snapshotFromSpecs,
   nextReceiveDcNumber,
 };

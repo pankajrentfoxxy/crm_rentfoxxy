@@ -43,12 +43,16 @@ const STATUS = Object.freeze({
   IN_REPAIR: 'in_repair',
   QC_FAILED: 'qc_failed',
   SCRAPPED: 'scrapped',
+  // D9: back with the vendor (return DC through the gate, or kept by the
+  // vendor when it sent a replacement). Not terminal: a vendor may send the
+  // same laptop back, which re-enters production.
+  RETURNED_TO_VENDOR: 'returned_to_vendor',
 });
 
 // Allowed transitions. null-key entries are reachable from any state (admin
 // corrections still flow through here so they are audited).
 const ALLOWED = {
-  in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'],
+  in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor'],
   reserved:        ['dispatch_ready', 'in_transit', 'in_stock'],
   // I6: dispatch_ready -> qc_failed. A unit on a challan that fails Dispatch QC
   // happens every week and the map did not permit it, so the code went round
@@ -78,10 +82,13 @@ const ALLOWED = {
   on_demo:         ['rented', 'returned'],
   rented:          ['returned', 'sold'],   // 'sold' = sale in place (see markSoldInPlace)
   sold:            ['returned'],
-  returned:        ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
-  in_repair:       ['in_stock', 'qc_failed', 'scrapped'],
-  qc_failed:       ['in_stock', 'in_repair', 'scrapped'],
+  returned:        ['in_stock', 'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor'],
+  // in_repair -> returned_to_vendor: out for vendor repair and the vendor
+  // keeps it (sends a replacement instead).
+  in_repair:       ['in_stock', 'qc_failed', 'scrapped', 'returned_to_vendor'],
+  qc_failed:       ['in_stock', 'in_repair', 'scrapped', 'returned_to_vendor'],
   scrapped:        [],
+  returned_to_vendor: ['in_repair', 'in_stock'],
 };
 
 const CANONICAL_STATUSES = new Set(Object.values(STATUS));
@@ -138,8 +145,8 @@ async function loadSerial(db, serialId) {
  * actionable without reproducing the request.
  */
 class TransitionRefused extends Error {
-  constructor({ serialId, ttsplId, from, to, caller }) {
-    super(`Illegal inventory transition ${from || 'null'} -> ${to} (serial ${serialId}${ttsplId ? ` / ${ttsplId}` : ''})`);
+  constructor({ serialId, ttsplId, from, to, caller, message = null }) {
+    super(message || `Illegal inventory transition ${from || 'null'} -> ${to} (serial ${serialId}${ttsplId ? ` / ${ttsplId}` : ''})`);
     this.name = 'TransitionRefused';
     this.code = 'TRANSITION_REFUSED';
     this.statusCode = 409;
@@ -186,6 +193,30 @@ async function transitionAsset(db, {
     throw new TransitionRefused({
       serialId, ttsplId: serial.ttspl_id, from, to: toStatus, caller,
     });
+  }
+
+  // B5: a laptop on its way back to the vendor (an open return challan or a
+  // vendor return ticket) cannot be reserved or put on a customer challan.
+  // It used to stay in_stock/returned while on a draft return challan, so
+  // sales could take it — and then the return's gate confirm failed.
+  if (!allowOverride && (toStatus === STATUS.RESERVED || toStatus === STATUS.DISPATCH_READY)) {
+    const onReturn = (await client.query(
+      `SELECT d.dc_number AS ref FROM vendor_return_dc_items i
+         JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number
+        WHERE i.serial_id = $1 AND d.status NOT IN ('cancelled', 'completed')
+       UNION ALL
+       SELECT t.ticket_number FROM vendor_return_ticket_items i
+         JOIN vendor_return_tickets t ON t.ticket_number = i.ticket_number
+        WHERE i.serial_id = $1 AND i.item_status <> 'cancelled' AND t.status NOT IN ('cancelled', 'completed')
+       LIMIT 1`,
+      [serialId]
+    )).rows[0];
+    if (onReturn) {
+      throw new TransitionRefused({
+        serialId, ttsplId: serial.ttspl_id, from, to: toStatus, caller,
+        message: `${serial.ttspl_id || `Serial ${serialId}`} is on vendor return ${onReturn.ref} — it can't be allocated. Cancel it from the return first if it should stay.`,
+      });
+    }
   }
 
   // Build the column updates relevant to this transition.

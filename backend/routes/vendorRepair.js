@@ -58,6 +58,7 @@ router.patch(...vrdcRoute('/dispatch-details', ctrl.requireVendorRepairDispatch,
 router.patch(...vrdcRoute('/commercial-details', ctrl.requireWarehouse, ctrl.updateCommercialDetails));
 router.post(...vrdcRoute('/mark-delivered-to-vendor', ctrl.requireVendorRepairDispatch, ctrl.markDeliveredToVendor));
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireVendorRepairDispatch, ctrl.signDispatch));
+router.post(...vrdcRoute('/cancel', ctrl.requireVendorRepairDispatch, ctrl.cancelDc));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));
 router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.sendAccountsVrdcEwayMail));
 router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, wrapMulter(uploadVrdcEwayDoc.single('eway_bill_pdf')), ctrl.uploadVrdcEway));

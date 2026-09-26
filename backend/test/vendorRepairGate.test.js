@@ -352,7 +352,9 @@ describe('vendorRepairGate', { concurrency: 1 }, () => {
     }
   });
 
-  it('9. after a passing capture, receive succeeds and serial returns to in_stock', async () => {
+  // B20 (26 Sep 2026): the repaired laptop goes back to the Floor Manager's
+  // triage with its ticket, so it is in_repair until floor QC puts it in stock.
+  it('9. after a passing capture, receive succeeds and the laptop goes back to the floor (in_repair)', async () => {
     const laptop = await insertLaptop({ suffix: `${Date.now()}9` });
     const { dcNumber } = await createSignedDc(laptop);
     await confirmOutward(dcNumber);
@@ -405,7 +407,7 @@ describe('vendorRepairGate', { concurrency: 1 }, () => {
       `SELECT status, current_stage_id FROM tickets WHERE ticket_id = $1`,
       [laptop.ticketId]
     );
-    assert.equal(serial.rows[0].inventory_status, 'in_stock');
+    assert.equal(serial.rows[0].inventory_status, 'in_repair');
     assert.equal(serial.rows[0].qc_status, 'pending');
     assert.equal(ticket.rows[0].status, 'in_progress');
     assert.equal(ticket.rows[0].current_stage_id, 1);

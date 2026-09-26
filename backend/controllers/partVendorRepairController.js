@@ -1,9 +1,24 @@
 const pool = require('../config/db');
 const svc = require('../services/partVendorRepairService');
 
-function requireWarehouse(req, res, next) {
-  if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
-  return res.status(403).json({ success: false, message: 'Warehouse, procurement, or admin access required' });
+/**
+ * B24: writes follow the permission matrix (part_vendor_repair create/edit),
+ * with the old role list kept as a fallback so no one loses access today.
+ */
+async function requireWarehouse(req, res, next) {
+  try {
+    if (req.user?.role === 'super_admin') return next();
+    const { hasPermission } = require('../services/permissionService');
+    const cache = req.permissionCache || (req.permissionCache = {});
+    for (const action of ['can_edit', 'can_create']) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await hasPermission(req.user.user_id, req.user.role, 'part_vendor_repair', action, cache)) return next();
+    }
+    if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
+    return res.status(403).json({ success: false, message: 'Part vendor repair edit access required' });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
 }
 
 function actor(req) {

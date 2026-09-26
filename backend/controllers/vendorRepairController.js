@@ -718,6 +718,24 @@ exports.exportOutForRepairPdf = async (req, res) => {
   }
 };
 
+exports.cancelDc = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await svc.cancelVendorRepairDc(client, {
+      dcNumber: req.params.dcNumber, reason: req.body?.reason,
+      actorUserId: req.user.user_id, actorName: req.user.name || req.user.email,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Repair challan cancelled', data: out });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 400).json({ success: false, message: err.message || 'Cancel failed' });
+  } finally {
+    client.release();
+  }
+};
+
 exports.requireWarehouse = requireWarehouse;
 exports.requireDiagnosisFailedProcess = requireDiagnosisFailedProcess;
 exports.requireVendorRepairDispatch = requireVendorRepairDispatch;

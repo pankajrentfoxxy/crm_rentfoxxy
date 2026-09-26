@@ -465,20 +465,17 @@ async function receivePartsFromVendor(client, {
     let itemStatus = 'received';
 
     if (mode === 'repaired') {
-      // Skip QC gate — repaired unit returns straight to available stock.
+      // B24: a repaired part is checked before it is stock again. It went
+      // straight to in_stock, and the qc-pending pass/fail screen had nothing
+      // to show. QC pass (passPartVendorRepairQc) adds it to the stock count.
       await client.query(
         `UPDATE part_instances
-            SET status = 'in_stock',
+            SET status = 'qc_pending',
                 vendor_repair_dc_number = NULL,
                 notes = COALESCE($2, notes),
                 updated_at = NOW()
           WHERE instance_id = $1`,
         [instanceId, item.remarks || null]
-      );
-      await client.query(
-        `UPDATE parts SET quantity = COALESCE(quantity, 0) + 1, updated_at = NOW()
-          WHERE part_id = $1`,
-        [line.live_part_id]
       );
       await recordMovement(client, {
         type: MOVEMENT.RECEIVED_FROM_VENDOR_REPAIR,
@@ -493,7 +490,7 @@ async function receivePartsFromVendor(client, {
         grnId: line.grn_id,
         vendorId: head.vendor_id || line.vendor_id,
         condition: 'repaired',
-        notes: item.remarks || `Repaired and returned to stock on ${dcNumber}`,
+        notes: item.remarks || `Repaired and returned on ${dcNumber} — waiting for QC`,
         actorUserId,
         actorName,
       });
@@ -507,8 +504,9 @@ async function receivePartsFromVendor(client, {
         }],
         unitCost: line.unit_cost || line.price || 0,
         locationCode: line.location_code || null,
-        spoId: null,
-        grnId: null,
+        // B24: the replacement keeps the order it traces back to.
+        spoId: line.spo_id || null,
+        grnId: line.grn_id || null,
         vendorId: head.vendor_id || line.vendor_id,
         batchNumber: null,
         receivedBy: actorUserId,
@@ -518,6 +516,13 @@ async function receivePartsFromVendor(client, {
       const neu = created[0];
       if (!neu) throw new Error('Failed to create replacement part instance');
       replacementInstanceId = neu.instance_id;
+      // B24: the replacement waits for QC like a repaired part; QC pass counts
+      // it into stock (receiveUnitsIntoInventory already had, so undo that).
+      await client.query(`UPDATE part_instances SET status = 'qc_pending', updated_at = NOW() WHERE instance_id = $1`, [replacementInstanceId]);
+      await client.query(
+        'UPDATE parts SET quantity = GREATEST(COALESCE(quantity, 0) - 1, 0), updated_at = NOW() WHERE part_id = $1',
+        [line.live_part_id]
+      );
 
       await client.query(
         `UPDATE part_instances
@@ -564,7 +569,7 @@ async function receivePartsFromVendor(client, {
         unitCost: neu.unit_cost,
         vendorId: head.vendor_id || line.vendor_id,
         condition: 'replacement',
-        notes: `Replacement received into stock for ${line.prt_id} on ${dcNumber}`,
+        notes: `Replacement received for ${line.prt_id} on ${dcNumber} — waiting for QC`,
         actorUserId,
         actorName,
       });

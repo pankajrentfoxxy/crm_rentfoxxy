@@ -7,7 +7,6 @@ const { vacateWarehouseLocation } = require('../services/warehouseLocationServic
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
-const vendorBilling = require('./vendorBillingController');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { buildQcFailure, ESCALATION_STAGE, auditEventType } = require('../services/qcFailureService');
 const {
@@ -881,14 +880,22 @@ exports.markQcFailed = async (req, res) => {
   if (!reason?.trim()) {
     return res.status(400).json({ success: false, message: 'Reason is required' });
   }
+  // B1/D11: one transaction, and the laptop itself moves to qc_failed so it
+  // can go on a vendor return challan (it stayed in_repair, which the return
+  // challan refuses — a dead end). The draft debit note is part of it (D12).
+  const client = await pool.connect();
+  let debitNote = null;
+  let ticket;
   try {
-    const ticketRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    await client.query('BEGIN');
+    const ticketRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1 FOR UPDATE', [id]);
     if (!ticketRes.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
-    const ticket = ticketRes.rows[0];
+    ticket = ticketRes.rows[0];
 
-    await pool.query(
+    await client.query(
       `UPDATE tickets SET
          floor_manager_qc_failed = TRUE,
          floor_manager_qc_failed_at = NOW(),
@@ -902,35 +909,50 @@ exports.markQcFailed = async (req, res) => {
     );
 
     if (ticket.vendor_serial_id) {
-      await pool.query(
+      await client.query(
         `UPDATE vendor_serial_numbers SET qc_status = 'qc_failed_return_vendor', updated_at = NOW()
          WHERE serial_id = $1`,
         [ticket.vendor_serial_id]
       );
+      const cur = (await client.query(
+        'SELECT inventory_status FROM vendor_serial_numbers WHERE serial_id = $1', [ticket.vendor_serial_id]
+      )).rows[0];
+      // Only from where a laptop on the floor or in the warehouse can be. A
+      // laptop reserved on an order is detached by the warehouse first (below).
+      if (['in_repair', 'in_stock', 'returned', 'dispatch_ready', 'at_gate', null, undefined].includes(cur?.inventory_status)) {
+        const { transitionAsset, STATUS } = require('../services/inventoryStateMachine');
+        await transitionAsset(client, {
+          serialId: ticket.vendor_serial_id,
+          toStatus: STATUS.QC_FAILED,
+          reason: `Floor QC failed — return to vendor: ${reason.trim()}`.slice(0, 500),
+          actorUserId: req.user?.user_id || null,
+          actorName: req.user?.name || null,
+          caller: 'ticketPhase2.markQcFailed',
+        });
+      }
     }
 
     // SO-level allocation: this laptop failed pre-dispatch QC — mark it failed so
     // the warehouse detaches/replaces it before the DC can be generated.
     if (ticket.ticket_type === 'sales_order_qc') {
-      await pool.query(
+      await client.query(
         `UPDATE sales_order_serials SET qc_status = 'failed', updated_at = NOW()
          WHERE qc_ticket_id = $1 AND status = 'attached'`,
         [ticket.ticket_id]
       );
     }
 
-    await ttsplAuditService.logTtsplEvent({
-      ttsplId: ticket.ttspl_id,
-      vendorSerialId: ticket.vendor_serial_id,
-      eventType: 'qc_failed_return_vendor',
-      description: `Floor manager QC fail: ${reason.trim()}`,
-      metadata: { return_dc_number: return_dc_number || null },
-      actorUserId: req.user.user_id,
-      actorName: req.user.name
+    debitNote = await require('../services/vendorDebitNoteService').draftForReturn(client, {
+      serialId: ticket.vendor_serial_id,
+      source: 'floor_qc_fail',
+      sourceRef: `ticket #${ticket.ticket_id}`,
+      reason: reason.trim(),
+      actorUserId: req.user?.user_id || null,
+      returnTicketId: ticket.ticket_id,
     });
 
-    const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
-    await logProductionHistory(pool, {
+    const afterRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    await logProductionHistory(client, {
       ticketBefore: ticket,
       ticketAfter: afterRes.rows[0] || ticket,
       source: 'markQcFailed',
@@ -938,27 +960,30 @@ exports.markQcFailed = async (req, res) => {
       failureReason: reason.trim(),
       actor: req.user,
     });
-
-    // Auto-raise a DRAFT vendor debit note linked to this return ticket (accounts
-    // fills the amount & approves; it then adjusts the next vendor bill).
-    let debitNote = null;
-    try {
-      debitNote = await vendorBilling.createReturnDebitNote(pool, {
-        ticket, reason: reason.trim(), actorUserId: req.user.user_id,
-      });
-    } catch (dnErr) {
-      console.error('[vendor-return] debit note auto-create failed for ticket', id, dnErr.message);
-    }
-
-    res.json({
-      success: true,
-      message: 'Ticket marked for vendor return. Initiate vendor return DC from vendor management.',
-      instructions: 'Create a vendor return DC and link the serial to complete the return process.',
-      debit_note: debitNote ? { debit_note_number: debitNote.debit_note_number, debit_note_id: debitNote.debit_note_id } : null,
-    });
+    await client.query('COMMIT');
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message || 'Failed' });
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed' });
+  } finally {
+    client.release();
   }
+
+  await ttsplAuditService.logTtsplEvent({
+    ttsplId: ticket.ttspl_id,
+    vendorSerialId: ticket.vendor_serial_id,
+    eventType: 'qc_failed_return_vendor',
+    description: `Floor manager QC fail: ${reason.trim()}`,
+    metadata: { return_dc_number: return_dc_number || null, debit_note: debitNote?.debit_note_number || null },
+    actorUserId: req.user.user_id,
+    actorName: req.user.name
+  }).catch((err) => console.error('qc fail audit:', err.message));
+
+  res.json({
+    success: true,
+    message: 'Marked QC failed — the laptop is now in the “To send back” list under Vendor returns.',
+    instructions: 'Put it on a vendor return challan from Procure → Vendor returns.',
+    debit_note: debitNote ? { debit_note_number: debitNote.debit_note_number, debit_note_id: debitNote.debit_note_id } : null,
+  });
 };
 
 exports.updateTtsplConfig = async (req, res) => {

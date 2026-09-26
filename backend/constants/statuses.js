@@ -38,6 +38,7 @@ const ASSET_STATUS = {
   IN_REPAIR: 'in_repair',
   QC_FAILED: 'qc_failed',
   SCRAPPED: 'scrapped',
+  RETURNED_TO_VENDOR: 'returned_to_vendor',
 };
 
 /**
@@ -58,6 +59,10 @@ const ASSET_STATUSES = [
   { value: ASSET_STATUS.IN_REPAIR,      family: FAMILY.OFFCYCLE, label: 'In repair',      means: 'Out for repair or on the bench' },
   { value: ASSET_STATUS.QC_FAILED,      family: FAMILY.OFFCYCLE, label: 'QC failed',      means: 'Failed QC, needs a decision' },
   { value: ASSET_STATUS.SCRAPPED,       family: FAMILY.CLOSED,   label: 'Scrapped',       means: 'Terminal' },
+  // D9 (26 Sep 2026): a laptop back with its vendor is not scrap. It was
+  // recorded as scrapped, which put it in scrap reports and stopped its last
+  // part-month of vendor rent from being billed.
+  { value: ASSET_STATUS.RETURNED_TO_VENDOR, family: FAMILY.CLOSED, label: 'Returned to vendor', means: 'Back with the vendor it came from' },
 ];
 
 const ASSET_STATUS_VALUES = ASSET_STATUSES.map((s) => s.value);

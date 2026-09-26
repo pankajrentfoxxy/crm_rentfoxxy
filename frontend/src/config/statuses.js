@@ -33,6 +33,7 @@ export const ASSET_STATUS = {
   IN_REPAIR: 'in_repair',
   QC_FAILED: 'qc_failed',
   SCRAPPED: 'scrapped',
+  RETURNED_TO_VENDOR: 'returned_to_vendor',
 };
 
 /**
@@ -53,6 +54,7 @@ export const ASSET_STATUSES = [
   { value: ASSET_STATUS.IN_REPAIR,      family: FAMILY.OFFCYCLE, label: 'In repair',      glyph: '✶', means: 'Out for repair or on the bench' },
   { value: ASSET_STATUS.QC_FAILED,      family: FAMILY.OFFCYCLE, label: 'QC failed',      glyph: '✕', means: 'Failed QC, needs a decision' },
   { value: ASSET_STATUS.SCRAPPED,       family: FAMILY.CLOSED,   label: 'Scrapped',       glyph: '⊘', means: 'Terminal' },
+  { value: ASSET_STATUS.RETURNED_TO_VENDOR, family: FAMILY.CLOSED, label: 'Returned to vendor', glyph: '⇤', means: 'Back with the vendor it came from' },
 ];
 
 export const ASSET_STATUS_VALUES = ASSET_STATUSES.map((s) => s.value);
