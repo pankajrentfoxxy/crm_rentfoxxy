@@ -206,8 +206,9 @@ Keep every reviewed CSV in `claude/reports/` with the date — it is the record 
 
 ☐ **PO GST type (120 POs: 96 laptop, 24 spare)** — `node backend/scripts/fix-po-gst-type.js --csv gst.csv`
   (report) → Accounts reviews → `--apply` (writes a backup JSON under backend/backups first). Totals do not
-  change (18% either way); only the CGST+SGST / IGST split on the PO. Not yet applied on QA either (26 Sep —
-  the session was not allowed to write it; run it by hand).
+  change (18% either way); only the CGST+SGST / IGST split on the PO. Applied on QA 26 Sep (120 corrected,
+  re-check shows 0; backup `backend/backups/po-gst-type-2026-09-26T20-34-12-379Z.json`). Live still to do —
+  needs commit 76c81b6e (the first --apply failed on a param type and rolled back).
 ☐ **Rented laptops' rent start date (BLOCKER for vendor bills)** — on QA 1,025 of ~1,050 rented laptops have
   `rental_start_date = 2027-02-07` (created 2026-02-07, the ERP import day; PO and GRN dates are that day too).
   A start date in the future keeps them OFF every vendor bill. The real receipt dates are only in the ERP
