@@ -144,15 +144,21 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/diagnosis', require('./routes/diagnosis'));
 app.use('/api/chip-repair', require('./routes/chipLevel'));
 app.use('/api/quotation', require('./routes/quotationPublic'));
-app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
-app.use('/api/qc2-capture', require('./routes/qc2CapturePublic'));
+// Procure safety C: the public capture links and the 6-digit access-number
+// lookup had no rate limit (captureLimiter was written for them and never
+// mounted), so access numbers could be enumerated and each hit burned a real
+// one. Only failed requests count, so a technician capturing normally is
+// never slowed.
+const { captureLimiter: publicCaptureLimiter } = require('./middleware/rateLimit');
+app.use('/api/grn-capture', publicCaptureLimiter, require('./routes/grnCapturePublic'));
+app.use('/api/qc2-capture', publicCaptureLimiter, require('./routes/qc2CapturePublic'));
 app.use('/api/qc2', require('./routes/qc2'));
-app.use('/api/dispatch-qc-capture', require('./routes/dispatchQcCapturePublic'));
-app.use('/api/vendor-return-capture', require('./routes/vendorReturnCapturePublic'));
-app.use('/api/rdc-capture', require('./routes/rdcCapturePublic'));
+app.use('/api/dispatch-qc-capture', publicCaptureLimiter, require('./routes/dispatchQcCapturePublic'));
+app.use('/api/vendor-return-capture', publicCaptureLimiter, require('./routes/vendorReturnCapturePublic'));
+app.use('/api/rdc-capture', publicCaptureLimiter, require('./routes/rdcCapturePublic'));
 app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/dispatch-chargers', require('./routes/dispatchCharger'));
-app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
+app.use('/api/grn-access-public', publicCaptureLimiter, require('./routes/grnAccessPublic'));
 app.use('/api/support-public', require('./routes/supportRequestPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));

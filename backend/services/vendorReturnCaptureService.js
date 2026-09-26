@@ -58,14 +58,18 @@ async function mintTokensForItems(client, { dcNumber, receiveDcNumber, items, cr
         WHERE item_id = $1 AND status = 'pending'`,
       [item.id]
     );
+    // Procure safety C: these public links never expired (no expires_at was
+    // ever set, so the existing expiry checks never fired). 48 hours covers
+    // guard-inward today, warehouse receive tomorrow; the repair DC can
+    // generate a new one.
     const tokenId = crypto.randomUUID();
     const accessNumber = await mintUniqueAccessNumber(client);
     const expected = expectedShape(item.expected_config || item.dispatch_config_snapshot);
     await client.query(
       `INSERT INTO vendor_return_capture_tokens
          (token_id, access_number, dc_number, receive_dc_number, item_id, ticket_id,
-          serial_id, ttspl_id, serial_number, expected_config, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11)`,
+          serial_id, ttspl_id, serial_number, expected_config, status, created_by, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11, NOW() + interval '48 hours')`,
       [
         tokenId,
         accessNumber,

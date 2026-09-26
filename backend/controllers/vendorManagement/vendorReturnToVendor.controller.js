@@ -243,6 +243,35 @@ exports.requestEwayBill = async (req, res) => {
   }
 };
 
+/**
+ * Runs BEFORE multer. The upload route used to write the file for any
+ * logged-in user and only then check the permission; and the number could be
+ * changed after the consignment had left (the UI hid it, the API did not).
+ */
+exports.requireEwayUploader = async (req, res, next) => {
+  try {
+    const allowed = await eway.canUploadVrtdcEwayBill(req.user, req.permissionCache);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Only the Accounts team can enter the E-way Bill' });
+    }
+    const pool = require('../../config/db');
+    const dc = await pool.query(
+      'SELECT status FROM vendor_return_delivery_challans WHERE dc_number = $1',
+      [req.params.dcNumber]
+    );
+    if (!dc.rows.length) return res.status(404).json({ success: false, message: 'Return DC not found' });
+    if (!['draft', 'dispatch_ready'].includes(String(dc.rows[0].status))) {
+      return res.status(409).json({
+        success: false,
+        message: `This return DC is ${dc.rows[0].status}; its E-way Bill can no longer be changed.`,
+      });
+    }
+    return next();
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 /** Accounts records the E-way Bill, which releases the consignment to the gate. */
 exports.saveEwayBill = async (req, res) => {
   try {

@@ -116,9 +116,10 @@ async function listVendors(req, res) {
   params.push(limit, offset);
   const data = await pool.query(dataSql, params);
 
+  const bankOk = await canSeeVendorBank(req);
   res.json({
     success: true,
-    data: data.rows.map(normalizeVendorRow),
+    data: data.rows.map((r) => redactVendor(normalizeVendorRow(r), bankOk)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 }
   });
 }
@@ -199,6 +200,29 @@ function normalizeVendorRow(row) {
 
 const getValidators = [param('id').isInt().toInt()];
 
+/**
+ * Bank and tax identifiers go only to people who handle vendors or pay them.
+ * The vendor read guard also admits diagnosis-failed, vendor-repair and
+ * debit-note users, who need a vendor's name and contact, not its account.
+ */
+const SENSITIVE_VENDOR_FIELDS = ['account_number', 'bank_ifsc_code', 'bank_name', 'account_holder_name', 'pan_number'];
+async function canSeeVendorBank(req) {
+  const { hasPermission } = require('../../services/permissionService');
+  const u = req.user || {};
+  if (u.role === 'super_admin') return true;
+  for (const section of ['vendor_management', 'vendor_billing_mgmt']) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await hasPermission(u.user_id, u.role, section, 'view', req.permissionCache)) return true;
+  }
+  return false;
+}
+function redactVendor(row, allowed) {
+  if (!row || allowed) return row;
+  const out = { ...row };
+  for (const f of SENSITIVE_VENDOR_FIELDS) if (f in out) out[f] = out[f] ? 'hidden' : out[f];
+  return out;
+}
+
 async function getVendor(req, res) {
   try {
     await ensureVendorShippingSchema();
@@ -214,7 +238,7 @@ async function getVendor(req, res) {
       [id]
     );
     if (r.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
-    res.json({ success: true, data: normalizeVendorRow(r.rows[0]) });
+    res.json({ success: true, data: redactVendor(normalizeVendorRow(r.rows[0]), await canSeeVendorBank(req)) });
   } catch (error) {
     console.error('getVendor:', error);
     res.status(500).json({ success: false, message: error.message || 'Server error fetching vendor' });
@@ -229,7 +253,7 @@ async function lookupVendor(req, res) {
   const id = req.query.vendor_id;
   const r = await pool.query(`SELECT * FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [id]);
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Vendor not found' });
-  res.json({ success: true, data: normalizeVendorRow(r.rows[0]) });
+  res.json({ success: true, data: redactVendor(normalizeVendorRow(r.rows[0]), await canSeeVendorBank(req)) });
 }
 
 function createValidators() {
@@ -1117,6 +1141,7 @@ async function exportVendorLaptopsExcel(req, res) {
 }
 
 module.exports = {
+  redactVendor,
   buildMulter,
   listValidators,
   listVendors,

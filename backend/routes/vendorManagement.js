@@ -292,8 +292,8 @@ router.put('/spare-parts-orders/:id', spareEdit, sparePo.updateValidators, spare
 router.delete('/spare-parts-orders/:id', spareDelete, sparePo.getValidators, sparePo.remove);
 
 // ---------- Billing (monthly views map to status + period filters) ----------------
-router.get('/billing', authorize, billing.listValidators, billing.list);
-router.get('/billing/:id', authorize, billing.getValidators, billing.getOne);
+router.get('/billing', billingRead, billing.listValidators, billing.list);
+router.get('/billing/:id', billingRead, billing.getValidators, billing.getOne);
 router.post('/billing', billingCreate, ...billing.createValidators(), billing.create);
 router.put('/billing/:id', billingEdit, billing.updateValidators, billing.update);
 router.delete('/billing/:id', billingDelete, billing.getValidators, billing.remove);
@@ -312,6 +312,10 @@ router.put('/replaced-products/:id', authorizeEdit, replaced.updateValidators, r
 router.delete('/replaced-products/:id', authorizeDelete, replaced.getValidators, replaced.remove);
 
 // ---------- Return laptop to vendor (warehouse → original supplier) -----------------
+// Procure safety C: VRTDC / VRT numbers contain slashes, so the prefixed routes
+// below are the ones that match — and every write among them was guarded by
+// VIEW (the edit-guarded :dcNumber routes further down were never reached).
+// Writes now require edit; reads stay view.
 const authorizeReturnToVendor = [
   authMiddleware,
   checkAnySectionPermission(['vendor_return_to_vendor', 'vendor_management'], 'view'),
@@ -325,9 +329,9 @@ router.get('/return-to-vendor/dc', authorizeReturnToVendor, vendorReturn.listDcs
 router.post('/return-to-vendor/dc', rtvCreate, vendorReturn.createDc);
 const vrtdcBase = '/return-to-vendor/dc';
 router.get(...prefixedDcRoute(vrtdcBase, '/pdf', ...authorizeReturnToVendor, vendorReturn.downloadPdf));
-router.post(...prefixedDcRoute(vrtdcBase, '/dispatch', ...authorizeReturnToVendor, vendorReturn.dispatchDc));
-router.post(...prefixedDcRoute(vrtdcBase, '/complete', ...authorizeReturnToVendor, vendorReturn.completeDc));
-router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...authorizeReturnToVendor, vendorReturn.cancelDc));
+router.post(...prefixedDcRoute(vrtdcBase, '/dispatch', ...rtvEdit, vendorReturn.dispatchDc));
+router.post(...prefixedDcRoute(vrtdcBase, '/complete', ...rtvEdit, vendorReturn.completeDc));
+router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...rtvEdit, vendorReturn.cancelDc));
 
 // ---------- VRTDC E-way Bill ----------
 // MUST be registered before the catch-all getDc below. A VRTDC number contains
@@ -343,15 +347,16 @@ router.post(...prefixedDcRoute(vrtdcBase, '/cancel', ...authorizeReturnToVendor,
 // controller checks the dc_eway_bill permission itself.
 const vrtdcEwayUpload = vendorReturn.createEwayUpload();
 router.get(...prefixedDcRoute(vrtdcBase, '/eway', ...authorizeReturnToVendor, vendorReturn.getEwayCompliance));
-router.post(...prefixedDcRoute(vrtdcBase, '/request-eway', ...authorizeReturnToVendor, vendorReturn.requestEwayBill));
+router.post(...prefixedDcRoute(vrtdcBase, '/request-eway', ...rtvEdit, vendorReturn.requestEwayBill));
 router.post(...prefixedDcRoute(
   vrtdcBase,
   '/eway',
   authMiddleware,
+  vendorReturn.requireEwayUploader,
   wrapMulter(vrtdcEwayUpload.single('eway_bill_pdf')),
   vendorReturn.saveEwayBill
 ));
-router.post(...prefixedDcRoute(vrtdcBase, '/item-values', ...authorizeReturnToVendor, vendorReturn.setItemValues));
+router.post(...prefixedDcRoute(vrtdcBase, '/item-values', ...rtvEdit, vendorReturn.setItemValues));
 router.get(...prefixedDcRoute(vrtdcBase, '/eway-pdf', ...authorizeReturnToVendor, vendorReturn.downloadEwayPdf));
 
 router.get(...prefixedDcRoute(vrtdcBase, '', ...authorizeReturnToVendor, vendorReturn.getDc));
@@ -373,10 +378,10 @@ router.get('/return-ticket/eligible-laptops', authorizeReturnTicket, vendorRetur
 router.get('/return-ticket', authorizeReturnTicket, vendorReturnTicket.listTickets);
 router.post('/return-ticket', vrtCreate, vendorReturnTicket.createTicket);
 const vrtBase = '/return-ticket';
-router.post(...prefixedDcRoute(vrtBase, '/notify', ...authorizeReturnTicket, vendorReturnTicket.notifyVendor));
-router.post(...prefixedDcRoute(vrtBase, '/dc', ...authorizeReturnTicket, vendorReturnTicket.createDc));
-router.post(...prefixedDcRoute(vrtBase, '/items/cancel', ...authorizeReturnTicket, vendorReturnTicket.cancelItems));
-router.post(...prefixedDcRoute(vrtBase, '/cancel', ...authorizeReturnTicket, vendorReturnTicket.cancelTicket));
+router.post(...prefixedDcRoute(vrtBase, '/notify', ...vrtEdit, vendorReturnTicket.notifyVendor));
+router.post(...prefixedDcRoute(vrtBase, '/dc', ...vrtEdit, vendorReturnTicket.createDc));
+router.post(...prefixedDcRoute(vrtBase, '/items/cancel', ...vrtEdit, vendorReturnTicket.cancelItems));
+router.post(...prefixedDcRoute(vrtBase, '/cancel', ...vrtEdit, vendorReturnTicket.cancelTicket));
 router.get(...prefixedDcRoute(vrtBase, '', ...authorizeReturnTicket, vendorReturnTicket.getTicket));
 router.get('/return-ticket/:ticketNumber', authorizeReturnTicket, vendorReturnTicket.getTicket);
 router.post('/return-ticket/:ticketNumber/notify', vrtEdit, vendorReturnTicket.notifyVendor);
