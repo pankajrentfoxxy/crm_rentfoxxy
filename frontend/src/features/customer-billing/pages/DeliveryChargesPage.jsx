@@ -314,6 +314,7 @@ export default function DeliveryChargesPage() {
                                   <td className="px-3 py-2 whitespace-nowrap">
                                     <span className="font-medium text-slate-800">{d.dc_number}</span>
                                     {d.sales_order_number && <p className="text-[11px] text-slate-400">{d.sales_order_number}</p>}
+                                    {d.movement_type === 'return' && <p className="text-[11px] font-medium text-amber-600">{d.kind}</p>}
                                   </td>
                                   <td className="px-3 py-2 whitespace-nowrap">{fmtDate(d.dispatched_at)}</td>
                                   <td className="px-3 py-2">{d.delivery_contact || '—'}</td>

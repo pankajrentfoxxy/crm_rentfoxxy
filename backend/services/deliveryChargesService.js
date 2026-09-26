@@ -8,6 +8,12 @@
  * month it was dispatched (IST, falling back to its creation date). Rejected and
  * cancelled DCs never reached the customer, so they are left out.
  *
+ * Return DCs count too: a return pickup from a work-from-home employee is
+ * chargeable (Rs 799 + GST, claude/carret-support.md) and Support puts that on
+ * the Return DC's `shiping_charges`. A return DC belongs to the month the pickup
+ * was dispatched. Return DCs often carry no customer name, so it falls back to
+ * the customer record.
+ *
  * Read-only: nothing here writes to the database.
  */
 
@@ -28,9 +34,10 @@ const DC_CHARGES_CTE = `
   WITH dc AS (
     SELECT dcl.dc_number,
            MAX(dcl.customer_id) AS customer_id,
-           MAX(dcl.customer_name) AS customer_name,
+           MAX(dcl.customer_name) AS dcl_customer_name,
+           MAX(COALESCE(dcl.movement_type, 'outbound')) AS movement_type,
            MAX(dcl.sales_order_number) AS sales_order_number,
-           MAX(dcl.gst_number) AS gst_number,
+           MAX(dcl.gst_number) AS dcl_gst_number,
            MAX(dcl.status) AS status,
            MAX(dcl.entity_code) AS entity_code,
            MAX(dcl.courier_name) AS courier_name,
@@ -42,14 +49,17 @@ const DC_CHARGES_CTE = `
            MAX(COALESCE(dcl.dispatched_at, dcl.created_at)) AS dispatched_at,
            MAX(COALESCE(dcl.delivered_at, dcl.delivery_completed_at)) AS delivered_at
       FROM delivery_challan_lines dcl
-     WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+     WHERE COALESCE(dcl.movement_type, 'outbound') IN ('outbound', 'return')
      GROUP BY dcl.dc_number
   ),
   charged AS (
     SELECT dc.*,
+           COALESCE(NULLIF(dc.dcl_customer_name, ''), c.company_name, c.name) AS customer_name,
+           COALESCE(NULLIF(dc.dcl_gst_number, ''), c.gst_no) AS gst_number,
            EXTRACT(MONTH FROM dc.dispatched_at AT TIME ZONE 'Asia/Kolkata')::int AS charge_month,
            EXTRACT(YEAR FROM dc.dispatched_at AT TIME ZONE 'Asia/Kolkata')::int AS charge_year
       FROM dc
+      LEFT JOIN customers c ON c.customer_id = dc.customer_id
      WHERE dc.delivery_charge > 0
        AND LOWER(COALESCE(dc.status, '')) NOT IN ('rejected', 'cancelled')
   )`;
@@ -79,6 +89,8 @@ function contactLine(addr) {
 function shapeRow(r) {
   return {
     dc_number: r.dc_number,
+    movement_type: r.movement_type,
+    kind: r.movement_type === 'return' ? 'Return pickup' : 'Delivery',
     customer_id: r.customer_id,
     customer_name: r.customer_name,
     sales_order_number: r.sales_order_number,
@@ -234,7 +246,7 @@ async function buildCustomerStatementHtml(group, { month, year }) {
   const bodyRows = group.dcs.map((d, i) => `
     <tr>
       <td>${i + 1}</td>
-      <td>${escapeHtml(d.dc_number)}<div style="color:#64748b;font-size:9px">${escapeHtml(d.sales_order_number || '')}</div></td>
+      <td>${escapeHtml(d.dc_number)}<div style="color:#64748b;font-size:9px">${escapeHtml([d.movement_type === 'return' ? d.kind : '', d.sales_order_number].filter(Boolean).join(' · '))}</div></td>
       <td>${escapeHtml(fmtDate(d.dispatched_at))}</td>
       <td>${escapeHtml(d.delivery_contact || '—')}<div style="color:#475569">${escapeHtml(d.delivery_address || '—')}</div></td>
       <td class="num">${d.laptop_qty || '—'}</td>

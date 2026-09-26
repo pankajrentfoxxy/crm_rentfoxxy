@@ -63,6 +63,7 @@ exports.exportDeliveryChargesExcel = async (req, res) => {
       Month: period,
       Customer: r.customer_name,
       'DC Number': r.dc_number,
+      Type: r.kind,
       'Sales Order': r.sales_order_number || '',
       'Dispatch Date': r.dispatched_at ? new Date(r.dispatched_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : '',
       'Delivery Contact': r.delivery_contact,
