@@ -7,6 +7,7 @@ import CreditNotesPage from './pages/CreditNotesPage';
 import CreditNoteDetailPage from './pages/CreditNoteDetailPage';
 import CreditNoteLaptopsPage from './pages/CreditNoteLaptopsPage';
 import SecurityDepositsPage from './pages/SecurityDepositsPage';
+import DeliveryChargesPage from './pages/DeliveryChargesPage';
 
 // Per-page guards match the backend route guards exactly.
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
@@ -20,6 +21,7 @@ export default function CustomerBillingApp() {
       <Route path="credit-notes/laptops" element={g('credit_notes', <CreditNoteLaptopsPage />)} />
       <Route path="credit-notes/:id" element={g('credit_notes', <CreditNoteDetailPage />)} />
       <Route path="credit-notes" element={g('credit_notes', <CreditNotesPage />)} />
+      <Route path="delivery-charges" element={g('customer_billing', <DeliveryChargesPage />)} />
       <Route path="security-deposits" element={g('security_deposits', <SecurityDepositsPage />)} />
     </Routes>
   );

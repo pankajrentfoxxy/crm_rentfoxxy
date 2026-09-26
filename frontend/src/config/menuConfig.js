@@ -150,6 +150,7 @@ export const financeMenuItems = [
   { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes', end: true },
   { icon: Laptop, label: 'Credit Note Laptops', path: '/customer-billing/credit-notes/laptops', section: 'credit_notes' },
   { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
+  { icon: Truck, label: 'Delivery Charges', path: '/customer-billing/delivery-charges', section: 'customer_billing' },
   { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
   { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
   { icon: FileStack, label: 'DC Invoice', path: '/finance/dc-invoice', section: 'einvoice_ewb', countKey: 'dc_invoice_queue' },
