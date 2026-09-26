@@ -140,7 +140,7 @@ export default function VendorRecordPage() {
 
   const actions = v && (
     <>
-      {canCreatePo && status === 'approved' && <Button variant="primary" onClick={() => navigate(`/vendor-management/purchase-orders?vendor_id=${vendorId}`)}>New purchase order</Button>}
+      {canCreatePo && status === 'approved' && <Button variant="primary" onClick={() => navigate(`/carret/procure/purchase-orders/new?vendor_id=${vendorId}`)}>New purchase order</Button>}
       {canEdit && <Button onClick={() => navigate(`/carret/procure/vendors/${vendorId}/edit`)}>Edit</Button>}
       {canEdit && status === 'approved' && (
         <Button variant="quiet" onClick={() => setConfirm({ title: 'Suspend this vendor?', body: 'No new purchase orders can be raised for them. Nothing already ordered or received changes.', label: 'Suspend', tone: 'crit', go: () => setStatus('suspended', 'Vendor suspended') })}>Suspend</Button>
@@ -278,7 +278,7 @@ export default function VendorRecordPage() {
                   columns={poCols}
                   rows={pos}
                   rowKey={(p) => p.po_id}
-                  onRowClick={() => navigate(`/vendor-management/purchase-orders?vendor_id=${vendorId}`)}
+                  onRowClick={(p) => navigate(`/carret/procure/purchase-orders/${p.po_id}`)}
                   empty={<EmptyState title="No purchase orders yet" />}
                 />
               )}

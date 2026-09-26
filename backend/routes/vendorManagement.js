@@ -196,6 +196,10 @@ router.post(
 
 router.get('/purchase-orders/:poId/activities', authorize, purchaseOrders.listPurchaseOrderActivities);
 router.post('/purchase-orders/:poId/activities', authorizeEdit, purchaseOrders.logPurchaseOrderDocumentActivity);
+router.get('/purchase-orders/:id/pdf', authorize, purchaseOrders.getValidators, purchaseOrders.downloadPdf);
+router.post('/purchase-orders/:id/amend', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.amend);
+router.post('/purchase-orders/:id/cancel', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.cancel);
+router.post('/purchase-orders/:id/short-close', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.shortClose);
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);
 router.post('/purchase-orders', authorizeCreate, ...purchaseOrders.createValidators(), purchaseOrders.create);
 router.put('/purchase-orders/:id', authorizeEdit, purchaseOrders.updateValidators, purchaseOrders.update);
@@ -297,6 +301,9 @@ router.post(
 );
 router.get('/spare-parts-orders', authorizeSpareParts, sparePo.listValidators, sparePo.list);
 router.get('/spare-parts-orders/:id', authorizeSpareParts, sparePo.getValidators, sparePo.getOne);
+router.post('/spare-parts-orders/:id/amend', spareEdit, sparePo.reasonValidators, sparePo.amend);
+router.post('/spare-parts-orders/:id/cancel', spareEdit, sparePo.reasonValidators, sparePo.cancel);
+router.post('/spare-parts-orders/:id/short-close', spareEdit, sparePo.reasonValidators, sparePo.shortClose);
 router.post('/spare-parts-orders', spareCreate, ...sparePo.createValidators(), sparePo.create);
 router.put('/spare-parts-orders/:id', spareEdit, sparePo.updateValidators, sparePo.update);
 router.delete('/spare-parts-orders/:id', spareDelete, sparePo.getValidators, sparePo.remove);

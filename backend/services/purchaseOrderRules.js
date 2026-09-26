@@ -1,3 +1,5 @@
+const { canonicalState } = require('../utils/indianStateCodes');
+
 /**
  * Purchase order rules (Procure-to-stock safety fixes, decisions D1/D2/D13).
  *
@@ -82,8 +84,9 @@ function spareReceivable(status) {
   return SPARE_RECEIVABLE.has(String(status || '').toLowerCase());
 }
 
+/** Canonical state ("HR", "06", "Haryana" → "haryana"); see utils/indianStateCodes. */
 function normalizeState(s) {
-  return String(s || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return canonicalState(s);
 }
 
 module.exports = {

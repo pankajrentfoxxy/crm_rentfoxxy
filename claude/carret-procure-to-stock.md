@@ -90,8 +90,24 @@ answers first, because several of them change how the team works, not just the s
    order. Not automatic yet: an order moves on when someone clicks, not the moment stock lands —
    automatic hand-off belongs to the "into stock" step of the Production process. "Raise a PO"
    opens the old PO screen until step 4.
-4. **Purchase orders** — list (correct columns and status), create/amend, record with
-   approve/send/PDF/cancel/short-close/activity; spare-part POs on the same screens.
+4. **Purchase orders** — DONE on QA 26 Sep. List with process tabs (waiting approval, with
+   vendor, receiving, done) and real received counts; create/edit form with D3 price fields
+   (rental: monthly rent billed + asset value; purchase: price), "save and send for approval",
+   prefilled from the To-buy queue (and linked on save); record with the next step leading,
+   approve / send back, PDF, amend (back through approval, re-sent), cancel (nothing received;
+   manager once approved), short-close (manager, part received), GRNs and activity (D2,
+   migration 332). New vendors that aren't approved can't get a PO. PDF rewritten: rent vs
+   price columns, lock-in/warranty, asset value, CGST+SGST or IGST split, ship-to, terms,
+   amendment number, CANCELLED mark. Spare-part POs on the same list and record (D13,
+   migration 333): send back with reason, cancel is a status (was a silent delete),
+   short-close; raise from a floor part request and it links. **Not done:** spare "amend"
+   (no spare edit form exists — cancel and re-raise); receiving still opens the old receive
+   screens until step 5.
+   **GST bug found and fixed for new POs:** states were compared as text, so a Haryana vendor
+   stored as "HR" delivering to "haryana" was charged IGST. Now names/codes/GST codes are one
+   state and the vendor's GSTIN decides. Existing data (not changed — tax documents, Accounts
+   to decide): 79 of 227 POs IGST where CGST+SGST was due (8 still open: PO-0027, PO-0144,
+   PO-0146..0151), 17 the other way, 24 of 548 spare POs.
 5. **Gate arrival** (D4) and **Receive (GRN)** — wizard with capture, waiver approval, labels,
    reject-at-door; GRN record with verification per unit and bills.
 6. **Vendor returns & repair** — one area for repair, return, replacement, QC-failed; debit notes.
@@ -100,7 +116,7 @@ answers first, because several of them change how the team works, not just the s
 
 Migrations expected: "returned to vendor" status (D9), PO amend/close fields, gate arrival entry
 (D4), GRN delivery/invoice fields, porter fields on return DCs, VRDC status constraint, link
-tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql.
+tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql, 332_po_amend_cancel_close.sql, 333_spare_po_same_flow.sql.
 
 ## Full findings
 

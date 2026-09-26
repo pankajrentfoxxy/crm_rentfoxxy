@@ -108,7 +108,12 @@ function normalizeIncomingLines(body) {
 function mapLineForProductDetail(line, purchaseOrderType) {
   const poType = String(purchaseOrderType || '').toLowerCase();
   const qty = Number(line.quantity) || 1;
-  const rate = Number(line.rate) || 0;
+  // D3: on a rental PO the billed figure is the monthly rent. When a line
+  // carries it, it is the line's rate too, so totals and vendor billing agree
+  // (asset value is kept on the line as asset_value, for e-way/insurance).
+  const monthly = Number(line.monthly_rental_amount);
+  const isRental = ['rent_to_own', 'rental_purchase'].includes(String(purchaseOrderType || '').toLowerCase());
+  const rate = isRental && monthly > 0 ? monthly : (Number(line.rate) || 0);
   const lockingRaw =
     line.vendor_locking_period ??
     line.warranty ??
@@ -161,6 +166,12 @@ function buildAssetsDetailsFromLines(lines) {
     rate: lines.map((l) => Number(l.rate) || 0),
     locking_period: lines.map((l) => l.vendor_locking_period ?? l.warranty ?? l.locking_period ?? '')
   };
+}
+
+/** D3: on a rental PO a line's rate IS its monthly rent (see mapLineForProductDetail). */
+function applyRentalRate(lines, purchaseOrderType) {
+  if (!['rent_to_own', 'rental_purchase'].includes(String(purchaseOrderType || '').toLowerCase())) return lines;
+  return lines.map((l) => (Number(l.monthly_rental_amount) > 0 ? { ...l, rate: Number(l.monthly_rental_amount) } : l));
 }
 
 function lineSubtotalFromRows(rows) {
@@ -236,6 +247,7 @@ module.exports = {
   mapLineForProductDetail,
   buildAssetsDetailsFromLines,
   lineSubtotalFromRows,
+  applyRentalRate,
   insertProductDetailsForPo,
   parseLaravelAssetsDetailsPayload
 };

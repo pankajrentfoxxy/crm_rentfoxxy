@@ -23,6 +23,10 @@ const VendorsListPage = React.lazy(() => import('../features/carret/procure/Vend
 const VendorRecordPage = React.lazy(() => import('../features/carret/procure/VendorRecordPage'));
 const VendorFormPage = React.lazy(() => import('../features/carret/procure/VendorFormPage'));
 const ToBuyPage = React.lazy(() => import('../features/carret/procure/ToBuyPage'));
+const PurchaseOrdersListPage = React.lazy(() => import('../features/carret/procure/PurchaseOrdersListPage'));
+const PurchaseOrderFormPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderFormPage'));
+const PurchaseOrderRecordPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderRecordPage'));
+const SparePoRecordPage = React.lazy(() => import('../features/carret/procure/SparePoRecordPage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
@@ -87,13 +91,17 @@ export const carretRoutes = CARRET_ENABLED
 
       // Procure & Produce (Part 5.7). Five procurement lists are one component,
       // like Sell, because they are the same shape.
-      { path: '/carret/procure/purchase-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="purchase-orders" />) },
+      { path: '/carret/procure/purchase-orders', element: guard('vendor_management', 'view', <PurchaseOrdersListPage />) },
+      { path: '/carret/procure/purchase-orders/new', element: guard('vendor_management', 'create', <PurchaseOrderFormPage />) },
+      { path: '/carret/procure/purchase-orders/:poId', element: guard('vendor_management', 'view', <PurchaseOrderRecordPage />) },
+      { path: '/carret/procure/purchase-orders/:poId/edit', element: guard('vendor_management', 'edit', <PurchaseOrderFormPage />) },
       { path: '/carret/procure/to-buy', element: guard('vendor_management', 'view', <ToBuyPage />) },
       { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <VendorsListPage />) },
       { path: '/carret/procure/vendors/new', element: guard('vendor_management', 'create', <VendorFormPage />) },
       { path: '/carret/procure/vendors/:vendorId', element: guard('vendor_management', 'view', <VendorRecordPage />) },
       { path: '/carret/procure/vendors/:vendorId/edit', element: guard('vendor_management', 'edit', <VendorFormPage />) },
-      { path: '/carret/procure/spare-parts-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="spare-parts-orders" />) },
+      { path: '/carret/procure/spare-parts-orders', element: guardAny(['vendor_management', 'parts_procurement'], 'view', <PurchaseOrdersListPage kind="spare" />) },
+      { path: '/carret/procure/spare-parts-orders/:spoId', element: guardAny(['vendor_management', 'parts_procurement'], 'view', <SparePoRecordPage />) },
       { path: '/carret/procure/vendor-returns', element: guard('vendor_return_to_vendor', 'view', <ProcureListPage kind="replaced-products" />) },
       { path: '/carret/procure/vendor-repair', element: guard('vendor_repair_dc', 'view', <ProcureListPage kind="vendor-repair-dcs" />) },
 

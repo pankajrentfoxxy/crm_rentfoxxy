@@ -340,7 +340,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
       const { data } = await createSparePartsOrder(body);
       if (!data.success) throw new Error(data.message || data.errors?.[0]?.msg || 'Save failed');
       toast.success(data.message || 'Spare parts PO saved');
-      onSaved?.();
+      onSaved?.(data.data);
       onClose?.();
     } catch (err) {
       const msg = err.response?.data?.errors?.[0]?.msg;

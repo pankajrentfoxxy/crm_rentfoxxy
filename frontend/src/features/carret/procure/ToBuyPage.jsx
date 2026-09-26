@@ -8,6 +8,8 @@ import {
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import { errMsg } from './procureShared';
+import { poStatusLabel } from './poShared';
+import SparePartsPoFormModal from '../../vendor-management/components/SparePartsPoFormModal';
 
 /**
  * Procure → To buy.
@@ -36,6 +38,7 @@ export default function ToBuyPage() {
   const [options, setOptions] = useState(null);
   const [link, setLink] = useState(null); // { kind: 'laptop'|'part', row, value }
   const [busy, setBusy] = useState('');
+  const [spareFor, setSpareFor] = useState(null); // part request a new spare order is raised for
 
   const load = useCallback(() => {
     api.get(base)
@@ -119,7 +122,7 @@ export default function ToBuyPage() {
       key: 'po',
       header: 'Being bought on',
       render: (r) => (r.po_id
-        ? <span><DocNumber value={r.purchase_order_number} /> <StatusChip status={r.po_status} /></span>
+        ? <span><DocNumber value={r.purchase_order_number} /> <StatusChip status={r.po_status} label={poStatusLabel(r.po_status)} /></span>
         : <span style={{ color: 'var(--alert-warn)' }}>⚠ No PO yet</span>),
     },
     {
@@ -132,12 +135,13 @@ export default function ToBuyPage() {
               {busy === r.sales_order_number ? 'Moving…' : 'Stock ready — move on'}
             </Button>
           )}
+          {canEdit && !r.po_id && hasPermission('vendor_management', 'create') && <Button onClick={() => navigate(`/carret/procure/purchase-orders/new?request=${r.request_id}`)}>Raise PO</Button>}
           {canEdit && <Button variant="quiet" onClick={() => openLink('laptop', r)}>{r.po_id ? 'Change PO' : 'Link PO'}</Button>}
         </div>
       ),
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [busy, canEdit]);
+  ], [busy, canEdit, hasPermission]);
 
   const partCols = useMemo(() => [
     { key: 'no', header: 'Request', render: (p) => <DocNumber value={p.request_number || `#${p.request_id}`} />, sub: (p) => p.requester_name },
@@ -153,7 +157,12 @@ export default function ToBuyPage() {
     {
       key: 'act',
       header: '',
-      render: (p) => canEdit && <Button variant="quiet" onClick={() => openLink('part', p)}>{p.spo_id ? 'Change order' : 'Link order'}</Button>,
+      render: (p) => canEdit && (
+        <div className="flex flex-wrap justify-end" style={{ gap: '6px' }}>
+          {!p.spo_id && <Button onClick={() => setSpareFor(p)}>Raise order</Button>}
+          <Button variant="quiet" onClick={() => openLink('part', p)}>{p.spo_id ? 'Change order' : 'Link order'}</Button>
+        </div>
+      ),
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [canEdit]);
@@ -197,7 +206,7 @@ export default function ToBuyPage() {
 
         {state.error && <EmptyState title="Could not load the queue" body={state.error} />}
         {!state.error && tab === 'laptops' && (
-          <Section title="Laptops sales orders are waiting for" actions={canEdit && <Button onClick={() => navigate('/vendor-management/purchase-orders')}>Raise a PO</Button>}>
+          <Section title="Laptops sales orders are waiting for" actions={canEdit && <Button onClick={() => navigate('/carret/procure/purchase-orders/new')}>Raise a PO</Button>}>
             {state.loading ? <EmptyState title="Loading…" /> : (
               <DataTable
                 columns={laptopCols}
@@ -210,7 +219,7 @@ export default function ToBuyPage() {
           </Section>
         )}
         {!state.error && tab === 'parts' && (
-          <Section title="Parts escalated by the floor" actions={canEdit && <Button onClick={() => navigate('/vendor-management/spare-parts-orders')}>Raise a spare-parts order</Button>}>
+          <Section title="Parts escalated by the floor" actions={canEdit && <Button onClick={() => navigate('/carret/procure/spare-parts-orders')}>Spare-parts orders</Button>}>
             {state.loading ? <EmptyState title="Loading…" /> : (
               <DataTable
                 columns={partCols}
@@ -224,6 +233,20 @@ export default function ToBuyPage() {
         )}
       </div>
 
+      <SparePartsPoFormModal
+        open={Boolean(spareFor)}
+        prefill={spareFor ? { part_name: spareFor.part_name, category: spareFor.category, quantity: spareFor.quantity || 1 } : null}
+        onClose={() => setSpareFor(null)}
+        onSaved={async (saved) => {
+          const pr = spareFor;
+          if (pr && saved?.spo_id) {
+            await api.patch(`${base}/part-requests/${pr.request_id}/link`, { spo_id: saved.spo_id })
+              .then(() => toast.success(`${pr.request_number || 'Request'} linked to ${saved.purchase_order_number}`))
+              .catch((e) => toast.error(errMsg(e, 'Order saved, but the request was not linked — link it here')));
+          }
+          load();
+        }}
+      />
       <Drawer
         open={Boolean(link)}
         onClose={() => setLink(null)}

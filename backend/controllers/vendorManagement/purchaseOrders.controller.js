@@ -1,4 +1,5 @@
 const poRules = require('../../services/purchaseOrderRules');
+const { canonicalState, vendorGstState } = require('../../utils/indianStateCodes');
 const { query, body, param, validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs');
@@ -13,7 +14,8 @@ const {
   normalizeIncomingLines,
   buildAssetsDetailsFromLines,
   lineSubtotalFromRows,
-  insertProductDetailsForPo
+  insertProductDetailsForPo,
+  applyRentalRate
 } = require('../../services/purchaseOrderProductDetailsService');
 const { resolveLineItem } = require('../../services/qcManagementService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
@@ -338,7 +340,7 @@ async function attachProductDetailsWithGrn(db, poRow, qtyMaps) {
 /** Receive page opens after manager approval (incl. vendor accepted / in progress). */
 function receiveViewAllowed(poRow) {
   const st = String(poRow?.status || '').toLowerCase();
-  return ['approved', 'vendor_accepted', 'sent', 'processing', 'completed'].includes(st);
+  return ['approved', 'vendor_accepted', 'sent', 'processing', 'completed', 'closed'].includes(st);
 }
 
 /** New serial receipts while PO is approved, vendor-accepted, or in progress. */
@@ -1751,9 +1753,10 @@ function lineSubtotal(lineItems) {
   return Math.round(s * 100) / 100;
 }
 
+/** The vendor's GST state (GSTIN first, then stored state), canonical. */
 async function vendorState(vendor_id) {
-  const r = await pool.query(`SELECT state FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [vendor_id]);
-  return r.rows[0]?.state || null;
+  const r = await pool.query(`SELECT state, gst_number FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [vendor_id]);
+  return r.rows[0] ? vendorGstState(r.rows[0]) : null;
 }
 
 const listValidators = [
@@ -1765,7 +1768,14 @@ const listValidators = [
   query('purchase_order_type').optional().isString().trim(),
   query('date_from').optional().isString().trim(),
   query('date_to').optional().isString().trim(),
+  // Comma-separated; each must be a known status (whitelisted below).
+  query('status').optional().isString().trim(),
 ];
+
+const PO_LIST_STATUSES = new Set([
+  'draft', 'pending', 'pending_approval', 'approved', 'rejected', 'sent', 'vendor_accepted', 'vendor_rejected',
+  'processing', 'completed', 'closed', 'cancelled',
+]);
 
 async function list(req, res) {
   const errors = validationResult(req);
@@ -1784,6 +1794,12 @@ async function list(req, res) {
   if (vid) {
     where += ` AND p.vendor_id = $${idx}`;
     p.push(vid);
+    idx += 1;
+  }
+  const statuses = String(req.query.status || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => PO_LIST_STATUSES.has(x));
+  if (statuses.length) {
+    where += ` AND LOWER(COALESCE(p.status, 'draft')) = ANY($${idx}::text[])`;
+    p.push(statuses);
     idx += 1;
   }
   const poType = String(req.query.purchase_type || req.query.purchase_order_type || '')
@@ -1847,9 +1863,14 @@ async function list(req, res) {
   const qtyMaps = await buildReceivedQtyMapsForPoIds(poIds);
 
   const rowsOut = data.rows.map((row) => attachProductDetails(row, qtyMaps));
+  const counts = await pool.query(
+    `SELECT LOWER(COALESCE(status, 'draft')) AS status, COUNT(*)::int AS n
+       FROM vendor_purchase_orders WHERE deleted_at IS NULL GROUP BY 1`
+  );
 
   res.json({
     success: true,
+    counts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
     data: rowsOut,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 }
   });
@@ -1884,7 +1905,7 @@ async function formMeta(req, res) {
   try {
     const purchase_order_number = await peekNextPurchaseOrderNumber();
     const vendors = await pool.query(
-      `SELECT vendor_id, first_name, business_name, email, phone, address, state
+      `SELECT vendor_id, first_name, business_name, email, phone, address, state, gst_number
        FROM vendors
        WHERE deleted_at IS NULL AND status = 'approved'
        ORDER BY business_name ASC NULLS LAST, vendor_id DESC
@@ -1901,21 +1922,14 @@ async function formMeta(req, res) {
         email: v.email,
         phone: v.phone,
         address: v.address,
-        state: v.state
+        state: v.state,
+        gst_state: vendorGstState(v)
       }))
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message || 'Failed to load PO form meta' });
   }
-}
-
-function normalizeStateValue(s) {
-  if (s == null || s === '') return '';
-  return String(s)
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_');
 }
 
 const getValidators = [param('id').isInt().toInt()];
@@ -1965,7 +1979,7 @@ async function create(req, res) {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const body = req.body;
-  const rawLines = normalizeIncomingLines(body);
+  const rawLines = applyRentalRate(normalizeIncomingLines(body), body.purchase_order_type);
   if (!rawLines.length) {
     return res.status(400).json({
       success: false,
@@ -1974,18 +1988,20 @@ async function create(req, res) {
   }
 
   const vendorCheck = await pool.query(
-    `SELECT vendor_id, state FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
+    `SELECT vendor_id, state, status, gst_number FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
     [body.vendor_id]
   );
   if (!vendorCheck.rows.length) {
     return res.status(400).json({ success: false, message: 'Vendor not found' });
   }
+  if (!['approved', ''].includes(String(vendorCheck.rows[0].status || '').toLowerCase())) {
+    return res.status(400).json({ success: false, message: `This vendor is ${vendorCheck.rows[0].status}. Purchase orders can only be raised for approved vendors.` });
+  }
 
-  const vState = vendorCheck.rows[0].state;
-  const is_same_state =
-    typeof body.is_same_state === 'boolean'
-      ? body.is_same_state
-      : normalizeStateValue(vState) === normalizeStateValue(body.po_state);
+  // CGST+SGST vs IGST is decided here from the vendor's GST state and the
+  // delivery state — never taken from the request, and never by comparing
+  // "HR" with "haryana" as text (which charged IGST on Haryana vendors).
+  const is_same_state = vendorGstState(vendorCheck.rows[0]) === canonicalState(body.po_state);
 
   // Always computed from the lines: a subtotal from the request could make the
   // PO total (and the vendor bill) disagree with what was ordered.
@@ -2021,8 +2037,8 @@ async function create(req, res) {
         purchase_order_number, purchase_order_date, purchase_order_type, vendor_id,
         po_state, is_same_state, sub_total_amount, total_amount,
         line_items, assets_details, product_details_legacy_ids, remarks,
-        status, status_updated_by_admin_id, status_updated_by_name
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        status, status_updated_by_admin_id, status_updated_by_name, expected_delivery_date
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::date)
       RETURNING *`,
       [
         purchase_order_number,
@@ -2041,7 +2057,8 @@ async function create(req, res) {
         // PATCH /status (it used to accept any status here, approval included).
         'draft',
         req.user?.user_id || null,
-        req.user?.name || 'Admin'
+        req.user?.name || 'Admin',
+        /^\d{4}-\d{2}-\d{2}$/.test(String(body.expected_delivery_date || '')) ? body.expected_delivery_date : null
       ]
     );
 
@@ -2151,7 +2168,7 @@ async function update(req, res) {
     }
 
     const rawLines = body.line_items != null || body.assets_details != null || body.assetsDetails != null
-      ? normalizeIncomingLines(body)
+      ? applyRentalRate(normalizeIncomingLines(body), body.purchase_order_type || oldPo.purchase_order_type)
       : null;
     if (rawLines && !rawLines.length) {
       await client.query('ROLLBACK');
@@ -2174,8 +2191,7 @@ async function update(req, res) {
     const po_state = body.po_state ?? oldPo.po_state;
     const vState = await vendorState(vendor_id);
     let is_same_state = oldPo.is_same_state;
-    if (typeof body.is_same_state === 'boolean') is_same_state = body.is_same_state;
-    else if (po_state || vState) is_same_state = normalizeStateValue(vState) === normalizeStateValue(po_state);
+    if (po_state || vState) is_same_state = vState === canonicalState(po_state || oldPo.po_state);
 
     const effectiveLines = rawLines || (Array.isArray(oldPo.line_items) ? oldPo.line_items : []);
     const sub_total_amount = rawLines ? lineSubtotalFromRows(rawLines) : lineSubtotal(effectiveLines);
@@ -2195,6 +2211,7 @@ async function update(req, res) {
         product_details_legacy_ids = COALESCE($9::jsonb, product_details_legacy_ids),
         assets_details = CASE WHEN $8::jsonb IS NULL THEN assets_details ELSE $10::jsonb END,
         remarks = COALESCE($11, remarks),
+        expected_delivery_date = CASE WHEN $14::text IS NULL THEN expected_delivery_date ELSE NULLIF($14::text, '')::date END,
         status = $12::text,
         rejection_reason = CASE WHEN $12::text = 'draft' AND status IN ('rejected','vendor_rejected') THEN NULL ELSE rejection_reason END,
         updated_at = NOW()
@@ -2213,6 +2230,8 @@ async function update(req, res) {
         body.remarks ?? null,
         nextStatus,
         id,
+        body.expected_delivery_date === undefined ? null
+          : (/^\d{4}-\d{2}-\d{2}$/.test(String(body.expected_delivery_date)) ? body.expected_delivery_date : ''),
       ]
     );
     await client.query('COMMIT');
@@ -3046,7 +3065,148 @@ async function removePoBill(req, res) {
   }
 }
 
+/* ---------- D2: amend, cancel, short-close; PDF ---------- */
+
+const APPROVED_STATES = ['approved', 'vendor_accepted', 'sent', 'processing'];
+const reasonValidators = [
+  param('id').isInt().toInt(),
+  body('reason').isString().trim().isLength({ min: 3, max: 2000 }).withMessage('Give a reason (at least 3 characters).'),
+];
+
+/**
+ * Run one D2 action on a locked PO row. `check(po, received)` returns an error
+ * message to refuse, else null; `apply(client, po)` writes the change.
+ */
+async function poAction(req, res, { name, check, apply, describe }) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0].msg, errors: errors.array() });
+  const id = Number(req.params.id);
+  const reason = String(req.body.reason || '').trim();
+  const client = await pool.connect();
+  let po;
+  let updated;
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query('SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL FOR UPDATE', [id]);
+    if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Purchase order not found' }); }
+    po = cur.rows[0];
+    const received = await poRules.receivedCount(client, { poId: id });
+    const refusal = check(po, received);
+    if (refusal) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, message: refusal }); }
+    updated = await apply(client, po, reason, received);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(`PO ${name}:`, e);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    client.release();
+  }
+  await logVendorAudit({
+    actorUserId: req.user?.user_id, vendorId: po.vendor_id || null, entityType: 'purchase_order', entityId: id,
+    action: name, payload: { from: po.status, to: updated.status, reason },
+  });
+  await safeLogPurchaseOrderActivity({
+    poId: id, activityType: ACTIVITY_TYPES.PURCHASE_ORDER, action: name,
+    description: describe(req.user?.name || 'User', po, updated), remarks: reason,
+    metadata: { from: po.status, to: updated.status }, user: req.user,
+  });
+  return res.json({ success: true, data: updated });
+}
+
+/** Amend: an approved PO with nothing received goes back to draft; edit, submit, re-approve, re-send. */
+const amend = (req, res) => poAction(req, res, {
+  name: 'amended',
+  check: (po, received) => {
+    if (!APPROVED_STATES.includes(String(po.status).toLowerCase())) return `Only an approved purchase order can be amended (this one is ${po.status}). A draft or rejected one can simply be edited.`;
+    if (received > 0) return `${received} laptop(s) are already received on this PO, so its lines can't change. Short-close it and raise a new PO for the rest.`;
+    return null;
+  },
+  apply: async (client, po, reason) => (await client.query(
+    `UPDATE vendor_purchase_orders
+        SET status = 'draft', amendment_no = COALESCE(amendment_no, 0) + 1, amended_at = NOW(), amended_by = $1,
+            amend_reason = $2, approved_at = NULL, submitted_at = NULL, status_updated_by_admin_id = $1, updated_at = NOW()
+      WHERE po_id = $3 RETURNING *`,
+    [req.user?.user_id || null, reason, po.po_id]
+  )).rows[0],
+  describe: (who, po, u) => `${who} opened amendment ${u.amendment_no} of ${po.purchase_order_number}; it goes back for approval and is re-sent to the vendor.`,
+});
+
+/** Cancel: only while nothing is received. After approval, a manager's call. */
+const cancel = (req, res) => poAction(req, res, {
+  name: 'cancelled',
+  check: (po, received) => {
+    const st = String(po.status || '').toLowerCase();
+    if (['cancelled', 'completed', 'closed'].includes(st)) return `This purchase order is already ${st}.`;
+    if (received > 0) return `${received} laptop(s) are already received, so it can't be cancelled. Short-close it instead.`;
+    if (APPROVED_STATES.includes(st) && !isManagerUser(req.user)) return 'This PO is approved and was sent to the vendor — only a manager can cancel it.';
+    return null;
+  },
+  apply: async (client, po, reason) => {
+    const u = (await client.query(
+      `UPDATE vendor_purchase_orders
+          SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $1, cancel_reason = $2,
+              status_updated_by_admin_id = $1, updated_at = NOW()
+        WHERE po_id = $3 RETURNING *`,
+      [req.user?.user_id || null, reason, po.po_id]
+    )).rows[0];
+    // Orders waiting on this PO go back to "no PO yet" on the To-buy queue.
+    await client.query(
+      `UPDATE sales_order_procurement_requests SET po_id = NULL, status = 'New', updated_at = NOW() WHERE po_id = $1`,
+      [po.po_id]
+    );
+    return u;
+  },
+  describe: (who, po) => `${who} cancelled ${po.purchase_order_number}.`,
+});
+
+/** Short-close: partly received and nothing more is coming. Manager only. */
+const shortClose = (req, res) => poAction(req, res, {
+  name: 'short_closed',
+  check: (po, received) => {
+    if (!isManagerUser(req.user)) return 'Only a manager can short-close a purchase order.';
+    if (!APPROVED_STATES.includes(String(po.status).toLowerCase())) return `Only an open, approved purchase order can be short-closed (this one is ${po.status}).`;
+    if (received === 0) return 'Nothing has been received on this PO — cancel it instead.';
+    return null;
+  },
+  apply: async (client, po, reason) => (await client.query(
+    `UPDATE vendor_purchase_orders
+        SET status = 'closed', closed_at = NOW(), closed_by = $1, close_reason = $2,
+            status_updated_by_admin_id = $1, updated_at = NOW()
+      WHERE po_id = $3 RETURNING *`,
+    [req.user?.user_id || null, reason, po.po_id]
+  )).rows[0],
+  describe: (who, po) => `${who} short-closed ${po.purchase_order_number}: no more laptops will be received on it.`,
+});
+
+/** GET /purchase-orders/:id/pdf — the PO as the vendor gets it. */
+async function downloadPdf(req, res) {
+  try {
+    const r = await pool.query(
+      `SELECT p.*, v.email AS vendor_email, v.business_name AS vendor_business_name, v.first_name AS vendor_first_name,
+              v.phone AS vendor_phone, v.gst_number AS vendor_gst, v.address AS vendor_address, v.city AS vendor_city,
+              v.state AS vendor_state, v.pincode AS vendor_pincode
+         FROM vendor_purchase_orders p LEFT JOIN vendors v ON v.vendor_id = p.vendor_id
+        WHERE p.po_id = $1 AND p.deleted_at IS NULL`,
+      [Number(req.params.id)]
+    );
+    if (!r.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    const { absolutePath } = await generatePurchaseOrderPdf({ po: r.rows[0] });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${String(r.rows[0].purchase_order_number).replace(/[^\w-]/g, '_')}.pdf"`);
+    fs.createReadStream(absolutePath).on('close', () => fs.unlink(absolutePath, () => {})).pipe(res);
+  } catch (e) {
+    console.error('PO pdf:', e);
+    res.status(500).json({ success: false, message: 'Could not make the PDF' });
+  }
+}
+
 module.exports = {
+  reasonValidators,
+  amend,
+  cancel,
+  shortClose,
+  downloadPdf,
   listValidators,
   list,
   nextNumber,

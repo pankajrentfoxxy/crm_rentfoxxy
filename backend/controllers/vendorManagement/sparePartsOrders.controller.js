@@ -233,16 +233,18 @@ function formatGrnNumber(grnId) {
   return `GRN-${String(grnId).padStart(4, '0')}`;
 }
 
+/** The vendor's GST state: its GSTIN first, then the stored state. */
 async function vendorState(vendor_id) {
-  const r = await pool.query(`SELECT state FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [vendor_id]);
-  return r.rows[0]?.state || null;
+  const r = await pool.query(`SELECT state, gst_number FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [vendor_id]);
+  return r.rows[0] ? require('../../utils/indianStateCodes').vendorGstState(r.rows[0]) : null;
 }
 
 const listValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
   query('vendor_id').optional().isInt().toInt(),
-  query('search').optional().isString().trim()
+  query('search').optional().isString().trim(),
+  query('status').optional().isString().trim()
 ];
 
 async function list(req, res) {
@@ -262,6 +264,13 @@ async function list(req, res) {
   if (vid) {
     where += ` AND sp.vendor_id = $${idx}`;
     p.push(vid);
+    idx += 1;
+  }
+  const SPO_STATUSES = new Set(['draft', 'pending', 'approved', 'rejected', 'processing', 'completed', 'closed', 'cancelled']);
+  const statuses = String(req.query.status || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => SPO_STATUSES.has(x));
+  if (statuses.length) {
+    where += ` AND LOWER(COALESCE(sp.status, 'draft')) = ANY($${idx}::text[])`;
+    p.push(statuses);
     idx += 1;
   }
   if (search) {
@@ -300,8 +309,13 @@ async function list(req, res) {
   const spoIds = data.rows.map((row) => row.spo_id);
   const qtyMaps = await buildReceivedQtyMapsForSpoIds(spoIds);
 
+  const counts = await pool.query(
+    `SELECT LOWER(COALESCE(status, 'draft')) AS status, COUNT(*)::int AS n
+       FROM vendor_spare_parts_purchase_orders WHERE deleted_at IS NULL GROUP BY 1`
+  );
   res.json({
     success: true,
+    counts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
     data: data.rows.map((row) => attachSpareProductDetails(row, qtyMaps)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 }
   });
@@ -480,12 +494,9 @@ async function create(req, res) {
   }
 
   const vState = await vendorState(b.vendor_id);
-  const is_same_state =
-    typeof b.is_same_state === 'boolean'
-      ? b.is_same_state
-      // "Madhya Pradesh" vs "madhya_pradesh": compared raw, every spare PO was
-      // taxed as inter-state (IGST).
-      : poRules.normalizeState(vState) === poRules.normalizeState(b.po_state);
+  // Decided here, never taken from the request: "HR", "Haryana" and
+  // "haryana" are one state (compared raw, they were charged IGST).
+  const is_same_state = poRules.normalizeState(vState) === poRules.normalizeState(b.po_state);
 
   const sub_total_amount = lineSubtotal(line_items);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
@@ -571,8 +582,7 @@ async function update(req, res) {
   const po_state = b.po_state ?? cur.rows[0].po_state;
   const vState = await vendorState(vendor_id);
   let is_same_state = cur.rows[0].is_same_state;
-  if (typeof b.is_same_state === 'boolean') is_same_state = b.is_same_state;
-  else if (po_state || vState) {
+  if (po_state || vState) {
     is_same_state = poRules.normalizeState(vState) === poRules.normalizeState(po_state);
   }
 
@@ -619,7 +629,11 @@ async function update(req, res) {
 }
 
 /* List screen: align with Laravel spare parts view — only pending / draft / empty can change to pending or approved. */
-const statusValidators = [param('id').isInt().toInt(), body('status').isIn(['pending', 'approved'])];
+const statusValidators = [
+  param('id').isInt().toInt(),
+  body('status').isIn(['pending', 'approved', 'rejected']),
+  body('rejection_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
+];
 
 async function updateStatus(req, res) {
   const errors = validationResult(req);
@@ -642,6 +656,14 @@ async function updateStatus(req, res) {
     });
   }
 
+  if (status === 'rejected') {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (!(req.user?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(role))) {
+      return res.status(403).json({ success: false, message: 'Only managers can send a spare parts PO back' });
+    }
+    if (prev !== 'pending') return res.status(400).json({ success: false, message: 'Only a PO waiting for approval can be sent back.' });
+    if (!String(req.body.rejection_reason || '').trim()) return res.status(400).json({ success: false, message: 'Say why it is being sent back' });
+  }
   if (status === 'approved') {
     // D13: spare POs get the same approval as laptop POs — a manager, and
     // never the person who created or submitted it (there was no check at all).
@@ -656,10 +678,11 @@ async function updateStatus(req, res) {
 
   const won = await pool.query(
     `UPDATE vendor_spare_parts_purchase_orders
-     SET status = $1, status_updated_by_admin_id = $2, updated_at = NOW()
+     SET status = $1, status_updated_by_admin_id = $2, updated_at = NOW(),
+         rejection_reason = CASE WHEN $1::text = 'rejected' THEN $4 ELSE NULL END
      WHERE spo_id = $3 AND deleted_at IS NULL AND COALESCE(status, '') IN ('', 'draft', 'pending')
      RETURNING spo_id`,
-    [status, req.user?.user_id || null, id]
+    [status, req.user?.user_id || null, id, String(req.body.rejection_reason || '').trim() || null]
   );
   if (!won.rows.length) {
     return res.status(409).json({ success: false, message: 'This spare parts PO was changed by someone else just now.' });
@@ -1569,8 +1592,87 @@ async function remove(req, res) {
   res.json({ success: true });
 }
 
+/* ---------- D2/D13: amend, cancel, short-close (same rules as laptop POs) ---------- */
+const SPARE_OPEN = ['approved', 'processing', 'vendor_accepted', 'sent'];
+const reasonValidators = [
+  param('id').isInt().toInt(),
+  body('reason').isString().trim().isLength({ min: 3, max: 2000 }).withMessage('Give a reason (at least 3 characters).'),
+];
+const isManager = (u) => u?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(String(u?.role || '').toLowerCase());
+
+function spareAction(name, check, sql) {
+  return async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0].msg });
+    const id = Number(req.params.id);
+    const reason = String(req.body.reason || '').trim();
+    const client = await pool.connect();
+    let row;
+    let prev;
+    try {
+      await client.query('BEGIN');
+      const cur = await client.query('SELECT * FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL FOR UPDATE', [id]);
+      if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Spare parts PO not found' }); }
+      prev = cur.rows[0];
+      const received = await poRules.receivedCount(client, { spoId: id });
+      const refusal = check(prev, received, req.user);
+      if (refusal) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, message: refusal }); }
+      row = (await client.query(sql, [req.user?.user_id || null, reason, id])).rows[0];
+      if (name === 'cancelled') {
+        // Part requests waiting on this order go back to "no order yet".
+        await client.query("UPDATE part_requests SET status = 'escalated', spo_id = NULL, updated_at = NOW() WHERE spo_id = $1 AND status = 'ordered'", [id]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error(`spare PO ${name}:`, e);
+      return res.status(500).json({ success: false, message: 'Server error' });
+    } finally {
+      client.release();
+    }
+    await logVendorAudit({
+      actorUserId: req.user?.user_id, vendorId: prev.vendor_id || null, entityType: 'spare_parts_po', entityId: String(id),
+      action: name, payload: { from: prev.status, to: row.status, reason },
+    });
+    return res.json({ success: true, data: row });
+  };
+}
+
+const amend = spareAction('amended', (po, received) => {
+  if (!SPARE_OPEN.includes(String(po.status).toLowerCase())) return `Only an approved spare parts PO can be amended (this one is ${po.status}).`;
+  if (received > 0) return `${received} part(s) are already received, so its lines can't change. Short-close it and raise a new order.`;
+  return null;
+}, `UPDATE vendor_spare_parts_purchase_orders
+     SET status = 'draft', amendment_no = COALESCE(amendment_no, 0) + 1, amended_at = NOW(), amended_by = $1,
+         amend_reason = $2, status_updated_by_admin_id = $1, updated_at = NOW()
+   WHERE spo_id = $3 RETURNING *`);
+
+const cancel = spareAction('cancelled', (po, received, user) => {
+  const st = String(po.status || '').toLowerCase();
+  if (['cancelled', 'completed', 'closed'].includes(st)) return `This spare parts PO is already ${st}.`;
+  if (received > 0) return `${received} part(s) are already received, so it can't be cancelled. Short-close it instead.`;
+  if (SPARE_OPEN.includes(st) && !isManager(user)) return 'This PO is approved — only a manager can cancel it.';
+  return null;
+}, `UPDATE vendor_spare_parts_purchase_orders
+     SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $1, cancel_reason = $2,
+         status_updated_by_admin_id = $1, updated_at = NOW()
+   WHERE spo_id = $3 RETURNING *`);
+
+const shortClose = spareAction('short_closed', (po, received, user) => {
+  if (!isManager(user)) return 'Only a manager can short-close a spare parts PO.';
+  if (!SPARE_OPEN.includes(String(po.status).toLowerCase())) return `Only an open, approved spare parts PO can be short-closed (this one is ${po.status}).`;
+  if (received === 0) return 'Nothing has been received on this PO — cancel it instead.';
+  return null;
+}, `UPDATE vendor_spare_parts_purchase_orders
+     SET status = 'closed', closed_at = NOW(), closed_by = $1, close_reason = $2,
+         status_updated_by_admin_id = $1, updated_at = NOW()
+   WHERE spo_id = $3 RETURNING *`);
 
 module.exports = {
+  reasonValidators,
+  amend,
+  cancel,
+  shortClose,
   listValidators,
   list,
   nextNumber,

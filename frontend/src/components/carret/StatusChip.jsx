@@ -38,13 +38,17 @@ const DOC_STATUS = {
   rejected:   { tone: 'crit',    glyph: '✕' },
   cancelled:  { tone: 'closed',  glyph: '⊘' },
   suspended:  { tone: 'crit',    glyph: '⊘' },
+  pending_approval: { tone: 'moving',  glyph: '○' },
+  vendor_accepted:  { tone: 'earning', glyph: '●' },
+  vendor_rejected:  { tone: 'crit',    glyph: '✕' },
+  processing:       { tone: 'moving',  glyph: '◐' },
 };
 
 const TONE_VARS = {
   crit: { fg: 'var(--alert-crit)', bg: 'var(--alert-crit-soft)' },
 };
 
-export default function StatusChip({ status, className = '', title }) {
+export default function StatusChip({ status, className = '', title, label }) {
   const known = isCanonicalAssetStatus(status);
   const doc = known ? null : DOC_STATUS[String(status || '').toLowerCase()];
   const family = doc ? doc.tone : statusFamily(status);
@@ -62,7 +66,7 @@ export default function StatusChip({ status, className = '', title }) {
       data-family={family}
     >
       <span aria-hidden="true">{doc ? doc.glyph : statusGlyph(status)}</span>
-      <span>{doc ? String(status).charAt(0).toUpperCase() + String(status).slice(1).toLowerCase() : statusLabel(status)}</span>
+      <span>{label || (doc ? String(status).charAt(0).toUpperCase() + String(status).slice(1).toLowerCase().replace(/_/g, ' ') : statusLabel(status))}</span>
     </span>
   );
 }
