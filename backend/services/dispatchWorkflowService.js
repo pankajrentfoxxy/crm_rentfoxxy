@@ -1072,6 +1072,8 @@ module.exports = {
   onDispatched,
   onCustomerAsset,
   onPurchaseRequestReceived,
+  findAvailableSerialForSo,
+  logWorkflowActivity,
   fetchSoLinesByNumbers,
   attachSoLinesToRows,
   listPendingOrders,

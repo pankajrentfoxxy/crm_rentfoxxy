@@ -22,6 +22,7 @@ const ProcureListPage = React.lazy(() => import('../features/carret/ProcureListP
 const VendorsListPage = React.lazy(() => import('../features/carret/procure/VendorsListPage'));
 const VendorRecordPage = React.lazy(() => import('../features/carret/procure/VendorRecordPage'));
 const VendorFormPage = React.lazy(() => import('../features/carret/procure/VendorFormPage'));
+const ToBuyPage = React.lazy(() => import('../features/carret/procure/ToBuyPage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
@@ -87,6 +88,7 @@ export const carretRoutes = CARRET_ENABLED
       // Procure & Produce (Part 5.7). Five procurement lists are one component,
       // like Sell, because they are the same shape.
       { path: '/carret/procure/purchase-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="purchase-orders" />) },
+      { path: '/carret/procure/to-buy', element: guard('vendor_management', 'view', <ToBuyPage />) },
       { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <VendorsListPage />) },
       { path: '/carret/procure/vendors/new', element: guard('vendor_management', 'create', <VendorFormPage />) },
       { path: '/carret/procure/vendors/:vendorId', element: guard('vendor_management', 'view', <VendorRecordPage />) },

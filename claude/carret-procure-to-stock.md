@@ -82,7 +82,14 @@ answers first, because several of them change how the team works, not just the s
    saves (migration 330); portal login emailed to the vendor. **Not done:** "login as vendor" —
    the token it makes cannot open the vendor portal (other domain, needs a portal session);
    needs a proper hand-off, left for later. PO links go to the old PO list until step 4.
-3. **To buy queue** (D13 demand chain).
+3. **To buy queue** — DONE on QA 26 Sep: one list of laptops sales orders are waiting for and
+   parts the floor escalated; each linked to the PO / spare PO that buys it (migration 331); an
+   order with matching stock shows "Stock ready — move on", which hands it back to dispatch
+   (nothing ever did before: all 136 requests sat at "New"). On QA: 31 orders / 318 laptops
+   waiting, **22 of them already have matching stock**; 27 part requests escalated, none on an
+   order. Not automatic yet: an order moves on when someone clicks, not the moment stock lands —
+   automatic hand-off belongs to the "into stock" step of the Production process. "Raise a PO"
+   opens the old PO screen until step 4.
 4. **Purchase orders** — list (correct columns and status), create/amend, record with
    approve/send/PDF/cancel/short-close/activity; spare-part POs on the same screens.
 5. **Gate arrival** (D4) and **Receive (GRN)** — wizard with capture, waiver approval, labels,
@@ -93,7 +100,7 @@ answers first, because several of them change how the team works, not just the s
 
 Migrations expected: "returned to vendor" status (D9), PO amend/close fields, gate arrival entry
 (D4), GRN delivery/invoice fields, porter fields on return DCs, VRDC status constraint, link
-tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql.
+tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql.
 
 ## Full findings
 

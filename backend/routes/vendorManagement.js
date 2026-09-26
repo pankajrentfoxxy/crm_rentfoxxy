@@ -155,6 +155,14 @@ router.get(
   purchaseOrders.getGrnReceivedProducts
 );
 router.get('/purchase-orders/details', authorize, purchaseOrders.getByNumber);
+// Procure → To buy: laptop shortfalls from sales orders + floor part requests.
+const toBuy = require('../controllers/vendorManagement/toBuy.controller');
+router.get('/to-buy', authorize, toBuy.list);
+router.get('/to-buy/link-options', authorize, toBuy.linkOptions);
+router.patch('/to-buy/laptop-requests/:id/link', authorizeEdit, toBuy.linkLaptop);
+router.patch('/to-buy/part-requests/:id/link', authorizeEdit, toBuy.linkPart);
+router.post('/to-buy/move-on', authorizeEdit, toBuy.moveOn);
+
 router.get('/purchase-orders', authorize, purchaseOrders.listValidators, purchaseOrders.list);
 
 const poBillsUpload = purchaseOrders.createBillsUpload();
