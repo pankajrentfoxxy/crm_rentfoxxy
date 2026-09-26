@@ -59,7 +59,17 @@ answers first, because several of them change how the team works, not just the s
    1,036 laptops change (SG Laptops +₹2.37 lakh/month, C Prompt −₹1.14 lakh, Firmsap +₹1.02
    lakh, Siddhi −₹20k); 27 laptops have no rate at all. **Accounts must confirm before it is
    promoted** — `node backend/scripts/report-vendor-rate-changes.js --csv <file>` lists every laptop.
-1. **Safety fixes first (backend)** — approval bypass, self-approval, edit lock, numbers taken from
+1. **Safety fixes** — DONE on QA 26 Sep (e9d9fea1, 9a120a63, deb38d0f, ee53ae73): PO approval
+   bypass, self-approval, edit lock, server numbering, cancel guard, spare-PO rules; one checked
+   receive path, D5 waiver, over-receipt lock, ticket in the receipt transaction, TTSPL reuse, QC
+   intake via state machine; edit guards on return DC/ticket writes, e-way upload auth, billing
+   list guard, bank/PAN redaction, capture rate limiter, link expiry; notify hang, DC number locks,
+   declared values, portal invoice duplicates, vendor transactions. **Left for the screens, because
+   each is a process change:** D9 returned-to-vendor status, QC-fail → vendor return (B1), units on
+   a draft return DC still allocatable (B5), repaired units in stock while on the triage desk
+   (B20), replacement intake (B18), VRDC cancel (B23), part vendor repair gate/QC (B24), porter
+   fields on return DCs (B13), vendor portal invite/login-as, GST certificate storage, complete PO
+   PDF. Original list: approval bypass, self-approval, edit lock, numbers taken from
    the request, delete with received units, over-receipt race, the two unchecked receive paths,
    "view"-guarded write routes (return DC, return ticket, billing list), e-way upload auth, notify
    hang, unmounted rate limiter on public capture, spare-PO GST/crash/approval bugs, vendor
