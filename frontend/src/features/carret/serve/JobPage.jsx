@@ -12,13 +12,15 @@ import {
   verifyVisitOtp, workDone,
 } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
+import { FindingFields, emptyFinding, findingBody, findingError, useIssueCatalog } from './IssueFields';
 
 /**
  * Serve → one job (claude/carret-support.md S4). The screen only ever offers
  * the next step, as one big button, over the existing support endpoints.
  *
  *   Visit   Arrived (GPS + scan the laptop) → Result (fixed / no fault: photo;
- *           needs a part; needs pickup or replacement) → Customer OTP
+ *           needs a part; needs pickup or replacement) + what was wrong, why,
+ *           what fixed it (tickets raised under the issue process) → Customer OTP
  *   Pickup  Arrived → photo + scan laptop and charger → Customer OTP
  *           → drop at the warehouse gate with the Return DC
  */
@@ -60,6 +62,8 @@ export default function JobPage() {
   const [otp, setOtp] = useState('');
   const [ticket, setTicket] = useState(null);
   const [chargerOk, setChargerOk] = useState(false);
+  const catalog = useIssueCatalog();
+  const [finding, setFinding] = useState(null);
 
   const load = useCallback(() => {
     fetchMyWork()
@@ -67,6 +71,7 @@ export default function JobPage() {
       .catch((e) => { setJob(null); toast.error(errMsg(e)); });
   }, [itemId]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (job && !finding) setFinding(emptyFinding(job.reported)); }, [job, finding]);
   useEffect(() => {
     if (result === 'parts' && job && !ticket) fetchTicket(job.ticket_id).then(({ data }) => setTicket(data)).catch(() => {});
   }, [result, job, ticket]);
@@ -98,15 +103,22 @@ export default function JobPage() {
     if (!code.trim()) throw new Error('Scan or type the laptop’s TTSPL or serial');
     await verifyLaptop(job.item_id, code.trim());
   }, 'Laptop matched');
+  // The finding travels with the outcome (the server refuses one without it).
+  const withFinding = () => {
+    if (!job.needs_finding) return {};
+    const err = findingError(result, finding, catalog);
+    if (err) throw new Error(err);
+    return findingBody(result, finding, catalog);
+  };
   const finishResult = () => run(async () => {
     if (!result) throw new Error('Choose the result');
     if (result === 'replacement_required') {
       if (note.trim().length < 3) throw new Error('Write what is wrong, for your lead');
-      await setOutcome(job.item_id, { outcome: 'replacement_required', comment: note.trim() });
+      await setOutcome(job.item_id, { outcome: 'replacement_required', comment: note.trim(), ...withFinding() });
       return;
     }
     if (!photo) throw new Error('Take a photo of the laptop');
-    if (!job.outcome) await setOutcome(job.item_id, { outcome: result, comment: note.trim() || undefined });
+    if (!job.outcome) await setOutcome(job.item_id, { outcome: result, comment: note.trim() || undefined, ...withFinding() });
     await uploadPhoto(job.item_id, photo);
     await workDone(job.item_id);
     await sendOtp(job.item_id);
@@ -169,6 +181,12 @@ export default function JobPage() {
                 </button>
               ))}
             </div>
+            {job.needs_finding && !job.outcome && finding && ['fixed', 'working', 'replacement_required'].includes(result) && (
+              <div className="c-stack" style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--line, #e2e8f0)' }}>
+                <strong>{result === 'working' ? 'What the customer reported' : 'What you found'}</strong>
+                <FindingFields catalog={catalog} finish={result} value={finding} onChange={setFinding} idPrefix={`job-${job.item_id}`} />
+              </div>
+            )}
             {(result === 'fixed' || result === 'working') && (
               <div className="c-stack" style={{ marginTop: '12px' }}>
                 <PhotoInput file={photo} onFile={setPhoto} />

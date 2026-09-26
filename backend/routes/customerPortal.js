@@ -20,6 +20,7 @@ router.get('/deliveries', ctrl.listDeliveries);
 // greedily by regex the same way the CRM's DC routes are.
 router.get(/^\/orders\/(.+)$/, ctrl.getOrder);
 router.get(/^\/deliveries\/(.+)$/, ctrl.getDelivery);
+router.get('/issue-types', require('../controllers/supportRequestController').publicIssueTypes);
 router.post('/tickets', blockImpersonatedWrites, ctrl.raiseTicket);
 router.get('/tickets', ctrl.listTickets);
 router.get('/tickets/:ticketId', ctrl.getTicket);

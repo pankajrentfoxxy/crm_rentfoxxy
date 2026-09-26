@@ -5,7 +5,8 @@ import DeskShell from '../../../shells/DeskShell';
 import {
   Button, DataTable, DocNumber, EmptyState, Field, FormGrid, Input, Notice, Section, Select, Textarea,
 } from '../../../components/carret';
-import { createTicket, fetchCategories, fetchCustomerLaptops, searchCustomers } from './serveApi';
+import { createTicket, fetchCustomerLaptops, searchCustomers } from './serveApi';
+import { IssuePicker, emptyIssue, issueComplete, useIssueCatalog } from './IssueFields';
 import { errMsg } from './serveShared';
 
 /**
@@ -13,7 +14,7 @@ import { errMsg } from './serveShared';
  *
  * Customer → the laptops they have with us (work-from-home ones marked: a
  * pickup / replacement to them is chargeable, Rs 799 + GST) → issue + remarks
- * per laptop → priority, visit slot, contact → a complaint ticket. Pickup, replacement
+ * (Type › Subtype › Issue, required) per laptop → priority, visit slot, contact → a complaint ticket. Pickup, replacement
  * and Service DC are then run from the ticket record (TicketActions).
  */
 export default function NewTicketPage() {
@@ -23,12 +24,11 @@ export default function NewTicketPage() {
   const [customer, setCustomer] = useState(null);
   const [laptops, setLaptops] = useState(null);
   const [wfhCharge, setWfhCharge] = useState(799);
-  const [cats, setCats] = useState([]);
-  const [picked, setPicked] = useState({}); // id -> { category, remarks }
+  const catalog = useIssueCatalog();
+  const [picked, setPicked] = useState({}); // id -> { issue: {type_id, subtype_id, issue_id}, remarks }
   const [f, setF] = useState({ priority: 'normal', visit: '', phone: '', alt: '', email: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { fetchCategories().then(({ data }) => setCats(data.categories || [])).catch(() => {}); }, []);
   useEffect(() => {
     if (customer || q.trim().length < 2) { setCustomers([]); return undefined; }
     const t = setTimeout(() => {
@@ -47,7 +47,7 @@ export default function NewTicketPage() {
 
   const toggle = (a) => setPicked((p) => {
     const n = { ...p };
-    if (n[a.id]) delete n[a.id]; else n[a.id] = { category: '', remarks: '' };
+    if (n[a.id]) delete n[a.id]; else n[a.id] = { issue: emptyIssue(), remarks: '' };
     return n;
   });
   const setPick = (id, k, v) => setPicked((p) => ({ ...p, [id]: { ...p[id], [k]: v } }));
@@ -58,7 +58,7 @@ export default function NewTicketPage() {
     if (!customer) { toast.error('Choose the customer'); return; }
     if (!chosen.length) { toast.error('Pick the laptop(s) with the problem'); return; }
     for (const a of chosen) {
-      if (!picked[a.id].category) { toast.error(`Choose the issue for ${a.unique_serial_number || a.serial_number}`); return; }
+      if (!issueComplete(picked[a.id].issue)) { toast.error(`Choose type, subtype and issue for ${a.unique_serial_number || a.serial_number}`); return; }
       if (picked[a.id].remarks.trim().length < 3) { toast.error(`Describe the problem on ${a.unique_serial_number || a.serial_number}`); return; }
     }
     setBusy(true);
@@ -75,7 +75,6 @@ export default function NewTicketPage() {
         ticket_category: 'complaint',
         visit_scheduled_at: f.visit ? `${f.visit}:00+05:30` : undefined,
         items: chosen.map((a) => {
-          const cat = cats.find((c) => String(c.id) === String(picked[a.id].category));
           const [brand, ...rest] = String(a.model_name || '').split(' ');
           return {
             item_type: 'complaint',
@@ -86,8 +85,9 @@ export default function NewTicketPage() {
             ram: a.ram,
             storage: a.storage,
             generation: a.generation,
-            issue_category_id: cat?.id || null,
-            issue_category_label: cat?.name || null,
+            reported_type_id: Number(picked[a.id].issue.type_id),
+            reported_subtype_id: Number(picked[a.id].issue.subtype_id),
+            reported_issue_id: Number(picked[a.id].issue.issue_id),
             remarks: picked[a.id].remarks.trim(),
           };
         }),
@@ -151,14 +151,13 @@ export default function NewTicketPage() {
           <Section title="3 · The problem">
             <div className="c-stack">
               {chosen.map((a) => (
-                <FormGrid key={a.id} cols={3}>
-                  <Field label={`Issue — ${a.unique_serial_number || a.serial_number}`} required>
-                    <Select value={picked[a.id].category} onChange={(e) => setPick(a.id, 'category', e.target.value)} placeholder="Choose…" options={cats.map((c) => ({ value: String(c.id), label: c.name }))} />
-                  </Field>
-                  <Field label="What the customer says" required span={2}>
+                <div key={a.id} className="c-stack" style={{ gap: '8px', paddingBottom: '12px', borderBottom: '1px solid var(--line, #e2e8f0)' }}>
+                  <strong className="font-mono">{a.unique_serial_number || a.serial_number} <span className="text-ink-3" style={{ fontFamily: 'inherit', fontWeight: 400 }}>{a.model_name}</span></strong>
+                  <IssuePicker catalog={catalog} value={picked[a.id].issue} onChange={(v) => setPick(a.id, 'issue', v)} label="Issue" idPrefix={`issue-${a.id}`} />
+                  <Field label="What the customer says" required>
                     <Input value={picked[a.id].remarks} onChange={(e) => setPick(a.id, 'remarks', e.target.value)} maxLength={500} />
                   </Field>
-                </FormGrid>
+                </div>
               ))}
             </div>
           </Section>

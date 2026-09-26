@@ -143,3 +143,24 @@ QA click-through: open a ticket with a complaint → Schedule pickup → Assign 
 receive at warehouse → Service DC; on another, mark replacement → Start
 replacement. Parts desk: raise a part from My work → approve to technician →
 sign; mark one chargeable → set price → send to customer.
+
+## Rework (26 Sep 2026) — user: flow/UI not good, issue type/subtype/issue, technician bucket
+
+Existing tickets are not touched; everything below applies to tickets raised from now on.
+
+- **A. Reported issue** (done): Type › Subtype › Issue from `support_issue_catalog` (303, 7/41/158)
+  on every complaint laptop — Carret New ticket (per laptop), request conversion (lead picks the
+  issue, starting from the customer's type/subtype), QR page and customer portal (customer picks
+  type + subtype; issue starts "Unspecified" for the lead to set). The old create form sends
+  complaints to the new screen. Migration 348; `services/supportIssueService.js`.
+- **B. Finding** (done): what was actually wrong + root cause (`support_root_causes`, + RC-REF
+  "Missed at refurbishment / QC (floor)") + fix (`support_resolution_codes`, allowed per finish).
+  Required by set-outcome, by Service DC (workshop finding on the ticket's Issue panel) and by
+  close. No fault found needs neither cause nor fix.
+- C. Issue insights — next. D. Technician bucket. E. Requests / technicians / settings screens.
+  F. UX pass.
+
+QA click-through A+B: New ticket → pick type/subtype/issue per laptop → assign → technician My
+work → job → result "Fixed" asks what was wrong / why / fix → OTP. On a repair pickup: ticket →
+Issue → Record repair finding → Service DC. QR page and portal ask kind of problem + which part;
+Customer requests → Convert asks the issue.

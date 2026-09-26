@@ -12,6 +12,7 @@ async function canLeadThisTicket(user, ticketId) {
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
+const supportIssues = require('../services/supportIssueService');
 const { assertItemAllowsTechnicianAssign, itemAllowsTechnicianAssign } = require('../services/supportAssignmentRules');
 const { isRestrictedToAssigned } = require('../services/dataScopeService');
 const supportInventoryService = require('../services/supportInventoryService');
@@ -1588,7 +1589,14 @@ exports.createTicket = async (req, res) => {
         });
 
         for (const item of items) {
-            await insertTicketItem(client, ticket.id, { ...item, item_type: ticketCategory }, req.user.user_id);
+            // Issue process (migration 348): every complaint laptop says Type > Subtype > Issue.
+            const reported = ticketCategory === 'complaint'
+                ? await supportIssues.resolveIssue(client, supportIssues.reportedFrom(item), {
+                    what: `the issue on ${item.unique_serial_number || item.serial_number || 'each laptop'}`,
+                })
+                : null;
+            const row = await insertTicketItem(client, ticket.id, { ...item, item_type: ticketCategory }, req.user.user_id);
+            if (reported) await supportIssues.setReported(client, row.id, reported);
         }
         // Appointment agreed with the customer (Carret new-ticket form) — shown on the technician's My work.
         if (req.body.visit_scheduled_at) {
@@ -1671,6 +1679,14 @@ exports.closeTicket = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Close all items first, or use force close from the ticket screen'
+            });
+        }
+        const ids = (await pool.query('SELECT id FROM support_ticket_items WHERE ticket_id = $1', [ticketId])).rows.map((r) => r.id);
+        const missing = await supportIssues.missingFindings(pool, ids);
+        if (missing.length) {
+            return res.status(400).json({
+                success: false,
+                message: `Record what was wrong, why and what fixed it on ${missing.map((m) => m.code).join(', ')} before closing`,
             });
         }
     }
@@ -4263,6 +4279,11 @@ exports.setOutcome = async (req, res) => {
     try {
         await client.query('BEGIN');
         await ensureSupportTicketItemV3Columns(client);
+        // Issue process (migration 348): a laptop raised with a reported issue
+        // finishes with what was wrong, why, and what fixed it.
+        if (item.reported_issue_id) {
+            await supportIssues.recordFinding(client, item, req.body || {}, { finish: outcome, userId });
+        }
         const reason = outcome === 'replacement_required' ? (String(comment || '').trim() || item.replacement_flag_reason || 'Replacement required') : null;
         await client.query(
             `UPDATE support_ticket_items SET
@@ -4304,6 +4325,7 @@ exports.setOutcome = async (req, res) => {
         } catch (rbErr) {
             console.error('setOutcome rollback', rbErr);
         }
+        if (e.status) return res.status(e.status).json({ success: false, message: e.message });
         console.error('setOutcome', e);
         return res.status(500).json({
             success: false,
@@ -6377,5 +6399,68 @@ exports.getDeskQueue = async (req, res) => {
         res.json({ success: true, ...(await require('../services/supportDeskService').deskQueue({ allowedCustomerTypes: req.allowedCustomerTypes })) });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/* ---- Issue process (claude/carret-support.md rework A+B; migration 348) ---- */
+
+/** GET /support/issue-catalog — Type > Subtype > Issue, root causes, fixes. */
+exports.getIssueCatalog = async (req, res) => {
+    try {
+        res.json({ success: true, ...(await supportIssues.catalogTree(pool)) });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+async function loadIssueItem(req, res) {
+    const itemId = parseInt(req.params.itemId, 10);
+    const item = (await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId])).rows[0];
+    if (!item) { res.status(404).json({ success: false, message: 'Laptop not found on any ticket' }); return null; }
+    if (item.item_type !== 'complaint') { res.status(400).json({ success: false, message: 'Only a complaint laptop carries an issue' }); return null; }
+    // Tickets raised before the issue process keep what they have (user, 26 Sep).
+    if (!item.reported_issue_id) { res.status(409).json({ success: false, message: 'This laptop was raised before the issue process — it is left as it is' }); return null; }
+    return item;
+}
+
+/** PATCH /support/items/:itemId/reported-issue — the lead corrects / completes what was reported. */
+exports.setReportedIssue = async (req, res) => {
+    if (!canManageAsTicketLead(req.user)) return res.status(403).json({ success: false, message: 'Only the support lead can change the reported issue' });
+    const item = await loadIssueItem(req, res);
+    if (!item) return;
+    try {
+        const rep = await supportIssues.resolveIssue(pool, req.body || {}, { what: 'the reported issue' });
+        await supportIssues.setReported(pool, item.id, rep);
+        await logAudit(pool, { itemId: item.id, ticketId: item.ticket_id, userId: req.user.user_id, action: 'reported_issue_set', detail: { label: rep.label } });
+        res.json({ success: true, message: `Reported issue: ${rep.label}`, label: rep.label });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    }
+};
+
+/**
+ * PATCH /support/items/:itemId/finding — what was wrong / why / what fixed it
+ * for a laptop repaired in the workshop (no on-site outcome). The lead or the
+ * laptop's technician.
+ */
+exports.recordIssueFinding = async (req, res) => {
+    const item = await loadIssueItem(req, res);
+    if (!item) return;
+    const userId = parseInt(req.user.user_id, 10);
+    if (!(await canLeadThisTicket(req.user, item.ticket_id)) && Number(item.assigned_to) !== userId) {
+        return res.status(403).json({ success: false, message: 'Not your laptop' });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const out = await supportIssues.recordFinding(client, item, req.body || {}, { finish: 'workshop', userId });
+        await logAudit(client, { itemId: item.id, ticketId: item.ticket_id, userId, action: 'finding_recorded', detail: out });
+        await client.query('COMMIT');
+        res.json({ success: true, message: `Recorded: ${out.found}`, finding: out });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    } finally {
+        client.release();
     }
 };

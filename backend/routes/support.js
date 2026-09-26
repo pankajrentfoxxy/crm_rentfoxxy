@@ -51,6 +51,9 @@ const {
     confirmWarehouseReceipt,
     getTechnicianLaptopBucket,
     setOutcome,
+    getIssueCatalog,
+    setReportedIssue,
+    recordIssueFinding,
     markPickedUp,
     initiateReplacement,
     editReturnPickupMachines,
@@ -161,6 +164,7 @@ router.post(
 router.use(requireSupportAccess);
 
 router.get('/categories', listCategories);
+router.get('/issue-catalog', getIssueCatalog);
 router.get('/technicians', listTechnicians);
 router.get('/customers', searchCustomers);
 router.get('/customers/:customerId', getCustomerDetail);
@@ -221,6 +225,8 @@ router.post('/items/:itemId/verify-ttspl', verifyTtspl);
 router.post('/items/:itemId/submit-pickup', submitForPickup);
 router.post('/items/:itemId/warehouse-received', requireTicketLead, warehouseReceivedPickup);
 router.post('/items/:itemId/set-outcome', setOutcome);
+router.patch('/items/:itemId/reported-issue', setReportedIssue);
+router.patch('/items/:itemId/finding', recordIssueFinding);
 router.post('/items/:itemId/picked-up', markPickedUp);
 router.delete('/items/:itemId', requireTicketLead, removeTicketItem);
 router.post('/items/:itemId/pod', uploadPodFile, uploadPod);

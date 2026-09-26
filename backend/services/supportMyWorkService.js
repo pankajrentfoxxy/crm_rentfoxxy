@@ -67,6 +67,9 @@ async function myWork(userId) {
       priority: r.priority || 'normal',
       laptop: { ttspl: r.ttspl_id || r.unique_serial_number, serial: r.serial_number, brand: r.brand, model: r.model },
       issue: r.issue_category_label || null,
+      // Issue process (migration 348): a laptop with a reported issue finishes with a finding.
+      reported: r.reported_issue_id ? { type_id: r.reported_type_id, subtype_id: r.reported_subtype_id, issue_id: r.reported_issue_id } : null,
+      needs_finding: Boolean(r.item_type === 'complaint' && r.reported_issue_id && !r.found_issue_id),
       remarks: r.remarks || r.top_level_remarks || null,
       return_dc_number: r.return_dc_number || null,
       visited_at: r.visited_at,

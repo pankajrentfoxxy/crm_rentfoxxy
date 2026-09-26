@@ -12,6 +12,7 @@ import {
 } from './serveApi';
 import { usePermission } from '../../../hooks/usePermission';
 import TicketActions from './TicketActions';
+import IssuePanel from './IssuePanel';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -156,6 +157,7 @@ export default function TicketRecordPage() {
         <Section title={`Laptops · ${items.length}`}>
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
         </Section>
+        <IssuePanel data={t} canLead={hasPermission('support_tickets', 'edit') && !closed} reload={load} />
         {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
         <Section title="Contact and address">
           <KeyValue cols={2} items={[

@@ -6,6 +6,7 @@ import {
 import toast from 'react-hot-toast';
 import QRCode from 'qrcode';
 import api from '../../../utils/api';
+import { useIssueCatalog } from '../../carret/serve/IssueFields';
 import { isSupportLead } from '../../../utils/supportAccess';
 import { assigneeOptionLabel } from '../../../components/support/utils';
 import { useAuth } from '../../../context/AuthContext';
@@ -163,6 +164,16 @@ function ConvertModal({ request, onClose, onConverted }) {
   const [searching, setSearching] = useState(false);
   const [assignees, setAssignees] = useState([]);
   const [assignedTo, setAssignedTo] = useState(request.prefill_assigned_to ? String(request.prefill_assigned_to) : '');
+  // Issue process (claude/carret-support.md rework A): the lead confirms
+  // Type > Subtype > Issue, starting from what the customer picked.
+  const catalog = useIssueCatalog();
+  const [issue, setIssue] = useState({
+    type_id: request.reported_type_id ? String(request.reported_type_id) : '',
+    subtype_id: request.reported_subtype_id ? String(request.reported_subtype_id) : '',
+    issue_id: '',
+  });
+  const issueType = catalog?.types.find((t) => String(t.id) === issue.type_id);
+  const issueSub = issueType?.subtypes.find((x) => String(x.id) === issue.subtype_id);
 
   const pickupDevices = Array.isArray(request.extra?.devices) && request.extra.devices.length
     ? request.extra.devices
@@ -215,6 +226,10 @@ function ConvertModal({ request, onClose, onConverted }) {
       toast.error('Select a customer');
       return;
     }
+    if (!isPickup && !(issue.type_id && issue.subtype_id && issue.issue_id)) {
+      toast.error('Choose the issue type, subtype and issue');
+      return;
+    }
     setBusy(true);
     try {
       const { data } = await api.post(`/support/requests/${request.id}/convert`, {
@@ -222,6 +237,11 @@ function ConvertModal({ request, onClose, onConverted }) {
         priority,
         ticket_category: isPickup ? 'pickup' : 'complaint',
         assigned_to: assignedTo ? Number(assignedTo) : undefined,
+        ...(isPickup ? {} : {
+          reported_type_id: Number(issue.type_id),
+          reported_subtype_id: Number(issue.subtype_id),
+          reported_issue_id: Number(issue.issue_id),
+        }),
       });
       toast.success(data.message || `Ticket T-${data.ticket_id} created`);
       onConverted?.(data);
@@ -302,6 +322,26 @@ function ConvertModal({ request, onClose, onConverted }) {
             ))}
           </select>
         </label>
+
+        {!isPickup && (
+          <div className="mb-3">
+            <p className="text-xs font-semibold text-slate-600 mb-1.5">Issue *</p>
+            <div className="grid grid-cols-1 gap-2">
+              <select className="w-full border rounded-lg px-3 py-2 text-sm" value={issue.type_id} onChange={(e) => setIssue({ type_id: e.target.value, subtype_id: '', issue_id: '' })}>
+                <option value="">Type…</option>
+                {(catalog?.types || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm" value={issue.subtype_id} disabled={!issueType} onChange={(e) => setIssue({ ...issue, subtype_id: e.target.value, issue_id: '' })}>
+                <option value="">Subtype…</option>
+                {(issueType?.subtypes || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm" value={issue.issue_id} disabled={!issueSub} onChange={(e) => setIssue({ ...issue, issue_id: e.target.value })}>
+                <option value="">Issue…</option>
+                {(issueSub?.issues || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
 
         <label className="block text-sm mb-3">
           <span className="text-xs font-semibold text-slate-600">Priority</span>

@@ -622,11 +622,17 @@ exports.createPublicRequest = async (req, res) => {
       ...scheduleParsed.value,
     };
 
+    // Issue process (migration 348): the customer says Type > Subtype.
+    const reported = await require('../services/supportIssueService').resolveIssue(client, {
+      type_id: body.reported_type_id, subtype_id: body.reported_subtype_id,
+    }, { requireIssue: false, what: 'the problem' });
+
     const ins = await client.query(
       `INSERT INTO support_requests (
          customer_name, mobile_number, company_name, issue_description,
-         device_serial, source, status, matched_customer_id, request_type, extra
-       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'complaint',$7::jsonb)
+         device_serial, source, status, matched_customer_id, request_type, extra,
+         reported_type_id, reported_subtype_id
+       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'complaint',$7::jsonb,$8,$9)
        RETURNING id, created_at`,
       [
         customer_name,
@@ -636,6 +642,8 @@ exports.createPublicRequest = async (req, res) => {
         ttsplCode,
         deployed.customer_id,
         JSON.stringify(extra),
+        reported.type_id,
+        reported.subtype_id,
       ]
     );
 
@@ -654,7 +662,7 @@ exports.createPublicRequest = async (req, res) => {
     });
   } catch (err) {
     console.error('createPublicRequest:', err);
-    res.status(500).json({ success: false, message: err.message || 'Could not submit request. Please try again.' });
+    res.status(err.status || 500).json({ success: false, message: err.message || 'Could not submit request. Please try again.' });
   } finally {
     client.release();
   }
@@ -1156,12 +1164,24 @@ exports.convertToTicket = async (req, res) => {
     );
     const ticketId = ticketRes.rows[0].id;
 
-    await client.query(
+    // Issue process (migration 348): the lead confirms Type > Subtype > Issue,
+    // starting from what the customer picked on the request.
+    const supportIssues = require('../services/supportIssueService');
+    const reported = category === 'complaint'
+      ? await supportIssues.resolveIssue(client, {
+          type_id: req.body?.reported_type_id || row.reported_type_id,
+          subtype_id: req.body?.reported_subtype_id || row.reported_subtype_id,
+          issue_id: req.body?.reported_issue_id,
+        }, { what: 'the issue' })
+      : null;
+
+    const itemIns = await client.query(
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
          issue_category_label, remarks, status, otp_code, assigned_to,
          brand, model, ram, storage, generation, processor, visit_scheduled_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       RETURNING id`,
       [
         ticketId,
         serial.serial_number || ttspl,
@@ -1181,6 +1201,7 @@ exports.convertToTicket = async (req, res) => {
         visitScheduledAt,
       ]
     );
+    if (reported) await supportIssues.setReported(client, itemIns.rows[0].id, reported);
 
     // Best-effort audit (same table as Support CRM).
     try {
@@ -1243,5 +1264,22 @@ exports.pendingCount = async (_req, res) => {
     res.json({ success: true, pending_count: r.rows[0]?.n || 0 });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /support-public/issue-types — Type > Subtype for the QR page and the
+ * customer portal (claude/carret-support.md rework A). Names only.
+ */
+exports.publicIssueTypes = async (_req, res) => {
+  try {
+    const { types } = await require('../services/supportIssueService').catalogTree(pool);
+    res.json({
+      success: true,
+      types: types
+        .map((t) => ({ id: t.id, name: t.name, subtypes: t.subtypes.map((st) => ({ id: st.id, name: st.name })) })),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Could not load' });
   }
 };

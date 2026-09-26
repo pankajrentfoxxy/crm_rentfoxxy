@@ -38,8 +38,16 @@ export default function CreateTicketPage() {
   const [pickupAddr, setPickupAddr] = useState(EMPTY_ADDRESS);
 
   const isReturn = ticketType === 'Return Request';
+  // A problem with a laptop (not a return / replacement) says what kind of
+  // problem and which part; our support team picks the exact issue.
+  const isComplaint = !['Return Request', 'Replacement Request'].includes(ticketType);
+  const [issueTypes, setIssueTypes] = useState([]);
+  const [issueTypeId, setIssueTypeId] = useState('');
+  const [issueSubtypeId, setIssueSubtypeId] = useState('');
+  const issueType = issueTypes.find((t) => String(t.id) === String(issueTypeId));
 
   useEffect(() => {
+    api.get('/issue-types').then(({ data }) => setIssueTypes(data.types || [])).catch(() => setIssueTypes([]));
     api.get('/laptops', { params: { limit: 200 } })
       .then(({ data }) => setLaptops(data.laptops || []))
       .catch(() => setLaptops([]));
@@ -65,6 +73,10 @@ export default function CreateTicketPage() {
     e.preventDefault();
     if (description.trim().length < 20) {
       toast.error('Please describe the issue in at least 20 characters');
+      return;
+    }
+    if (isComplaint && (!issueTypeId || !issueSubtypeId)) {
+      toast.error('Choose the kind of problem and which part');
       return;
     }
     if (isReturn && !ttsplId) {
@@ -95,6 +107,8 @@ export default function CreateTicketPage() {
         description,
         ticket_type: ticketType,
         ttspl_id: ttsplId || undefined,
+        reported_type_id: isComplaint ? Number(issueTypeId) : undefined,
+        reported_subtype_id: isComplaint ? Number(issueSubtypeId) : undefined,
         pickup_address: isReturn
           ? {
             ...pickupAddr,
@@ -170,6 +184,34 @@ export default function CreateTicketPage() {
             {ISSUE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
+
+        {isComplaint && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="text-slate-700">Kind of problem *</span>
+              <select
+                value={issueTypeId}
+                onChange={(e) => { setIssueTypeId(e.target.value); setIssueSubtypeId(''); }}
+                className={`mt-1 ${INPUT} bg-white`}
+              >
+                <option value="">Choose…</option>
+                {issueTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-700">Which part *</span>
+              <select
+                value={issueSubtypeId}
+                disabled={!issueType}
+                onChange={(e) => setIssueSubtypeId(e.target.value)}
+                className={`mt-1 ${INPUT} bg-white`}
+              >
+                <option value="">{issueType ? 'Choose…' : 'Choose the kind first'}</option>
+                {(issueType?.subtypes || []).map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+              </select>
+            </label>
+          </div>
+        )}
 
         <label className="block text-sm">
           <span className="text-slate-700">Which Laptop{isReturn ? ' *' : ''}</span>

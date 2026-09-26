@@ -647,6 +647,15 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     throw Object.assign(new Error(msg), { status: 400 });
   }
 
+  // Issue process (migration 348): a repaired laptop goes back only once what
+  // was wrong, why and what fixed it is recorded on its complaint.
+  const { missingFindings } = require('./supportIssueService');
+  const complaintIds = selected.map((row) => row.item.source_item_id || row.item.id).filter(Boolean);
+  const missing = await missingFindings(db, complaintIds);
+  if (missing.length) {
+    throw Object.assign(new Error(`Record what was wrong, why and what fixed it on ${missing.map((m) => m.code).join(', ')} first`), { status: 400, code: 'FINDING_REQUIRED' });
+  }
+
   const deliveryDefaults = await loadDeliveryDefaults(db, ticket, selected[0].item);
   const groups = await groupSelectedBySalesOrder(db, ticket, selected, deliveryDefaults);
   const shippingAddress = await buildShippingAddress(db, ticket, deliveryDefaults, dispatch || {});

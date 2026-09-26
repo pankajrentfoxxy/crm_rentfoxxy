@@ -12,6 +12,7 @@ const router = express.Router();
 router.post('/request', publicIntakeLimiter, ctrl.createPublicRequest);
 router.get('/pincode/:pin', publicLookupLimiter, ctrl.lookupPublicPincode);
 router.get('/ttspl/:code', publicLookupLimiter, ctrl.lookupPublicTtspl);
+router.get('/issue-types', publicLookupLimiter, ctrl.publicIssueTypes);
 
 // Customer feedback after a ticket closes (claude/carret-support.md S6). The
 // token is 32 random hex characters; the page shows only the ticket number.

@@ -50,7 +50,16 @@ export default function PublicSupportRequestPage() {
     preferred_visit_time: '',
     pickup_reason_type: '',
     pickup_reason_other: '',
+    reported_type_id: '',
+    reported_subtype_id: '',
   });
+  // Issue process (claude/carret-support.md rework A): the customer says what
+  // kind of problem (type > subtype); our team picks the exact issue.
+  const [issueTypes, setIssueTypes] = useState([]);
+  useEffect(() => {
+    api.get('/support-public/issue-types').then(({ data }) => setIssueTypes(data.types || [])).catch(() => setIssueTypes([]));
+  }, []);
+  const issueType = issueTypes.find((t) => String(t.id) === String(form.reported_type_id));
   const [devices, setDevices] = useState([]);
   const [deviceDraft, setDeviceDraft] = useState('');
   const [deviceCustomerId, setDeviceCustomerId] = useState(null);
@@ -170,6 +179,8 @@ export default function PublicSupportRequestPage() {
       }
     } else {
       if (!String(form.device_serial || '').trim()) next.device_serial = 'TTSPL / device ID is required';
+      if (!form.reported_type_id) next.reported_type_id = 'Please choose what kind of problem it is';
+      else if (!form.reported_subtype_id) next.reported_subtype_id = 'Please choose which part has the problem';
       if (String(form.issue_description || '').trim().length < 10) {
         next.issue_description = 'Please describe the issue (at least 10 characters)';
       }
@@ -225,6 +236,10 @@ export default function PublicSupportRequestPage() {
         mobile_number: normalizeIndianMobile(form.mobile_number),
         company_name: form.company_name.trim() || undefined,
         issue_description: form.issue_description.trim() || undefined,
+        ...(ticketType === 'complaint' ? {
+          reported_type_id: Number(form.reported_type_id) || undefined,
+          reported_subtype_id: Number(form.reported_subtype_id) || undefined,
+        } : {}),
       };
       const visitAddress = {
         name: form.customer_name.trim(),
@@ -610,6 +625,36 @@ export default function PublicSupportRequestPage() {
                       ) : null}
                     </label>
                   </div>
+                </section>
+              ) : null}
+
+              {!isPickup ? (
+                <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">Kind of problem *</span>
+                    <select
+                      className={inputClass(fieldErrors.reported_type_id)}
+                      value={form.reported_type_id}
+                      onChange={(e) => setForm((f) => ({ ...f, reported_type_id: e.target.value, reported_subtype_id: '' }))}
+                    >
+                      <option value="">Choose…</option>
+                      {issueTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    <FieldError>{fieldErrors.reported_type_id}</FieldError>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">Which part *</span>
+                    <select
+                      className={inputClass(fieldErrors.reported_subtype_id)}
+                      value={form.reported_subtype_id}
+                      disabled={!issueType}
+                      onChange={(e) => set('reported_subtype_id', e.target.value)}
+                    >
+                      <option value="">{issueType ? 'Choose…' : 'Choose the kind first'}</option>
+                      {(issueType?.subtypes || []).map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+                    </select>
+                    <FieldError>{fieldErrors.reported_subtype_id}</FieldError>
+                  </label>
                 </section>
               ) : null}
 

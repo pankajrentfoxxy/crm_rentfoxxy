@@ -80,3 +80,8 @@ export const setPartDcCourier = (dc, body) => api.patch(`${sp}/part-dcs/${encode
 export const markPartDcDelivered = (dc) => api.patch(`${sp}/part-dcs/${encodeURIComponent(dc)}/delivered`);
 export const fetchPartReturnDcsPending = () => api.get(`${sp}/part-return-dcs-pending`);
 export const receivePartReturnDc = (dc) => api.patch(`${sp}/part-return-dcs/${encodeURIComponent(dc)}/receive`, {});
+
+/* Issue process (rework A+B): Type > Subtype > Issue, root causes, fixes. */
+export const fetchIssueCatalog = () => api.get('/support/issue-catalog');
+export const setReportedIssue = (itemId, body) => api.patch(item(itemId, '/reported-issue'), body);
+export const recordFinding = (itemId, body) => api.patch(item(itemId, '/finding'), body);

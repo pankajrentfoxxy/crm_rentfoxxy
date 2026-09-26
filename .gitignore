@@ -32,3 +32,5 @@ reports/
 frontend/build.prev/
 frontend/build.prev-*/
 frontend/build.next/
+customer-portal/build.prev-*/
+customer-portal/build.next/

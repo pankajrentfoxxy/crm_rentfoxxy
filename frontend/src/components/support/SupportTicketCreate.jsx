@@ -371,6 +371,12 @@ export default function SupportTicketCreate() {
     const submit = async (e) => {
         e.preventDefault();
         if (ticketCategory === 'pickup') return;
+        // Issue process (claude/carret-support.md rework A): a complaint needs
+        // Type > Subtype > Issue per laptop, which only the new screen asks for.
+        if (ticketCategory === 'complaint') {
+            navigate('/carret/serve/tickets/new');
+            return;
+        }
         if (!customer) {
             alert('Select a customer');
             return;
@@ -598,6 +604,12 @@ export default function SupportTicketCreate() {
                     </div>
                     {step === 0 && customerStep}
                     {step === 1 && categoryStep}
+                    {ticketCategory === 'complaint' && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            Complaint tickets now record Type › Subtype › Issue for every laptop.{' '}
+                            <button type="button" className="font-semibold underline" onClick={() => navigate('/carret/serve/tickets/new')}>Raise it on the new screen</button>
+                        </div>
+                    )}
                     {step === 2 && machinesStep}
                     {isMobile && ticketCategory === 'pickup' && step === 2 && selectedCount === 1 && pickupTicketStub && (
                         <div className="px-1 pb-2">
@@ -617,6 +629,12 @@ export default function SupportTicketCreate() {
                 <>
                     {customerStep}
                     {categoryStep}
+                    {ticketCategory === 'complaint' && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            Complaint tickets now record Type › Subtype › Issue for every laptop.{' '}
+                            <button type="button" className="font-semibold underline" onClick={() => navigate('/carret/serve/tickets/new')}>Raise it on the new screen</button>
+                        </div>
+                    )}
                     {machinesStep}
                     {ticketCategory !== 'pickup' && (
                         <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">

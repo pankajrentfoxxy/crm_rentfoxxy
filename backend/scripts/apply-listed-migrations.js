@@ -32,7 +32,13 @@ const pool = require('../config/db');
         console.log(`${name}: already recorded — skipped`);
         continue;
       }
-      await c.query(fs.readFileSync(full, 'utf8'));
+      // A file's own top-level BEGIN; / COMMIT; would end this transaction early
+      // (a dry run then commits for real — happened with 348). Run the body
+      // inside ours instead.
+      const sql = fs.readFileSync(full, 'utf8')
+        .replace(/^\s*BEGIN\s*;\s*$/gim, '')
+        .replace(/^\s*COMMIT\s*;\s*$/gim, '');
+      await c.query(sql);
       await c.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
       console.log(`${name}: applied`);
     }

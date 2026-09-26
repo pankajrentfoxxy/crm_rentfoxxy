@@ -601,12 +601,22 @@ exports.raiseTicket = async (req, res) => {
     );
     const ticketId = ticketRes.rows[0].id;
 
-    await client.query(
+    // Issue process (migration 348): the customer says Type > Subtype; the
+    // issue starts as Unspecified until the lead or technician sets it.
+    const supportIssues = require('../services/supportIssueService');
+    const reported = category === 'complaint'
+      ? await supportIssues.resolveIssue(client, {
+          type_id: req.body?.reported_type_id, subtype_id: req.body?.reported_subtype_id,
+        }, { requireIssue: false, what: 'the problem' })
+      : null;
+
+    const itemIns = await client.query(
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
          issue_category_label, remarks, status, otp_code,
          brand, model, ram, storage, generation
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13)
+       RETURNING id`,
       [
         ticketId,
         assetSerial || ttspl_id || null,
@@ -619,6 +629,7 @@ exports.raiseTicket = async (req, res) => {
         specs.brand, specs.model, specs.ram, specs.storage, specs.generation,
       ]
     );
+    if (reported) await supportIssues.setReported(client, itemIns.rows[0].id, reported);
 
     await client.query('COMMIT');
     try {
@@ -634,7 +645,7 @@ exports.raiseTicket = async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('raiseTicket:', err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   } finally {
     client.release();
   }
