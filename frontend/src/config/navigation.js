@@ -48,27 +48,21 @@ export const SECTIONS = [
   {
     key: 'produce',
     label: 'Production',
+    // Production in Carret (26 Sep 2026): the floor board, a laptop's ticket,
+    // the parts desk and into-stock. The old screens stay under "Old view"
+    // until the process is signed off (hard rule 6).
+    groups: ['Production', 'Old view'],
     items: [
-      { to: '/floor-pipeline/tickets', label: 'Floor Pipeline', section: 'floor_pipeline', action: 'view' },
-      { to: '/floor-pipeline/tickets?stage=Diagnosis', label: 'Diagnosis', section: 'floor_tickets', action: 'view' },
-      { to: '/floor-pipeline/tickets?stage=QC1', label: 'QC1', section: 'floor_tickets', action: 'view' },
-      { to: '/floor-pipeline/tickets?stage=QC2', label: 'QC2', section: 'floor_tickets', action: 'view' },
-      { to: '/floor-pipeline/tickets?stage=Chip%20Level%20Repair', label: 'Chip Level Repair', section: 'chip_level_repair', action: 'view' },
-      { to: '/floor-pipeline/pending-inventory', label: 'Pending Inventory', section: 'pending_inventory', action: 'view' },
-      // QC Management is absorbed into Produce (Decision 7) rather than kept as
-      // its own module — being separate is what let it keep its own status
-      // vocabulary, which is finding I4.
-      { to: '/qc-management/orders', label: 'QC Management', section: 'qc_management', action: 'view' },
-      { to: '/tickets', label: 'Production Tickets', section: 'tickets', action: 'view' },
-      { to: '/inventory-management/parts', label: 'Parts', section: 'parts_inventory', action: 'view' },
-      { to: '/inventory-management/part-vendor-repair', label: 'Part Repairs', section: 'part_vendor_repair', action: 'view' },
-      // Part 5.7, behind REACT_APP_CARRET. The six stage entries above become
-      // ONE screen with the stage as a filter — the same reasoning as the
-      // entity split in Sell: a laptop moving from QC1 to QC2 must not move
-      // between sections, and "what is on the floor" should be one screen, not
-      // six that have to be added up.
-      { to: '/carret/produce/pipeline', label: 'Floor Pipeline (Carret)', section: 'floor_pipeline', action: 'view' },
-      { to: '/carret/produce/parts', label: 'Parts (Carret)', section: 'parts_inventory', action: 'view' },
+      { group: 'Production', to: '/carret/produce/floor', label: 'Floor', sections: ['floor_pipeline', 'floor_tickets'], section: 'floor_pipeline', action: 'view' },
+      { group: 'Production', to: '/carret/produce/parts-desk', label: 'Parts Desk', sections: ['parts_approval', 'parts_inventory'], section: 'parts_approval', action: 'view' },
+      { group: 'Production', to: '/carret/produce/into-stock', label: 'Into Stock', section: 'pending_inventory', action: 'view' },
+      { group: 'Production', to: '/carret/produce/parts', label: 'Parts Stock', section: 'parts_inventory', action: 'view' },
+      { group: 'Production', to: '/inventory-management/part-vendor-repair', label: 'Part Repairs', section: 'part_vendor_repair', action: 'view' },
+      { group: 'Old view', to: '/floor-pipeline/tickets', label: 'Floor Pipeline (old)', section: 'floor_pipeline', action: 'view' },
+      { group: 'Old view', to: '/floor-pipeline/pending-inventory', label: 'Pending Inventory (old)', section: 'pending_inventory', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/parts-approval', label: 'Parts Approval (old)', section: 'parts_approval', action: 'view' },
+      { group: 'Old view', to: '/qc-management/orders', label: 'QC Management (old)', section: 'qc_management', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/parts', label: 'Parts (old)', section: 'parts_inventory', action: 'view' },
     ],
   },
   {

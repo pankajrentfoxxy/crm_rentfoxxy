@@ -62,6 +62,9 @@ router.get(
 );
 router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
+// PD8 — old parts the warehouse still has to collect from the floor.
+router.get('/old-parts/to-collect', allowPartInstanceRead, ctrl.listOldPartsToCollect);
+router.post('/old-parts/:instanceId/collect', allowPartInstanceWrite, ctrl.collectOldPart);
 router.get('/instances', allowPartInstanceRead, ctrl.listPartInstances);
 router.post('/instances', allowPartInstanceWrite, ctrl.addPartInstances);
 router.patch('/instances/:instanceId/fitment', allowPartInstanceWrite, ctrl.updatePartInstanceFitment);

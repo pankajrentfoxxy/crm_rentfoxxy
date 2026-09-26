@@ -57,11 +57,11 @@ async function resolveStageByName(db, stageName) {
   return r.rows[0] || null;
 }
 
-async function pickFloorManagerUser(db) {
-  const r = await db.query(
-    `SELECT user_id FROM users WHERE role = 'floor_manager' AND active = TRUE ORDER BY user_id ASC LIMIT 1`
-  );
-  return r.rows[0]?.user_id ?? null;
+// PD1 (Production): new tickets land UNASSIGNED in one shared Floor Manager
+// queue that any floor manager claims from the floor board. They used to go
+// to the lowest-id floor manager, whose work timer then started at once.
+async function pickFloorManagerUser(_db) {
+  return null;
 }
 
 async function ensureLegacyInventoryRow(db, {

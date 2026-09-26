@@ -108,11 +108,20 @@ first, because several change how the floor works, not just the screens.
    428 laptops to "in repair" (302 "returned", 126 "in stock" while on the floor), 12 tickets to
    close (rented/sold/scrapped/with vendor/at Inventory), 47 keep; 98 idle 60+ days flagged CHECK.
    Production needs its own run at promotion (same two steps).
-2. **Floor board** — stage queues with claim, my work, stuck/aged, holds.
-3. **Ticket record** — the laptop, its stage path, checklist per stage, parts, timers, history.
-4. **Parts on the floor** — request/approve/issue/fit/old part; parts approval; stock that agrees.
-5. **QC** — one QC screen per stage with the checklist and the capture result.
-6. **Into stock** — pending inventory → scan into carret/slot, tag.
+2–6. **Screens** — DONE on QA 26 Sep (migrations 337 hold, 338 old-part collected):
+   **Floor** board (open tickets only, stage tabs, "My work" / "Waiting" (claimable by the
+   stage's team, PD9) / "Stuck" (3+ days), flags for parts, QC failures, won't-power-on);
+   new laptops wait in one shared Floor Manager queue (PD1). **Ticket record**: next step by
+   stage, work timer (assignee only), the stage's own form (the floor's existing diagnosis,
+   repair, assembly/testing and QC forms, embedded), parts requests, laptop, history; floor
+   manager actions: assign, hold / release with reason (PD11), break for parts → finish
+   dismantling (parts into stock, laptop scrapped, PD14), send back to vendor. **Parts desk**:
+   give a unit (auto-fit / scan / choose), send back, buy it (→ To buy); **old parts to collect**
+   (PD8). **Into stock**: passed-QC2 laptops scanned into a carret + slot (free slots shown).
+   Menu: Production opens these; old screens under "Old view".
+   **Still on old code paths / later:** QC checklist + QC2 capture are the existing form inside
+   the record; part cost per laptop (PD15, P21) and parts ledger gaps (P9–P15); config truth
+   between tables (Q9–Q11); Dispatch QC rework status.
 7. Menu (Production opens the new screens; old under "Old view"), verify on QA end to end.
 
 ## Full findings

@@ -2230,3 +2230,56 @@ exports.bulkUpdatePartInstanceFitment = async (req, res) => {
     client.release();
   }
 };
+
+// ---------------------------------------------------------------------------
+// PD8 — old parts to collect. The technician records the removed part at
+// fitting (a defective_return unit); the warehouse confirms it has it.
+// ---------------------------------------------------------------------------
+// GET /api/part-requests/old-parts/to-collect
+exports.listOldPartsToCollect = async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT pi.instance_id, pi.prt_id, pi.status, pi.condition_on_removal, pi.removed_at, pi.serial_number,
+              pi.removed_from_ttspl_id AS ttspl_id, pi.removed_from_ticket_id AS ticket_id, pi.notes,
+              p.part_name, p.category, pr.request_number, u.name AS technician_name
+         FROM part_instances pi
+         JOIN parts p ON p.part_id = pi.part_id
+         LEFT JOIN part_requests pr ON pr.request_id = pi.origin_request_id
+         LEFT JOIN users u ON u.user_id = pr.requested_by
+        WHERE pi.source = 'defective_return' AND pi.collected_at IS NULL
+          AND pi.removed_at > NOW() - interval '180 days'
+        ORDER BY pi.removed_at ASC
+        LIMIT 500`
+    );
+    res.json({ success: true, data: r.rows });
+  } catch (err) {
+    console.error('listOldPartsToCollect:', err);
+    res.status(500).json({ success: false, message: 'Could not load old parts' });
+  }
+};
+
+// POST /api/part-requests/old-parts/:instanceId/collect  body: { location_code?, condition? }
+exports.collectOldPart = async (req, res) => {
+  try {
+    const id = Number(req.params.instanceId);
+    const cond = req.body?.condition;
+    const u = await pool.query(
+      `UPDATE part_instances
+          SET collected_at = NOW(), collected_by = $2,
+              location_code = COALESCE(NULLIF($3, ''), location_code), updated_at = NOW()
+        WHERE instance_id = $1 AND source = 'defective_return' AND collected_at IS NULL
+        RETURNING instance_id, prt_id, part_id, status`,
+      [id, req.user.user_id, String(req.body?.location_code || '').trim()]
+    );
+    if (!u.rows.length) return res.status(409).json({ success: false, message: 'Already collected, or not an old part.' });
+    // The warehouse can correct the condition the technician recorded.
+    if (cond === 'defective' && u.rows[0].status === 'in_stock') {
+      await pool.query(`UPDATE part_instances SET status = 'defective', updated_at = NOW() WHERE instance_id = $1`, [id]);
+      await pool.query('UPDATE parts SET quantity = GREATEST(COALESCE(quantity, 0) - 1, 0), updated_at = NOW() WHERE part_id = $1', [u.rows[0].part_id]);
+    }
+    res.json({ success: true, message: `${u.rows[0].prt_id} collected` });
+  } catch (err) {
+    console.error('collectOldPart:', err);
+    res.status(500).json({ success: false, message: 'Could not record it' });
+  }
+};

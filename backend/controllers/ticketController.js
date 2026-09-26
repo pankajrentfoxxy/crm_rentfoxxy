@@ -1385,7 +1385,7 @@ exports.claimTicket = async (req, res) => {
     const ticket = ticketCheck.rows[0];
 
     const ticketTeamId = parseInt(ticket.assigned_team_id, 10);
-    const canClaim = req.user.role === 'admin' || req.user.role === 'floor_manager'
+    const canClaim = ['admin', 'floor_manager', 'manager', 'super_admin'].includes(req.user.role)
       || (userTeamIds.length > 0 && userTeamIds.includes(ticketTeamId));
 
     if (!canClaim) {

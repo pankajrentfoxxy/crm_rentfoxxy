@@ -134,6 +134,13 @@ router.get('/qc/qc2-assignees', floorAnyView, qcController.getQC2Assignees);
 router.get('/floor-counts', floorAnyView, getFloorNavCounts);
 router.get('/floor-status-counts', floorQueueView, getFloorStatusCounts);
 router.get('/floor-dashboard', floorPipelineView, phase2.getFloorDashboard);
+// Production screens: the floor board (PD1, PD9), hold / release (PD11) and
+// finish dismantling (PD14).
+const floorBoard = require('../controllers/floorBoard.controller');
+router.get('/floor-board', floorAnyView, floorBoard.board);
+router.post('/:id/hold', ftEdit, requireFloorLead, floorBoard.hold);
+router.post('/:id/release', ftEdit, requireFloorLead, floorBoard.release);
+router.post('/:id/dismantle', ftEdit, requireFloorLead, floorBoard.dismantle);
 router.get(
   '/floor-manager-queue',
   floorQueueView,

@@ -30,7 +30,10 @@ const VendorArrivalsPage = React.lazy(() => import('../features/carret/procure/V
 const DeliveryReceivePage = React.lazy(() => import('../features/carret/procure/DeliveryReceivePage'));
 const VendorReturnsPage = React.lazy(() => import('../features/carret/procure/VendorReturnsPage'));
 const ReturnChallanRecordPage = React.lazy(() => import('../features/carret/procure/ReturnChallanRecordPage'));
-const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
+const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
+const FloorTicketPage = React.lazy(() => import('../features/carret/produce/FloorTicketPage'));
+const PartsDeskPage = React.lazy(() => import('../features/carret/produce/PartsDeskPage'));
+const IntoStockPage = React.lazy(() => import('../features/carret/produce/IntoStockPage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
 const InvoiceRecordPage = React.lazy(() => import('../features/carret/InvoiceRecordPage'));
@@ -118,7 +121,11 @@ export const carretRoutes = CARRET_ENABLED
       // The six stage views are ONE screen with the stage as a filter, for the
       // same reason the entity split is a filter: a laptop moving from QC1 to
       // QC2 must not move between sections.
-      { path: '/carret/produce/pipeline', element: guard('floor_pipeline', 'view', <FloorPipelinePage />) },
+      { path: '/carret/produce/floor', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorBoardPage />) },
+      { path: '/carret/produce/pipeline', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorBoardPage />) },
+      { path: '/carret/produce/tickets/:ticketId', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorTicketPage />) },
+      { path: '/carret/produce/parts-desk', element: guardAny(['parts_approval', 'parts_inventory'], 'view', <PartsDeskPage />) },
+      { path: '/carret/produce/into-stock', element: guard('pending_inventory', 'view', <IntoStockPage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
 
       // Money (Part 6.4). The invoice record is the visible half of 6.2: the

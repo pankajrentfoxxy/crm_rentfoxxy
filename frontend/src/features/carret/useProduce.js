@@ -76,23 +76,6 @@ function rowsFrom(data, ...keys) {
  * order — Dispatch QC used to share stage_order 10 with QC2, so two stages
  * arrived in whatever sequence the planner chose.
  */
-export function useFloorPipeline() {
-  const { loading, error, data, refresh } = useEndpoint('/tickets/floor-dashboard');
-  const stages = useMemo(() => rowsFrom(data, 'by_stage', 'byStage', 'stages'), [data]);
-  return { loading, error, stages, dashboard: data?.data || data || {}, refresh };
-}
-
-/** Tickets, optionally at one stage. The stage is a filter, not a screen. */
-export function useFloorTickets({ stage = '', search = '', priority = '', status = '' } = {}) {
-  const url = useMemo(
-    () => `/tickets${qs({ stage_names: stage || undefined, search, priority, status })}`,
-    [stage, search, priority, status]
-  );
-  const { loading, error, data, refresh } = useEndpoint(url);
-  const rows = useMemo(() => rowsFrom(data, 'tickets', 'rows'), [data]);
-  return { loading, error, rows, total: rows.length, refresh };
-}
-
 /** Parts on the floor, with the brand/model the spare chain now carries. */
 export function usePartInstances(filters = {}) {
   const url = useMemo(() => `/part-requests/instances${qs(filters)}`, [JSON.stringify(filters)]); // eslint-disable-line react-hooks/exhaustive-deps
