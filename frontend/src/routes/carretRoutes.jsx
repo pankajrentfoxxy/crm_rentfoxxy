@@ -27,6 +27,8 @@ const PurchaseOrdersListPage = React.lazy(() => import('../features/carret/procu
 const PurchaseOrderFormPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderFormPage'));
 const PurchaseOrderRecordPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderRecordPage'));
 const SparePoRecordPage = React.lazy(() => import('../features/carret/procure/SparePoRecordPage'));
+const VendorArrivalsPage = React.lazy(() => import('../features/carret/procure/VendorArrivalsPage'));
+const DeliveryReceivePage = React.lazy(() => import('../features/carret/procure/DeliveryReceivePage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
@@ -96,6 +98,9 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/procure/purchase-orders/:poId', element: guard('vendor_management', 'view', <PurchaseOrderRecordPage />) },
       { path: '/carret/procure/purchase-orders/:poId/edit', element: guard('vendor_management', 'edit', <PurchaseOrderFormPage />) },
       { path: '/carret/procure/to-buy', element: guard('vendor_management', 'view', <ToBuyPage />) },
+      // The guard logs vendor arrivals; the warehouse receives against them (D4).
+      { path: '/carret/procure/arrivals', element: guardAny(['guard_gate_checking', 'vendor_management'], 'view', <VendorArrivalsPage />) },
+      { path: '/carret/procure/arrivals/:deliveryId', element: guard('vendor_management', 'view', <DeliveryReceivePage />) },
       { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <VendorsListPage />) },
       { path: '/carret/procure/vendors/new', element: guard('vendor_management', 'create', <VendorFormPage />) },
       { path: '/carret/procure/vendors/:vendorId', element: guard('vendor_management', 'view', <VendorRecordPage />) },

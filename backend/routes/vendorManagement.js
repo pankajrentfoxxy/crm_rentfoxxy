@@ -155,6 +155,20 @@ router.get(
   purchaseOrders.getGrnReceivedProducts
 );
 router.get('/purchase-orders/details', authorize, purchaseOrders.getByNumber);
+// Procure → vendor deliveries (D4/D5/D7): the guard logs an arrival, the
+// warehouse receives against it. The guard needs the gate section, not
+// vendor management.
+const deliveries = require('../controllers/vendorManagement/vendorDeliveries.controller');
+const gateOrVendorView = [authMiddleware, checkAnySectionPermission(['guard_gate_checking', 'vendor_management'], 'view')];
+const gateOrVendorCreate = [authMiddleware, checkAnySectionPermission(['guard_gate_checking', 'vendor_management'], 'create')];
+router.get('/deliveries/expected', gateOrVendorView, deliveries.expected);
+router.get('/deliveries', gateOrVendorView, deliveries.listValidators, deliveries.list);
+router.post('/deliveries', gateOrVendorCreate, deliveries.createValidators, deliveries.create);
+router.get('/deliveries/:id', authorize, deliveries.getOne);
+router.post('/deliveries/:id/complete', authorizeEdit, deliveries.completeValidators, deliveries.complete);
+router.patch('/deliveries/:id/invoice', authorizeEdit, deliveries.invoiceValidators, deliveries.setInvoice);
+router.post('/serials/:serialId/approve-waiver', authorizeEdit, deliveries.approveWaiver);
+
 // Procure → To buy: laptop shortfalls from sales orders + floor part requests.
 const toBuy = require('../controllers/vendorManagement/toBuy.controller');
 router.get('/to-buy', authorize, toBuy.list);

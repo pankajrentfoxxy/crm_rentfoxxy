@@ -108,15 +108,29 @@ answers first, because several of them change how the team works, not just the s
    state and the vendor's GSTIN decides. Existing data (not changed — tax documents, Accounts
    to decide): 79 of 227 POs IGST where CGST+SGST was due (8 still open: PO-0027, PO-0144,
    PO-0146..0151), 17 the other way, 24 of 548 spare POs.
-5. **Gate arrival** (D4) and **Receive (GRN)** — wizard with capture, waiver approval, labels,
-   reject-at-door; GRN record with verification per unit and bills.
+5. **Gate arrival** (D4) and **Receive (GRN)** — DONE on QA 26 Sep (migration 334). "Vendor
+   arrivals": the guard logs each delivery (PO, vendor challan, invoice if given, laptop count,
+   vehicle) — only POs with laptops still due are offered. The warehouse opens the delivery and
+   receives one laptop at a time: PO line → condition → configuration check run on the laptop
+   (access number; reads the serial; shows ordered vs found) → receive → TTSPL → label (D14,
+   the spare-part QR label). A laptop that won't power on is received with a reason and waits
+   for a manager's approval (D5). A wrong/DOA laptop is **rejected at the door** (D6): TTSPL for
+   traceability, qc_failed, no floor ticket, not counted on the PO line, excluded from vendor
+   billing. Each delivery gets its own GRN (D7) and can't take more laptops than the guard
+   logged; closing it with a difference needs a note. The invoice number is asked for on the
+   delivery (needed before payment; it does not block monthly rent billing). The PO record's
+   "Receive" goes to the open delivery. **Data fix on QA:** 47 POs were fully received but
+   still "approved" — `node backend/scripts/sync-po-receive-status.js [--apply]` synced them;
+   **run it on production at promotion**. **Still open:** the old receive screen still works
+   without a gate entry (kept until sign-off); reject-at-door units go on a vendor return in
+   step 6.
 6. **Vendor returns & repair** — one area for repair, return, replacement, QC-failed; debit notes.
 7. Menu: Procure section opens the new screens; old ones under "Old view" until sign-off.
 8. Verify on QA end to end, same method as Order to delivery.
 
 Migrations expected: "returned to vendor" status (D9), PO amend/close fields, gate arrival entry
 (D4), GRN delivery/invoice fields, porter fields on return DCs, VRDC status constraint, link
-tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql, 332_po_amend_cancel_close.sql, 333_spare_po_same_flow.sql.
+tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql, 332_po_amend_cancel_close.sql, 333_spare_po_same_flow.sql, 334_vendor_deliveries.sql.
 
 ## Full findings
 

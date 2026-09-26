@@ -124,6 +124,7 @@ export const SECTIONS = [
       { group: 'Outward', to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers', section: 'dispatch_charger', action: 'view' },
 
       // ---- Inward: coming back in ----
+      { group: 'Inward', to: '/carret/procure/arrivals', label: 'Vendor Arrivals', sections: ['guard_gate_checking', 'vendor_management'], section: 'vendor_management', action: 'view' },
       { group: 'Inward', to: '/sales-pipeline/return-dc', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/carret/move/return-challans', label: 'Return Challans (Carret)', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/vendor-management/vendor-repair-dc?direction=inward', label: 'Vendor Repair Receive', section: 'vendor_repair_dc', action: 'view' },

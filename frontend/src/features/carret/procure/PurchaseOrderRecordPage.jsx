@@ -49,12 +49,15 @@ export default function PurchaseOrderRecordPage() {
   const [busy, setBusy] = useState('');
   const [reasonFor, setReasonFor] = useState(null);
   const [reason, setReason] = useState('');
+  const [openDeliveries, setOpenDeliveries] = useState(null);
 
   const load = useCallback(() => {
     fetchPurchaseOrder(poId)
       .then(({ data }) => setState({ loading: false, error: null, po: data.data }))
       .catch((e) => setState({ loading: false, error: errMsg(e, 'Could not load the purchase order.'), po: null }));
     fetchGrns(poId).then(({ data }) => setGrns(data.data || [])).catch(() => setGrns([]));
+    api.get('/vendor-management/deliveries', { params: { po_id: poId, status: 'arrived,receiving' } })
+      .then(({ data }) => setOpenDeliveries(data.data || [])).catch(() => setOpenDeliveries([]));
   }, [poId]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -118,7 +121,7 @@ export default function PurchaseOrderRecordPage() {
         <Notice tone={st === 'vendor_accepted' ? 'good' : 'info'} title={st === 'vendor_accepted' ? 'The vendor accepted — waiting for delivery' : 'With the vendor'}>
           {po.sent_to_vendor_at ? <>Emailed <DateTime value={po.sent_to_vendor_at} />. </> : 'The email to the vendor has not gone yet — send the PDF yourself if needed. '}
           {po.expected_delivery_date ? <>Due <DateTime value={po.expected_delivery_date} />. </> : ''}
-          When the laptops arrive, the guard logs them at the gate and the warehouse receives them.
+          When the laptops arrive, the guard logs them under Vendor arrivals and the warehouse receives them there.
         </Notice>
       );
     } else if (st === 'processing') {
@@ -138,8 +141,11 @@ export default function PurchaseOrderRecordPage() {
       <Button onClick={pdf} disabled={busy === 'pdf'}>{busy === 'pdf' ? 'Opening…' : 'PDF'}</Button>
       {canEdit && ['draft', 'pending', 'rejected', 'vendor_rejected', ''].includes(st) && <Button onClick={() => navigate(`/carret/procure/purchase-orders/${poId}/edit`)}>Edit</Button>}
       {canEdit && OPEN_STATES.includes(st) && qty.received === 0 && <Button onClick={() => setReasonFor('amend')}>Amend</Button>}
-      {canEdit && OPEN_STATES.includes(st) && (
-        <Button variant="quiet" onClick={() => navigate(`/vendor-management/purchase-orders/${poId}/receive`)}>Receive laptops</Button>
+      {canEdit && OPEN_STATES.includes(st) && (openDeliveries || []).map((dv) => (
+        <Button key={dv.delivery_id} variant="primary" onClick={() => navigate(`/carret/procure/arrivals/${dv.delivery_id}`)}>Receive {dv.delivery_number}</Button>
+      ))}
+      {canEdit && OPEN_STATES.includes(st) && openDeliveries && !openDeliveries.length && (
+        <Button variant="quiet" onClick={() => navigate(`/carret/procure/arrivals?po=${poId}`)}>Log an arrival</Button>
       )}
       {manager && canEdit && OPEN_STATES.includes(st) && qty.received > 0 && <Button variant="quiet" onClick={() => setReasonFor('close')}>Short-close</Button>}
       {canCancel && <Button variant="quiet" onClick={() => setReasonFor('cancel')}>Cancel PO</Button>}
@@ -229,11 +235,12 @@ export default function PurchaseOrderRecordPage() {
                   columns={[
                     { key: 'no', header: 'GRN', render: (g) => <DocNumber value={g.grn_number || `GRN-${g.grn_id}`} /> },
                     { key: 'when', header: 'Received', render: (g) => <DateTime value={g.created_at} /> },
-                    { key: 'bill', header: 'Vendor bill', render: (g) => g.bill_name || <span className="text-ink-3">not uploaded</span> },
+                    { key: 'dl', header: 'Delivery', render: (g) => g.meta?.delivery_number || (g.delivery_id ? `#${g.delivery_id}` : <span className="text-ink-3">before gate logging</span>), sub: (g) => g.vendor_challan_no || null },
+                    { key: 'bill', header: 'Vendor invoice', render: (g) => g.vendor_invoice_no || g.bill_name || <span className="text-ink-3">not given</span> },
                   ]}
                   rows={grns}
                   rowKey={(g) => g.grn_id}
-                  onRowClick={() => navigate(`/vendor-management/purchase-orders/${poId}/grn-detail`)}
+                  onRowClick={(g) => navigate(g.delivery_id ? `/carret/procure/arrivals/${g.delivery_id}` : `/vendor-management/purchase-orders/${poId}/grn-detail`)}
                   empty={<EmptyState title="Nothing received yet" />}
                 />
               )}

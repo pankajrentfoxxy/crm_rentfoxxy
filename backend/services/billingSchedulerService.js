@@ -3530,6 +3530,9 @@ async function generateVendorBill(vendorId, month, year) {
                IN ('rental_purchase','rent_to_own')
          AND vsn.deleted_at IS NULL
          AND vpo.deleted_at IS NULL
+         -- D6: a laptop rejected at the door was never accepted; the vendor
+         -- is not paid rent for it.
+         AND NOT COALESCE(vsn.rejected_at_receipt, FALSE)
          -- BL1: inventory_status was SELECTed but never filtered, so the only
          -- thing that stopped a vendor line was vendor_rent_end_date. A unit we
          -- sold or scrapped kept billing the vendor every month while the asset
@@ -3677,6 +3680,7 @@ async function generateAllVendorBills(month, year) {
      WHERE COALESCE(vsn.acquisition_type, vpo.purchase_order_type) IN ('rental_purchase','rent_to_own')
        AND vsn.deleted_at IS NULL
        AND vpo.deleted_at IS NULL
+       AND NOT COALESCE(vsn.rejected_at_receipt, FALSE)
        AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL`
   );
 

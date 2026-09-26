@@ -235,7 +235,10 @@ async function buildReceivedQtyMapsForPoIds(poIds) {
   const r = await pool.query(
     `SELECT po_id, serial_id, serial_number, inventory_asset_code, extra
        FROM vendor_serial_numbers
-      WHERE po_id = ANY($1::int[]) AND deleted_at IS NULL`,
+      WHERE po_id = ANY($1::int[]) AND deleted_at IS NULL
+        -- D6: a laptop rejected at the door is not part of what the vendor
+        -- delivered against the line; the vendor still owes it.
+        AND NOT COALESCE(rejected_at_receipt, FALSE)`,
     [poIds]
   );
 
@@ -1165,6 +1168,11 @@ const receivePoLineUnitValidators = [
   body('physical_damage_remark').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
   body('received_condition').optional({ nullable: true }).isIn(CONDITION_VALUES),
   body('missing_parts').optional({ nullable: true }).isArray({ max: 20 }),
+  // D4/D7: the gate entry this laptop arrived on; its GRN is the delivery's.
+  body('delivery_id').optional({ nullable: true }).isInt().toInt(),
+  // D6: wrong or dead on arrival — received for traceability, then returned.
+  body('reject_at_receipt').optional().isBoolean().toBoolean(),
+  body('rejection_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
 ];
 
 async function receivePoLineUnit(req, res) {
@@ -1182,6 +1190,12 @@ async function receivePoLineUnit(req, res) {
   const missingParts = receivedCondition === 'part_missing'
     ? normalizeMissingParts(req.body.missing_parts)
     : [];
+  const deliveryId = req.body.delivery_id ? Number(req.body.delivery_id) : null;
+  const rejectAtReceipt = req.body.reject_at_receipt === true;
+  const rejectionReason = String(req.body.rejection_reason || '').trim();
+  if (rejectAtReceipt && rejectionReason.length < 5) {
+    return res.status(400).json({ success: false, message: 'Say why this laptop is rejected at the door (at least 5 characters).' });
+  }
 
   let grnId =
     req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
@@ -1217,7 +1231,7 @@ async function receivePoLineUnit(req, res) {
 
   const ordered = Number(line.quantity) || 0;
   const currentReceived = Number(line.receivedQty) || 0;
-  if (currentReceived + 1 > ordered) {
+  if (!rejectAtReceipt && currentReceived + 1 > ordered) {
     return res.status(400).json({
       success: false,
       message: 'Cannot receive more units than ordered for this line.'
@@ -1240,8 +1254,9 @@ async function receivePoLineUnit(req, res) {
 
   // Part 5.1 (P3) — the configuration gate. Before this, capture_token was
   // optional and unchecked: any UUID, or none at all, booked the unit in.
-  let gate;
-  try {
+  // A laptop rejected at the door skips the check: it is going back.
+  let gate = { tokenId: null, waived: false, waiverReason: null };
+  if (!rejectAtReceipt) try {
     gate = await assertUnitMayBeReceived(pool, {
       poId,
       lineIndex,
@@ -1275,13 +1290,50 @@ async function receivePoLineUnit(req, res) {
     {
       const qtyNow = await buildReceivedQtyMapsForPoIds([poId]);
       const lineNow = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyNow.get(poId))[lineIndex];
-      if ((Number(lineNow?.receivedQty) || 0) + 1 > (Number(lineNow?.quantity) || 0)) {
+      if (!rejectAtReceipt && (Number(lineNow?.receivedQty) || 0) + 1 > (Number(lineNow?.quantity) || 0)) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, message: 'Cannot receive more units than ordered for this line.' });
       }
     }
 
-    if (grnId != null && Number.isFinite(grnId)) {
+    if (deliveryId) {
+      // D4/D7: the delivery the guard logged. Its first receipt opens a GRN of
+      // its own; later receipts on it join that GRN. Never more laptops than
+      // the guard counted in.
+      const d = (await client.query(
+        'SELECT * FROM vendor_deliveries WHERE delivery_id = $1 FOR UPDATE', [deliveryId]
+      )).rows[0];
+      if (!d || Number(d.po_id) !== poId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'That gate entry is not for this purchase order.' });
+      }
+      if (!['arrived', 'receiving'].includes(d.status)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: `This delivery is already ${d.status}.` });
+      }
+      if (d.grn_id) {
+        const onIt = (await client.query(
+          'SELECT COUNT(*)::int AS n FROM vendor_serial_numbers WHERE grn_id = $1 AND deleted_at IS NULL', [d.grn_id]
+        )).rows[0].n;
+        if (onIt + 1 > Number(d.laptop_count)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, message: `The guard logged ${d.laptop_count} laptop(s) on ${d.delivery_number}, and ${onIt} are already received. Ask the guard to correct the count if more arrived.` });
+        }
+        finalGrnId = d.grn_id;
+      } else {
+        const insG = await client.query(
+          `INSERT INTO vendor_goods_received_notes (po_id, meta, delivery_id, vendor_challan_no, vendor_invoice_no, bill_name)
+           VALUES ($1, $2::jsonb, $3, $4, $5, $5) RETURNING grn_id`,
+          [poId, JSON.stringify({ delivery_number: d.delivery_number }), d.delivery_id, d.vendor_challan_no, d.vendor_invoice_no]
+        );
+        finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
+        await client.query(
+          "UPDATE vendor_deliveries SET grn_id = $1, status = 'receiving', updated_at = NOW() WHERE delivery_id = $2",
+          [finalGrnId, d.delivery_id]
+        );
+      }
+    } else if (grnId != null && Number.isFinite(grnId)) {
       const g = await client.query(
         `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
         [grnId, poId]
@@ -1397,6 +1449,12 @@ async function receivePoLineUnit(req, res) {
       waived: gate.waived,
       waiverReason: gate.waiverReason,
     });
+    if (rejectAtReceipt) {
+      await client.query(
+        'UPDATE vendor_serial_numbers SET rejected_at_receipt = TRUE, receipt_rejection_reason = $2 WHERE serial_id = $1',
+        [createdRow.serial_id, rejectionReason.slice(0, 2000)]
+      );
+    }
     if (gate.waived) {
       await recordWaiverEvent(client, {
         serialId: createdRow.serial_id,
@@ -1411,49 +1469,63 @@ async function receivePoLineUnit(req, res) {
       });
     }
 
-    // Part 5.2 (G2) — a received laptop is on the floor, not on the shelf.
-    // Leaving this NULL is what made every availability query COALESCE it to
-    // 'in_stock' and count a unit on the diagnosis bench as sellable.
-    await transitionAsset(client, {
-      serialId: createdRow.serial_id,
-      toStatus: STATUS.IN_REPAIR,
-      reason: 'Received on GRN — enters production',
-      actorUserId: req.user?.user_id || null,
-      actorName: req.user?.name || null,
-      correlationId: req.correlationId || null,
-      caller: 'purchaseOrders.receivePoLineUnit',
-    });
+    if (rejectAtReceipt) {
+      // D6: rejected at the door. Not on the floor (no ticket), not in stock:
+      // qc_failed is the state a vendor return picks up.
+      await transitionAsset(client, {
+        serialId: createdRow.serial_id,
+        toStatus: STATUS.QC_FAILED,
+        reason: `Rejected at receipt: ${rejectionReason}`.slice(0, 500),
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        correlationId: req.correlationId || null,
+        caller: 'purchaseOrders.receivePoLineUnit(reject)',
+      });
+    } else {
+      // Part 5.2 (G2) — a received laptop is on the floor, not on the shelf.
+      // Leaving this NULL is what made every availability query COALESCE it to
+      // 'in_stock' and count a unit on the diagnosis bench as sellable.
+      await transitionAsset(client, {
+        serialId: createdRow.serial_id,
+        toStatus: STATUS.IN_REPAIR,
+        reason: 'Received on GRN — enters production',
+        actorUserId: req.user?.user_id || null,
+        actorName: req.user?.name || null,
+        correlationId: req.correlationId || null,
+        caller: 'purchaseOrders.receivePoLineUnit',
+      });
 
-    // The floor ticket is part of the receipt: created in the same
-    // transaction, so a laptop can never be booked in_repair with no ticket
-    // (invisible to the floor, excluded from availability). If it cannot be
-    // created, nothing is received.
-    const receiveLine = { ...line, ...receiveConfig };
-    const poLabel = po.purchase_order_number || String(po.po_id);
-    const conditionNote = receivedCondition === 'part_missing'
-      ? `Condition: Part Missing (${partCategoryLabels(missingParts).join(', ')})`
-      : receivedCondition === 'not_on'
-        ? 'Condition: Not On — laptop does not power on'
-        : '';
-    const conditionParts = [
-      `GRN receive — PO ${poLabel}`,
-      conditionNote,
-      physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
-    ].filter(Boolean);
-    const initialCondition =
-      conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
-    ticketResult = await createTicketFromGrnReceive(client, {
-      serialId: createdRow.serial_id,
-      serialNumber: createdRow.serial_number,
-      inventoryAssetCode: createdRow.inventory_asset_code,
-      po,
-      line: receiveLine,
-      actorUserId: req.user?.user_id,
-      initialConditionOverride: initialCondition,
-      grnId: finalGrnId,
-      receivedCondition,
-      missingParts,
-    });
+      // The floor ticket is part of the receipt: created in the same
+      // transaction, so a laptop can never be booked in_repair with no ticket
+      // (invisible to the floor, excluded from availability). If it cannot be
+      // created, nothing is received.
+      const receiveLine = { ...line, ...receiveConfig };
+      const poLabel = po.purchase_order_number || String(po.po_id);
+      const conditionNote = receivedCondition === 'part_missing'
+        ? `Condition: Part Missing (${partCategoryLabels(missingParts).join(', ')})`
+        : receivedCondition === 'not_on'
+          ? 'Condition: Not On — laptop does not power on'
+          : '';
+      const conditionParts = [
+        `GRN receive — PO ${poLabel}`,
+        conditionNote,
+        physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
+      ].filter(Boolean);
+      const initialCondition =
+        conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
+      ticketResult = await createTicketFromGrnReceive(client, {
+        serialId: createdRow.serial_id,
+        serialNumber: createdRow.serial_number,
+        inventoryAssetCode: createdRow.inventory_asset_code,
+        po,
+        line: receiveLine,
+        actorUserId: req.user?.user_id,
+        initialConditionOverride: initialCondition,
+        grnId: finalGrnId,
+        receivedCondition,
+        missingParts,
+      });
+    }
 
     await client.query('COMMIT');
   } catch (e) {
@@ -1527,13 +1599,16 @@ async function receivePoLineUnit(req, res) {
 
   res.status(201).json({
     success: true,
-    message: ticketResult?.ok
-      ? `Unit received as ${createdRow.inventory_asset_code}. Repair ticket created for Floor Manager.`
-      : `Unit received as ${createdRow.inventory_asset_code}.`,
+    message: rejectAtReceipt
+      ? `${createdRow.inventory_asset_code} recorded as rejected at the door — it goes back to the vendor and is not billed.`
+      : ticketResult?.ok
+        ? `Unit received as ${createdRow.inventory_asset_code}. Repair ticket created for Floor Manager.`
+        : `Unit received as ${createdRow.inventory_asset_code}.`,
     data: {
       grn_id: finalGrnId,
       rental_start_date,
-      created: { ...createdRow, received_condition: receivedCondition, missing_parts: missingParts },
+      created: { ...createdRow, received_condition: receivedCondition, missing_parts: missingParts, rejected_at_receipt: rejectAtReceipt, waiver_pending: gate.waived },
+      delivery_id: deliveryId,
       lines: linesAfter,
       ticket: ticketResult
     }
@@ -3202,6 +3277,11 @@ async function downloadPdf(req, res) {
 }
 
 module.exports = {
+  // shared with vendorDeliveries.controller (received counts per line)
+  buildReceivedQtyMapsForPoIds,
+  enrichLineItemsWithReceived,
+  parseLineItemsJson,
+  syncPoReceiveProgressStatus,
   reasonValidators,
   amend,
   cancel,
