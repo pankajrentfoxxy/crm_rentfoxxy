@@ -1598,6 +1598,11 @@ async function ensureInvoiceSecurityLines(client, {
     }
   }
   const zohoAcks = await loadZohoBillingAcks(client, customerId, securitySerialIds);
+  const firstRentSerials = new Set(
+    rental
+      .filter((line) => !line.is_catchup && deliveryInInvoiceMonth(line.rent_start, invMonth, invYear))
+      .map((line) => Number(line.serial_id))
+  );
   const keepSecurity = [];
   const dropSecurity = [];
   const dropZohoSecurity = [];
@@ -1608,9 +1613,13 @@ async function ensureInvoiceSecurityLines(client, {
       continue;
     }
     const delivery = deliveryById.get(serialId) || line.delivery_date || line.rent_start;
+    // A current-month security line stays when its first rent is on this same
+    // invoice — the customer's first order, billed on delivery. A plain
+    // monthly re-run (includeCurrentMonth false) used to strip it.
     const inWindow = includeCurrentMonth
       ? deliveryInInvoiceMonth(delivery, invMonth, invYear)
-      : deliveryInPreviousMonth(delivery, invMonth, invYear);
+      : deliveryInPreviousMonth(delivery, invMonth, invYear)
+        || (deliveryInInvoiceMonth(delivery, invMonth, invYear) && firstRentSerials.has(serialId));
     if (inWindow) keepSecurity.push(line);
     else dropSecurity.push(line);
   }
