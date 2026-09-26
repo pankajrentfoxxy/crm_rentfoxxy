@@ -16,7 +16,7 @@ const {
   assertQcGate,
   QC_PASS_MOVES,
 } = require('../services/stageTransitionService');
-const { assertMayPassQc, overrideFrom } = require('../services/qcGateService');
+const { assertMayPassQc, overrideFrom, isManager: gateIsManager } = require('../services/qcGateService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
@@ -286,6 +286,31 @@ exports.moveToStage = async (req, res) => {
     } catch (gateErr) {
       await client.query('ROLLBACK');
       return res.status(gateErr.status || 409).json({ success: false, code: gateErr.code || 'QC_GATE', message: gateErr.message });
+    }
+
+    // PD12: after chip-level or body repair the laptop is re-diagnosed; the
+    // shortcut straight to Assembly skipped that check.
+    if (DIAGNOSIS_REPAIR_STAGES.includes(currentStageName) && effectiveToStage === 'Assembly & Software') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: `After ${currentStageName} the laptop goes back to Diagnosis to be checked, not straight to Assembly.` });
+    }
+    // PD4: sending a laptop back needs a reason, and only a floor manager or
+    // manager sends it back to Floor Manager (a "re-entry" rule let anyone
+    // send any ticket there, from any stage, with no reason).
+    const why = String(reason || '').trim();
+    if (effectiveToStage === 'Floor Manager' && currentStageName !== 'Floor Manager') {
+      if (!gateIsManager(req.user)) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, message: 'Only a floor manager or manager can send a ticket back to Floor Manager.' });
+      }
+      if (why.length < 5) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Say why it goes back to Floor Manager.' });
+      }
+    }
+    if (Number(nextStage.stage_order) < Number(currentStage?.stage_order) && why.length < 5) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Moving back from ${currentStageName} to ${effectiveToStage} needs a reason.` });
     }
 
     let conditionHint = null;

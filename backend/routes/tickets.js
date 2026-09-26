@@ -118,7 +118,14 @@ router.get('/my', floorAnyView, getMyTickets);
 // @route   POST /api/tickets/bulk-move
 // @desc    Bulk move all tickets from one stage to another
 // @access  Private (Admin, Manager, Floor Manager)
-router.post('/bulk-move', ftEdit, bulkMoveTickets);
+
+// PD4 / F10: moving many tickets at once and failing a laptop back to its
+// vendor are floor-manager decisions. One floor grant (floor_tickets edit),
+// which technicians hold, used to open both.
+const requireFloorLead = (req, res, next) => (require('../services/qcGateService').isManager(req.user)
+  ? next()
+  : res.status(403).json({ success: false, message: 'Only a floor manager or manager can do this.' }));
+router.post('/bulk-move', ftEdit, requireFloorLead, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', floorAnyView, qcController.getQC2Assignees);
@@ -143,6 +150,7 @@ router.patch('/:id/body-paint', floorAnyEdit, phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
   ftEdit,
+  requireFloorLead,
   phase2.markQcFailed
 );
 router.patch('/:id/diagnosis-failed', floorAnyEdit, phase2.markDiagnosisFailed);

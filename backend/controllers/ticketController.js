@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const { queryDispatchQcEligibleMembers } = require('../utils/dispatchQcAccess');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
-const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
+const { pickNextAssigneeForTeam } = require('../services/qcRoundRobinService');
 const {
   startWorkLog,
   syncWorkLogForTicketState,
@@ -9,6 +9,7 @@ const {
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const { applyStageMove, assertTransitionAllowed, assertQcGate, StageTransitionRefused } = require('../services/stageTransitionService');
+const { inTransaction } = require('../utils/txHandler');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const {
   resolvePartConfigUpdate,
@@ -819,16 +820,25 @@ exports.updateTicket = async (req, res) => {
   const { id } = req.params;
   const { brand, model, status, priority, notes } = req.body;
 
+  // F11: status came straight from the body, so any floor editor could mark a
+  // ticket completed or cancelled with no stage move and no laptop change.
+  // Status changes only through the ticket's own actions.
+  if (status != null && status !== '') {
+    return res.status(400).json({
+      success: false,
+      message: 'A ticket\'s status changes only through its actions (move stage, QC, receive, fail, cancel).',
+    });
+  }
+
   try {
     const result = await pool.query(
       `UPDATE tickets 
        SET brand = COALESCE($1, brand),
            model = COALESCE($2, model),
-           status = COALESCE($3, status),
-           priority = COALESCE($4, priority)
-       WHERE ticket_id = $5
+           priority = COALESCE($3, priority)
+       WHERE ticket_id = $4
        RETURNING *`,
-      [brand, model, status, priority, id]
+      [brand, model, priority, id]
     );
 
     if (result.rows.length === 0) {
@@ -859,13 +869,13 @@ exports.updateTicket = async (req, res) => {
 };
 
 // Move Ticket to Next Stage or Jump to Specific Stage
-exports.moveToNextStage = async (req, res) => {
+async function moveToNextStageInner(req, res, db) {
   const { id } = req.params;
   const { notes, checklist_data, target_stage_id } = req.body;
 
   try {
     // Get current ticket
-    const ticketResult = await pool.query(
+    const ticketResult = await db.query(
       'SELECT * FROM tickets WHERE ticket_id = $1',
       [id]
     );
@@ -880,13 +890,13 @@ exports.moveToNextStage = async (req, res) => {
     const ticket = ticketResult.rows[0];
 
     try {
-      await assertTicketNotPartBlocked(pool, ticket.ticket_id);
+      await assertTicketNotPartBlocked(db, ticket.ticket_id);
     } catch (blockErr) {
       return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
     }
     let nextStage;
 
-    const currentStageMeta = await pool.query(
+    const currentStageMeta = await db.query(
       'SELECT stage_name, stage_category FROM stages WHERE stage_id = $1',
       [ticket.current_stage_id]
     );
@@ -898,14 +908,14 @@ exports.moveToNextStage = async (req, res) => {
 
     if (target_stage_id && canJump) {
       // Fetch target stage
-      const targetStageRes = await pool.query('SELECT * FROM stages WHERE stage_id = $1', [target_stage_id]);
+      const targetStageRes = await db.query('SELECT * FROM stages WHERE stage_id = $1', [target_stage_id]);
       if (targetStageRes.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Target stage not found' });
       }
       nextStage = targetStageRes.rows[0];
     } else {
       // Default: Get next sequential stage
-      const nextStageResult = await pool.query(
+      const nextStageResult = await db.query(
         `SELECT * FROM stages 
            WHERE stage_order > (SELECT stage_order FROM stages WHERE stage_id = $1)
            ORDER BY stage_order ASC LIMIT 1`,
@@ -927,7 +937,7 @@ exports.moveToNextStage = async (req, res) => {
     // when the move was then refused. QC passes and stock entry never go
     // through this route (checklist / serial-scan receive only).
     try {
-      await assertTransitionAllowed(pool, {
+      await assertTransitionAllowed(db, {
         fromStageName: currentStageName, toStageName: nextStage.stage_name, ticketId: ticket.ticket_id,
       });
       assertQcGate({ from: currentStageName, to: nextStage.stage_name, qcGate: null, ticketId: ticket.ticket_id });
@@ -937,7 +947,7 @@ exports.moveToNextStage = async (req, res) => {
 
     // Save checklist data... (keep existing)
     if (checklist_data) {
-      await pool.query(
+      await db.query(
         `INSERT INTO ticket_checklist_progress (ticket_id, stage_id, checklist_data, completed_by)
          VALUES ($1, $2, $3, $4)`,
         [id, ticket.current_stage_id, JSON.stringify(checklist_data), req.user.user_id]
@@ -953,7 +963,7 @@ exports.moveToNextStage = async (req, res) => {
       successMessage = 'Ticket moved to Inventory and marked as Ready Stock';
 
       // Update Inventory if serial matches
-      await pool.query(
+      await db.query(
         `UPDATE inventory 
              SET status = 'In Stock', stock_type = 'Ready' 
              WHERE serial_number = $1`,
@@ -962,7 +972,7 @@ exports.moveToNextStage = async (req, res) => {
 
       if (ticket.vendor_serial_id) {
         try {
-          const qcPass = await applyGrnVendorQcPassOnTicketComplete(pool, ticket, req.user.user_id);
+          const qcPass = await applyGrnVendorQcPassOnTicketComplete(db, ticket, req.user.user_id);
           if (qcPass.applied) {
             successMessage = 'Ticket completed — laptop marked QC Passed';
           }
@@ -980,7 +990,7 @@ exports.moveToNextStage = async (req, res) => {
 
     if (enteringQC1FromFinalTesting && nextStage.team_id) {
       try {
-        assignedUserIdValue = await pickNextAssigneeForTeamPool(pool, nextStage.team_id);
+        assignedUserIdValue = await pickNextAssigneeForTeam(db, nextStage.team_id);
       } catch (rrErr) {
         console.error('QC1 round-robin assignment failed:', rrErr);
         assignedUserIdValue = null;
@@ -997,7 +1007,7 @@ exports.moveToNextStage = async (req, res) => {
 
     if (!isCompleted && ticket.status === 'completed') {
       // A completed ticket moved back: the legacy inventory table has to follow.
-      await pool.query(
+      await db.query(
         `UPDATE inventory SET status = 'Floor', stock_type = 'Cooling Period' WHERE serial_number = $1`,
         [ticket.serial_number]
       );
@@ -1005,7 +1015,7 @@ exports.moveToNextStage = async (req, res) => {
 
     // SYNC Inventory Stage
     if (nextStage && nextStage.stage_name) {
-      await pool.query(
+      await db.query(
         `UPDATE inventory SET stage = $1 WHERE serial_number = $2`,
         [nextStage.stage_name, ticket.serial_number]
       );
@@ -1016,7 +1026,7 @@ exports.moveToNextStage = async (req, res) => {
     // was the widest hole: a plain POST here moved any ticket to any stage.
     let updateResult;
     try {
-      const moved = await applyStageMove(pool, {
+      const moved = await applyStageMove(db, {
         ticket,
         toStageName: nextStage.stage_name,
         assignedUserId: assignedUserIdValue == null ? null : assignedUserIdValue,
@@ -1034,7 +1044,7 @@ exports.moveToNextStage = async (req, res) => {
       throw moveErr;
     }
 
-    await syncWorkLogForTicketState(pool, updateResult.rows[0]);
+    await syncWorkLogForTicketState(db, updateResult.rows[0]);
 
     // Log activity
     const action = target_stage_id ? 'stage_jumped' : 'stage_changed';
@@ -1065,13 +1075,13 @@ exports.moveToNextStage = async (req, res) => {
       }
     }
 
-    await pool.query(
+    await db.query(
       `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes) 
        VALUES ($1, $2, $3, $4, $5)`,
       [id, nextStage.stage_id, req.user.user_id, action, activityNotes]
     );
 
-    await logProductionHistory(pool, {
+    await logProductionHistory(db, {
       ticketBefore: ticket,
       ticketAfter: updateResult.rows[0],
       beforeStageName: currentStageName,
@@ -1093,10 +1103,11 @@ exports.moveToNextStage = async (req, res) => {
       message: 'Server error moving ticket to next stage'
     });
   }
-};
+}
+exports.moveToNextStage = (req, res) => inTransaction(res, (db, held) => moveToNextStageInner(req, held, db));
 
 // Assign Ticket to User or Team
-exports.assignTicket = async (req, res) => {
+async function assignTicketInner(req, res, db) {
   const { id } = req.params;
   const { user_id, team_id, target_stage_id } = req.body;
   const laptopConditionRaw = req.body.laptop_condition ?? req.body.received_condition ?? req.body.condition;
@@ -1104,7 +1115,7 @@ exports.assignTicket = async (req, res) => {
   const assignSerial = req.body.serial_number ?? req.body.serial ?? req.body.verify_serial;
 
   try {
-    const ticketRes = await pool.query(
+    const ticketRes = await db.query(
       `SELECT t.*, s.stage_name
        FROM tickets t
        JOIN stages s ON s.stage_id = t.current_stage_id
@@ -1186,7 +1197,7 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_user_id = $${paramCount}, `;
       params.push(user_id);
       paramCount++;
-      const userRes = await pool.query('SELECT name FROM users WHERE user_id = $1', [user_id]);
+      const userRes = await db.query('SELECT name FROM users WHERE user_id = $1', [user_id]);
       const userName = userRes.rows[0]?.name || `user #${user_id}`;
       logMessage += `Assigned to ${userName}. `;
     } else if (user_id === null) {
@@ -1198,7 +1209,7 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_team_id = $${paramCount}, `;
       params.push(team_id);
       paramCount++;
-      const teamRes = await pool.query('SELECT team_name FROM teams WHERE team_id = $1', [team_id]);
+      const teamRes = await db.query('SELECT team_name FROM teams WHERE team_id = $1', [team_id]);
       const teamName = teamRes.rows[0]?.team_name || `team #${team_id}`;
       logMessage += `Assigned to ${teamName} team. `;
     }
@@ -1213,7 +1224,7 @@ exports.assignTicket = async (req, res) => {
 
     if (target_stage_id) {
       // Floor manager priority assign: user + stage specified
-      const stageRes = await pool.query('SELECT stage_id, team_id, stage_name FROM stages WHERE stage_id = $1', [target_stage_id]);
+      const stageRes = await db.query('SELECT stage_id, team_id, stage_name FROM stages WHERE stage_id = $1', [target_stage_id]);
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
@@ -1225,7 +1236,7 @@ exports.assignTicket = async (req, res) => {
       logMessage += preserveDispatchQcStage ? 'Reassigned at Dispatch QC. ' : `Reassigned at ${currentTicket.stage_name}. `;
     } else if (user_id) {
       // Get all teams for this user (primary team_id + user_teams)
-      const userTeamsRes = await pool.query(
+      const userTeamsRes = await db.query(
         `SELECT team_id FROM users WHERE user_id = $1 AND team_id IS NOT NULL
          UNION
          SELECT team_id FROM user_teams WHERE user_id = $1`,
@@ -1234,7 +1245,7 @@ exports.assignTicket = async (req, res) => {
       const userTeamIds = userTeamsRes.rows.map((r) => r.team_id).filter(Boolean);
 
       if (userTeamIds.length > 0) {
-        const stageRes = await pool.query(
+        const stageRes = await db.query(
           `SELECT s.stage_id, s.team_id, s.stage_name FROM stages s
            WHERE s.team_id = ANY($1::int[])
            ORDER BY s.stage_order ASC LIMIT 1`,
@@ -1249,7 +1260,7 @@ exports.assignTicket = async (req, res) => {
       }
     } else if (team_id) {
       // When assigning to team only, move to that team's first stage
-      const stageRes = await pool.query(
+      const stageRes = await db.query(
         'SELECT stage_id, team_id, stage_name FROM stages WHERE team_id = $1 ORDER BY stage_order ASC LIMIT 1',
         [team_id]
       );
@@ -1268,7 +1279,7 @@ exports.assignTicket = async (req, res) => {
     // team still wins over the stage's defaults.
     if (targetStageId != null && targetStageName) {
       try {
-        await applyStageMove(pool, {
+        await applyStageMove(db, {
           ticket: currentTicket,
           toStageName: targetStageName,
           status: 'in_progress',
@@ -1289,7 +1300,7 @@ exports.assignTicket = async (req, res) => {
     updateQuery += `, status = 'in_progress', completed_at = NULL WHERE ticket_id = $${paramCount} RETURNING *`;
     params.push(id);
 
-    const result = await pool.query(updateQuery, params);
+    const result = await db.query(updateQuery, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -1299,7 +1310,7 @@ exports.assignTicket = async (req, res) => {
     }
 
     // Log activity
-    await pool.query(
+    await db.query(
       `INSERT INTO activities (ticket_id, user_id, action, notes) 
        VALUES ($1, $2, $3, $4)`,
       [id, req.user.user_id, 'assigned', logMessage.trim()]
@@ -1307,7 +1318,7 @@ exports.assignTicket = async (req, res) => {
 
     const updatedTicket = result.rows[0];
 
-    await logProductionHistory(pool, {
+    await logProductionHistory(db, {
       ticketBefore: currentTicket,
       ticketAfter: updatedTicket,
       beforeStageName: currentTicket.stage_name,
@@ -1317,11 +1328,11 @@ exports.assignTicket = async (req, res) => {
       assignmentType: 'manual_assign',
     });
 
-    await syncWorkLogForTicketState(pool, updatedTicket);
+    await syncWorkLogForTicketState(db, updatedTicket);
 
     // Inventory Sync Logic: If ticket was completed (or we are resetting to in_progress), ensure Inventory is "Floor"
     if (updatedTicket.status === 'in_progress') {
-      await pool.query(
+      await db.query(
         `UPDATE inventory SET status = 'Floor', stock_type = 'Cooling Period' WHERE serial_number = $1`,
         [updatedTicket.serial_number]
       );
@@ -1330,9 +1341,9 @@ exports.assignTicket = async (req, res) => {
     // Sync Inventory Stage Name
     if (updatedTicket.current_stage_id) {
       // We need stage name. 
-      const stageNameRes = await pool.query('SELECT stage_name FROM stages WHERE stage_id = $1', [updatedTicket.current_stage_id]);
+      const stageNameRes = await db.query('SELECT stage_name FROM stages WHERE stage_id = $1', [updatedTicket.current_stage_id]);
       if (stageNameRes.rows.length > 0) {
-        await pool.query(
+        await db.query(
           `UPDATE inventory SET stage = $1 WHERE serial_number = $2`,
           [stageNameRes.rows[0].stage_name, updatedTicket.serial_number]
         );
@@ -1350,7 +1361,8 @@ exports.assignTicket = async (req, res) => {
       message: 'Server error assigning ticket'
     });
   }
-};
+}
+exports.assignTicket = (req, res) => inTransaction(res, (db, held) => assignTicketInner(req, held, db));
 
 // Claim Ticket (Self-Assign for Team Members)
 exports.claimTicket = async (req, res) => {
@@ -1384,14 +1396,18 @@ exports.claimTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Ticket is already assigned to a user' });
     }
 
-    // Proceed to claim
+    // Proceed to claim — only if still unclaimed (two people claiming at once
+    // both used to succeed; the second silently took it).
     const result = await pool.query(
       `UPDATE tickets 
        SET assigned_user_id = $1
-       WHERE ticket_id = $2
+       WHERE ticket_id = $2 AND assigned_user_id IS NULL
        RETURNING *`,
       [userId, id]
     );
+    if (!result.rows.length) {
+      return res.status(409).json({ success: false, message: 'Someone else claimed this ticket just now.' });
+    }
 
     // Get updated details including team name for frontend consistency
     const updatedTicket = await pool.query(
@@ -1806,12 +1822,21 @@ exports.startWork = async (req, res) => {
 
   try {
     const ticketRes = await pool.query(
-      'SELECT current_stage_id, ttspl_id, serial_number, received_condition FROM tickets WHERE ticket_id = $1',
+      'SELECT current_stage_id, ttspl_id, serial_number, received_condition, assigned_user_id FROM tickets WHERE ticket_id = $1',
       [id]
     );
     if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
     const ticket = ticketRes.rows[0];
     const stageId = ticket.current_stage_id;
+
+    // PD13: only the assigned technician runs their own timer. Anyone with
+    // floor edit could start it, which closed the assignee's segment.
+    if (!ticket.assigned_user_id) {
+      return res.status(409).json({ success: false, message: 'Claim this ticket (or have it assigned) before starting work.' });
+    }
+    if (Number(ticket.assigned_user_id) !== Number(userId) && !require('../services/qcGateService').isManager(req.user)) {
+      return res.status(403).json({ success: false, message: 'This ticket is assigned to someone else — only they start its timer.' });
+    }
 
     const { assertTtsplAndSerial, normalizeMachineId } = require('../utils/machineIdentityVerify');
     const { requiresSerialIdentity } = require('../constants/laptopConditions');
@@ -2130,8 +2155,13 @@ exports.bulkMoveTickets = async (req, res) => {
       UPDATE inventory SET stage = $1 WHERE serial_number = $2
     `;
 
+    // F15: log and sync only the tickets that actually moved (refused ones
+    // used to get "Bulk moved" activity and history rows too).
+    const movedSet = new Set(movedIds.map(Number));
+    const moved = tickets.filter((t) => movedSet.has(Number(t.ticket_id)));
+
     // Process logs and inventory sync in parallel promises
-    const promises = tickets.map(t => {
+    const promises = moved.map(t => {
       return Promise.all([
         pool.query(activityQuery, [t.ticket_id, targetStage.stage_id, userId, `Bulk moved to ${targetStage.stage_name}`]),
         pool.query(inventoryQuery, [targetStage.stage_name, t.serial_number])
@@ -2141,7 +2171,7 @@ exports.bulkMoveTickets = async (req, res) => {
     await Promise.all(promises);
 
     await Promise.all(
-      tickets.map(async (beforeTicket) => {
+      moved.map(async (beforeTicket) => {
         const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [beforeTicket.ticket_id]);
         return logProductionHistory(pool, {
           ticketBefore: beforeTicket,
