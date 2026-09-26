@@ -3756,6 +3756,7 @@ function startBillingScheduler() {
 }
 
 module.exports = {
+  invoiceMoneyTotals,
   VENDOR_LINE_JOIN_SQL,
   VENDOR_LINE_RATE_SQL,
   startBillingScheduler,

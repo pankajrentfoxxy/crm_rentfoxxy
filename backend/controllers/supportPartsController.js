@@ -104,7 +104,13 @@ exports.raiseSupportPartRequest = async (req, res) => {
 
   const mode = fulfillment_mode === 'courier_to_customer' ? 'courier_to_customer' : 'warehouse_handover';
   const billing = billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty';
-  const charge = billing === 'charge_customer' ? Number(charge_amount || 0) : 0;
+  // Parts are free unless Support marks them chargeable (with a reason); the
+  // WAREHOUSE sets the price — a price typed here is ignored (claude/carret-support.md).
+  const charge = 0;
+  const chargeReason = billing === 'charge_customer' ? String(req.body.charge_reason || '').trim() : '';
+  if (billing === 'charge_customer' && chargeReason.length < 3) {
+    return res.status(400).json({ success: false, message: 'Say why the customer is charged for this part' });
+  }
   const shouldCollectOld = collect_old_part !== false;
   let oldPartMethod = null;
   let oldPartStatus = 'not_applicable';
@@ -152,14 +158,16 @@ exports.raiseSupportPartRequest = async (req, res) => {
           serial_number, requested_by, assigned_to_tech, part_id, quantity,
           reason, status, fulfillment_mode, billing_type, charge_amount,
           tampered_by_customer, sales_order_number,
-          collect_old_part, old_part_collection_method, old_part_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18)
+          collect_old_part, old_part_collection_method, old_part_status,
+          charge_reason, charge_marked_by, charge_marked_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,
+               NULLIF($19, ''), CASE WHEN $19 <> '' THEN $6::int END, CASE WHEN $19 <> '' THEN NOW() END)
        RETURNING *`,
       [reqNumber, support_ticket_id, support_item_id || null, ttspl_id || null,
        serial_number || null, req.user.user_id, assignedTechId, part_id,
        Number(quantity), reason || null, mode, billing, charge,
        Boolean(tampered_by_customer), ticket.sales_order_number || null,
-       shouldCollectOld, oldPartMethod, oldPartStatus]
+       shouldCollectOld, oldPartMethod, oldPartStatus, chargeReason]
     );
     const spr = rows[0];
 
@@ -606,7 +614,8 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
       courierName: courierNameTrimmed || null,
       awbNumber: awb_number,
       courierTrackingUrl: courier_tracking_url,
-      billingType: billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty',
+      // Support decided chargeable on the request; the warehouse gives the price here.
+      billingType: requests.some((r) => r.billing_type === 'charge_customer') ? 'charge_customer' : 'under_warranty',
       chargeAmount: Number(charge_amount || 0),
       tamperedByCustomer: Boolean(tampered_by_customer),
       shippingOverride: customer_shipping_address || null,
@@ -639,6 +648,9 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
       rpdcNumber = rpdc.rpdcNumber;
     }
 
+    // A chargeable part priced by the warehouse and sent to the customer is a charge line.
+    const { syncPartCharge } = require('../services/supportChargesService');
+    for (const r of requests) await syncPartCharge(client, r.id, req.user);
     await client.query('COMMIT');
 
     let pdfPath = null;
@@ -1231,6 +1243,27 @@ exports.markPartUsed = async (req, res) => {
     await client.query(
       `UPDATE support_challan_items SET return_status='used' WHERE part_request_id=$1`, [reqId]
     );
+
+    // U11: fitting a part now records its cost against the laptop (the courier
+    // path already did; the handover path wrote nothing).
+    if (!(await client.query('SELECT 1 FROM support_part_laptop_costs WHERE support_part_request_id = $1', [reqId])).rows.length) {
+      await client.query(
+        `INSERT INTO support_part_laptop_costs (
+           support_part_request_id, support_ticket_id, ttspl_id, serial_number,
+           sales_order_number, part_id, part_name, prt_id, instance_id,
+           unit_cost, billing_type, charge_amount, customer_dc_number
+         )
+         SELECT spr.id, spr.support_ticket_id, spr.ttspl_id, spr.serial_number,
+                spr.sales_order_number, spr.part_id, p.part_name, pi.prt_id, spr.instance_id,
+                COALESCE(pi.unit_cost, p.cost, spr.internal_unit_cost, 0), spr.billing_type, COALESCE(spr.charge_amount, 0), NULL
+           FROM support_part_requests spr
+           JOIN parts p ON p.part_id = spr.part_id
+           LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+          WHERE spr.id = $1`,
+        [reqId]
+      );
+    }
+    await require('../services/supportChargesService').syncPartCharge(client, reqId, req.user);
 
     await client.query('COMMIT');
     const msg = oldPartInstance
@@ -1967,4 +2000,61 @@ exports.resolveReassign = async (req, res) => {
     await client.query('ROLLBACK');
     res.status(e.status || 500).json({ success: false, message: e.message });
   } finally { client.release(); }
+};
+
+/* ---- Charges (claude/carret-support.md): Support marks chargeable, the warehouse prices, Accounts bills ---- */
+const charges = require('../services/supportChargesService');
+
+async function inChargeTxn(res, fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(e.status || 500).json({ success: false, message: e.message });
+    return undefined;
+  } finally {
+    client.release();
+  }
+}
+
+/** PATCH /requests/:requestId/chargeable { chargeable, reason } — support lead or the laptop's technician. */
+exports.markPartChargeable = async (req, res) => {
+  const reqId = parseInt(req.params.requestId, 10);
+  const out = await inChargeTxn(res, async (client) => {
+    const spr = (await client.query('SELECT * FROM support_part_requests WHERE id = $1', [reqId])).rows[0];
+    if (!spr) throw Object.assign(new Error('Request not found'), { status: 404 });
+    if (!(await userCanActOnPartRequest(client, spr, req.user))) throw Object.assign(new Error('Not authorised'), { status: 403 });
+    return charges.markPartChargeable(client, {
+      requestId: reqId, chargeable: req.body?.chargeable === true, reason: req.body?.reason, user: req.user,
+    });
+  });
+  if (out !== undefined) res.json({ success: true, message: req.body?.chargeable === true ? 'Marked chargeable — the warehouse sets the price' : 'Marked free (under service)', charge: out });
+};
+
+/** PATCH /requests/:requestId/price { amount } — the warehouse. */
+exports.setPartPrice = async (req, res) => {
+  const reqId = parseInt(req.params.requestId, 10);
+  const out = await inChargeTxn(res, (client) => charges.setPartPrice(client, { requestId: reqId, amount: req.body?.amount, user: req.user }));
+  if (out !== undefined) res.json({ success: true, message: 'Price set', charge: out });
+};
+
+/** GET /charges-to-bill?customer_id — Accounts. */
+exports.listChargesToBill = async (req, res) => {
+  try {
+    res.json({ success: true, data: await charges.listChargesToBill({ customerId: req.query.customer_id }) });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+/** POST /charges/add-to-invoice { invoice_id, extra_line_ids } — Accounts. */
+exports.addChargesToInvoice = async (req, res) => {
+  const out = await inChargeTxn(res, (client) => charges.addChargesToDraftInvoice(client, {
+    invoiceId: Number(req.body?.invoice_id), extraLineIds: req.body?.extra_line_ids, user: req.user,
+  }));
+  if (out !== undefined) res.json({ success: true, message: `${out.added} charge(s) added to the draft invoice`, ...out });
 };

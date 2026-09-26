@@ -231,7 +231,7 @@ async function createConfigSalesOrder(client, {
 
   for (const cfg of lineConfigs) {
     const { resolveHsnForPersist } = require('../constants/hsnDefaults');
-    const lineHsn = resolveHsnForPersist({ quotationType: 'rental' });
+    const lineHsn = resolveHsnForPersist({ quotationType: cfg.quotation_type || 'rental' });
     const ins = await client.query(
       `INSERT INTO sales_order_lines (
          sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
@@ -240,7 +240,7 @@ async function createConfigSalesOrder(client, {
          gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
          technical_warranty, remark, status, token, created_by, hsn_code
        ) VALUES (
-         $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
+         $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,COALESCE($23::numeric, 0),COALESCE($24, 'rental'),COALESCE($25, 'rentfoxxy'),
          $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
          $22,'pending',$19,$20,$21
        ) RETURNING id`,
@@ -267,6 +267,9 @@ async function createConfigSalesOrder(client, {
         userId,
         lineHsn,
         buildReplacementSoLineRemark(cfg),
+        cfg.shipping_charge != null ? Number(cfg.shipping_charge) : null,
+        cfg.quotation_type || null,
+        cfg.entity_code || null,
       ]
     );
     lineIds.push(ins.rows[0].id);
@@ -312,7 +315,7 @@ async function appendConfigSalesOrderLines(client, {
 
   for (const cfg of lineConfigs) {
     const { resolveHsnForPersist } = require('../constants/hsnDefaults');
-    const lineHsn = resolveHsnForPersist({ quotationType: 'rental' });
+    const lineHsn = resolveHsnForPersist({ quotationType: cfg.quotation_type || 'rental' });
     const ins = await client.query(
       `INSERT INTO sales_order_lines (
          sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
@@ -321,7 +324,7 @@ async function appendConfigSalesOrderLines(client, {
          gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
          technical_warranty, remark, status, token, created_by, hsn_code
        ) VALUES (
-         $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
+         $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,COALESCE($23::numeric, 0),COALESCE($24, 'rental'),COALESCE($25, 'rentfoxxy'),
          $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
          $22,'pending',$19,$20,$21
        ) RETURNING id`,
@@ -348,6 +351,9 @@ async function appendConfigSalesOrderLines(client, {
         userId,
         lineHsn,
         buildReplacementSoLineRemark(cfg),
+        cfg.shipping_charge != null ? Number(cfg.shipping_charge) : null,
+        cfg.quotation_type || null,
+        cfg.entity_code || null,
       ]
     );
     lineIds.push(ins.rows[0].id);
@@ -490,8 +496,9 @@ async function collectSerialIdsFromDc(client, dcNumber) {
 /** Outbound DC delivered — one unit per SO line. */
 async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
   const meta = await client.query(
-    `SELECT dc_purpose, support_ticket_id, sales_order_number
-       FROM delivery_challan_lines WHERE dc_number = $1 AND movement_type = 'outbound' LIMIT 1`,
+    `SELECT dcl.dc_purpose, dcl.support_ticket_id, dcl.sales_order_number, dcl.entity_code, dcl.ship_by, dcl.dispatch_mode,
+            (SELECT s.quotation_type FROM sales_order_lines s WHERE s.sales_order_number = dcl.sales_order_number ORDER BY s.id LIMIT 1) AS quotation_type
+       FROM delivery_challan_lines dcl WHERE dcl.dc_number = $1 AND dcl.movement_type = 'outbound' LIMIT 1`,
     [dcNumber]
   );
   const row = meta.rows[0];
@@ -517,11 +524,12 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
     const ticketRes = await client.query('SELECT customer_id FROM support_tickets WHERE id = $1', [order.ticket_id]);
 
     await inventorySM.markDelivered(client, serialId, {
-      quotationType: 'rental',
+      // S9: the deal of the replacement's own SO / DC, not always rental / rentfoxxy.
+      quotationType: String(row.quotation_type || '').toLowerCase().includes('sale') ? 'sale' : 'rental',
       dcNumber,
       customerId: ticketRes.rows[0]?.customer_id,
-      entityCode: 'rentfoxxy',
-      dispatchMode: 'inhouse',
+      entityCode: row.entity_code || 'rentfoxxy',
+      dispatchMode: row.dispatch_mode || 'inhouse',
       deliveredAt: new Date(),
       rentMonthlyRate: order.old_rent_monthly_rate != null ? Number(order.old_rent_monthly_rate) : null,
       actorUserId: actor.user_id,
@@ -684,6 +692,40 @@ async function loadSerialByAssetCode(client, code) {
 }
 
 /** Config for swap when the faulty unit is already in warehouse via repair pickup. */
+/**
+ * S9 (claude/carret-support.md): the replacement goes out on the SAME deal as
+ * the laptop it replaces — rental or sale, and the same entity — taken from
+ * that laptop's last delivered outbound DC to this customer and its sales
+ * order. It was hardcoded to rental / rentfoxxy, wrong for a sale or a
+ * gorefurbo customer. Falls back to rental / rentfoxxy when there is no history.
+ */
+async function resolveOriginalDeal(client, { code, serialNumber, customerId }) {
+  const keys = [code, serialNumber].map((v) => String(v || '').trim()).filter(Boolean);
+  if (!keys.length || !customerId) return { quotation_type: 'rental', entity_code: 'rentfoxxy', source: 'default' };
+  const r = (await client.query(
+    `SELECT dcl.dc_number, dcl.entity_code, sol.quotation_type, sol.branch
+       FROM delivery_challan_lines dcl
+       LEFT JOIN LATERAL (
+         SELECT s.quotation_type, s.branch FROM sales_order_lines s
+          WHERE s.sales_order_number = dcl.sales_order_number ORDER BY s.id LIMIT 1
+       ) sol ON TRUE
+      WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+        AND dcl.customer_id = $1
+        AND LOWER(COALESCE(dcl.status, '')) = 'delivered'
+        AND (dcl.serial_number::text ILIKE ANY($2::text[]) OR dcl.delivered_serial_numbers::text ILIKE ANY($2::text[]))
+      ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at) DESC
+      LIMIT 1`,
+    [customerId, keys.map((k) => `%${k}%`)]
+  )).rows[0];
+  if (!r) return { quotation_type: 'rental', entity_code: 'rentfoxxy', source: 'default' };
+  const qt = String(r.quotation_type || '').toLowerCase().includes('sale') ? 'sale' : 'rental';
+  return {
+    quotation_type: qt,
+    entity_code: String(r.entity_code || r.branch || 'rentfoxxy').toLowerCase(),
+    source: r.dc_number,
+  };
+}
+
 async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, customerId) {
   const code = pickupItem.ttspl_id || pickupItem.unique_serial_number || pickupItem.serial_number;
   const serial = await loadSerialByAssetCode(client, code);
@@ -705,7 +747,10 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
     });
   }
   const src = complaintItem || pickupItem;
+  const deal = await resolveOriginalDeal(client, { code, serialNumber: serial?.serial_number || pickupItem.serial_number, customerId });
   return {
+    quotation_type: deal.quotation_type,
+    entity_code: deal.entity_code,
     brand: src.brand || extra.brand || '',
     model: src.model || extra.model || extra.model_name || src.inv_model_name || '',
     processor: src.processor || extra.processor || src.inv_processor || '',
@@ -1653,6 +1698,7 @@ async function initiateResendLaptop(client, ticketId, userId, { reason } = {}) {
 }
 
 module.exports = {
+  resolveOriginalDeal,
   buildReplacementRdcRemarks,
   resolveConfigFromComplaint,
   resolveConfigFromRepairPickup,

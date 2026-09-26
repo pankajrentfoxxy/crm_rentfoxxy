@@ -220,6 +220,29 @@ async function transitionAsset(db, {
         message: `${serial.ttspl_id || `Serial ${serialId}`} is on vendor return ${onReturn.ref} — it can't be allocated. Cancel it from the return first if it should stay.`,
       });
     }
+    // Support S7: a customer's own laptop, in for repair and due back to them on
+    // a Service DC, is not stock — the floor may put it "in stock" when repaired,
+    // but no sales order may take it. (The Service DC delivers it without a
+    // reservation, so this never blocks the return itself.)
+    const dueBack = (await client.query(
+      `SELECT st.id AS ticket_id, COALESCE(st.customer_name, '') AS customer
+         FROM support_ticket_items i
+         JOIN support_tickets st ON st.id = i.ticket_id
+        WHERE i.item_type = 'pickup' AND i.status = 'awaiting_service_return'
+          AND (
+            (NULLIF(i.ttspl_id, '') IS NOT NULL AND UPPER(i.ttspl_id) = UPPER($1))
+            OR (NULLIF(i.unique_serial_number, '') IS NOT NULL AND UPPER(i.unique_serial_number) = UPPER($2))
+            OR (NULLIF(i.serial_number, '') IS NOT NULL AND UPPER(i.serial_number) = UPPER($2))
+          )
+        LIMIT 1`,
+      [serial.ttspl_id || '', serial.serial_number || '']
+    )).rows[0];
+    if (dueBack) {
+      throw new TransitionRefused({
+        serialId, ttsplId: serial.ttspl_id, from, to: toStatus, caller,
+        message: `${serial.ttspl_id || `Serial ${serialId}`} belongs to ${dueBack.customer || 'a customer'} and is in for repair (support ticket #${dueBack.ticket_id}) — it goes back to them on a Service DC, it can't be allocated.`,
+      });
+    }
   }
 
   // Build the column updates relevant to this transition.

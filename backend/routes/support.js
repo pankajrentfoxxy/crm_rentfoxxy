@@ -184,6 +184,8 @@ router.patch('/tickets/:ticketId', requireTicketLead, updateTicket);
 router.patch('/tickets/:ticketId/pickup-address', requireTicketLead, updatePickupAddress);
 router.post('/tickets/:ticketId/phases', requireTicketLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
+router.get('/tickets/:ticketId/wfh', require('../controllers/supportController').getTicketWfh);
+router.post('/items/:itemId/wfh-charge', requireSupportLead, require('../controllers/supportController').chargeWfhDelivery);
 router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
 router.post('/tickets/:ticketId/cancel', requireSupportTicketCancel, cancelTicket);
 router.get('/tickets/:ticketId/repair-swap-context', requireTicketLead, getRepairSwapContext);

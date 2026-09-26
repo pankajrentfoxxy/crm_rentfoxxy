@@ -5789,7 +5789,30 @@ exports.getAvailableAssets = async (req, res) => {
     try {
         const customerId = parseInt(req.params.customerId, 10);
         const assets = await supportInventoryService.getAvailableAssets(customerId);
-        res.json({ success: true, assets });
+        // WFH (work from home): shown when raising the ticket, because a return
+        // pickup or a replacement delivery to that laptop is chargeable.
+        const codes = [...new Set((assets || []).flatMap((a) => [a.ttspl_id, a.unique_serial_number, a.serial_number])
+            .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
+        if (codes.length) {
+            const wfh = await pool.query(
+                `SELECT DISTINCT ON (k) k, is_wfh FROM (
+                   SELECT UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) AS k,
+                          COALESCE(sos.is_wfh, FALSE) OR COALESCE(sol.is_wfh, FALSE) AS is_wfh,
+                          sos.created_at, sos.allocation_id
+                     FROM sales_order_serials sos
+                     JOIN sales_order_lines sol ON sol.id = sos.line_id
+                    WHERE sol.customer_id = $1
+                      AND UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) = ANY($2::text[])
+                 ) x ORDER BY k, created_at DESC NULLS LAST, allocation_id DESC`,
+                [customerId, codes]
+            );
+            const byCode = new Map(wfh.rows.map((r) => [r.k, r.is_wfh]));
+            for (const a of assets) {
+                a.is_wfh = [a.ttspl_id, a.unique_serial_number, a.serial_number]
+                    .some((c) => byCode.get(String(c || '').trim().toUpperCase()) === true);
+            }
+        }
+        res.json({ success: true, assets, wfh_charge: require('../services/supportChargesService').WFH_CHARGE });
     } catch (e) {
         res.status(500).json({ success: false, message: 'Failed to load available assets' });
     }
@@ -6203,3 +6226,46 @@ exports.ensureSupportSchema = async () => {
 
 // Exported for unit tests (see test/supportOtp.test.js).
 exports.otpMatches = otpMatches;
+
+/** GET /tickets/:ticketId/wfh — each laptop on the ticket: work-from-home? charged? */
+exports.getTicketWfh = async (req, res) => {
+    try {
+        const ticketId = parseInt(req.params.ticketId, 10);
+        const t = (await pool.query('SELECT customer_id FROM support_tickets WHERE id = $1', [ticketId])).rows[0];
+        if (!t) return res.status(404).json({ success: false, message: 'Ticket not found' });
+        const items = (await pool.query(
+            `SELECT id, item_type, status, ttspl_id, unique_serial_number, serial_number, return_dc_number,
+                    wfh_charge, wfh_charge_amount, wfh_charge_dc_number, wfh_charge_at
+               FROM support_ticket_items WHERE ticket_id = $1 ORDER BY id`,
+            [ticketId]
+        )).rows;
+        const { laptopWfh, WFH_CHARGE } = require('../services/supportChargesService');
+        const out = [];
+        for (const it of items) {
+            const w = await laptopWfh(pool, { code: it.ttspl_id || it.unique_serial_number || it.serial_number, customerId: t.customer_id });
+            out.push({ item_id: it.id, item_type: it.item_type, is_wfh: w.is_wfh, home_address: w.address || null,
+                charged: it.wfh_charge, amount: it.wfh_charge_amount, dc_number: it.wfh_charge_dc_number, charged_at: it.wfh_charge_at });
+        }
+        res.json({ success: true, wfh_charge: WFH_CHARGE, items: out });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** POST /items/:itemId/wfh-charge — the lead charges a WFH return pickup / replacement delivery (Rs 799 + GST). */
+exports.chargeWfhDelivery = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const out = await require('../services/supportChargesService').chargeWfhDelivery(client, {
+            itemId: parseInt(req.params.itemId, 10), user: req.user,
+        });
+        await client.query('COMMIT');
+        res.json({ success: true, message: out.already ? 'Already charged' : `Charged Rs ${out.amount} + GST on ${out.dc_number} — it shows under Delivery Charges`, ...out });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    } finally {
+        client.release();
+    }
+};

@@ -99,6 +99,12 @@ router.patch('/part-return-dcs/:dcNumber/receive', requireWarehouseEdit,     ctr
 router.patch('/part-return-dcs/:dcNumber/courier', requireWarehouseEdit,    ctrl.updatePartReturnDcCourier);
 router.get('/part-return-dcs-pending',            requireWarehouse,          ctrl.listPartReturnDcsPendingReceive);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
+// Charges: Support marks a part chargeable; the warehouse prices it; Accounts bills it.
+router.patch('/requests/:requestId/chargeable',   requireSupportOrWarehouse, ctrl.markPartChargeable);
+router.patch('/requests/:requestId/price',        requireWarehouseEdit,      ctrl.setPartPrice);
+const { checkSectionPermission } = require('../middleware/auth');
+router.get('/charges-to-bill',                    checkSectionPermission('customer_billing', 'view'), ctrl.listChargesToBill);
+router.post('/charges/add-to-invoice',            checkSectionPermission('customer_billing', 'edit'), ctrl.addChargesToInvoice);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);
 router.patch('/requests/:requestId/accept-return', requireWarehouseEdit,         ctrl.acceptReturn);
 router.post('/requests/:requestId/request-reassign', requireSupportOrWarehouse, ctrl.requestReassign);

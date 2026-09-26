@@ -79,3 +79,16 @@ creates the Service DC in one click → delivery → credit.
 4. Lead desk: Queue (tickets + requests), ticket record, create, assign with load, repair-loop list,
    SLA board, technicians, settings.
 5. Menu (Serve opens the new screens; old under "Old view"), QA click-through.
+
+## Progress
+- **Step 0 — safety fixes: DONE** (3ff00bdf, migration 344).
+- **Step 1 — repair loop, deal, charges: DONE** (migrations 345, 346):
+  S7 trigger stamps `repair_ready_at` when the floor completes the repair; such a laptop can't be reserved for a
+  sale. S9 replacement SO + delivery take the replaced laptop's deal (rental/sale, entity). Parts: free by default;
+  Support marks chargeable (reason) → warehouse prices (`PATCH /support-parts/requests/:id/price`, or on the
+  customer-DC approve) → used/delivered → APPROVED line in `customer_invoice_extra_lines` → Accounts adds it to the
+  customer's draft invoice (`GET /support-parts/charges-to-bill`, `POST /support-parts/charges/add-to-invoice`).
+  Mark-used now writes the laptop cost row (U11). WFH: `GET /support/tickets/:id/wfh`, asset picker shows `is_wfh`,
+  `POST /support/items/:id/wfh-charge` (lead) puts Rs 799 on the return DC / replacement SO+DC `shiping_charges`.
+  **After the live merge:** extend Delivery Charges (`deliveryChargesService.DC_CHARGES_CTE`, outbound only today) to
+  include return DCs with a charge, so WFH return pickups show there too.
