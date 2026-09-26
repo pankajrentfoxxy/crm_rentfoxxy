@@ -428,7 +428,33 @@ function notifySupportOtpAsync(args) {
   fireAndForget(() => notifySupportOtp(args), 'delivery_otp_v1');
 }
 
+/**
+ * Feedback link on WhatsApp (S6). Off until INTERAKT_TPL_SUPPORT_FEEDBACK names
+ * an approved template — sending an unapproved one only fails at Interakt.
+ */
+async function notifySupportFeedback(ticketId, link) {
+  try {
+    if (!String(process.env.INTERAKT_TPL_SUPPORT_FEEDBACK || '').trim()) {
+      return { ok: false, skipped: true, error: 'feedback template not configured' };
+    }
+    const ticket = await loadTicketContext(ticketId);
+    if (!ticket) return { ok: false, skipped: true, error: 'ticket not found' };
+    const ticketNo = formatTicketNo(ticket.id);
+    return await sendWhatsAppTemplate({
+      phone: await resolveTicketPhone(ticket),
+      templateName: 'support_feedback_v1',
+      values: [displayCustomerName(ticket) || 'Customer', ticketNo, link],
+      refType: 'support_feedback',
+      refId: ticketNo,
+    });
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, 'notifySupportFeedback failed');
+    return { ok: false, error: err.message };
+  }
+}
+
 module.exports = {
+  notifySupportFeedback,
   formatTicketNo,
   formatTicketType,
   displayCustomerName,

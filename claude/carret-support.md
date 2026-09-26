@@ -95,8 +95,8 @@ creates the Service DC in one click → delivery → credit.
 - **Step 2 — SLA + CSAT: DONE** (migration 347). SLA computed on read (`services/supportSlaService.js`: business
   hours, holds + part waits pause); `GET /support/sla/board`, `/tickets/:id/sla`, lead hold/release. CSAT: token on
   close (trigger), mail via the email queue worker, public `/api/support-public/feedback/:token` (rate-limited, no
-  contact details), `GET /support/csat/summary`. WhatsApp CSAT needs an approved Interakt template — not sent by
-  WhatsApp yet (email only). QA today: 128 open tickets, 126 past SLA (old, stale).
+  contact details), `GET /support/csat/summary`. WhatsApp CSAT is wired (support_feedback_v1) and switches on when
+  INTERAKT_TPL_SUPPORT_FEEDBACK names the approved template; email until then. QA today: 128 open tickets, 126 past SLA (old, stale).
 - **Step 3 — technician phone: DONE** (264f9907): Serve → My work / job screen / My parts.
 - **Step 4 — lead desk: DONE**: Serve → Queue (4 lanes by who acts next, SLA), Ticket record (SLA clocks, hold,
   assign least-busy first, visit slot, WFH badge + charge, history), New ticket (customer → laptops with WFH →

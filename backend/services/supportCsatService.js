@@ -1,7 +1,8 @@
 /**
  * Support CSAT (claude/carret-support.md S6). When a ticket closes, a trigger
  * (migration 347) makes a feedback row with a random token. This service mails
- * the customer a link to the public feedback page, takes the 1–5 rating and
+ * (and, once the Interakt template is approved, WhatsApps) the customer a link
+ * to the public feedback page, takes the 1–5 rating and
  * comment, and summarises it for the lead — overall and per technician.
  *
  * The public endpoints are internet-facing: they return only the ticket number
@@ -28,12 +29,16 @@ async function queueFeedbackMails() {
       WHERE c.sent_at IS NULL AND c.send_error IS NULL AND c.submitted_at IS NULL AND c.expires_at > NOW()
       ORDER BY c.id LIMIT 50`
   )).rows;
+  const { notifySupportFeedback } = require('./supportWhatsApp');
   for (const r of rows) {
+    const link = `${publicBase()}/feedback/${r.token}`;
+    // WhatsApp as well, once its template is approved (off otherwise).
+    const wa = await notifySupportFeedback(r.ticket_id, link);
     if (!r.email) {
-      await pool.query(`UPDATE support_csat SET send_error = 'no email on the ticket or customer' WHERE id = $1`, [r.id]);
+      if (wa?.ok && !wa.skipped) await pool.query('UPDATE support_csat SET sent_at = NOW() WHERE id = $1', [r.id]);
+      else await pool.query(`UPDATE support_csat SET send_error = 'no email on the ticket or customer' WHERE id = $1`, [r.id]);
       continue;
     }
-    const link = `${publicBase()}/feedback/${r.token}`;
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#0f172a">
       <p>Dear ${escapeHtml(r.customer_name || 'Customer')},</p>
       <p>Your support ticket <strong>#${r.ticket_id}</strong> is resolved. How did we do? It takes 10 seconds:</p>

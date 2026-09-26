@@ -211,8 +211,19 @@ Keep every reviewed CSV in `claude/reports/` with the date — it is the record 
   needs commit 76c81b6e (the first --apply failed on a param type and rolled back).
 ☐ **Rented laptops' rent start date (BLOCKER for vendor bills)** — on QA 1,025 of ~1,050 rented laptops have
   `rental_start_date = 2027-02-07` (created 2026-02-07, the ERP import day; PO and GRN dates are that day too).
-  A start date in the future keeps them OFF every vendor bill. The real receipt dates are only in the ERP
-  (`extra.erp_serial_id`). Check live for the same before any vendor bill is generated there.
+  A start date in the future keeps them OFF every vendor bill. Checked 26 Sep: the ERP API's product rows
+  were also created 2026-02-07, so neither system holds the true first day. Fix: `node backend/scripts/
+  fix-rental-start-dates.js --csv x.csv` then `--apply` — start = earliest of opening-stock PO date, first
+  customer rent start, first delivery/dispatch (2025-01-04 … 2026-02-07); old value kept in
+  `extra.rental_start_date_imported`, backup JSON written. Correct for every vendor-bill month from Mar 2026;
+  do NOT generate CRM vendor bills for months already settled outside the CRM. QA report:
+  `claude/reports/rental-start-QA-2026-09-26.csv`. Not yet applied on QA (session not allowed — run by hand).
+☐ **Vendor rates (per-line rule)** — verified against the ERP API 26 Sep: new rate = ERP rate on 979 of 1,006
+  laptops (old line-1 rule matched 248). Accounts to fill `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv`
+  (27 disagree with the ERP, 40 have no rate and are not billed). Full comparison:
+  `vendor-rates-vs-erp-QA-2026-09-26.csv`.
+☐ **WhatsApp feedback** — code ready (template `support_feedback_v1`, 3 values: customer, ticket no, link).
+  Off until Interakt approves the template and `INTERAKT_TPL_SUPPORT_FEEDBACK=<name>` is set in backend/.env.
 
 ### B6. After promotion — watch for a day
 ☐ Floor: one laptop through triage → diagnosis → assembly → testing → QC1 → QC2 → into stock.

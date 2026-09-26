@@ -95,6 +95,17 @@ const TEMPLATES = Object.freeze({
     varCount: 4,
     fields: ['customer_name', 'ticket_no', 'sdc_no', 'quantity'],
   },
+  // Customer feedback link after a ticket closes (claude/carret-support.md S6).
+  // Not in the Interakt dashboard yet: sent only once INTERAKT_TPL_SUPPORT_FEEDBACK
+  // names the approved template. Body: {{1}} customer, {{2}} ticket no, {{3}} link.
+  support_feedback_v1: {
+    key: 'support_feedback_v1',
+    interaktName: envName('INTERAKT_TPL_SUPPORT_FEEDBACK', 'support_feedback'),
+    aliases: ['support_feedback', 'support_feedback_v1'],
+    eventType: 'support_feedback',
+    varCount: 3,
+    fields: ['customer_name', 'ticket_no', 'feedback_link'],
+  },
   support_service_delivered_v1: {
     key: 'support_service_delivered_v1',
     interaktName: envName('INTERAKT_TPL_SUPPORT_SERVICE_DELIVERED', 'support_service_delivered'),
