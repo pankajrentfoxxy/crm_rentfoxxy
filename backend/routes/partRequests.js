@@ -72,9 +72,9 @@ const allowTtsplPartDetach = (req, res, next) => {
   return checkSectionPermission('parts_detach', 'edit')(req, res, next);
 };
 router.post('/instances/:instanceId/detach-from-ttspl', allowTtsplPartDetach, ctrl.detachInstalledPartFromTtspl);
-router.get('/ticket/:ticketId', ctrl.getTicketPartRequests);
+router.get('/ticket/:ticketId', checkAnySectionPermission(['parts_requests', 'parts_approval'], 'view'), ctrl.getTicketPartRequests);
 
-router.get('/:requestId', ctrl.getPartRequest);
+router.get('/:requestId', checkAnySectionPermission(['parts_requests', 'parts_approval'], 'view'), ctrl.getPartRequest);
 router.patch('/:requestId/approve', requirePartsApprovalEdit, ctrl.approvePartRequest);
 router.patch('/:requestId/reject', requirePartsApprovalEdit, ctrl.rejectPartRequest);
 router.patch('/:requestId/escalate', requirePartsApprovalEdit, ctrl.escalateToProcurement);
@@ -89,6 +89,18 @@ const allowPartDetach = (req, res, next) => {
   return checkSectionPermission('parts_requests', 'create')(req, res, next);
 };
 router.post('/:requestId/detach', allowPartDetach, ctrl.detachAttachedPart);
-router.patch('/:requestId/cancel', ctrl.cancelPartRequest);
+// P16: cancel needed only a login (plus a role list inside).
+router.patch('/:requestId/cancel', (req, res, next) => {
+  // Requesters (parts_requests create) or approvers (parts_approval edit).
+  const { hasPermission } = require('../services/permissionService');
+  const cache = req.permissionCache || (req.permissionCache = {});
+  Promise.all([
+    hasPermission(req.user.user_id, req.user.role, 'parts_requests', 'can_create', cache),
+    hasPermission(req.user.user_id, req.user.role, 'parts_approval', 'can_edit', cache),
+  ]).then(([a, b]) => (a || b || req.user.role === 'super_admin'
+    ? next()
+    : res.status(403).json({ success: false, message: 'Permission denied' })))
+    .catch((e) => res.status(500).json({ success: false, message: e.message }));
+}, ctrl.cancelPartRequest);
 
 module.exports = router;

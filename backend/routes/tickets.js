@@ -32,9 +32,6 @@ const {
   moveToNextStage,
   assignTicket,
   addNote,
-  addPartToTicket,
-  requestPart,
-  fulfillPartRequest,
   addServiceCost,
   claimTicket,
   getAllStages,
@@ -48,7 +45,6 @@ const {
   getFloorManagerQueue,
   getTeamMembers,
   getNextAssignee,
-  addPartToTicketWithConfig,
   removePartFromTicket,
   logNote,
   getFloorNavCounts,
@@ -190,18 +186,27 @@ router.post('/:id/notes', floorAnyEdit, addNote);
 // @route   POST /api/tickets/:id/parts
 // @desc    Add part to ticket
 // @access  Private
-router.post('/:id/parts', floorAnyEdit, addPartToTicket);
+// PD7 (Production safety B): parts are fitted only through a part request
+// (request -> approve a real unit -> fit). These took stock off the count with
+// no approval, no unit and no ledger entry, and chip-level "request part"
+// created free-text requests nothing could fulfil.
+const retiredPartIssue = (req, res) => res.status(410).json({
+  success: false,
+  code: 'PART_ISSUE_RETIRED',
+  message: 'Parts are fitted only through a part request: request the part on the ticket, the warehouse approves a unit, then fit it.',
+});
+router.post('/:id/parts', floorAnyEdit, retiredPartIssue);
 router.post(
   '/:id/parts-with-config',
   ftEdit,
-  addPartToTicketWithConfig
+  retiredPartIssue
 );
 router.delete('/:id/parts/:ticketPartId', ftEdit, removePartFromTicket);
 router.post('/:id/log-note', floorAnyEdit, logNote);
 
 // Cost & Parts System
-router.post('/:id/part-request', floorAnyEdit, requestPart);
-router.post('/:id/fulfill-part', floorAnyEdit, fulfillPartRequest);
+router.post('/:id/part-request', floorAnyEdit, retiredPartIssue);
+router.post('/:id/fulfill-part', floorAnyEdit, retiredPartIssue);
 router.post('/:id/service-cost', floorAnyEdit, addServiceCost);
 // Work Logs Routes
 router.post('/:id/work/start', floorAnyEdit, startWork);

@@ -222,7 +222,15 @@ exports.createPartRequest = async (req, res) => {
       stageName = sRes.rows[0]?.stage_name || null;
     }
 
-    const inStock = Number(part.quantity) > 0;
+    // P5: "in stock" means a unit is on the shelf, not parts.quantity (which
+    // also counts reserved units and drifts). P4: one request is one unit.
+    if (Number(quantity) > 1) {
+      return res.status(400).json({ success: false, message: 'Request one part per request — raise another request for the next unit.' });
+    }
+    const shelf = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM part_instances WHERE part_id = $1 AND status = 'in_stock'`, [part_id]
+    );
+    const inStock = shelf.rows[0].n > 0;
     const status = inStock ? 'pending' : 'escalated';
     const blocks = blocks_stage !== false;
 
@@ -401,6 +409,12 @@ exports.approvePartRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot approve a request with status '${pr.status}'` });
     }
 
+    // P7: part_requests has no brand/model columns, so pr.brand was always
+    // undefined and the fitment check never ran. The laptop is the ticket's.
+    const lap = (await client.query('SELECT brand, model FROM tickets WHERE ticket_id = $1', [pr.ticket_id])).rows[0] || {};
+    pr.brand = lap.brand || null;
+    pr.model = lap.model || null;
+
     let instanceId = instance_id ? Number(instance_id) : null;
 
     // Scanned QR label (or a typed Part ID / serial) picks the exact unit.
@@ -435,7 +449,7 @@ exports.approvePartRequest = async (req, res) => {
            FROM part_instances
           WHERE part_id = $1 AND status = 'in_stock'
           ORDER BY received_at ASC, instance_id ASC
-          FOR UPDATE SKIP LOCKED`,
+          FOR UPDATE`,
         [pr.part_id]
       );
       let chosen = null;
@@ -451,29 +465,16 @@ exports.approvePartRequest = async (req, res) => {
       if (chosen) {
         instanceId = chosen.instance_id;
       } else {
-        // No PRT instance exists yet. Legacy stock may live only in parts.quantity
-        // (added before Phase 16). If there is stock, mint a PRT instance on-the-fly.
-        const partRow = await client.query(
-          `SELECT part_id, part_name, quantity, cost FROM parts WHERE part_id = $1 FOR UPDATE`,
-          [pr.part_id]
-        );
-        const part = partRow.rows[0];
-        if (!part || Number(part.quantity) <= 0) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Part "${part?.part_name || pr.part_id}" is out of stock (0 available). Escalate to procurement.`
-          });
-        }
-        const prtId = await generatePrtId(new Date(), client);
-        const created = await client.query(
-          `INSERT INTO part_instances
-             (prt_id, part_id, unit_cost, status, notes, fitment, received_at, created_at, updated_at)
-           VALUES ($1, $2, $3, 'in_stock', 'Auto-created from legacy stock on approval', 'unset', NOW(), NOW(), NOW())
-           RETURNING instance_id`,
-          [prtId, pr.part_id, Number(part.cost || 0)]
-        );
-        instanceId = created.rows[0].instance_id;
+        // P3: no unit is on the shelf. This used to create one whenever
+        // parts.quantity > 0 — which counts reserved units, and with SKIP
+        // LOCKED fired under concurrency — so parts that did not exist were
+        // reserved and later installed. Nothing is invented now.
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          code: 'NO_UNIT_ON_SHELF',
+          message: 'No unit of this part is on the shelf. If there is stock, add its units (with their labels) in Parts first; otherwise escalate to procurement.',
+        });
       }
     }
 
@@ -497,6 +498,30 @@ exports.approvePartRequest = async (req, res) => {
     if (inst.status !== 'in_stock' && inst.status !== 'reserved') {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: `${inst.prt_id} is '${inst.status}', not available` });
+    }
+    // P1: a reserved unit may only be re-confirmed for the request that holds
+    // it — it could be reserved for a second request and installed twice.
+    if (inst.status === 'reserved') {
+      const holder = (await client.query(
+        `SELECT request_number FROM part_requests
+          WHERE instance_id = $1 AND request_id <> $2 AND status IN ('approved', 'ordered', 'received', 'pending', 'escalated')
+          LIMIT 1`,
+        [inst.instance_id, pr.request_id]
+      )).rows[0];
+      if (holder || Number(pr.instance_id) !== Number(inst.instance_id)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `${inst.prt_id} is already reserved${holder ? ` for ${holder.request_number}` : ' for another job'}. Pick a unit that is on the shelf.`,
+        });
+      }
+    }
+    // Re-approving with a different unit gives the old one back to the shelf.
+    if (pr.instance_id && Number(pr.instance_id) !== Number(instanceId)) {
+      await client.query(
+        `UPDATE part_instances SET status = 'in_stock', updated_at = NOW() WHERE instance_id = $1 AND status = 'reserved'`,
+        [pr.instance_id]
+      );
     }
 
     const fitGate = await assertAssignmentAllowed({
@@ -716,6 +741,13 @@ exports.markPartReceived = async (req, res) => {
     if (!prRes.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Request not found' }); }
     const pr = prRes.rows[0];
 
+    // P2: only a request still waiting for its part, and only a unit that is
+    // on the shelf (it could revive cancelled requests and reserve installed
+    // or defective units).
+    if (!['escalated', 'ordered', 'received', 'pending'].includes(pr.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: `This request is ${pr.status} — it is not waiting for a part.` });
+    }
     const instRes = await client.query(`SELECT * FROM part_instances WHERE instance_id = $1 FOR UPDATE`, [Number(instance_id)]);
     if (!instRes.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Part instance not found' }); }
     const inst = instRes.rows[0];
@@ -723,8 +755,23 @@ exports.markPartReceived = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Part unit does not match the requested part' });
     }
+    if (inst.status !== 'in_stock') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: `${inst.prt_id} is ${inst.status}, not on the shelf.` });
+    }
+    if (pr.instance_id && Number(pr.instance_id) !== Number(inst.instance_id)) {
+      await client.query(
+        `UPDATE part_instances SET status = 'in_stock', updated_at = NOW() WHERE instance_id = $1 AND status = 'reserved'`,
+        [pr.instance_id]
+      );
+    }
 
     await client.query(`UPDATE part_instances SET status = 'reserved', updated_at = NOW() WHERE instance_id = $1`, [Number(instance_id)]);
+    await recordMovement(client, {
+      type: MOVEMENT.RESERVED, partId: pr.part_id, instanceId: inst.instance_id, prtId: inst.prt_id,
+      serialNumber: inst.serial_number, unitCost: inst.unit_cost, requestId: Number(requestId), ticketId: pr.ticket_id,
+      actorUserId: req.user.user_id, actorName: req.user.name,
+    });
     await client.query(
       `UPDATE part_requests SET status = 'approved', instance_id = $1, approved_by = $2, approved_at = NOW(), updated_at = NOW()
         WHERE request_id = $3`,
@@ -812,9 +859,15 @@ exports.attachPartAndReturnOld = async (req, res) => {
       throw Object.assign(new Error('Return the old part to warehouse before completing attach.'), { status: 400 });
     }
 
+    // P4/P5: a part is fitted only as a real reserved unit, one at a time.
+    // Without a unit this took stock off the count with nothing issued, and
+    // a quantity above 1 took several off while installing one.
+    if (!r.instance_id) {
+      throw Object.assign(new Error('No part unit is reserved for this request — approve it with a unit first.'), { status: 400 });
+    }
     const unitCost = parseFloat(r.instance_cost || r.part_cost || 0);
     const isUpgrade = r.request_type === 'upgrade';
-    const qty = Number(r.quantity) || 1;
+    const qty = 1;
 
     if (r.instance_id) {
       await client.query(
@@ -871,6 +924,13 @@ exports.attachPartAndReturnOld = async (req, res) => {
     // declared what to expect at approval; the technician can still correct it.
     let returnedInstance = null;
     if (old_part_returned) {
+      // P6 / PD8: on an upgrade the part that came off is NOT the new part
+      // (an 8GB stick out, a 16GB in). Defaulting to the new part booked the
+      // removed 8GB as a 16GB unit — sellable stock at cost 0 if "good".
+      const declared = old_part_part_id || r.old_part_part_id || String(old_part_name || r.old_part_name || '').trim();
+      if (isUpgrade && !declared) {
+        throw Object.assign(new Error('Say which part came off the laptop (e.g. "8GB DDR4 RAM") — on an upgrade it is not the new part.'), { status: 400 });
+      }
       const returnedPartId = await resolveOldPartCatalogId(client, {
         partId: old_part_part_id || r.old_part_part_id || r.part_id,
         category: old_part_category || r.old_part_category || r.category,

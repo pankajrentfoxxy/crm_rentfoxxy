@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Search, PackagePlus, Wrench, X, Camera, Trash2 } from 'lucide-react';
+import { Loader2, Search, PackagePlus, X, Camera, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { addPartWithConfig, removeTicketPart, searchParts } from '../floorPipelineApi';
 import { createPartRequest, attachPartToRequest, detachAttachedPart, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
@@ -845,11 +845,7 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
               mode === 'request' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
             <PackagePlus className="w-4 h-4" /> Request Part
           </button>
-          <button type="button" onClick={() => { setMode('direct'); resetSelection(); }}
-            className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${
-              mode === 'direct' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
-            <Wrench className="w-4 h-4" /> Direct Attach
-          </button>
+          {/* PD7: "Direct Attach" is retired — every part goes through a request. */}
         </div>
         <p className="text-xs text-slate-400">
           {mode === 'request'
