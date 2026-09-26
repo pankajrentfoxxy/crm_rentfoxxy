@@ -24,3 +24,11 @@ backend/private-uploads/
 # Production data dumps and generated reports - customer PII, never commit
 backups/
 reports/
+
+# Local Claude Code settings (personal permissions — never shared)
+.claude/
+
+# QA frontend rollback copies made when swapping in a new build
+frontend/build.prev/
+frontend/build.prev-*/
+frontend/build.next/

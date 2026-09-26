@@ -806,7 +806,8 @@ async function computeCostSummary(ctx) {
   const { getLaptopCost } = require('./laptopCostService');
   const cost = await getLaptopCost(pool, { serialId: serialId || null, ttsplId: serialId ? null : (canonicalTtspl || aliasArr[0]) });
   if (!cost) return { parts_cost: 0, base_cost: 0, total_cost: 0 };
-  const baseCost = cost.base.kind === 'purchase' ? (cost.base.amount || 0) : 0;
+  // Rented laptops count at their purchase-equivalent (asset value) — #6.
+  const baseCost = cost.base.kind === 'purchase' ? (cost.base.amount || 0) : (cost.base.purchase_equivalent?.amount || 0);
   return {
     parts_cost: cost.parts,
     base_cost: baseCost,
@@ -815,6 +816,9 @@ async function computeCostSummary(ctx) {
     base_kind: cost.base.kind,
     monthly_rent: cost.base.kind === 'monthly_rent' ? cost.base.amount : null,
     base_source: cost.base.source,
+    purchase_equivalent: cost.base.purchase_equivalent || null,
+    rent_paid: cost.rent_paid || null,
+    total_basis: cost.total_basis,
     lines: cost.lines,
   };
 }

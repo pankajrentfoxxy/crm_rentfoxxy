@@ -175,7 +175,31 @@ export default function FloorTicketPage() {
             {cost && (
               <Section title="Cost of this laptop">
                 <div className="c-totals">
-                  <div><span>{cost.base.kind === 'monthly_rent' ? `Rented from the vendor (${cost.base.po_number || 'PO'}) — monthly rent, not in the total` : `Bought on ${cost.base.po_number || 'its PO'}`}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
+                  {cost.base.kind === 'monthly_rent' ? (
+                    <>
+                      <div>
+                        <span>
+                          Purchase-equivalent (rented on {cost.base.po_number || 'its PO'})
+                          {' — '}
+                          {{ asset_value: 'asset value on the PO', po_rate: 'price on the PO', same_model_purchases: `what we paid for the same model (${cost.base.purchase_equivalent?.lines || 0} purchase line(s))` }[cost.base.purchase_equivalent?.source] || 'no price on record'}
+                        </span>
+                        <span>{cost.base.purchase_equivalent?.amount != null ? money(cost.base.purchase_equivalent.amount) : '—'}</span>
+                      </div>
+                      <div className="text-ink-3"><span>Monthly rent to the vendor (not in the total)</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'not found'}</span></div>
+                      {cost.rent_paid && (
+                        <div className="text-ink-3">
+                          <span>
+                            {cost.rent_paid.start_in_future
+                              ? 'Rent paid so far — rent start date is wrong (in the future), cannot work it out'
+                              : `Rent paid so far — ${cost.rent_paid.days} day(s)${cost.rent_paid.ended ? ', rent ended' : ''} (not in the total)`}
+                          </span>
+                          <span>{cost.rent_paid.start_in_future ? '—' : money(cost.rent_paid.amount)}</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div><span>Bought on {cost.base.po_number || 'its PO'}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
+                  )}
                   {cost.lines.map((l, i) => (
                     // eslint-disable-next-line react/no-array-index-key
                     <div key={i}><span>{l.label}{l.ref ? ` · ${l.ref}` : ''}{l.no_cost ? ' (no cost recorded)' : ''}</span><span>{money(l.amount)}</span></div>

@@ -200,6 +200,15 @@ state the report saw.
 
 Keep every reviewed CSV in `claude/reports/` with the date — it is the record of what changed.
 
+☐ **PO GST type (120 POs: 96 laptop, 24 spare)** — `node backend/scripts/fix-po-gst-type.js --csv gst.csv`
+  (report) → Accounts reviews → `--apply` (writes a backup JSON under backend/backups first). Totals do not
+  change (18% either way); only the CGST+SGST / IGST split on the PO. Not yet applied on QA either (26 Sep —
+  the session was not allowed to write it; run it by hand).
+☐ **Rented laptops' rent start date (BLOCKER for vendor bills)** — on QA 1,025 of ~1,050 rented laptops have
+  `rental_start_date = 2027-02-07` (created 2026-02-07, the ERP import day; PO and GRN dates are that day too).
+  A start date in the future keeps them OFF every vendor bill. The real receipt dates are only in the ERP
+  (`extra.erp_serial_id`). Check live for the same before any vendor bill is generated there.
+
 ### B6. After promotion — watch for a day
 ☐ Floor: one laptop through triage → diagnosis → assembly → testing → QC1 → QC2 → into stock.
 ☐ One part asked for, given by the parts desk, fitted; the old part appears on "Old parts to
