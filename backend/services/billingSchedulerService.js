@@ -3464,6 +3464,31 @@ async function generateAllCustomerInvoices(month, year) {
   });
 }
 
+/**
+ * The monthly rent a vendor bills for ONE laptop (Procure-to-stock step 0).
+ *
+ * It used to read the PO's first line for every laptop on the PO, and prefer
+ * "Rate" over "Monthly rental". Both were wrong:
+ *  - ERP-era POs carry one line per laptop at its own rent (PO-0009: 451 lines
+ *    from ₹700 to ₹1,250), so every laptop was billed at line 1's rent;
+ *  - the rental PO form asks for Rate AND Monthly rental, and people put the
+ *    purchase price in Rate (PO-0225: Rate ₹25,000, Monthly rental ₹1,999).
+ * Now: the laptop's own line (vsn.extra.line_index, set at receipt; line 1 if
+ * absent), and on that line Monthly rental, then monthly_rate, then Rate.
+ * A line with none of them bills nothing and is logged (BL3 rule).
+ */
+const VENDOR_LINE_JOIN_SQL = `CROSS JOIN LATERAL (
+         SELECT COALESCE(
+                  vpo.line_items -> COALESCE(NULLIF(vsn.extra->>'line_index', '')::int, 0),
+                  vpo.line_items -> 0
+                ) AS ln
+       ) vln`;
+const VENDOR_LINE_RATE_SQL = `COALESCE(
+                NULLIF(NULLIF(vln.ln->>'monthly_rental_amount', '')::numeric, 0),
+                NULLIF(NULLIF(vln.ln->>'monthly_rate', '')::numeric, 0),
+                NULLIF(NULLIF(vln.ln->>'rate', '')::numeric, 0)
+              )`;
+
 async function generateVendorBill(vendorId, month, year) {
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
@@ -3489,15 +3514,13 @@ async function generateVendorBill(vendorId, month, year) {
               vsn.inventory_status,
               COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
               vsn.vendor_rent_end_date AS returned_at,
-              COALESCE(
-                NULLIF((vpo.line_items->0->>'rate')::numeric, 0),
-                NULLIF((vpo.line_items->0->>'monthly_rental_amount')::numeric, 0),
-                NULLIF((vpo.line_items->0->>'monthly_rate')::numeric, 0)
-              ) AS rental_monthly_rate,
+              ${VENDOR_LINE_RATE_SQL} AS rental_monthly_rate,
+              COALESCE(NULLIF(vsn.extra->>'line_index', '')::int, 0) AS po_line_index,
               vsn.po_id,
               COALESCE(vsn.acquisition_type, vpo.purchase_order_type) AS po_type
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+       ${VENDOR_LINE_JOIN_SQL}
        WHERE vpo.vendor_id = $1
          -- Per-serial acquisition_type shadows the PO. A vendor-rented unit that we
          -- later bought out (sale in place) is flipped to direct_purchase on the
@@ -3541,7 +3564,7 @@ async function generateVendorBill(vendorId, month, year) {
         console.warn(
           `[billing] SKIPPED vendor line for ${row.ttspl_id || `serial ${row.serial_id}`}`
           + ` on PO ${row.po_id} (vendor ${vendorId}, ${year}-${String(month).padStart(2, '0')}):`
-          + ' no usable rate on the PO line_items. No line written.'
+          + ` no usable rate on PO line ${Number(row.po_line_index) + 1}. No line written.`
           + ' Set rate / monthly_rental_amount / monthly_rate on the PO to bill it.'
         );
         continue;
@@ -3570,6 +3593,7 @@ async function generateVendorBill(vendorId, month, year) {
         monthly_rate: calc.monthlyRate,
         daily_rate: calc.dailyRate,
         amount: calc.amount,
+        po_line_index: row.po_line_index,
       });
     }
 
@@ -3648,7 +3672,11 @@ async function generateAllVendorBills(month, year) {
     `SELECT DISTINCT vpo.vendor_id
      FROM vendor_serial_numbers vsn
      JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
-     WHERE vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+     -- BL5: pick vendors by the same rule generateVendorBill bills by — the
+     -- serial's own acquisition type shadows the PO's — and skip deleted rows.
+     WHERE COALESCE(vsn.acquisition_type, vpo.purchase_order_type) IN ('rental_purchase','rent_to_own')
+       AND vsn.deleted_at IS NULL
+       AND vpo.deleted_at IS NULL
        AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL`
   );
 
@@ -3702,6 +3730,8 @@ function startBillingScheduler() {
 }
 
 module.exports = {
+  VENDOR_LINE_JOIN_SQL,
+  VENDOR_LINE_RATE_SQL,
   startBillingScheduler,
   generateCustomerInvoice,
   generatePostpaidCustomerInvoice,

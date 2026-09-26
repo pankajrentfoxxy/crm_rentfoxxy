@@ -54,9 +54,11 @@ answers first, because several of them change how the team works, not just the s
 
 ## Build order (after decisions)
 
-0. **Vendor billing rate (urgent, before anything else)** — bill each laptop at *its own* PO
-   line's monthly rent, not line 1's Rate; list every rental PO whose Rate and Monthly rent
-   disagree (PO-0225 first) for accounts to confirm before the next vendor bill run.
+0. **Vendor billing rate (urgent, before anything else)** — DONE on QA 26 Sep: each laptop billed
+   at its own PO line, Monthly rent before Rate; BL5 vendor list fixed. Impact on QA data: 765 of
+   1,036 laptops change (SG Laptops +₹2.37 lakh/month, C Prompt −₹1.14 lakh, Firmsap +₹1.02
+   lakh, Siddhi −₹20k); 27 laptops have no rate at all. **Accounts must confirm before it is
+   promoted** — `node backend/scripts/report-vendor-rate-changes.js --csv <file>` lists every laptop.
 1. **Safety fixes first (backend)** — approval bypass, self-approval, edit lock, numbers taken from
    the request, delete with received units, over-receipt race, the two unchecked receive paths,
    "view"-guarded write routes (return DC, return ticket, billing list), e-way upload auth, notify
