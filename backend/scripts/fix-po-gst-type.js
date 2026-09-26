@@ -138,8 +138,8 @@ function toCsv(rows) {
         await client.query(
           `INSERT INTO vendor_audit_logs (actor_user_id, vendor_id, entity_type, entity_id, action, payload)
            SELECT NULL, vendor_id, 'purchase_order', $1::text, 'gst_type_corrected', $2::jsonb
-             FROM vendor_purchase_orders WHERE po_id = $1`,
-          [r.id, JSON.stringify({ from: r.stored_type, to: r.correct_type, vendor_state: r.vendor_state, po_state: r.po_state })]
+             FROM vendor_purchase_orders WHERE po_id = $3`,
+          [String(r.id), JSON.stringify({ from: r.stored_type, to: r.correct_type, vendor_state: r.vendor_state, po_state: r.po_state }), r.id]
         );
       }
     }
