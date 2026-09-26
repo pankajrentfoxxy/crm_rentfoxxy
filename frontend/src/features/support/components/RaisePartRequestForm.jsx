@@ -244,6 +244,10 @@ export default function RaisePartRequestForm({ ticket, item }) {
 
   const submit = async () => {
     if (!partId) return;
+    if (billingType === 'charge_customer' && chargeAmount.trim().length < 3) {
+      toast.error('Say why the customer is charged for this part');
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await raiseSupportPartRequest({
@@ -256,7 +260,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
         reason: reason.trim() || undefined,
         fulfillment_mode: fulfillmentMode,
         billing_type: billingType,
-        charge_amount: billingType === 'charge_customer' ? Number(chargeAmount) || 0 : 0,
+        charge_reason: billingType === 'charge_customer' ? chargeAmount.trim() : undefined,
         tampered_by_customer: tampered,
         collect_old_part: collectOldPart,
         old_part_collection_method: collectOldPart ? oldPartMethod : undefined,
@@ -443,7 +447,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
                     : 'border-amber-100 text-amber-800'
                 }`}
               >
-                Under warranty (no charge)
+                Free — under our service
               </button>
               <button
                 type="button"
@@ -454,23 +458,24 @@ export default function RaisePartRequestForm({ ticket, item }) {
                     : 'border-amber-100 text-amber-800'
                 }`}
               >
-                Charge customer
+                Charge the customer
               </button>
             </div>
             {billingType === 'charge_customer' && (
-              <div className="grid grid-cols-2 gap-2 mt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                {/* The warehouse sets the price (claude/carret-support.md); Support says why. */}
                 <input
-                  type="number"
-                  min="0"
                   value={chargeAmount}
                   onChange={(e) => setChargeAmount(e.target.value)}
-                  placeholder="Amount (Rs.)"
+                  placeholder="Why is the customer charged? *"
                   className="border rounded-xl px-3 py-2 text-sm bg-white"
+                  maxLength={300}
                 />
                 <label className="flex items-center gap-2 text-xs text-amber-800 px-2">
                   <input type="checkbox" checked={tampered} onChange={(e) => setTampered(e.target.checked)} />
                   Customer tampering
                 </label>
+                <p className="text-[11px] text-amber-800 sm:col-span-2">The warehouse sets the part's price; it goes on the customer's next invoice once the part is fitted.</p>
               </div>
             )}
           </div>

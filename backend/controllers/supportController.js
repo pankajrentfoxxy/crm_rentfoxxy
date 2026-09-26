@@ -6326,3 +6326,13 @@ exports.getCsatSummary = async (req, res) => {
         res.status(500).json({ success: false, message: e.message });
     }
 };
+
+/** GET /my-work — the signed-in technician's support jobs with their next step (claude/carret-support.md). */
+exports.getMyWork = async (req, res) => {
+    try {
+        const jobs = await require('../services/supportMyWorkService').myWork(req.user.user_id);
+        res.json({ success: true, jobs });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
