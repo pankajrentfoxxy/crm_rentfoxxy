@@ -7,12 +7,14 @@ import {
   Textarea,
 } from '../../../components/carret';
 import {
-  assignItem, chargeWfh, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
+  assignItem, cancelTicket, chargeWfh, closeTicket, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
   setAppointment,
 } from './serveApi';
 import { usePermission } from '../../../hooks/usePermission';
 import TicketActions from './TicketActions';
 import IssuePanel from './IssuePanel';
+import TicketPartsPanel from './TicketPartsPanel';
+import TicketNextStep from './TicketNextStep';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -50,6 +52,9 @@ export default function TicketRecordPage() {
   const [appt, setAppt] = useState('');
   const [holdOpen, setHoldOpen] = useState(false);
   const [holdNote, setHoldNote] = useState('');
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelNote, setCancelNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -73,6 +78,7 @@ export default function TicketRecordPage() {
   const items = (t.items || []).filter((i) => !['removed'].includes(i.status));
   const onHold = (sla?.holds || []).find((h) => !h.to_at);
   const closed = ['closed', 'cancelled'].includes(tk.status);
+  const canLead = hasPermission('support_tickets', 'edit');
   const byLoad = [...techs].filter((x) => x.assignee_kind === 'technician').sort((a, b) => (a.open_item_count - b.open_item_count) || String(a.name).localeCompare(b.name));
   const suggested = byLoad[0]?.user_id;
 
@@ -128,7 +134,9 @@ export default function TicketRecordPage() {
               {!closed && (onHold
                 ? <Button disabled={busy} onClick={() => run(() => releaseHold(tk.id), 'Released — the SLA clock runs again')}>Release hold</Button>
                 : <Button onClick={() => setHoldOpen(true)}>On hold (customer)</Button>)}
-              <Button variant="quiet" onClick={() => navigate(`/support/tickets/${tk.id}`)}>Old view (pickup, replacement, Service DC, parts)</Button>
+              {!closed && canLead && <Button variant="primary" onClick={() => setCloseOpen(true)}>Close ticket</Button>}
+              {!closed && canLead && <Button variant="quiet" onClick={() => setCancelOpen(true)}>Cancel ticket</Button>}
+              <Button variant="quiet" onClick={() => navigate(`/support/tickets/${tk.id}`)}>Old view</Button>
             </>
           )}
           meta={[
@@ -139,10 +147,11 @@ export default function TicketRecordPage() {
             { label: 'Return DC', value: tk.return_dc_number || '—' },
           ]}
         />
+        <TicketNextStep data={t} canLead={canLead} onAssign={(i) => setAssignFor(i)} onClose={() => setCloseOpen(true)} />
         {onHold && <Notice tone="warn" title="On hold — waiting on the customer">{onHold.note} (since <DateTime value={onHold.from_at} />). The SLA clock is paused.</Notice>}
         {items.some((i) => i.repair_ready_at && !i.service_dc_number) && (
-          <Notice tone="good" title="Repaired — ready to go back" action={<Button variant="primary" onClick={() => navigate(`/support/tickets/${tk.id}`)}>Raise the Service DC</Button>}>
-            The floor has finished the repair. Raise the Service DC to send it back to the customer.
+          <Notice tone="good" title="Repaired — ready to go back">
+            The floor has finished the repair. Raise the Service DC below to send it back to the customer.
           </Notice>
         )}
         {sla?.sla && (
@@ -157,7 +166,8 @@ export default function TicketRecordPage() {
         <Section title={`Laptops · ${items.length}`}>
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
         </Section>
-        <IssuePanel data={t} canLead={hasPermission('support_tickets', 'edit') && !closed} reload={load} />
+        <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
+        <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
         {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
         <Section title="Contact and address">
           <KeyValue cols={2} items={[
@@ -223,6 +233,24 @@ export default function TicketRecordPage() {
       >
         <p style={{ marginBottom: '8px' }}>Use this only when we are waiting on the customer (not reachable, asked to come later). Waiting for a part pauses the SLA by itself.</p>
         <Field label="What are we waiting for" required><Textarea rows={3} value={holdNote} onChange={(e) => setHoldNote(e.target.value)} /></Field>
+      </Drawer>
+      <Drawer
+        open={closeOpen}
+        onClose={() => setCloseOpen(false)}
+        title={`Close ticket #${tk.id}`}
+        footer={<Button variant="primary" disabled={busy} onClick={async () => { if (await run(() => closeTicket(tk.id), 'Ticket closed — the customer gets the feedback link')) setCloseOpen(false); }}>Close the ticket</Button>}
+      >
+        <p>Every laptop must be finished, every part settled, and what was wrong recorded. The customer then gets a link to rate the service.</p>
+      </Drawer>
+
+      <Drawer
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        title={`Cancel ticket #${tk.id}`}
+        footer={<Button variant="primary" disabled={busy || cancelNote.trim().length < 3} onClick={async () => { if (await run(() => cancelTicket(tk.id, cancelNote.trim()), 'Ticket cancelled')) { setCancelOpen(false); setCancelNote(''); } }}>Cancel the ticket</Button>}
+      >
+        <p style={{ marginBottom: '8px' }}>Only when the ticket was raised by mistake or the customer withdrew it. Open parts must be settled first.</p>
+        <Field label="Why" required><Textarea rows={3} value={cancelNote} onChange={(e) => setCancelNote(e.target.value)} /></Field>
       </Drawer>
     </DeskShell>
   );

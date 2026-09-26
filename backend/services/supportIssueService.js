@@ -21,23 +21,25 @@ const RESOLUTIONS_FOR = {
   workshop: ['RES-RPR', 'RES-PRT', 'RES-NFF'],
 };
 
-async function catalogTree(db) {
+async function catalogTree(db, { includeInactive = false } = {}) {
+  // "Unspecified" rows (…-UNS) are placeholders for a customer's choice, never offered.
   const rows = (await db.query(
-    `SELECT catalog_id AS id, parent_id, level, code, name, requires_photo, chargeable_default
+    `SELECT catalog_id AS id, parent_id, level, code, name, active, requires_photo, chargeable_default
        FROM support_issue_catalog
-      WHERE active
-      ORDER BY level, sort_order, name`
+      WHERE ($1::boolean OR active) AND code NOT LIKE '%-UNS'
+      ORDER BY level, sort_order, name`,
+    [includeInactive]
   )).rows;
-  const types = rows.filter((r) => r.level === 1).map((t) => ({ id: t.id, code: t.code, name: t.name, subtypes: [] }));
+  const types = rows.filter((r) => r.level === 1).map((t) => ({ id: t.id, code: t.code, name: t.name, active: t.active, subtypes: [] }));
   const byId = new Map(types.map((t) => [t.id, t]));
   const subs = new Map();
   for (const s of rows.filter((r) => r.level === 2)) {
-    const node = { id: s.id, code: s.code, name: s.name, issues: [] };
+    const node = { id: s.id, code: s.code, name: s.name, active: s.active, issues: [] };
     subs.set(s.id, node);
     byId.get(s.parent_id)?.subtypes.push(node);
   }
   for (const i of rows.filter((r) => r.level === 3)) {
-    subs.get(i.parent_id)?.issues.push({ id: i.id, code: i.code, name: i.name, requires_photo: i.requires_photo, chargeable: i.chargeable_default });
+    subs.get(i.parent_id)?.issues.push({ id: i.id, code: i.code, name: i.name, active: i.active, requires_photo: i.requires_photo, chargeable: i.chargeable_default });
   }
   const causes = (await db.query(
     `SELECT cause_id AS id, code, name, default_liability FROM support_root_causes WHERE active ORDER BY sort_order`
@@ -61,14 +63,14 @@ async function resolveIssue(db, { type_id: typeId, subtype_id: subtypeId, issue_
     `SELECT t.catalog_id AS type_id, t.name AS type_name, s.catalog_id AS subtype_id, s.name AS subtype_name, s.code AS subtype_code
        FROM support_issue_catalog s
        JOIN support_issue_catalog t ON t.catalog_id = s.parent_id AND t.level = 1
-      WHERE s.catalog_id = $1 AND s.level = 2 AND t.catalog_id = $2`,
+      WHERE s.catalog_id = $1 AND s.level = 2 AND t.catalog_id = $2 AND s.active AND t.active`,
     [s, t]
   )).rows[0];
   if (!chain) throw fail(`The subtype does not belong to that type (${what})`);
   let issue;
   if (Number(issueId)) {
     issue = (await db.query(
-      `SELECT catalog_id AS id, name FROM support_issue_catalog WHERE catalog_id = $1 AND level = 3 AND parent_id = $2`,
+      `SELECT catalog_id AS id, name FROM support_issue_catalog WHERE catalog_id = $1 AND level = 3 AND parent_id = $2 AND active`,
       [Number(issueId), s]
     )).rows[0];
     if (!issue) throw fail(`The issue does not belong to that subtype (${what})`);
@@ -156,4 +158,52 @@ async function missingFindings(db, itemIds) {
   )).rows;
 }
 
-module.exports = { RESOLUTIONS_FOR, catalogTree, resolveIssue, reportedFrom, setReported, recordFinding, missingFindings, fail };
+/**
+ * Settings: add a subtype under a type, or an issue under a subtype. Codes are
+ * the parent's code plus a running number; nothing is ever deleted — retired
+ * entries are switched off so old tickets keep their names.
+ */
+async function addCatalogEntry(db, { parent_id: parentId, name }) {
+  const clean = String(name || '').trim();
+  if (clean.length < 2 || clean.length > 120) throw fail('Give it a name (2–120 characters)');
+  const parent = (await db.query('SELECT catalog_id, level, code, applies_to_class FROM support_issue_catalog WHERE catalog_id = $1', [Number(parentId)])).rows[0];
+  if (!parent || parent.level > 2) throw fail('Add a subtype under a type, or an issue under a subtype');
+  const dup = (await db.query('SELECT 1 FROM support_issue_catalog WHERE parent_id = $1 AND LOWER(name) = LOWER($2)', [parent.catalog_id, clean])).rows[0];
+  if (dup) throw fail(`"${clean}" is already there`, 409);
+  const n = Number((await db.query('SELECT COUNT(*) FROM support_issue_catalog WHERE parent_id = $1', [parent.catalog_id])).rows[0].count) + 1;
+  let code = `${parent.code}-X${String(n).padStart(2, '0')}`.slice(0, 24);
+  for (let k = n; (await db.query('SELECT 1 FROM support_issue_catalog WHERE code = $1', [code])).rows.length; k += 1) {
+    code = `${parent.code}-X${String(k + 1).padStart(2, '0')}`.slice(0, 24);
+  }
+  const sort = Number((await db.query(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM support_issue_catalog WHERE parent_id = $1 AND code NOT LIKE '%-UNS'`, [parent.catalog_id])).rows[0].m) + 10;
+  const row = (await db.query(
+    `INSERT INTO support_issue_catalog (parent_id, level, code, name, applies_to_class, sort_order, active)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE) RETURNING catalog_id AS id, code, name`,
+    [parent.catalog_id, parent.level + 1, code, clean, parent.applies_to_class, sort]
+  )).rows[0];
+  if (parent.level === 1) {
+    // A new subtype gets its own hidden "Unspecified" for customer requests.
+    await db.query(
+      `INSERT INTO support_issue_catalog (parent_id, level, code, name, applies_to_class, sort_order, active)
+       VALUES ($1, 3, $2, 'Unspecified', $3, 999, FALSE) ON CONFLICT (code) DO NOTHING`,
+      [row.id, `${code}-UNS`.slice(0, 24), parent.applies_to_class]
+    );
+  }
+  return row;
+}
+
+async function updateCatalogEntry(db, id, { name, active }) {
+  const row = (await db.query('SELECT catalog_id, parent_id, code FROM support_issue_catalog WHERE catalog_id = $1', [Number(id)])).rows[0];
+  if (!row || /-UNS$/.test(row.code)) throw fail('Not found', 404);
+  if (name !== undefined) {
+    const clean = String(name || '').trim();
+    if (clean.length < 2 || clean.length > 120) throw fail('Give it a name (2–120 characters)');
+    await db.query('UPDATE support_issue_catalog SET name = $2, updated_at = NOW() WHERE catalog_id = $1', [row.catalog_id, clean]);
+  }
+  if (active !== undefined) {
+    await db.query('UPDATE support_issue_catalog SET active = $2, updated_at = NOW() WHERE catalog_id = $1', [row.catalog_id, Boolean(active)]);
+  }
+  return { id: row.catalog_id };
+}
+
+module.exports = { addCatalogEntry, updateCatalogEntry, RESOLUTIONS_FOR, catalogTree, resolveIssue, reportedFrom, setReported, recordFinding, missingFindings, fail };

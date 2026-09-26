@@ -133,3 +133,4 @@ describe('support issue process', () => {
     assert.ok(r.body.types.every((t) => t.subtypes.every((s) => s.issues.every((i) => i.name !== 'Unspecified'))), 'Unspecified is not offered');
   });
 });
+

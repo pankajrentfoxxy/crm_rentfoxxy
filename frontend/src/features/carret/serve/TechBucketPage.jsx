@@ -5,7 +5,7 @@ import DeskShell from '../../../shells/DeskShell';
 import {
   Button, DataTable, DateTime, Drawer, EmptyState, Input, Section, StatTile,
 } from '../../../components/carret';
-import { fetchTechBucketBoard } from './serveApi';
+import { fetchTechBucketBoard, fetchTechnicians } from './serveApi';
 import { errMsg, when } from './serveShared';
 
 /**
@@ -14,7 +14,9 @@ import { errMsg, when } from './serveShared';
  * What every technician is holding or owes right now: open visits, pickups to
  * collect, laptops collected but not in at the gate, Service DC / replacement
  * deliveries out with them, parts issued, and old parts to bring back — each
- * with how many days it has been sitting. A technician sees only their own.
+ * with how many days it has been sitting. Every support technician is listed
+ * (the old Technicians screen), with today's visits. A technician sees only
+ * their own.
  */
 const LATE = 7; // days before something in hand is flagged
 
@@ -41,7 +43,22 @@ export default function TechBucketPage() {
   const [open, setOpen] = useState(null);
 
   useEffect(() => {
-    fetchTechBucketBoard().then(({ data: d }) => setData(d)).catch((e) => { toast.error(errMsg(e, 'Could not load the bucket')); setData({ technicians: [] }); });
+    Promise.all([
+      fetchTechBucketBoard().then(({ data: d }) => d),
+      fetchTechnicians().then(({ data: d }) => d.technicians || []).catch(() => []),
+    ]).then(([board, list]) => {
+      const empty = { visits: [], to_collect: [], in_hand: [], deliveries: [], parts: [], old_parts: [] };
+      const rows = [...(board.technicians || [])];
+      if (board.supervisor) {
+        for (const t of list.filter((x) => x.assignee_kind === 'technician')) {
+          if (!rows.some((r) => r.user_id === t.user_id)) {
+            rows.push({ user_id: t.user_id, name: t.name, phone: t.mobile_no, ...empty, counts: Object.fromEntries(Object.keys(empty).map((k) => [k, 0])), oldest_days: 0 });
+          }
+        }
+      }
+      const today = Object.fromEntries(list.map((t) => [t.user_id, t.today_visits || 0]));
+      setData({ ...board, technicians: rows.map((r) => ({ ...r, today: today[r.user_id] || 0 })) });
+    }).catch((e) => { toast.error(errMsg(e, 'Could not load the bucket')); setData({ technicians: [] }); });
   }, []);
 
   const rows = useMemo(() => {
@@ -68,7 +85,7 @@ export default function TechBucketPage() {
           {data === null ? <EmptyState title="Loading…" /> : (
             <DataTable
               columns={[
-                { key: 'n', header: 'Technician', render: (t) => t.name, sub: (t) => t.phone || null },
+                { key: 'n', header: 'Technician', render: (t) => t.name, sub: (t) => [t.phone, t.today ? `${t.today} visit(s) today` : null].filter(Boolean).join(' · ') || null },
                 ...COLS.map((c) => ({ key: c.key, header: c.label, render: (t) => <Count n={t.counts[c.key]} late={lateIn(t, c.key)} /> })),
                 { key: 'o', header: 'Oldest', render: (t) => <span style={{ color: t.oldest_days > LATE ? 'var(--alert-bad, #b91c1c)' : undefined }}>{days(t.oldest_days)}</span> },
               ]}

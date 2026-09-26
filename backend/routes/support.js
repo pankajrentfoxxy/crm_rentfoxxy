@@ -52,6 +52,9 @@ const {
     getTechnicianLaptopBucket,
     setOutcome,
     getIssueCatalog,
+    getIssueCatalogAdmin,
+    addIssueCatalogEntry,
+    updateIssueCatalogEntry,
     getIssueInsights,
     getTechBucketBoard,
     setReportedIssue,
@@ -167,6 +170,9 @@ router.use(requireSupportAccess);
 
 router.get('/categories', listCategories);
 router.get('/issue-catalog', getIssueCatalog);
+router.get('/issue-catalog/admin', getIssueCatalogAdmin);
+router.post('/issue-catalog', addIssueCatalogEntry);
+router.patch('/issue-catalog/:id', updateIssueCatalogEntry);
 router.get('/issue-insights', getIssueInsights);
 router.get('/tech-bucket-board', getTechBucketBoard);
 router.get('/technicians', listTechnicians);

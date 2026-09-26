@@ -217,6 +217,7 @@ export default function TicketActions({ data, techs, reload }) {
   return (
     <>
       {/* Pickup */}
+      <div id="ticket-pickup" />
       <Section
         title="Pickup"
         actions={(
@@ -235,6 +236,7 @@ export default function TicketActions({ data, techs, reload }) {
       </Section>
 
       {/* Replacement */}
+      <div id="ticket-replacement" />
       {(complaints.length > 0 || orders.length > 0 || warehouseReceived.length > 0) && !closedTicket && (
         <Section
           title="Replacement"
@@ -266,6 +268,7 @@ export default function TicketActions({ data, techs, reload }) {
       )}
 
       {/* Service DC */}
+      {showSdc && <div id="ticket-sdc" />}
       {showSdc && (
         <Section title="Service DC — send the repaired laptop back" actions={sdc?.can_create && <Button variant="primary" onClick={openSdc}>Raise Service DC</Button>}>
           {!sdc ? <EmptyState title="Loading…" /> : (

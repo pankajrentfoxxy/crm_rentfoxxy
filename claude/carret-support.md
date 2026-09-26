@@ -164,7 +164,15 @@ Existing tickets are not touched; everything below applies to tickets raised fro
 - **D. Technician bucket** (done): Serve → Technician bucket — per technician: laptops in hand, old
   parts to return, to collect, Service DC / replacement out for delivery, parts held, open visits, each
   with days held (red after 7). A technician sees only their own.
-- E. Requests / technicians / settings screens — next. F. UX pass.
+- **E. Old screens moved** (done): Serve → Customer requests (turn into a ticket with the issue, mark looked
+  at, reject with a reason, QR code); Technicians folded into Technician bucket (every technician, today's
+  visits); Support settings — the issue list (add subtype / issue, rename, switch off; never delete) and
+  the ticket rules. Old screens stay under Old view.
+- **F. UX pass** (done): ticket record now says "What's next" with the one button that does it; Close and
+  Cancel ticket on the new page; Parts on the ticket (where each part is, charge the customer / make free,
+  cancel); "Raise the Service DC" points at the new section, not the old screen; Support desk menu in
+  working order (Queue, Customer requests, New ticket, Technician bucket, Parts desk, Issue insights,
+  SLA & feedback, Settings).
 
 QA click-through A+B: New ticket → pick type/subtype/issue per laptop → assign → technician My
 work → job → result "Fixed" asks what was wrong / why / fix → OTP. On a repair pickup: ticket →

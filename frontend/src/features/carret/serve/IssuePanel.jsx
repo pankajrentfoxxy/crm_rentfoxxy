@@ -65,6 +65,8 @@ export default function IssuePanel({ data, canLead, reload }) {
   ];
 
   return (
+    <>
+    <div id="ticket-issue" />
     <Section title="Issue">
       {missing.length > 0 && (
         <Notice tone="info">
@@ -105,5 +107,6 @@ export default function IssuePanel({ data, canLead, reload }) {
         {find && <FindingFields catalog={catalog} finish="workshop" value={find.value} onChange={(v) => setFind({ ...find, value: v })} idPrefix="workshop" />}
       </Drawer>
     </Section>
+    </>
   );
 }

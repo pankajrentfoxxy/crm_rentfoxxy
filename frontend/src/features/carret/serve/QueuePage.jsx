@@ -72,7 +72,7 @@ export default function QueuePage() {
     >
       <div className="c-stack">
         {data?.requests_pending > 0 && (
-          <Notice tone="info" action={<Button onClick={() => navigate('/support/requests')}>Open requests</Button>}>
+          <Notice tone="info" action={<Button onClick={() => navigate('/carret/serve/requests')}>Open requests</Button>}>
             {data.requests_pending} request(s) from customers (QR page / portal) are waiting to be turned into tickets.
           </Notice>
         )}

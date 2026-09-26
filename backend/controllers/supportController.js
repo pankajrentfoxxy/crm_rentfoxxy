@@ -6486,3 +6486,37 @@ exports.getTechBucketBoard = async (req, res) => {
         res.status(500).json({ success: false, message: e.message });
     }
 };
+
+/* ---- Support settings: the issue list (rework E) ---- */
+const canEditSupportSettings = (user) => ['admin', 'super_admin', 'support_lead'].includes(user?.role);
+
+/** GET /support/issue-catalog/admin — every entry, switched-off ones too. */
+exports.getIssueCatalogAdmin = async (req, res) => {
+    try {
+        res.json({ success: true, can_edit: canEditSupportSettings(req.user), ...(await supportIssues.catalogTree(pool, { includeInactive: true })) });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** POST /support/issue-catalog { parent_id, name } */
+exports.addIssueCatalogEntry = async (req, res) => {
+    if (!canEditSupportSettings(req.user)) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
+    try {
+        const row = await supportIssues.addCatalogEntry(pool, req.body || {});
+        res.status(201).json({ success: true, message: `Added "${row.name}"`, entry: row });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    }
+};
+
+/** PATCH /support/issue-catalog/:id { name?, active? } */
+exports.updateIssueCatalogEntry = async (req, res) => {
+    if (!canEditSupportSettings(req.user)) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
+    try {
+        await supportIssues.updateCatalogEntry(pool, req.params.id, req.body || {});
+        res.json({ success: true, message: 'Saved' });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    }
+};

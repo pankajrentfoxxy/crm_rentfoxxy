@@ -87,3 +87,17 @@ export const setReportedIssue = (itemId, body) => api.patch(item(itemId, '/repor
 export const recordFinding = (itemId, body) => api.patch(item(itemId, '/finding'), body);
 export const fetchIssueInsights = (params) => api.get('/support/issue-insights', { params });
 export const fetchTechBucketBoard = (params) => api.get('/support/tech-bucket-board', { params });
+export const fetchTicketParts = (ticketId) => api.get(`${sp}/requests`, { params: { support_ticket_id: ticketId } });
+export const closeTicket = (ticketId, body = {}) => api.post(`/support/tickets/${ticketId}/close`, body);
+export const cancelTicket = (ticketId, remark) => api.post(`/support/tickets/${ticketId}/cancel`, { cancellation_remark: remark });
+
+/* Customer requests (QR page / portal) and support settings — rework E. */
+export const fetchRequests = (params) => api.get('/support/requests', { params });
+export const fetchRequest = (id) => api.get(`/support/requests/${id}`);
+export const convertRequest = (id, body) => api.post(`/support/requests/${id}/convert`, body);
+export const updateRequest = (id, body) => api.patch(`/support/requests/${id}`, body);
+export const fetchSupportSettings = () => api.get('/support/settings');
+export const saveSupportSettings = (body) => api.put('/support/settings', body);
+export const fetchIssueCatalogAdmin = () => api.get('/support/issue-catalog/admin');
+export const addIssueEntry = (body) => api.post('/support/issue-catalog', body);
+export const updateIssueEntry = (id, body) => api.patch(`/support/issue-catalog/${id}`, body);
