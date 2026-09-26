@@ -104,6 +104,39 @@ async function isFirstOutboundDcForSo(db, dcNumber) {
 }
 
 /**
+ * Rule 3 — only a customer's FIRST order is invoiced on delivery. Once the
+ * customer has been billed for any laptop (CRM invoice or Zoho ack) outside the
+ * batch being delivered now, every later delivery waits for the 1st: the monthly
+ * run bills it as previous-month catch-up plus its one-month security.
+ *
+ * Without this, each new SO's first DC appended pro-rata rent and security onto
+ * the customer's current-month draft (INV-1127: three September deliveries).
+ * The batch itself is excluded so a retry of the first order still completes.
+ */
+async function customerAlreadyBilledOutsideBatch(db, customerId, batchSerialIds) {
+  const ids = normalizeSerialIds(batchSerialIds);
+  const { rows } = await db.query(
+    `SELECT EXISTS (
+              SELECT 1
+                FROM customer_invoice_lines cil
+                JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+               WHERE ci.customer_id = $1
+                 AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
+                 AND COALESCE(cil.line_type, 'rental') <> 'security'
+                 AND (cil.serial_id IS NULL OR NOT (cil.serial_id = ANY($2::int[])))
+            )
+         OR EXISTS (
+              SELECT 1
+                FROM customer_serial_billing_ack ack
+               WHERE ack.customer_id = $1
+                 AND NOT (ack.serial_id = ANY($2::int[]))
+            ) AS billed`,
+    [customerId, ids]
+  );
+  return Boolean(rows[0]?.billed);
+}
+
+/**
  * Allocate the next invoice number.
  *
  * `db` MUST be the caller's transaction client whenever one exists. Running the
@@ -2846,6 +2879,23 @@ async function maybeInvoiceFirstRentalPeriod({
         `${logLabel} invoice skipped — no first-billed rental assets`
       );
       return { skipped: true, reason: 'no first-billed rental assets' };
+    }
+
+    let batchSerialIds = candidates.rows.map((row) => row.serial_id);
+    if (dcNumber) {
+      const onDc = await pool.query(
+        `SELECT serial_id FROM vendor_serial_numbers
+          WHERE current_customer_id = $1 AND current_dc_number = $2`,
+        [customerId, dcNumber]
+      );
+      batchSerialIds = [...batchSerialIds, ...onDc.rows.map((row) => row.serial_id)];
+    }
+    if (await customerAlreadyBilledOutsideBatch(pool, customerId, batchSerialIds)) {
+      billingLog.info(
+        { customerId, dcNumber, serialIds },
+        `${logLabel} invoice skipped — existing customer; the 1st-of-month run bills this delivery`
+      );
+      return { skipped: true, reason: 'existing customer — billed on the 1st' };
     }
 
     const anchor = monthYearFromRentStart(candidates.rows[0].rent_start_date);
