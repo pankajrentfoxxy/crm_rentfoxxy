@@ -1,3 +1,4 @@
+const poRules = require('../../services/purchaseOrderRules');
 const { query, body, param, validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs');
@@ -1973,7 +1974,9 @@ async function create(req, res) {
       ? body.is_same_state
       : normalizeStateValue(vState) === normalizeStateValue(body.po_state);
 
-  const sub_total_amount = body.sub_total_amount ?? lineSubtotalFromRows(rawLines);
+  // Always computed from the lines: a subtotal from the request could make the
+  // PO total (and the vendor bill) disagree with what was ordered.
+  const sub_total_amount = lineSubtotalFromRows(rawLines);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
   const preferredPoNumber =
@@ -1988,7 +1991,10 @@ async function create(req, res) {
   try {
     await client.query('BEGIN');
 
-    const purchase_order_number = await allocatePurchaseOrderNumber(client, preferredPoNumber);
+    // The number is always allocated here, never taken from the request
+    // (CLAUDE.md: allocate inside the write transaction).
+    void preferredPoNumber;
+    const purchase_order_number = await allocatePurchaseOrderNumber(client, null);
 
     const { insertedIds, enrichedLines } = await insertProductDetailsForPo(
       client,
@@ -2018,9 +2024,11 @@ async function create(req, res) {
         JSON.stringify(assets_details),
         JSON.stringify(insertedIds),
         body.remarks || null,
-        body.status || 'draft',
+        // A new PO is always a draft; approval happens only through
+        // PATCH /status (it used to accept any status here, approval included).
+        'draft',
         req.user?.user_id || null,
-        body.status_updated_by_name || 'Admin'
+        req.user?.name || 'Admin'
       ]
     );
 
@@ -2095,114 +2103,151 @@ async function update(req, res) {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const id = Number(req.params.id);
-  const cur = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [id]);
-  if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
-  const oldPo = cur.rows[0];
-
-  const body = req.body;
-  const line_items = Array.isArray(body.line_items) ? body.line_items : JSON.parse(JSON.stringify(cur.rows[0].line_items || []));
-
-  const vState =
-    body.vendor_id != null ? await vendorState(body.vendor_id || cur.rows[0].vendor_id) : await vendorState(cur.rows[0].vendor_id);
-  const vendor_id = body.vendor_id ?? cur.rows[0].vendor_id;
-  const po_state = body.po_state ?? cur.rows[0].po_state;
-
-  let is_same_state = cur.rows[0].is_same_state;
-  if (typeof body.is_same_state === 'boolean') {
-    is_same_state = body.is_same_state;
-  } else if (po_state || vState) {
-    is_same_state = normalizeStateValue(vState) === normalizeStateValue(po_state);
-  }
-
-  const sub_total_amount = body.sub_total_amount ?? lineSubtotal(line_items);
-  const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
-
+  const body = req.body || {};
+  const client = await pool.connect();
+  let upd;
+  let oldPo;
   try {
-    const upd = await pool.query(
+    await client.query('BEGIN');
+    const cur = await client.query(
+      'SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL FOR UPDATE',
+      [id]
+    );
+    if (!cur.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+    oldPo = cur.rows[0];
+
+    // D2: an approved PO is never changed silently — it changed what the vendor
+    // bills us without anyone re-approving it. Amend (re-approval) is the way.
+    if (!poRules.canEditPo(oldPo.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        code: 'PO_LOCKED',
+        message: `This purchase order is ${oldPo.status}. It can only be changed by an amendment that goes back for approval.`,
+      });
+    }
+    if (body.status != null && body.status !== '' && body.status !== oldPo.status) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Status cannot be set by editing. Submit, approve or reject through the status action.',
+      });
+    }
+
+    const rawLines = body.line_items != null || body.assets_details != null || body.assetsDetails != null
+      ? normalizeIncomingLines(body)
+      : null;
+    if (rawLines && !rawLines.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'A purchase order needs at least one line.' });
+    }
+    const type = body.purchase_order_type || oldPo.purchase_order_type;
+
+    let lineItemsJson = null;
+    let legacyIds = null;
+    if (rawLines) {
+      // Nothing is received before approval, so the per-line product records
+      // are rebuilt to match the edited lines (they used to go stale).
+      await client.query('DELETE FROM vendor_product_details WHERE po_id = $1', [id]);
+      const { insertedIds, enrichedLines } = await insertProductDetailsForPo(client, id, rawLines, type);
+      lineItemsJson = JSON.stringify(enrichedLines);
+      legacyIds = JSON.stringify(insertedIds);
+    }
+
+    const vendor_id = body.vendor_id ?? oldPo.vendor_id;
+    const po_state = body.po_state ?? oldPo.po_state;
+    const vState = await vendorState(vendor_id);
+    let is_same_state = oldPo.is_same_state;
+    if (typeof body.is_same_state === 'boolean') is_same_state = body.is_same_state;
+    else if (po_state || vState) is_same_state = normalizeStateValue(vState) === normalizeStateValue(po_state);
+
+    const effectiveLines = rawLines || (Array.isArray(oldPo.line_items) ? oldPo.line_items : []);
+    const sub_total_amount = rawLines ? lineSubtotalFromRows(rawLines) : lineSubtotal(effectiveLines);
+    const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
+    const nextStatus = poRules.statusAfterEdit(oldPo.status);
+
+    upd = await client.query(
       `UPDATE vendor_purchase_orders SET
         purchase_order_date = COALESCE($1::date, purchase_order_date),
         purchase_order_type = COALESCE(NULLIF($2,''), purchase_order_type),
-        vendor_id = COALESCE($3, vendor_id),
+        vendor_id = $3,
         po_state = COALESCE(NULLIF($4,''), po_state),
         is_same_state = $5,
         sub_total_amount = $6,
         total_amount = $7,
         line_items = COALESCE($8::jsonb, line_items),
-        assets_details = CASE WHEN $9::jsonb IS NULL THEN assets_details ELSE $9 END,
-        remarks = COALESCE($10, remarks),
-        status = COALESCE(NULLIF($11,''), status),
-        status_updated_by_admin_id = COALESCE($12, status_updated_by_admin_id),
-        status_updated_by_name = COALESCE($13, status_updated_by_name),
+        product_details_legacy_ids = COALESCE($9::jsonb, product_details_legacy_ids),
+        assets_details = CASE WHEN $8::jsonb IS NULL THEN assets_details ELSE $10::jsonb END,
+        remarks = COALESCE($11, remarks),
+        status = $12::text,
+        rejection_reason = CASE WHEN $12::text = 'draft' AND status IN ('rejected','vendor_rejected') THEN NULL ELSE rejection_reason END,
         updated_at = NOW()
-       WHERE po_id = $14 AND deleted_at IS NULL RETURNING *`,
+       WHERE po_id = $13 AND deleted_at IS NULL RETURNING *`,
       [
         body.purchase_order_date || null,
         body.purchase_order_type || '',
-        body.vendor_id !== undefined && body.vendor_id !== null ? body.vendor_id : null,
+        vendor_id,
         po_state || '',
         is_same_state,
         sub_total_amount,
         total_amount,
-        body.line_items != null ? JSON.stringify(line_items) : null,
-        body.assets_details != null ? JSON.stringify(body.assets_details) : null,
-        body.remarks,
-        body.status || '',
-        req.user?.user_id || null,
-        body.status_updated_by_name || 'Admin',
-        id
+        lineItemsJson,
+        legacyIds,
+        rawLines ? JSON.stringify(buildAssetsDetailsFromLines(rawLines)) : null,
+        body.remarks ?? null,
+        nextStatus,
+        id,
       ]
     );
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(e);
+    return res.status(500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
 
-    await logVendorAudit({
-      actorUserId: req.user?.user_id,
-      vendorId: upd.rows[0].vendor_id,
-      entityType: 'purchase_order',
-      entityId: id,
-      action: 'update',
-      payload: {}
-    });
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: upd.rows[0].vendor_id,
+    entityType: 'purchase_order',
+    entityId: id,
+    action: 'update',
+    payload: { from_status: oldPo.status, to_status: upd.rows[0].status }
+  });
 
-    res.json({ success: true, data: upd.rows[0] });
+  res.json({ success: true, data: upd.rows[0] });
 
+  await safeLogPurchaseOrderActivity({
+    poId: id,
+    activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+    action: 'updated',
+    description: `${req.user?.name || 'User'} updated Purchase Order ${upd.rows[0].purchase_order_number}.`,
+    user: req.user,
+  });
+  if (body.vendor_id != null && Number(body.vendor_id) !== Number(oldPo.vendor_id)) {
     await safeLogPurchaseOrderActivity({
       poId: id,
-      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
-      action: 'updated',
-      description: `${req.user?.name || 'User'} updated Purchase Order ${upd.rows[0].purchase_order_number}.`,
+      activityType: ACTIVITY_TYPES.VENDOR,
+      action: 'vendor_changed',
+      description: `Vendor changed on Purchase Order ${upd.rows[0].purchase_order_number}.`,
+      metadata: { from_vendor_id: oldPo.vendor_id, to_vendor_id: body.vendor_id },
       user: req.user,
     });
-    if (body.vendor_id != null && Number(body.vendor_id) !== Number(oldPo.vendor_id)) {
-      await safeLogPurchaseOrderActivity({
-        poId: id,
-        activityType: ACTIVITY_TYPES.VENDOR,
-        action: 'vendor_changed',
-        description: `Vendor changed on Purchase Order ${upd.rows[0].purchase_order_number}.`,
-        metadata: { from_vendor_id: oldPo.vendor_id, to_vendor_id: body.vendor_id },
-        user: req.user,
-      });
-    }
-    if (Number(total_amount) !== Number(oldPo.total_amount)) {
-      await safeLogPurchaseOrderActivity({
-        poId: id,
-        activityType: ACTIVITY_TYPES.ITEM,
-        action: 'total_amount_updated',
-        description: `Total amount updated from ₹${oldPo.total_amount} to ₹${total_amount}.`,
-        metadata: { old_total: oldPo.total_amount, new_total: total_amount },
-        user: req.user,
-      });
-    }
-    if (body.line_items != null) {
-      await safeLogPurchaseOrderActivity({
-        poId: id,
-        activityType: ACTIVITY_TYPES.ITEM,
-        action: 'item_updated',
-        description: `Line items updated on Purchase Order ${upd.rows[0].purchase_order_number}.`,
-        user: req.user,
-      });
-    }
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, message: e.message });
+  }
+  if (Number(upd.rows[0].total_amount) !== Number(oldPo.total_amount)) {
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.ITEM,
+      action: 'total_amount_updated',
+      description: `Total amount updated from ₹${oldPo.total_amount} to ₹${upd.rows[0].total_amount}.`,
+      metadata: { old_total: oldPo.total_amount, new_total: upd.rows[0].total_amount },
+      user: req.user,
+    });
   }
 }
 
@@ -2395,11 +2440,24 @@ async function remove(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
+  // D2: cancel only while nothing has been received. Deleting a PO with
+  // received laptops orphaned them and silently stopped their vendor billing.
+  const received = await poRules.receivedCount(pool, { poId: Number(req.params.id) });
+  if (received > 0) {
+    return res.status(409).json({
+      success: false,
+      code: 'PO_HAS_RECEIPTS',
+      message: `${received} laptop(s) have already been received on this purchase order, so it cannot be cancelled. Short-close it instead.`,
+    });
+  }
   const r = await pool.query(
-    `UPDATE vendor_purchase_orders SET deleted_at = NOW() WHERE po_id = $1 AND deleted_at IS NULL RETURNING *`,
+    `UPDATE vendor_purchase_orders SET deleted_at = NOW()
+      WHERE po_id = $1 AND deleted_at IS NULL
+        AND COALESCE(status, '') NOT IN ('processing', 'completed')
+      RETURNING *`,
     [req.params.id]
   );
-  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found, or already receiving and cannot be cancelled' });
   await logVendorAudit({
     actorUserId: req.user?.user_id,
     vendorId: r.rows[0].vendor_id,
@@ -2557,7 +2615,7 @@ async function updateStatus(req, res) {
     await pool.query(
       `UPDATE vendor_purchase_orders
        SET status = 'pending_approval', submitted_at = NOW(), status_updated_by_admin_id = $1, updated_at = NOW()
-       WHERE po_id = $2 AND deleted_at IS NULL`,
+       WHERE po_id = $2 AND deleted_at IS NULL AND COALESCE(status, '') IN ('', 'draft', 'pending')`,
       [req.user?.user_id || null, id]
     );
 
@@ -2580,14 +2638,24 @@ async function updateStatus(req, res) {
         message: 'Purchase order must be in pending approval before a manager can approve it.'
       });
     }
+    // D1: maker-checker. The creator or submitter cannot approve their own PO.
+    const people = await poRules.poPeople(pool, po);
+    const conflict = poRules.approvalConflict({ approverId: req.user?.user_id, ...people });
+    if (conflict) return res.status(403).json({ success: false, code: 'SELF_APPROVAL', message: conflict });
 
-    await pool.query(
+    // Conditional on the status, so two managers approving at once cannot
+    // both succeed (and send the vendor two emails).
+    const won = await pool.query(
       `UPDATE vendor_purchase_orders
-       SET status = 'approved', approved_at = NOW(), sent_to_vendor_at = NOW(),
+       SET status = 'approved', approved_at = NOW(),
            status_updated_by_admin_id = $1, rejection_reason = NULL, updated_at = NOW()
-       WHERE po_id = $2 AND deleted_at IS NULL`,
+       WHERE po_id = $2 AND deleted_at IS NULL AND status = 'pending_approval'
+       RETURNING po_id`,
       [req.user?.user_id || null, id]
     );
+    if (!won.rows.length) {
+      return res.status(409).json({ success: false, message: 'This purchase order was approved or changed by someone else just now.' });
+    }
 
     try {
       const vendor = {
@@ -2597,6 +2665,8 @@ async function updateStatus(req, res) {
       };
       const { absolutePath } = await generatePurchaseOrderPdf({ po, vendor });
       await sendPurchaseOrderApprovedEmail({ po, vendor, pdfAbsolutePath: absolutePath });
+      // Only once the email really went out.
+      await pool.query('UPDATE vendor_purchase_orders SET sent_to_vendor_at = NOW() WHERE po_id = $1', [id]);
     } catch (emailErr) {
       console.error('PO approval email failed:', emailErr);
     }
@@ -2617,7 +2687,7 @@ async function updateStatus(req, res) {
     await pool.query(
       `UPDATE vendor_purchase_orders
        SET status = 'rejected', rejection_reason = $1, status_updated_by_admin_id = $2, updated_at = NOW()
-       WHERE po_id = $3 AND deleted_at IS NULL`,
+       WHERE po_id = $3 AND deleted_at IS NULL AND status = 'pending_approval'`,
       [reason, req.user?.user_id || null, id]
     );
   }

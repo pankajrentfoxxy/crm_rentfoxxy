@@ -1,3 +1,5 @@
+const poRules = require('../../services/purchaseOrderRules');
+const { allocateSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { query, body, param, validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs');
@@ -223,8 +225,8 @@ function attachSpareProductDetails(spoRow, qtyMaps) {
 }
 
 function spareReceiveAllowed(spoRow) {
-  const st = String(spoRow?.status || '').toLowerCase();
-  return st !== 'void' && st !== 'pending';
+  // D13: only an approved spare PO can be received (drafts could be before).
+  return poRules.spareReceivable(spoRow?.status);
 }
 
 function formatGrnNumber(grnId) {
@@ -402,6 +404,7 @@ async function getOne(req, res) {
      WHERE sp.spo_id = $1 AND sp.deleted_at IS NULL`,
     [req.params.id]
   );
+  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Spare parts PO not found' });
   const qtyMaps = await buildReceivedQtyMapsForSpoIds([Number(req.params.id)]);
   res.json({ success: true, data: attachSpareProductDetails(r.rows[0], qtyMaps) });
 }
@@ -468,7 +471,7 @@ async function create(req, res) {
     }
   }
 
-  const badIdx = line_items.findIndex((l) => !l.quantity || l.quantity <= 0 || !l.rate || l.rate < 0);
+  const badIdx = line_items.findIndex((l) => !l.quantity || l.quantity <= 0 || l.rate == null || l.rate === '' || Number(l.rate) < 0);
   if (badIdx !== -1) {
     return res.status(400).json({
       success: false,
@@ -480,17 +483,19 @@ async function create(req, res) {
   const is_same_state =
     typeof b.is_same_state === 'boolean'
       ? b.is_same_state
-      : String(vState || '').toLowerCase() === String(b.po_state || '').toLowerCase();
+      // "Madhya Pradesh" vs "madhya_pradesh": compared raw, every spare PO was
+      // taxed as inter-state (IGST).
+      : poRules.normalizeState(vState) === poRules.normalizeState(b.po_state);
 
-  const sub_total_amount = b.sub_total_amount ?? lineSubtotal(line_items);
+  const sub_total_amount = lineSubtotal(line_items);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
-  const purchase_order_number =
-    b.purchase_order_number?.trim?.() ||
-    (!b.purchase_order_number ? await nextSparePartsPurchaseOrderNumber() : String(b.purchase_order_number));
-
+  const client = await pool.connect();
   try {
-    const ins = await pool.query(
+    await client.query('BEGIN');
+    // Allocated here under a lock, never taken from the request.
+    const purchase_order_number = await allocateSparePartsPurchaseOrderNumber(client);
+    const ins = await client.query(
       `INSERT INTO vendor_spare_parts_purchase_orders (
         purchase_order_number, purchase_order_date, vendor_id, po_state, is_same_state,
         sub_total_amount, total_amount, line_items, assets_details, remarks, status,
@@ -507,11 +512,12 @@ async function create(req, res) {
         JSON.stringify(line_items),
         b.assets_details != null ? JSON.stringify(b.assets_details) : null,
         b.remarks || null,
-        b.status || 'draft',
+        'draft',
         req.user?.user_id || null,
-        b.status_updated_by_name || 'Admin'
+        req.user?.name || 'Admin'
       ]
     );
+    await client.query('COMMIT');
 
     await logVendorAudit({
       actorUserId: req.user?.user_id,
@@ -529,11 +535,11 @@ async function create(req, res) {
       data: attachSpareProductDetails(ins.rows[0], qtyMapsNew)
     });
   } catch (e) {
-    if (String(e.code) === '23505') {
-      return res.status(409).json({ success: false, message: 'PO number already exists' });
-    }
+    await client.query('ROLLBACK').catch(() => {});
     console.error(e);
     res.status(500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
   }
 }
 
@@ -549,19 +555,29 @@ async function update(req, res) {
     [id]
   );
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  if (!poRules.canEditPo(cur.rows[0].status)) {
+    return res.status(409).json({
+      success: false,
+      code: 'PO_LOCKED',
+      message: `This spare parts PO is ${cur.rows[0].status}. It can only be changed by an amendment that goes back for approval.`,
+    });
+  }
 
   const b = req.body;
+  if (b.status != null && b.status !== '' && b.status !== cur.rows[0].status) {
+    return res.status(400).json({ success: false, message: 'Status cannot be set by editing. Use the approval action.' });
+  }
   const vendor_id = b.vendor_id ?? cur.rows[0].vendor_id;
   const po_state = b.po_state ?? cur.rows[0].po_state;
   const vState = await vendorState(vendor_id);
   let is_same_state = cur.rows[0].is_same_state;
   if (typeof b.is_same_state === 'boolean') is_same_state = b.is_same_state;
   else if (po_state || vState) {
-    is_same_state = String(vState || '').toLowerCase() === String(po_state || '').toLowerCase();
+    is_same_state = poRules.normalizeState(vState) === poRules.normalizeState(po_state);
   }
 
   const line_items = Array.isArray(b.line_items) ? b.line_items : parseLineItemsJson(cur.rows[0].line_items);
-  const sub_total_amount = b.sub_total_amount ?? lineSubtotal(line_items);
+  const sub_total_amount = lineSubtotal(line_items);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
   try {
@@ -576,7 +592,7 @@ async function update(req, res) {
         line_items = COALESCE($7::jsonb, line_items),
         assets_details = CASE WHEN $8::jsonb IS NULL THEN assets_details ELSE $8 END,
         remarks = COALESCE($9, remarks),
-        status = COALESCE(NULLIF($10,''), status),
+        status = $10,
         updated_at = NOW()
        WHERE spo_id = $11 RETURNING *`,
       [
@@ -589,7 +605,7 @@ async function update(req, res) {
         b.line_items != null ? JSON.stringify(line_items) : null,
         b.assets_details != null ? JSON.stringify(b.assets_details) : null,
         b.remarks,
-        b.status || '',
+        poRules.statusAfterEdit(cur.rows[0].status),
         id
       ]
     );
@@ -613,7 +629,7 @@ async function updateStatus(req, res) {
   const { status } = req.body;
 
   const cur = await pool.query(
-    `SELECT status FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`,
+    `SELECT spo_id, status FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`,
     [id]
   );
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Spare parts PO not found' });
@@ -626,12 +642,28 @@ async function updateStatus(req, res) {
     });
   }
 
-  await pool.query(
+  if (status === 'approved') {
+    // D13: spare POs get the same approval as laptop POs — a manager, and
+    // never the person who created or submitted it (there was no check at all).
+    const role = String(req.user?.role || '').toLowerCase();
+    if (!(req.user?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(role))) {
+      return res.status(403).json({ success: false, message: 'Only managers can approve spare parts POs' });
+    }
+    const people = await poRules.sparePoPeople(pool, cur.rows[0]);
+    const conflict = poRules.approvalConflict({ approverId: req.user?.user_id, ...people });
+    if (conflict) return res.status(403).json({ success: false, code: 'SELF_APPROVAL', message: conflict });
+  }
+
+  const won = await pool.query(
     `UPDATE vendor_spare_parts_purchase_orders
      SET status = $1, status_updated_by_admin_id = $2, updated_at = NOW()
-     WHERE spo_id = $3 AND deleted_at IS NULL`,
+     WHERE spo_id = $3 AND deleted_at IS NULL AND COALESCE(status, '') IN ('', 'draft', 'pending')
+     RETURNING spo_id`,
     [status, req.user?.user_id || null, id]
   );
+  if (!won.rows.length) {
+    return res.status(409).json({ success: false, message: 'This spare parts PO was changed by someone else just now.' });
+  }
 
   await logVendorAudit({
     actorUserId: req.user?.user_id,
@@ -1510,9 +1542,30 @@ async function getSpareGrnReceivedProducts(req, res) {
 async function remove(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-  await pool.query(`UPDATE vendor_spare_parts_purchase_orders SET deleted_at = NOW() WHERE spo_id = $1 AND deleted_at IS NULL`, [
-    req.params.id
-  ]);
+  // D2: cancel only while nothing is received, and leave an audit row.
+  const received = await poRules.receivedCount(pool, { spoId: Number(req.params.id) });
+  if (received > 0) {
+    return res.status(409).json({
+      success: false,
+      code: 'PO_HAS_RECEIPTS',
+      message: `${received} part(s) have already been received on this PO, so it cannot be cancelled. Short-close it instead.`,
+    });
+  }
+  const r = await pool.query(
+    `UPDATE vendor_spare_parts_purchase_orders SET deleted_at = NOW()
+      WHERE spo_id = $1 AND deleted_at IS NULL AND COALESCE(status, '') NOT IN ('processing', 'completed')
+      RETURNING spo_id, vendor_id, purchase_order_number`,
+    [req.params.id]
+  );
+  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found, or already receiving and cannot be cancelled' });
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: r.rows[0].vendor_id,
+    entityType: 'spare_parts_po',
+    entityId: String(r.rows[0].spo_id),
+    action: 'cancel',
+    payload: { purchase_order_number: r.rows[0].purchase_order_number },
+  });
   res.json({ success: true });
 }
 

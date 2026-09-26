@@ -6,6 +6,7 @@ const PO_PAD = 4;
 const PO_STANDARD_RE = /^PO-\d+$/;
 /** Advisory lock id for vendor PO number allocation (create). */
 const PO_ALLOC_LOCK = 840001;
+const SPO_ALLOC_LOCK = 840002;
 
 function formatPurchaseOrderNumber(n) {
   return `${PO_PREFIX}${String(n).padStart(PO_PAD, '0')}`;
@@ -25,8 +26,9 @@ async function maxStandardPoNumericSuffix(db = pool) {
   const r = await db.query(
     `SELECT COALESCE(MAX((substring(purchase_order_number FROM '[0-9]+$'))::int), 0) AS n
        FROM vendor_purchase_orders
-      WHERE deleted_at IS NULL
-        AND purchase_order_number ~ '^PO-[0-9]+$'`
+      -- Cancelled (soft-deleted) POs keep their number; the column is UNIQUE,
+      -- so skipping them re-issued a number that then failed to save.
+      WHERE purchase_order_number ~ '^PO-[0-9]+$'`
   );
   return Number(r.rows[0]?.n || 0);
 }
@@ -51,7 +53,7 @@ async function allocatePurchaseOrderNumber(client, preferred = null) {
   if (preferredTrim) {
     const taken = await client.query(
       `SELECT 1 FROM vendor_purchase_orders
-        WHERE purchase_order_number = $1 AND deleted_at IS NULL
+        WHERE purchase_order_number = $1
         LIMIT 1`,
       [preferredTrim]
     );
@@ -63,7 +65,7 @@ async function allocatePurchaseOrderNumber(client, preferred = null) {
     const formatted = formatPurchaseOrderNumber(candidate);
     const taken = await client.query(
       `SELECT 1 FROM vendor_purchase_orders
-        WHERE purchase_order_number = $1 AND deleted_at IS NULL
+        WHERE purchase_order_number = $1
         LIMIT 1`,
       [formatted]
     );
@@ -84,8 +86,7 @@ async function maxStandardSpoNumericSuffix(db = pool) {
   const r = await db.query(
     `SELECT COALESCE(MAX((substring(purchase_order_number FROM '[0-9]+$'))::int), 0) AS n
        FROM vendor_spare_parts_purchase_orders
-      WHERE deleted_at IS NULL
-        AND purchase_order_number ~ '^SP-PO-[0-9]+$'`
+      WHERE purchase_order_number ~ '^SP-PO-[0-9]+$'`
   );
   return Number(r.rows[0]?.n || 0);
 }
@@ -103,6 +104,17 @@ async function nextSparePartsPurchaseOrderNumber() {
   return peekNextSparePartsPurchaseOrderNumber();
 }
 
+/** Allocate an SP-PO number inside the caller's transaction (serialised by an advisory lock). */
+async function allocateSparePartsPurchaseOrderNumber(client) {
+  await client.query('SELECT pg_advisory_xact_lock($1)', [SPO_ALLOC_LOCK]);
+  const r = await client.query(
+    `SELECT COALESCE(MAX((substring(purchase_order_number FROM '[0-9]+$'))::int), 0) AS n
+       FROM vendor_spare_parts_purchase_orders
+      WHERE purchase_order_number ~ '^SP-PO-[0-9]+$'`
+  );
+  return formatSparePartsPurchaseOrderNumber(Number(r.rows[0]?.n || 0) + 1);
+}
+
 module.exports = {
   PO_PREFIX,
   PO_STANDARD_RE,
@@ -114,4 +126,5 @@ module.exports = {
   nextPurchaseOrderNumber,
   peekNextSparePartsPurchaseOrderNumber,
   nextSparePartsPurchaseOrderNumber,
+  allocateSparePartsPurchaseOrderNumber,
 };
