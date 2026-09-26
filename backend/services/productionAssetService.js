@@ -5,7 +5,7 @@
 const { configFromPlainObject } = require('./grnReceivedConfigService');
 const { normalizeCondition, normalizeMissingParts } = require('../constants/laptopConditions');
 const { compareConfig } = require('./grnConfigService');
-const { transitionAsset } = require('./inventoryStateMachine');
+const { enterStock } = require('./inventoryStateMachine');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
 const { applyStageMove } = require('./stageTransitionService');
 const {
@@ -761,6 +761,13 @@ async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
     pa = await getById(db, productionAssetId);
   }
 
+  // Q1: a failed QC2 configuration check is not quietly overwritten by a pass.
+  if (['qc2_failed', 'qc_failed'].includes(String(pa.status || '')) && !meta.override) {
+    const err = new Error('This laptop failed its QC2 configuration check. Fix it and re-run the check, or a manager overrides with a reason.');
+    err.status = 400;
+    throw err;
+  }
+
   const source = meta.source || 'qc2';
   const requireTag = source === 'qc2' || source === 'qc2_script';
   const inventoryTag = await resolveInventoryTag(db, pa, meta.inventory_tag ?? meta.inventoryTag, {
@@ -858,6 +865,27 @@ async function receiveIntoInventory(db, productionAssetId, {
     }
   }
 
+  // Q8: a laptop failed by the floor manager (or already gone back to the
+  // vendor) is never received into stock, whatever the asset row says.
+  if (pa.vendor_serial_id) {
+    const vs = (await db.query(
+      `SELECT v.inventory_status,
+              EXISTS (SELECT 1 FROM tickets t WHERE t.vendor_serial_id = v.serial_id
+                        AND (t.floor_manager_qc_failed OR t.status = 'qc_failed_return_vendor')
+                        AND t.status <> 'cancelled'
+                        AND t.created_at >= COALESCE($2::timestamptz, 'epoch')) AS floor_failed
+         FROM vendor_serial_numbers v WHERE v.serial_id = $1`,
+      [pa.vendor_serial_id, pa.created_at || null]
+    )).rows[0];
+    if (vs?.floor_failed || ['qc_failed', 'returned_to_vendor', 'scrapped', 'sold', 'rented'].includes(vs?.inventory_status)) {
+      const err = new Error(vs?.floor_failed
+        ? 'This laptop was failed by the floor manager and goes back to the vendor — it can\'t be received into stock.'
+        : `This laptop is ${String(vs.inventory_status).replace(/_/g, ' ')} — it can't be received into stock.`);
+      err.status = 409;
+      throw err;
+    }
+  }
+
   const liveTicket = await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true });
   if (liveTicket) {
     pa = await retargetProductionAssetFromTicket(db, pa.production_asset_id, liveTicket)
@@ -922,15 +950,15 @@ async function receiveIntoInventory(db, productionAssetId, {
     [pa.vendor_serial_id, JSON.stringify(extraPatch)]
   );
 
-  // Prefer in_repair / returned / null → in_stock via state machine
+  // Q7: through the one stock-entry door — never an override, so a laptop
+  // that is not ours or not fit (rented, sold, QC-failed…) is refused.
   try {
-    await transitionAsset(db, {
+    await enterStock(db, {
       serialId: pa.vendor_serial_id,
-      toStatus: 'in_stock',
-      reason: 'pending_inventory_receive',
+      reason: 'Serial-verified receive into a carret slot',
       actorUserId,
       actorName,
-      allowOverride: true,
+      caller: 'productionAssetService.receiveIntoInventory',
     });
   } catch (e) {
     if (!/not found/i.test(e.message || '')) throw e;
@@ -969,6 +997,7 @@ async function receiveIntoInventory(db, productionAssetId, {
         source: 'productionAssetService.receiveIntoInventory',
         actor: actorUserId ? { actor_type: 'user', actor_id: actorUserId, actor_name: null } : null,
         reason: 'Serial-verified receive into inventory',
+        qcGate: { kind: 'receive' },
       });
 
       await db.query(

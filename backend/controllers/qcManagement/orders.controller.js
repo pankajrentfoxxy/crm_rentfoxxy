@@ -113,7 +113,7 @@ async function listOrdersByStatus(req, res) {
     });
   } catch (e) {
     console.error('listOrdersByStatus', e);
-    res.status(500).json({ success: false, message: e.message || 'Failed to load QC orders' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Failed to load QC orders' });
   }
 }
 
@@ -140,7 +140,7 @@ async function getStatusCounts(req, res) {
     res.json({ success: true, counts });
   } catch (e) {
     console.error('getStatusCounts', e);
-    res.status(500).json({ success: false, message: e.message || 'Failed to load counts' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Failed to load counts' });
   }
 }
 
@@ -199,7 +199,7 @@ async function listPendingProductsByPo(req, res) {
     res.json({ success: true, data: Array.from(byProduct.values()) });
   } catch (e) {
     console.error('listPendingProductsByPo', e);
-    res.status(500).json({ success: false, message: e.message || 'Failed to load PO products' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Failed to load PO products' });
   }
 }
 
@@ -250,7 +250,7 @@ async function getOrderDetails(req, res) {
     res.json({ success: true, data: filtered });
   } catch (e) {
     console.error('getOrderDetails', e);
-    res.status(500).json({ success: false, message: e.message || 'Failed to load order details' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Failed to load order details' });
   }
 }
 
@@ -280,6 +280,17 @@ async function qcCheck(req, res) {
   const remark = req.body.remark ?? '';
   const sparePartsIds = req.body.sparePartsIds ?? '';
   const userId = req.user?.user_id ?? null;
+
+  // PD6 (Production safety A): QC Management is not a way into stock. A pass
+  // here put the laptop straight on the shelf with no floor QC, no
+  // configuration check, no tag and no slot.
+  if (selected === 'passed') {
+    return res.status(409).json({
+      success: false,
+      code: 'QC_VIA_FLOOR',
+      message: 'Laptops go into stock only through floor QC. Move it to QC Process and create its production ticket; it is received into a carret slot after QC2.',
+    });
+  }
 
   const client = await pool.connect();
   try {
@@ -330,7 +341,6 @@ async function qcCheck(req, res) {
           toStatus: 'in_stock',
           reason: `QC passed${remark ? ` — ${remark}` : ''}`,
           actorUserId: userId || null,
-          allowOverride: true,
           correlationId: req.correlationId,
           caller: 'qcManagement/orders.controller.qcCheck(passed)',
         });
@@ -369,7 +379,7 @@ async function qcCheck(req, res) {
       /* ignore */
     }
     console.error('qcCheck', e);
-    res.status(500).json({ success: false, message: e.message || 'QC check failed' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'QC check failed' });
   } finally {
     client.release();
   }
@@ -421,7 +431,6 @@ async function hardwareQcCheck(req, res) {
         reason: `Harvested for parts${req.body.remark ? ` — ${req.body.remark}` : ''}`,
         actorUserId: req.user?.user_id || null,
         actorName: req.user?.name || null,
-        allowOverride: true,
         correlationId: req.correlationId,
         caller: 'qcManagement/orders.controller.hardwareAction(require_for_parts)',
       });
@@ -453,7 +462,7 @@ async function hardwareQcCheck(req, res) {
     res.json({ success: true, message: 'Hardware QC updated successfully' });
   } catch (e) {
     console.error('hardwareQcCheck', e);
-    res.status(500).json({ success: false, message: e.message || 'Hardware QC failed' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Hardware QC failed' });
   }
 }
 
@@ -492,6 +501,15 @@ async function returnAndRepareCheck(req, res) {
 
   if (!remark) {
     return res.status(400).json({ success: false, message: 'Remark is required' });
+  }
+  // PD6: "repaired" put the laptop straight into stock. A repaired laptop is
+  // checked on the floor like any other.
+  if (selected === 'repared' || selected === 'repaired') {
+    return res.status(409).json({
+      success: false,
+      code: 'QC_VIA_FLOOR',
+      message: 'A repaired laptop goes into stock only through floor QC. Move it to QC Process and create its production ticket.',
+    });
   }
   if (VENDOR_REQUIRED_ACTIONS.has(selected) && !vendorId) {
     return res.status(400).json({ success: false, message: 'Please select a vendor' });
@@ -578,10 +596,8 @@ async function returnAndRepareCheck(req, res) {
         reason: `QC Management: ${selected}${remark ? ` — ${remark}` : ''}`,
         actorUserId: req.user?.user_id || null,
         actorName: req.user?.name || null,
-        // QC is the sanctioned correction point for a unit in almost any state,
-        // so the override stays — but it is now audited and canonical rather
-        // than a raw write of an arbitrary string.
-        allowOverride: true,
+        // Q7: no override — the transition map decides (a rented or sold
+        // laptop can't be marked returned-for-repair from here).
         correlationId: req.correlationId,
         caller: 'qcManagement/orders.controller.returnAndRepareCheck',
       });
@@ -609,7 +625,7 @@ async function returnAndRepareCheck(req, res) {
       /* ignore */
     }
     console.error('returnAndRepareCheck', e);
-    res.status(500).json({ success: false, message: e.message || 'Action failed' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Action failed' });
   } finally {
     client.release();
   }
@@ -627,7 +643,7 @@ async function listSpareParts(req, res) {
     res.json({ success: true, data: r.rows });
   } catch (e) {
     console.error('listSpareParts', e);
-    res.status(500).json({ success: false, message: e.message || 'Failed to load spare parts' });
+    res.status(e.statusCode || e.status || 500).json({ success: false, message: e.message || 'Failed to load spare parts' });
   }
 }
 

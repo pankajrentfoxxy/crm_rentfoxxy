@@ -58,13 +58,13 @@ async function reopenQcSerialForActivePipeline(db, { vendorSerialId, ticketId, s
     [vendorSerialId]
   );
 
-  // Only qc_failed and in_repair were moved by the old CASE; everything else
-  // was left where it was. Same rule, now audited.
   const prevInv = String(r.rows[0]?.inventory_status || '');
-  if (r.rows.length && ['qc_failed', 'in_repair'].includes(prevInv)) {
+  if (r.rows.length && prevInv === 'qc_failed') {
+    // Q6: back on the floor means in production, not on the shelf (it was
+    // set in_stock, so a unit being reworked looked available).
     await transitionAsset(db, {
       serialId: vendorSerialId,
-      toStatus: 'in_stock',
+      toStatus: 'in_repair',
       reason: `Reopened for the floor pipeline at ${stageName}`,
       ticketId,
       caller: 'qcProcessIntakeService.reopenQcSerialForActivePipeline',
@@ -519,8 +519,9 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
     // laptop on the floor look available). Floor ticket → in_repair.
     await transitionAsset(client, {
       serialId,
-      toStatus: intakeTarget === 'pending' ? 'in_repair' : 'in_stock',
-      reason: intakeTarget === 'pending' ? 'QC Process intake — enters production' : 'QC Process intake — into stock',
+      // PD6: QC Process is not a way into stock — every intake waits for QC.
+      toStatus: 'in_repair',
+      reason: 'QC Process intake — waits for QC',
       actorUserId,
       caller: 'qcProcessIntakeService.addLaptop',
     });
@@ -661,15 +662,12 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
     );
     const invNow = curInv.rows[0]?.inventory_status || null;
     if (!invNow || !DEPLOYED.includes(String(invNow))) {
+      // Q6: moved into QC Process = waiting for QC, not available stock.
       await transitionAsset(client, {
         serialId,
-        toStatus: 'in_stock',
-        reason: 'Moved to QC Process — returned to available stock',
+        toStatus: 'in_repair',
+        reason: 'Moved to QC Process — waits for QC',
         actorUserId,
-        // allowOverride because the source here is NULL or a stray value, which
-        // is the case the map has no opinion about. That is also exactly the
-        // 1,345 assets from decision D1.
-        allowOverride: true,
         caller: 'qcProcessIntakeService.moveReadyToRentToQcProcess',
       });
     }
@@ -784,7 +782,7 @@ async function moveQcPendingToQcProcess(db, { serialId, serialNumber }, actorUse
   // terminal state exists to stop.
   await transitionAsset(db, {
     serialId: row.serial_id,
-    toStatus: 'in_stock',
+    toStatus: 'in_repair',
     reason: effectiveQc === 'dead'
       ? 'Dead laptop re-evaluation — returned to QC Process'
       : 'Failed QC re-evaluation — returned to QC Process',
@@ -874,7 +872,7 @@ async function moveDeadOrFailedToQcProcess(db, { serialId, serialNumber }, actor
   // the exact path that resurrected scrapped units.
   await transitionAsset(db, {
     serialId: row.serial_id,
-    toStatus: 'in_stock',
+    toStatus: 'in_repair',
     reason: effectiveQc === 'dead'
       ? 'Dead laptop re-evaluation — returned to QC Process'
       : 'Failed QC re-evaluation — returned to QC Process',

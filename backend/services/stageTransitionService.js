@@ -133,6 +133,11 @@ async function applyStageMove(db, {
   actor = null,               // req.user, or an { actor_type, ... } shape
   correlationId = null,
   reason = null,
+  // Production safety A: how a QC pass / stock entry was earned.
+  //   { kind: 'checklist' }         QC passed through the saved checklist
+  //   { kind: 'override', reason }  a manager passed it without one (logged)
+  //   { kind: 'receive' }           serial-verified receive into a carret slot
+  qcGate = null,
 }) {
   const client = db || pool;
   if (!source) throw new Error('applyStageMove requires a source');
@@ -164,6 +169,10 @@ async function applyStageMove(db, {
     toStageName: toStage.stage_name,
     conditionHint,
     ticketId,
+  });
+
+  assertQcGate({
+    from: fromStage?.stage_name || null, to: toStage.stage_name, qcGate, ticketId,
   });
 
   const sets = ['current_stage_id = $2', 'assigned_team_id = $3', 'updated_at = NOW()'];
@@ -219,7 +228,39 @@ async function applyStageMove(db, {
   return { ticket: updated[0], fromStage, toStage };
 }
 
+/**
+ * Production safety A (Q1, Q2, Q3, F3, F4) — enforced here because every
+ * mover (move-stage, next-stage, bulk-move, assign, QC submit, receive) comes
+ * through applyStageMove, so no side door can skip it:
+ *   - passing QC1 / QC2 needs the saved QC checklist, or a manager's override
+ *     with a reason (the pass buttons used to skip both);
+ *   - a laptop reaches Inventory only by the serial-scan receive into a carret
+ *     slot (or as a sales-order laptop passing Dispatch QC). "Move to
+ *     Inventory", bulk-move and Dismantle -> Inventory put laptops in stock
+ *     unchecked.
+ */
+const QC_PASS_MOVES = new Set(['QC1→QC2', 'QC1→Dispatch QC', 'QC2→Pending Inventory', 'QC2→Inventory']);
+function assertQcGate({ from, to, qcGate, ticketId }) {
+  const kind = qcGate?.kind || null;
+  const refuse = (why) => {
+    const err = new StageTransitionRefused({ from, to, ticketId, reason: why });
+    err.status = 409;
+    err.code = 'QC_GATE';
+    throw err;
+  };
+  if (QC_PASS_MOVES.has(`${from}→${to}`) || to === 'Pending Inventory') {
+    if (kind === 'checklist') return;
+    if (kind === 'override' && String(qcGate.reason || '').trim().length >= 10) return;
+    refuse(`${from || 'This stage'} is passed through the QC checklist (QC tab), not by moving the ticket. A manager can override with a reason.`);
+  }
+  if (to === 'Inventory' && from !== 'Dispatch QC' && kind !== 'receive') {
+    refuse('A laptop goes into stock only by scanning its serial into a carret slot from Pending Inventory.');
+  }
+}
+
 module.exports = {
+  assertQcGate,
+  QC_PASS_MOVES,
   StageTransitionRefused,
   getStageByName,
   getStageById,

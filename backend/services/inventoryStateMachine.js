@@ -622,7 +622,34 @@ async function bridgeSupportReplacement(db, {
   return result;
 }
 
+/**
+ * Production safety A (Q7): the one way a laptop goes INTO stock.
+ *
+ * Every "into stock" call used allowOverride, so a rented, sold, scrapped,
+ * QC-failed or vendor-returned laptop could be forced back onto the shelf.
+ * Stock is entered only from where a laptop genuinely comes from: nowhere yet
+ * (first receipt), production, a customer return, or the guard's custody.
+ * Already in stock is a no-op, never a second transitions row.
+ */
+const STOCK_ENTRY_FROM = new Set([null, STATUS.IN_REPAIR, STATUS.RETURNED, STATUS.AT_GATE]);
+async function enterStock(db, { serialId, reason, actorUserId = null, actorName = null, correlationId = null, caller = null }) {
+  const client = db || pool;
+  const serial = await loadSerial(client, serialId);
+  if (!serial) throw new Error(`Serial ${serialId} not found`);
+  const from = serial.inventory_status || null;
+  if (from === STATUS.IN_STOCK) return { ok: true, from, to: from, unchanged: true };
+  if (!STOCK_ENTRY_FROM.has(from)) {
+    throw new TransitionRefused({
+      serialId, ttsplId: serial.ttspl_id, from, to: STATUS.IN_STOCK, caller,
+      message: `${serial.ttspl_id || `Serial ${serialId}`} is ${String(from).replace(/_/g, ' ')} — it can't be put into stock from here.`,
+    });
+  }
+  return transitionAsset(client, { serialId, toStatus: STATUS.IN_STOCK, reason, actorUserId, actorName, correlationId, caller });
+}
+
 module.exports = {
+  enterStock,
+  STOCK_ENTRY_FROM,
   TransitionRefused,
   markAtGate,
   collectFromGate,

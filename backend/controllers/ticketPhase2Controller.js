@@ -13,7 +13,10 @@ const {
   checkTransition,
   applyStageMove,
   StageTransitionRefused,
+  assertQcGate,
+  QC_PASS_MOVES,
 } = require('../services/stageTransitionService');
+const { assertMayPassQc, overrideFrom } = require('../services/qcGateService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
@@ -267,6 +270,22 @@ exports.moveToStage = async (req, res) => {
     if (!nextStage) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Target stage not found' });
+    }
+
+    // Production safety A — a QC pass or a stock entry is refused here, before
+    // any of this handler's side effects, unless a manager overrides with a
+    // reason (PD3). The same gate sits in applyStageMove for every other door.
+    let qcGate = null;
+    try {
+      qcGate = overrideFrom(req.user, req.body.qc_override_reason);
+      const isPass = QC_PASS_MOVES.has(`${currentStageName}→${effectiveToStage}`);
+      if (isPass && qcGate) {
+        await assertMayPassQc(client, { ticketId: ticket.ticket_id, user: req.user, stageName: currentStageName });
+      }
+      assertQcGate({ from: currentStageName, to: effectiveToStage, qcGate, ticketId: ticket.ticket_id });
+    } catch (gateErr) {
+      await client.query('ROLLBACK');
+      return res.status(gateErr.status || 409).json({ success: false, code: gateErr.code || 'QC_GATE', message: gateErr.message });
     }
 
     let conditionHint = null;
@@ -717,7 +736,8 @@ exports.moveToStage = async (req, res) => {
         source: 'ticketPhase2Controller.moveToStage',
         actor: req.user,
         correlationId: req.correlationId || null,
-        reason: reason || null,
+        reason: qcGate ? `QC override: ${qcGate.reason}` : (reason || null),
+        qcGate,
       });
     } catch (moveErr) {
       await client.query('ROLLBACK');
@@ -931,6 +951,15 @@ exports.markQcFailed = async (req, res) => {
         });
       }
     }
+
+    // Q8: the working asset leaves Pending Inventory too, so the warehouse
+    // can't receive a failed laptop into stock from that list.
+    await client.query(
+      `UPDATE production_assets SET status = 'qc_failed', updated_at = NOW()
+        WHERE (ticket_id = $1 OR ($2::int IS NOT NULL AND vendor_serial_id = $2))
+          AND status NOT IN ('received')`,
+      [ticket.ticket_id, ticket.vendor_serial_id || null]
+    );
 
     // SO-level allocation: this laptop failed pre-dispatch QC — mark it failed so
     // the warehouse detaches/replaces it before the DC can be generated.

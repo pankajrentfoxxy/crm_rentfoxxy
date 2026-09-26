@@ -8,7 +8,7 @@ const {
   closeOpenWorkLogsForTickets
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
-const { applyStageMove, assertTransitionAllowed, StageTransitionRefused } = require('../services/stageTransitionService');
+const { applyStageMove, assertTransitionAllowed, assertQcGate, StageTransitionRefused } = require('../services/stageTransitionService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const {
   resolvePartConfigUpdate,
@@ -917,9 +917,22 @@ exports.moveToNextStage = async (req, res) => {
       }
     }
 
-    // If no next stage found (and not jumping), assume completion
+    // F5: with no next stage this used to fall through and crash (500).
     if (!nextStage) {
-      // ... existing completion logic for fallback ...
+      return res.status(400).json({ success: false, message: `There is no stage after ${currentStageName || 'this one'}.` });
+    }
+
+    // F14 / Production safety A: decide BEFORE writing anything. The legacy
+    // inventory update and the stock entry below ran first and stayed even
+    // when the move was then refused. QC passes and stock entry never go
+    // through this route (checklist / serial-scan receive only).
+    try {
+      await assertTransitionAllowed(pool, {
+        fromStageName: currentStageName, toStageName: nextStage.stage_name, ticketId: ticket.ticket_id,
+      });
+      assertQcGate({ from: currentStageName, to: nextStage.stage_name, qcGate: null, ticketId: ticket.ticket_id });
+    } catch (gateErr) {
+      return res.status(gateErr.status || 409).json({ success: false, message: gateErr.message });
     }
 
     // Save checklist data... (keep existing)
@@ -2070,6 +2083,8 @@ exports.bulkMoveTickets = async (req, res) => {
         fromStageName,
         toStageName: targetStage.stage_name,
       });
+      // Production safety A: no bulk QC pass, no bulk stock entry.
+      assertQcGate({ from: fromStageName, to: targetStage.stage_name, qcGate: null });
     } catch (moveErr) {
       if (moveErr instanceof StageTransitionRefused) {
         return res.status(moveErr.status).json({

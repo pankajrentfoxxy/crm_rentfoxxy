@@ -698,12 +698,13 @@ export default function TicketDetailPage() {
     }
   }
   if ((qc || canManageTickets) && stage === 'QC1') {
-    const nextQcStage = ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2';
     const nextLabel = ticket.ticket_type === 'sales_order_qc'
       ? 'QC1 PASS — Move to Dispatch QC'
       : 'QC1 PASS — Move to QC2';
     stageButtons.push(
-      { label: nextLabel, action: () => move(nextQcStage), success: true },
+      // Production safety A (PD3): a QC pass is the checklist, saved as a QC
+      // record — the server refuses a plain stage move.
+      { label: nextLabel.replace('Move to', 'fill checklist →'), action: () => { setTab('qc'); toast('Fill the QC1 checklist to pass it.'); }, success: true },
       { label: 'QC1 FAIL — Send back', action: openQc1FailPicker, danger: true, needsReason: true }
     );
   }
@@ -743,7 +744,7 @@ export default function TicketDetailPage() {
   }
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
-      { label: 'QC2 PASS — Move to QC Ready', action: () => setQc2PassTagOpen(true), success: true },
+      { label: 'QC2 PASS — fill checklist', action: () => { setTab('qc'); toast('Run the configuration check and fill the QC2 checklist to pass it.'); }, success: true },
       { label: 'QC2 FAIL — Send back to QC1', action: openQc2FailPicker, danger: true, needsReason: true }
     );
   }

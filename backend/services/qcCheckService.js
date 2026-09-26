@@ -2,6 +2,10 @@
  * Laravel helpers.php parity for QualityCheckController@qcCheck
  */
 const { parseExtra, resolveLineItem } = require('./qcManagementService');
+// Q13: both were used below and never imported, so "required for parts" and
+// "send to QC check" crashed with a ReferenceError.
+const { transitionAsset } = require('./inventoryStateMachine');
+const { statusForQcOutcome } = require('../constants/statuses');
 
 function uniqueDisplay(row, extra) {
   if (row.inventory_asset_code) return String(row.inventory_asset_code);
@@ -224,7 +228,9 @@ async function applySerialQcUpdate(client, { serialId, serialNumber, selected, r
   const row = cur.rows[0];
   const extra = parseExtra(row.extra);
   let qcStatus = selected;
-  let inventoryStatus = row.inventory_status ?? extra.status2 ?? null;
+  // Only an outcome that changes where the laptop stands moves it; "passed"
+  // here is qc_status only (stock entry is enterStock's job).
+  let inventoryStatus = null;
 
   if (selected === 'failed') {
     const details = await getProductDetailsBySerialNumber(client, serialNumber);
@@ -243,6 +249,11 @@ async function applySerialQcUpdate(client, { serialId, serialNumber, selected, r
       remarks: remark
     });
 
+    qcStatus = selected;
+    // Q13: a failed laptop stayed in_stock and could be attached to an order.
+    inventoryStatus = statusForQcOutcome('failed').status;
+  } else if (selected === 'dead') {
+    inventoryStatus = statusForQcOutcome('dead').status;
     qcStatus = selected;
   } else if (selected === 'require_for_parts') {
     extra.status2 = selected;
@@ -279,7 +290,6 @@ async function applySerialQcUpdate(client, { serialId, serialNumber, selected, r
       reason: `QC check: ${selected}${remark ? ` — ${remark}` : ''}`,
       actorUserId,
       correlationId,
-      allowOverride: true,
       caller: 'qcCheckService.applySerialQcUpdate',
     });
   }

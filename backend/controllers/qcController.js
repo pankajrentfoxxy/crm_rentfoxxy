@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { assertMayPassQc, assertQc2Matched, overrideFrom } = require('../services/qcGateService');
 const { reserveOnQcPass } = require('../services/qcPassReservation');
 const {
     pickNextAssigneeForTeam,
@@ -347,6 +348,24 @@ exports.submitQC = async (req, res) => {
         // Calculate QC result against the criteria for THIS stage (Part 5.4).
         const { result, reasons } = calculateQCResult(checklist, qcStage);
 
+        // Production safety A (PD2, PD3). A pass needs an inspector who did not
+        // repair it, and a QC2 pass needs the configuration check to have
+        // matched on the server — unless a manager overrides with a reason.
+        let qcGate = { kind: 'checklist' };
+        if (result === 'PASS' && ['QC1', 'QC2'].includes(qcStage)) {
+            try {
+                const override = overrideFrom(req.user, req.body.qc_override_reason);
+                await assertMayPassQc(client, { ticketId: Number(id), user: req.user, stageName: qcStage });
+                if (qcStage === 'QC2') {
+                    if (override) qcGate = { kind: 'checklist', override: override.reason };
+                    else await assertQc2Matched(client, { ticketId: Number(id) });
+                }
+            } catch (gateErr) {
+                await client.query('ROLLBACK');
+                return res.status(gateErr.status || 409).json({ success: false, code: gateErr.code || 'QC_GATE', message: gateErr.message });
+            }
+        }
+
         // Save or update QC result
         const qcCheck = await client.query(
             `SELECT qc_id FROM qc_results WHERE ticket_id = $1 AND qc_stage = $2`,
@@ -430,7 +449,9 @@ exports.submitQC = async (req, res) => {
         if (failure) {
             nextStage = failure.toStageName;
         } else if (qcStage === 'QC1') {
-            nextStage = 'QC2';
+            // F21: a sales-order laptop goes QC1 -> Dispatch QC, as move-stage
+            // already did; this path sent it to QC2.
+            nextStage = ticketMeta.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2';
         } else {
             // Dispatch QC still goes to Inventory. Floor QC2 goes to Pending Inventory.
             nextStage = qcStage === 'Dispatch QC' ? 'Inventory' : 'Pending Inventory';
@@ -533,7 +554,8 @@ exports.submitQC = async (req, res) => {
                     source: 'qcController.submitQC',
                     actor: req.user,
                     correlationId: req.correlationId || null,
-                    reason: failure ? failure.failReason : null,
+                    reason: failure ? failure.failReason : (qcGate.override ? `QC2 check override: ${qcGate.override}` : null),
+                    qcGate: failure ? null : qcGate,
                 });
             } catch (moveErr) {
                 await client.query('ROLLBACK');

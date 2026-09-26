@@ -2,7 +2,7 @@
  * GRN receive → repair ticket (Floor Manager) → ticket completion → vendor QC passed.
  */
 const { startWorkLog } = require('./ticketWorkLogService');
-const { transitionAsset } = require('./inventoryStateMachine');
+const { enterStock } = require('./inventoryStateMachine');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
@@ -351,12 +351,10 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
   // migration 037 added the column with no default and the GRN INSERTs omit
   // it), and a transition out of NULL is exactly the case the map has no
   // opinion about.
-  await transitionAsset(db, {
+  await enterStock(db, {
     serialId: vendorSerialId,
-    toStatus: 'in_stock',
     reason: 'GRN vendor QC passed — first entry into stock',
     actorUserId: userId || null,
-    allowOverride: true,
     caller: 'grnTicketService.applyGrnVendorQcPassOnTicketComplete',
   });
 
@@ -377,16 +375,18 @@ async function markVendorSerialReadyForRent(db, ticket, userId) {
   const vendorSerialId = ticket?.vendor_serial_id;
   if (!vendorSerialId) return { applied: false, reason: 'no_vendor_serial' };
 
-  // Part 2.2, bypass-register B. Same defect as the site above, at the other
-  // end of production: QC2 completion put the unit on the shelf with no record.
-  await transitionAsset(db, {
-    serialId: vendorSerialId,
-    toStatus: 'in_stock',
-    reason: 'QC2 complete — ready to rent or sell',
-    actorUserId: userId || null,
-    allowOverride: true,
-    caller: 'grnTicketService.markVendorSerialReadyForRent',
-  });
+  // Q7: through enterStock, never an override. A sales-order laptop passing
+  // Dispatch QC is reserved for its order and stays reserved; a laptop that
+  // is not ours or not fit is refused rather than forced onto the shelf.
+  const cur = (await db.query('SELECT inventory_status FROM vendor_serial_numbers WHERE serial_id = $1', [vendorSerialId])).rows[0];
+  if (!['reserved', 'dispatch_ready'].includes(cur?.inventory_status)) {
+    await enterStock(db, {
+      serialId: vendorSerialId,
+      reason: 'QC2 complete — ready to rent or sell',
+      actorUserId: userId || null,
+      caller: 'grnTicketService.markVendorSerialReadyForRent',
+    });
+  }
 
   await db.query(
     `UPDATE vendor_serial_numbers
