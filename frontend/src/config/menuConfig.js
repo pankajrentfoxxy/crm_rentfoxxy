@@ -213,6 +213,7 @@ const carretMenuItems = [
   { icon: ShoppingCart, label: 'Sales Orders', path: '/carret/sell/sales-orders', section: 'sales_orders_doc' },
   { icon: Truck, label: 'Delivery Register', path: '/carret/move/deliveries', section: 'delivery_register_management' },
   { icon: Store, label: 'Purchase Orders', path: '/carret/procure/purchase-orders', section: 'vendor_management' },
+  { icon: Store, label: 'Vendors', path: '/carret/procure/vendors', section: 'vendor_management' },
   { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
   { icon: DollarSign, label: 'Ageing & Outstanding', path: '/carret/money/ageing', section: 'customer_billing' },
 ];

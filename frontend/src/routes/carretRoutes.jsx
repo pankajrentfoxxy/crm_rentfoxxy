@@ -19,6 +19,9 @@ const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
 const SellListPage = React.lazy(() => import('../features/carret/SellListPage'));
 const ProcureListPage = React.lazy(() => import('../features/carret/ProcureListPage'));
+const VendorsListPage = React.lazy(() => import('../features/carret/procure/VendorsListPage'));
+const VendorRecordPage = React.lazy(() => import('../features/carret/procure/VendorRecordPage'));
+const VendorFormPage = React.lazy(() => import('../features/carret/procure/VendorFormPage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
@@ -84,7 +87,10 @@ export const carretRoutes = CARRET_ENABLED
       // Procure & Produce (Part 5.7). Five procurement lists are one component,
       // like Sell, because they are the same shape.
       { path: '/carret/procure/purchase-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="purchase-orders" />) },
-      { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <ProcureListPage kind="vendors" />) },
+      { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <VendorsListPage />) },
+      { path: '/carret/procure/vendors/new', element: guard('vendor_management', 'create', <VendorFormPage />) },
+      { path: '/carret/procure/vendors/:vendorId', element: guard('vendor_management', 'view', <VendorRecordPage />) },
+      { path: '/carret/procure/vendors/:vendorId/edit', element: guard('vendor_management', 'edit', <VendorFormPage />) },
       { path: '/carret/procure/spare-parts-orders', element: guard('vendor_management', 'view', <ProcureListPage kind="spare-parts-orders" />) },
       { path: '/carret/procure/vendor-returns', element: guard('vendor_return_to_vendor', 'view', <ProcureListPage kind="replaced-products" />) },
       { path: '/carret/procure/vendor-repair', element: guard('vendor_repair_dc', 'view', <ProcureListPage kind="vendor-repair-dcs" />) },

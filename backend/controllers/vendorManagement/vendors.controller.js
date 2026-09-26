@@ -75,7 +75,8 @@ function buildMulter() {
 const listValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
-  query('search').optional().isString().trim()
+  query('search').optional().isString().trim(),
+  query('status').optional().isIn(['pending', 'approved', 'suspended'])
 ];
 
 async function listVendors(req, res) {
@@ -90,6 +91,11 @@ async function listVendors(req, res) {
   let where = `v.deleted_at IS NULL`;
   const params = [];
   let pIdx = 1;
+  if (req.query.status) {
+    where += ` AND v.status = $${pIdx}`;
+    params.push(req.query.status);
+    pIdx += 1;
+  }
   /* Laravel view_vendor(): split query by spaces — each token may match name / email / phone / business */
   const tokens = rawSearch.split(/\s+/).filter(Boolean);
   for (const tok of tokens) {
@@ -117,9 +123,16 @@ async function listVendors(req, res) {
   const data = await pool.query(dataSql, params);
 
   const bankOk = await canSeeVendorBank(req);
+  const counts = await pool.query(
+    `SELECT COALESCE(status, 'approved') AS status, COUNT(*)::int AS n FROM vendors WHERE deleted_at IS NULL GROUP BY 1`
+  );
   res.json({
     success: true,
-    data: data.rows.map((r) => redactVendor(normalizeVendorRow(r), bankOk)),
+    counts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
+    data: data.rows.map((r) => ({
+      ...redactVendor(normalizeVendorRow(r), bankOk),
+      bank_details_ok: bankDetailsLookValid(r),
+    })),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 }
   });
 }
@@ -238,7 +251,10 @@ async function getVendor(req, res) {
       [id]
     );
     if (r.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
-    res.json({ success: true, data: redactVendor(normalizeVendorRow(r.rows[0]), await canSeeVendorBank(req)) });
+    res.json({
+      success: true,
+      data: { ...redactVendor(normalizeVendorRow(r.rows[0]), await canSeeVendorBank(req)), bank_details_ok: bankDetailsLookValid(r.rows[0]) },
+    });
   } catch (error) {
     console.error('getVendor:', error);
     res.status(500).json({ success: false, message: error.message || 'Server error fetching vendor' });
@@ -254,6 +270,60 @@ async function lookupVendor(req, res) {
   const r = await pool.query(`SELECT * FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`, [id]);
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Vendor not found' });
   res.json({ success: true, data: redactVendor(normalizeVendorRow(r.rows[0]), await canSeeVendorBank(req)) });
+}
+
+
+/* ---------- Vendor tax / bank identifiers (Procure screens 1) ---------- */
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const up = (v) => String(v ?? '').trim().toUpperCase();
+
+/**
+ * Format checks for GSTIN, PAN and IFSC, on a new vendor or on a value that is
+ * CHANGING. 99 of 124 vendors carry the imported placeholder IFSC "ABSI12345";
+ * editing such a vendor's phone must not fail on bank details nobody touched —
+ * the vendor record flags those instead. A GSTIN may not belong to another
+ * active vendor.
+ * @returns {Promise<string[]>} problems, empty when fine
+ */
+async function vendorIdProblems(body, prev = null) {
+  const problems = [];
+  const changed = (field, bodyKey = field) => {
+    const next = up(body[bodyKey]);
+    if (!next || next === 'HIDDEN') return false;
+    return !prev || next !== up(prev[field]);
+  };
+  if (changed('gst_number') && !GSTIN_RE.test(up(body.gst_number))) problems.push('GSTIN is not in the 15-character GST format (e.g. 06AAHCT0310N1ZG).');
+  if (changed('pan_number') && !PAN_RE.test(up(body.pan_number))) problems.push('PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F).');
+  if (changed('bank_ifsc_code') && !IFSC_RE.test(up(body.bank_ifsc_code))) problems.push('IFSC must be 4 letters, 0, then 6 letters or digits (e.g. HDFC0001234).');
+  if (changed('gst_number')) {
+    const dup = await pool.query(
+      `SELECT business_name FROM vendors
+        WHERE deleted_at IS NULL AND UPPER(TRIM(gst_number)) = $1 AND ($2::int IS NULL OR vendor_id <> $2) LIMIT 1`,
+      [up(body.gst_number), prev?.vendor_id || null]
+    );
+    if (dup.rows.length) problems.push(`GSTIN ${up(body.gst_number)} already belongs to ${dup.rows[0].business_name}.`);
+  }
+  return problems;
+}
+
+/** True when the vendor's bank details look real (not the imported placeholder). */
+function bankDetailsLookValid(v) {
+  return IFSC_RE.test(up(v.bank_ifsc_code)) && /^\d{6,20}$/.test(String(v.account_number || '').trim());
+}
+
+/** A value shown to a user as "hidden" comes back unchanged — keep what is stored. */
+function keepHidden(body, prev) {
+  for (const f of SENSITIVE_VENDOR_FIELDS) {
+    if (String(body[f] ?? '').trim().toLowerCase() === 'hidden') body[f] = prev ? prev[f] : null;
+  }
+}
+
+async function saveGstCertificate(vendorId, file) {
+  const url = saveUploadedFile(file);
+  if (url) await pool.query('UPDATE vendors SET gst_certificate_url = $1 WHERE vendor_id = $2', [url, vendorId]);
+  return url;
 }
 
 function createValidators() {
@@ -321,6 +391,9 @@ async function createVendor(req, res) {
     const licenses_url = saveUploadedFile(req.files?.licenses_and_permits?.[0]);
     const logo_url = saveUploadedFile(req.files?.logo?.[0]);
     const ext = pickExtendedVendorFields(req.body);
+
+    const idProblems = await vendorIdProblems(req.body, null);
+    if (idProblems.length) return res.status(400).json({ success: false, message: idProblems.join(' '), errors: idProblems.map((m) => ({ msg: m })) });
 
     // One connection for the whole transaction: BEGIN/COMMIT through the
     // pool could land on different connections, so the rollback protected
@@ -401,6 +474,8 @@ async function createVendor(req, res) {
 
     await client.query('COMMIT');
 
+    await saveGstCertificate(v.vendor_id, req.files?.gst_certificate?.[0]);
+
     try {
       const { upsertCredential } = require('../../services/authCredentialsService');
       await upsertCredential({
@@ -455,10 +530,11 @@ function updateValidatorsFixed() {
       .matches(/^\d{4}-\d{2}-\d{2}$/)
       .withMessage('Invalid registration date'),
     body('bank_name').trim().notEmpty().isLength({ min: 1, max: 255 }),
+    // "hidden" = the user cannot see bank details and left them alone (keepHidden).
     body('account_number')
       .trim()
       .notEmpty()
-      .matches(/^\d+$/)
+      .custom((v) => /^\d+$/.test(v) || v.toLowerCase() === 'hidden')
       .withMessage('Account number must be numeric'),
     body('bank_ifsc_code').trim().notEmpty(),
     body('account_holder_name').trim().notEmpty(),
@@ -491,6 +567,9 @@ async function updateVendor(req, res) {
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Vendor not found' });
 
   const prev = cur.rows[0];
+  keepHidden(req.body, prev);
+  const idProblems = await vendorIdProblems(req.body, prev);
+  if (idProblems.length) return res.status(400).json({ success: false, message: idProblems.join(' '), errors: idProblems.map((m) => ({ msg: m })) });
 
   let password_hash = prev.password_hash;
   let vendor_portal_password_hash = prev.vendor_portal_password_hash || prev.password_hash;
@@ -595,6 +674,7 @@ async function updateVendor(req, res) {
       vendor_id
     ]
   );
+  await saveGstCertificate(vendor_id, req.files?.gst_certificate?.[0]);
 
   const shopLogo = saveUploadedFile(req.files?.logo?.[0]);
   const shopBanner = saveUploadedFile(req.files?.banner?.[0]);
@@ -731,6 +811,7 @@ const portalAccessValidators = [
   body('portal_enabled').optional().isBoolean(),
   body('enabled').optional().isBoolean(),
   body('reset_password').optional().isBoolean(),
+  body('send_invite').optional().isBoolean(),
   body('password').optional({ checkFalsy: true }).isLength({ min: 8, max: 256 })
 ];
 
@@ -839,10 +920,24 @@ async function updatePortalAccess(req, res) {
     payload: { portal_enabled: portalEnabled, reset_password: req.body.reset_password === true }
   });
 
+  // send_invite: email the vendor its login and the new password.
+  let inviteSent = null;
+  if (req.body.send_invite === true && newPasswordPlain) {
+    try {
+      const v = (await pool.query('SELECT email, business_name, first_name FROM vendors WHERE vendor_id = $1', [vendor_id])).rows[0];
+      const { sendVendorPortalInvite } = require('../../services/vendorPoEmailService');
+      inviteSent = await sendVendorPortalInvite({ vendor: v, password: newPasswordPlain });
+    } catch (mailErr) {
+      console.warn('vendor portal invite email failed:', mailErr.message);
+      inviteSent = false;
+    }
+  }
+
   res.json({
     success: true,
-    message: 'Vendor portal access updated',
+    message: inviteSent === true ? 'Portal login emailed to the vendor' : 'Vendor portal access updated',
     data: r.rows[0],
+    ...(inviteSent !== null ? { invite_sent: inviteSent } : {}),
     ...(newPasswordPlain ? { new_password: newPasswordPlain } : {})
   });
 }
@@ -1162,8 +1257,31 @@ const withErrors = (name, fn) => async (req, res, next) => {
   }
 };
 
+/**
+ * GET /vendors/:id/activity — the vendor record's history: who did what, when.
+ * Payloads are left out (they can carry bank fields and portal details).
+ */
+async function listVendorActivity(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+  const r = await pool.query(
+    `SELECT l.log_id, l.action, l.entity_type, l.entity_id, l.created_at,
+            COALESCE(NULLIF(TRIM(u.name), ''), u.email) AS actor_name
+       FROM vendor_audit_logs l
+       LEFT JOIN users u ON u.user_id = l.actor_user_id
+      WHERE l.vendor_id = $1
+      ORDER BY l.created_at DESC, l.log_id DESC
+      LIMIT 100`,
+    [req.params.id]
+  );
+  res.json({ success: true, data: r.rows });
+}
+
 module.exports = {
   redactVendor,
+  vendorIdProblems,
+  bankDetailsLookValid,
+  keepHidden,
   buildMulter,
   listValidators,
   listVendors: withErrors('listVendors', listVendors),
@@ -1179,6 +1297,7 @@ module.exports = {
   loginAsVendor,
   portalAccessValidators,
   updatePortalAccess,
+  listVendorActivity: withErrors('listVendorActivity', listVendorActivity),
   laptopsValidators,
   laptopsExportValidators,
   listVendorLaptops,

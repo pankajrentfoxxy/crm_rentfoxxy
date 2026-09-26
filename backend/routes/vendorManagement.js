@@ -65,6 +65,7 @@ const upload = vendors.buildMulter();
 const vendorFiles = upload.fields([
   { name: 'image', maxCount: 1 },
   { name: 'licenses_and_permits', maxCount: 1 },
+  { name: 'gst_certificate', maxCount: 1 },
   { name: 'logo', maxCount: 1 },
   { name: 'banner', maxCount: 1 }
 ]);
@@ -74,6 +75,7 @@ router.get('/vendors/info', authorizeVendorRead, vendors.lookupValidators, vendo
 router.get('/vendors', authorizeVendorRead, vendors.listValidators, vendors.listVendors);
 router.get('/vendors/:id/laptops/export.xlsx', authorize, vendors.laptopsExportValidators, vendors.exportVendorLaptopsExcel);
 router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors.listVendorLaptops);
+router.get('/vendors/:id/activity', authorize, vendors.getValidators, vendors.listVendorActivity);
 router.get('/vendors/:id', authorizeVendorRead, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',

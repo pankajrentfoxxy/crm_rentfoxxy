@@ -75,7 +75,13 @@ answers first, because several of them change how the team works, not just the s
    hang, unmounted rate limiter on public capture, spare-PO GST/crash/approval bugs, vendor
    transactions on the shared pool, ticket created outside the receive transaction, DDL on every
    request. Each with a test.
-2. **Vendors** — list, record (POs, laptops with them, returns), create/edit, portal access.
+2. **Vendors** — DONE on QA 26 Sep: list with status tabs and a "bank needs fixing" flag; vendor
+   record (details, bank, documents, POs, laptops with us/with customers, portal, activity);
+   add/edit form. New vendors start **pending** and are approved on the record. GSTIN/PAN/IFSC
+   checked on the server when new or changed; GSTIN unique among active vendors; GST certificate
+   saves (migration 330); portal login emailed to the vendor. **Not done:** "login as vendor" —
+   the token it makes cannot open the vendor portal (other domain, needs a portal session);
+   needs a proper hand-off, left for later. PO links go to the old PO list until step 4.
 3. **To buy queue** (D13 demand chain).
 4. **Purchase orders** — list (correct columns and status), create/amend, record with
    approve/send/PDF/cancel/short-close/activity; spare-part POs on the same screens.
@@ -87,7 +93,7 @@ answers first, because several of them change how the team works, not just the s
 
 Migrations expected: "returned to vendor" status (D9), PO amend/close fields, gate arrival entry
 (D4), GRN delivery/invoice fields, porter fields on return DCs, VRDC status constraint, link
-tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production.
+tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql.
 
 ## Full findings
 

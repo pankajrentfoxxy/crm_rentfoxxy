@@ -121,4 +121,38 @@ async function sendPoPendingApprovalEmailToManagers({ po, vendorName, submitterN
   return sent;
 }
 
-module.exports = { sendPurchaseOrderApprovedEmail, sendPoPendingApprovalEmailToManagers };
+/**
+ * Portal invite: the vendor's login address and a freshly generated password.
+ * A new vendor used to get a password nobody ever saw, so they could not log in
+ * until an admin reset it and passed it on by hand.
+ * @returns {Promise<boolean>} true if sent
+ */
+async function sendVendorPortalInvite({ vendor, password }) {
+  const transport = getMailTransport();
+  if (!transport || !vendor?.email) return false;
+  const portal = String(process.env.VENDOR_PORTAL_URL || 'https://vendor.rentfoxxy.com').replace(/\/$/, '');
+  const name = vendor.business_name || vendor.first_name || 'there';
+  const text = [
+    `Hello ${name},`,
+    '',
+    'Your Rentfoxxy vendor portal account is ready. You can see your purchase orders,',
+    'accept them, upload invoices and follow your laptops with us.',
+    '',
+    `Portal:   ${portal}`,
+    `Login:    ${vendor.email}`,
+    `Password: ${password}`,
+    '',
+    'Please change the password after you first log in.',
+    '',
+    'Regards, Rentfoxxy Procurement',
+  ].join('\n');
+  await transport.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to: vendor.email,
+    subject: 'Your Rentfoxxy vendor portal login',
+    text,
+  });
+  return true;
+}
+
+module.exports = { sendPurchaseOrderApprovedEmail, sendPoPendingApprovalEmailToManagers, sendVendorPortalInvite };

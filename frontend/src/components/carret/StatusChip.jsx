@@ -37,6 +37,7 @@ const DOC_STATUS = {
   overdue:    { tone: 'crit',    glyph: '!' },
   rejected:   { tone: 'crit',    glyph: '✕' },
   cancelled:  { tone: 'closed',  glyph: '⊘' },
+  suspended:  { tone: 'crit',    glyph: '⊘' },
 };
 
 const TONE_VARS = {
