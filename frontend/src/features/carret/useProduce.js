@@ -68,23 +68,6 @@ function rowsFrom(data, ...keys) {
   return [];
 }
 
-/**
- * Purchase orders, vendors, spare parts orders, vendor returns, vendor repair.
- *
- * `path` is the endpoint, given in full, because Vendor Repair lives under
- * /vendor-repair and everything else under /vendor-management. Guessing a base
- * from the resource name would be the kind of convenient assumption that ends
- * with two of something.
- */
-export function useProcureList(path, filters = {}) {
-  const url = useMemo(() => `${path}${qs(filters)}`, [path, JSON.stringify(filters)]); // eslint-disable-line react-hooks/exhaustive-deps
-  const { loading, error, data, refresh } = useEndpoint(url);
-  const rows = useMemo(
-    () => rowsFrom(data, 'purchase_orders', 'vendors', 'spare_parts_orders', 'dcs', 'items', 'rows', 'list'),
-    [data]
-  );
-  return { loading, error, rows, total: data?.total ?? data?.data?.total ?? rows.length, refresh };
-}
 
 /**
  * The floor pipeline: how many tickets sit at each stage right now.

@@ -24,19 +24,25 @@ export const SECTIONS = [
   {
     key: 'procure',
     label: 'Procure',
+    // Procure to stock is complete in Carret (26 Sep 2026): these open the new
+    // screens, in the order the process runs. The old ones stay under "Old
+    // view" until the process is signed off (hard rule 6). Three old links
+    // (/grn, /vendor-return, /vendor-repair) pointed at routes that do not
+    // exist and are gone (B26).
+    groups: ['Procure to stock', 'Old view'],
     items: [
-      { to: '/vendor-management/purchase-orders', label: 'Purchase Orders', section: 'vendor_management', action: 'view' },
-      { to: '/vendor-management/grn', label: 'GRN', section: 'vendor_management', action: 'view' },
-      { to: '/vendor-management/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
-      { to: '/vendor-management/vendor-return', label: 'Vendor Returns', section: 'vendor_return_to_vendor', action: 'view' },
-      { to: '/vendor-management/vendor-repair', label: 'Vendor Repair', section: 'vendor_repair_dc', action: 'view' },
-      // Part 5.7, behind REACT_APP_CARRET. Beside the existing screens, not
-      // replacing them (hard rule 6).
-      { to: '/carret/procure/purchase-orders', label: 'Purchase Orders (Carret)', section: 'vendor_management', action: 'view' },
-      { to: '/carret/procure/vendors', label: 'Vendors (Carret)', section: 'vendor_management', action: 'view' },
-      { to: '/carret/procure/spare-parts-orders', label: 'Spare Parts Orders (Carret)', section: 'vendor_management', action: 'view' },
-      { to: '/carret/procure/vendor-returns', label: 'Vendor Returns (Carret)', section: 'vendor_return_to_vendor', action: 'view' },
-      { to: '/carret/procure/vendor-repair', label: 'Vendor Repair (Carret)', section: 'vendor_repair_dc', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/to-buy', label: 'To buy', section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/purchase-orders', label: 'Purchase Orders', section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/spare-parts-orders', label: 'Spare-parts Orders', sections: ['vendor_management', 'parts_procurement'], section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/arrivals', label: 'Vendor Arrivals', sections: ['guard_gate_checking', 'vendor_management'], section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/returns', label: 'Vendor Returns', sections: ['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], section: 'vendor_return_to_vendor', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/purchase-orders', label: 'Purchase Orders (old)', section: 'vendor_management', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/spare-parts-po', label: 'Spare Parts PO (old)', section: 'parts_procurement', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/vendors', label: 'Vendors (old)', section: 'vendor_management', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/return-to-vendor', label: 'Return to Vendor (old)', section: 'vendor_return_to_vendor', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/return-ticket', label: 'Vendor Return Tickets (old)', section: 'vendor_return_ticket', action: 'view' },
+      { group: 'Old view', to: '/vendor-management/vendor-repair-dc', label: 'Vendor Repair DCs (old)', section: 'vendor_repair_dc', action: 'view' },
     ],
   },
   {

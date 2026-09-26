@@ -189,7 +189,12 @@ async function listEligibleLaptops({ vendorId, poId, search, inventoryStatus, pa
               vpo.vendor_id,
               v.business_name AS vendor_name,
               COALESCE(vsn.extra->>'brand', '') AS brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
+              COALESCE(vsn.rejected_at_receipt, FALSE) AS rejected_at_receipt,
+              vsn.receipt_rejection_reason,
+              (SELECT t.floor_manager_qc_fail_reason FROM tickets t
+                WHERE t.vendor_serial_id = vsn.serial_id AND t.floor_manager_qc_failed
+                ORDER BY t.floor_manager_qc_failed_at DESC NULLS LAST LIMIT 1) AS qc_fail_reason
          FROM vendor_serial_numbers vsn
          JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
          JOIN vendors v ON v.vendor_id = vpo.vendor_id AND v.deleted_at IS NULL

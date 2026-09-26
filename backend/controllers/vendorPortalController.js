@@ -622,26 +622,29 @@ async function listVendorReturns(req, res) {
 
   const vendorId = req.vendor.vendor_id;
 
+  // B28: this listed CUSTOMER return challans (support RDCs matched to the
+  // vendor by serial text) as the vendor's returns, and missed the real ones.
+  // A vendor's returns are its return challans and rental return tickets.
   const rdcRows = await pool.query(
-    `SELECT
-       st.return_dc_number AS rdc_number,
-       MIN(st.updated_at) AS return_date,
-       COUNT(DISTINCT sti.id)::int AS laptop_count,
-       COALESCE(MAX(st.complaint_type), MAX(sti.issue_category_label), 'Return to vendor') AS reason,
-       COALESCE(MAX(st.status), 'open') AS status,
-       jsonb_agg(DISTINCT COALESCE(vsn.inventory_asset_code, sti.unique_serial_number, sti.serial_number))
-         FILTER (WHERE COALESCE(vsn.inventory_asset_code, sti.unique_serial_number, sti.serial_number) IS NOT NULL) AS ttspl_ids
-     FROM support_tickets st
-     JOIN support_ticket_items sti ON sti.ticket_id = st.id
-     JOIN vendor_serial_numbers vsn ON vsn.deleted_at IS NULL
-       AND (
-         LOWER(COALESCE(vsn.inventory_asset_code, '')) = LOWER(COALESCE(sti.unique_serial_number, ''))
-         OR LOWER(COALESCE(vsn.serial_number, '')) = LOWER(COALESCE(sti.serial_number, ''))
-       )
-     JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id AND vpo.vendor_id = $1 AND vpo.deleted_at IS NULL
-     WHERE st.return_dc_number IS NOT NULL
-     GROUP BY st.return_dc_number
-     ORDER BY MIN(st.updated_at) DESC NULLS LAST`,
+    `SELECT d.dc_number AS rdc_number,
+            COALESCE(d.dispatched_at, d.created_at) AS return_date,
+            COUNT(i.id) FILTER (WHERE COALESCE(i.item_status, '') <> 'cancelled')::int AS laptop_count,
+            COALESCE(d.return_reason, 'Return to vendor') AS reason,
+            d.status,
+            jsonb_agg(i.ttspl_id ORDER BY i.id) FILTER (WHERE i.ttspl_id IS NOT NULL AND COALESCE(i.item_status, '') <> 'cancelled') AS ttspl_ids
+       FROM vendor_return_delivery_challans d
+       LEFT JOIN vendor_return_dc_items i ON i.dc_number = d.dc_number
+      WHERE d.vendor_id = $1 AND d.status <> 'cancelled'
+      GROUP BY d.dc_number, d.dispatched_at, d.created_at, d.return_reason, d.status
+     UNION ALL
+     SELECT t.ticket_number, COALESCE(t.vendor_notified_at, t.created_at),
+            COUNT(i.id) FILTER (WHERE COALESCE(i.item_status, '') <> 'cancelled')::int,
+            COALESCE(t.return_reason, 'Rental return'), t.status,
+            jsonb_agg(i.ttspl_id ORDER BY i.id) FILTER (WHERE i.ttspl_id IS NOT NULL AND COALESCE(i.item_status, '') <> 'cancelled')
+       FROM vendor_return_tickets t
+       LEFT JOIN vendor_return_ticket_items i ON i.ticket_number = t.ticket_number
+      WHERE t.vendor_id = $1 AND t.status NOT IN ('cancelled', 'draft')
+      GROUP BY t.ticket_number, t.vendor_notified_at, t.created_at, t.return_reason, t.status`,
     [vendorId]
   );
 
@@ -662,7 +665,7 @@ async function listVendorReturns(req, res) {
   // Floor-driven returns: a Force-Fail (qc_failed_return_vendor) ticket sends a
   // unit back to this vendor. Surface it with its linked return ticket + debit note.
   const floorRows = await pool.query(
-    `SELECT t.ticket_id,
+    `SELECT t.ticket_id, t.status,
             t.floor_manager_qc_failed_at AS return_date,
             COALESCE(t.floor_manager_qc_fail_reason, t.highlighted_reason, 'Return to vendor') AS reason,
             t.return_to_vendor_dc_number AS rdc_number,

@@ -124,13 +124,29 @@ answers first, because several of them change how the team works, not just the s
    **run it on production at promotion**. **Still open:** the old receive screen still works
    without a gate entry (kept until sign-off); reject-at-door units go on a vendor return in
    step 6.
-6. **Vendor returns & repair** — one area for repair, return, replacement, QC-failed; debit notes.
-7. Menu: Procure section opens the new screens; old ones under "Old view" until sign-off.
+6. **Vendor returns & repair** — DONE on QA 26 Sep (migrations 335, 336). Backend: real
+   "returned to vendor" status (D9; the 13 recorded as scrapped corrected, status CHECK
+   extended); floor QC fail is one transaction and moves the laptop to qc_failed so it can go on
+   a return challan (B1/D11); a draft debit note for every return and replacement, one per
+   laptop, in the same transaction (D12); a laptop on an open return can't be reserved (B5);
+   replacement intake refuses the same/held laptop and carries the original's PO line, type and
+   rent dates, the original's rent stops the same day (B18); repaired/replacement laptops go
+   back to the floor as in_repair, not stock (B20); porter fields kept (B13); cancelled challan
+   items cancelled (B14); repair challans cancellable before they leave (B23); parts come back
+   through QC with their SPO link, matrix permission (B24); vendor portal Returns shows the
+   vendor's return challans and tickets instead of customer RDCs (B28). Screens: "Vendor
+   returns" — To send back (QC-failed and rejected-at-door, pick → return challan per vendor),
+   Return challans (new record page: values, transport, e-way, gate, vendor received, cancel),
+   Rental returns, Repairs (cancel), Debit notes. **Still on the old screens (linked):** rental
+   return ticket detail, repair challan sign/dispatch/receive, part repairs. **Not done:** part
+   repair gate/e-way (B24 remainder), D10 (rent stop at notify vs gate — still notify).
+7. Menu — DONE: Procure opens the new screens in process order; old ones under "Old view"
+   until sign-off; three dead links removed (B26).
 8. Verify on QA end to end, same method as Order to delivery.
 
 Migrations expected: "returned to vendor" status (D9), PO amend/close fields, gate arrival entry
 (D4), GRN delivery/invoice fields, porter fields on return DCs, VRDC status constraint, link
-tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql, 332_po_amend_cancel_close.sql, 333_spare_po_same_flow.sql, 334_vendor_deliveries.sql.
+tables for the "To buy" queue. Numbered above 329; applied to QA; listed for production. Applied so far: 330_vendor_gst_certificate.sql, 331_to_buy_links.sql, 332_po_amend_cancel_close.sql, 333_spare_po_same_flow.sql, 334_vendor_deliveries.sql, 335_vendor_returns_same_flow.sql, 336_return_dc_item_cancelled.sql.
 
 ## Full findings
 

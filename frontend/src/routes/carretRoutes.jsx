@@ -18,7 +18,6 @@ const OperationsOverviewPage = React.lazy(() => import('../features/carret/Opera
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
 const SellListPage = React.lazy(() => import('../features/carret/SellListPage'));
-const ProcureListPage = React.lazy(() => import('../features/carret/ProcureListPage'));
 const VendorsListPage = React.lazy(() => import('../features/carret/procure/VendorsListPage'));
 const VendorRecordPage = React.lazy(() => import('../features/carret/procure/VendorRecordPage'));
 const VendorFormPage = React.lazy(() => import('../features/carret/procure/VendorFormPage'));
@@ -29,6 +28,8 @@ const PurchaseOrderRecordPage = React.lazy(() => import('../features/carret/proc
 const SparePoRecordPage = React.lazy(() => import('../features/carret/procure/SparePoRecordPage'));
 const VendorArrivalsPage = React.lazy(() => import('../features/carret/procure/VendorArrivalsPage'));
 const DeliveryReceivePage = React.lazy(() => import('../features/carret/procure/DeliveryReceivePage'));
+const VendorReturnsPage = React.lazy(() => import('../features/carret/procure/VendorReturnsPage'));
+const ReturnChallanRecordPage = React.lazy(() => import('../features/carret/procure/ReturnChallanRecordPage'));
 const FloorPipelinePage = React.lazy(() => import('../features/carret/FloorPipelinePage'));
 const PartsListPage = React.lazy(() => import('../features/carret/PartsListPage'));
 const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesListPage'));
@@ -107,8 +108,12 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/procure/vendors/:vendorId/edit', element: guard('vendor_management', 'edit', <VendorFormPage />) },
       { path: '/carret/procure/spare-parts-orders', element: guardAny(['vendor_management', 'parts_procurement'], 'view', <PurchaseOrdersListPage kind="spare" />) },
       { path: '/carret/procure/spare-parts-orders/:spoId', element: guardAny(['vendor_management', 'parts_procurement'], 'view', <SparePoRecordPage />) },
-      { path: '/carret/procure/vendor-returns', element: guard('vendor_return_to_vendor', 'view', <ProcureListPage kind="replaced-products" />) },
-      { path: '/carret/procure/vendor-repair', element: guard('vendor_repair_dc', 'view', <ProcureListPage kind="vendor-repair-dcs" />) },
+      // One area for everything going back to a vendor (step 6). The two old
+      // Carret list paths open it too.
+      { path: '/carret/procure/returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
+      { path: '/carret/procure/returns/:dcNumber', element: guardAny(['vendor_return_to_vendor', 'vendor_management'], 'view', <ReturnChallanRecordPage />) },
+      { path: '/carret/procure/vendor-returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
+      { path: '/carret/procure/vendor-repair', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
 
       // The six stage views are ONE screen with the stage as a filter, for the
       // same reason the entity split is a filter: a laptop moving from QC1 to

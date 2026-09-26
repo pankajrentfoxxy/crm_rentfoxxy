@@ -216,6 +216,7 @@ const carretMenuItems = [
   { icon: ShoppingCart, label: 'To buy', path: '/carret/procure/to-buy', section: 'vendor_management' },
   { icon: Truck, label: 'Vendor arrivals', path: '/carret/procure/arrivals', section: 'vendor_management' },
   { icon: Store, label: 'Vendors', path: '/carret/procure/vendors', section: 'vendor_management' },
+  { icon: Truck, label: 'Vendor returns', path: '/carret/procure/returns', section: 'vendor_return_to_vendor' },
   { icon: Boxes, label: 'Spare-parts orders', path: '/carret/procure/spare-parts-orders', section: 'vendor_management' },
   { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
   { icon: DollarSign, label: 'Ageing & Outstanding', path: '/carret/money/ageing', section: 'customer_billing' },

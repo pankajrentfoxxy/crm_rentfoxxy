@@ -122,7 +122,8 @@ a TTSPL audit event. Named wrappers (`reserveForDc`, `markDispatchReady`, `markD
 
 **Always go through `transitionAsset()`.** About a dozen call sites currently write
 `inventory_status` with a raw `UPDATE` and have polluted production with non-canonical
-values; there is no CHECK constraint to stop you, and `isAllowed()` deliberately waves
+values; a CHECK constraint (migration 259, extended by 335 with `returned_to_vendor`)
+now limits the column to the 13 canonical values, but `isAllowed()` deliberately waves
 through any unit already in a non-canonical state. Do not add another bypass.
 
 Asset truth is spread across three tables kept in sync by hand — `vendor_serial_numbers`
