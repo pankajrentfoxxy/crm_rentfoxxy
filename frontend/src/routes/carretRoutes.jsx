@@ -36,6 +36,11 @@ const ReplacementApprovalsPage = React.lazy(() => import('../features/carret/pro
 const ServeMyWorkPage = React.lazy(() => import('../features/carret/serve/MyWorkPage'));
 const ServeJobPage = React.lazy(() => import('../features/carret/serve/JobPage'));
 const ServeMyPartsPage = React.lazy(() => import('../features/carret/serve/MyPartsPage'));
+const ServeQueuePage = React.lazy(() => import('../features/carret/serve/QueuePage'));
+const ServeTicketRecordPage = React.lazy(() => import('../features/carret/serve/TicketRecordPage'));
+const ServeNewTicketPage = React.lazy(() => import('../features/carret/serve/NewTicketPage'));
+const ServeInsightsPage = React.lazy(() => import('../features/carret/serve/InsightsPage'));
+const SupportChargesToBillPage = React.lazy(() => import('../features/carret/serve/ChargesToBillPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
 const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
 const FloorTicketPage = React.lazy(() => import('../features/carret/produce/FloorTicketPage'));
@@ -124,6 +129,12 @@ export const carretRoutes = CARRET_ENABLED
       // Serve — the support technician's phone (claude/carret-support.md step 3)
       { path: '/carret/serve/my-work', element: guard('support_tickets', 'view', <ServeMyWorkPage />) },
       { path: '/carret/serve/job/:itemId', element: guard('support_tickets', 'view', <ServeJobPage />) },
+      // Serve — the support lead's desk (step 4)
+      { path: '/carret/serve/queue', element: guard('support_tickets', 'view', <ServeQueuePage />) },
+      { path: '/carret/serve/tickets/new', element: guard('support_tickets', 'create', <ServeNewTicketPage />) },
+      { path: '/carret/serve/tickets/:ticketId', element: guard('support_tickets', 'view', <ServeTicketRecordPage />) },
+      { path: '/carret/serve/insights', element: guard('support_tickets', 'view', <ServeInsightsPage />) },
+      { path: '/carret/money/support-charges', element: guard('customer_billing', 'view', <SupportChargesToBillPage />) },
       { path: '/carret/serve/my-parts', element: guardAny(['support_part_requests', 'support_tickets'], 'view', <ServeMyPartsPage />) },
       { path: '/carret/procure/replacement-approvals', element: guardAny(['vendor_repair_dc', 'vendor_management', 'vendor_billing_mgmt'], 'view', <ReplacementApprovalsPage />) },
       { path: '/carret/procure/vendor-rentals', element: guardAny(['vendor_management', 'vendor_billing_mgmt', 'vendor_repair_dc'], 'view', <VendorRentalsPage />) },

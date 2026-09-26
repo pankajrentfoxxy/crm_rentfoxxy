@@ -154,16 +154,25 @@ export const SECTIONS = [
   {
     key: 'serve',
     label: 'Serve',
-    // Placeholder until Part 6 rebuilds the support UI. These are the live v1
-    // routes, which keep working — nothing is deleted before its replacement is
-    // signed off.
+    // Support in Carret (claude/carret-support.md, 26 Sep 2026): the lead's desk
+    // and the technician's phone open the new screens. The v1 pages stay under
+    // "Old view" (pickup / replacement / Service DC / parts still run there)
+    // until Support is signed off.
+    groups: ['Support desk', 'Technician', 'Old view'],
     items: [
-      { to: '/support/tickets', label: 'Support Queue', section: 'support_tickets', action: 'view' },
-      { to: '/support/parts-queue', label: 'Parts Requests', section: 'support_part_requests', action: 'view' },
-      { to: '/support-parts/queue', label: 'Parts Challans', section: 'support_part_challan', action: 'view' },
-      { to: '/support/tech-bucket', label: 'Technician Bucket', section: 'technician_bucket', action: 'view' },
-      { to: '/support/technicians', label: 'Technicians', section: 'support_technician', action: 'view' },
-      { to: '/support/settings', label: 'Support Settings', section: 'support_settings', action: 'view' },
+      { group: 'Support desk', to: '/carret/serve/queue', label: 'Queue', section: 'support_tickets', action: 'view' },
+      { group: 'Support desk', to: '/carret/serve/tickets/new', label: 'New ticket', section: 'support_tickets', action: 'create' },
+      { group: 'Support desk', to: '/carret/serve/insights', label: 'SLA & feedback', section: 'support_tickets', action: 'view' },
+      { group: 'Support desk', to: '/support/requests', label: 'Customer requests', section: 'support_tickets', action: 'view' },
+      { group: 'Technician', to: '/carret/serve/my-work', label: 'My work', section: 'support_tickets', action: 'view' },
+      { group: 'Technician', to: '/carret/serve/my-parts', label: 'My parts', sections: ['support_part_requests', 'support_tickets'], section: 'support_part_requests', action: 'view' },
+      { group: 'Technician', to: '/carret/move/my-deliveries', label: 'My deliveries', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
+      { group: 'Old view', to: '/support/tickets', label: 'Support Queue (old)', section: 'support_tickets', action: 'view' },
+      { group: 'Old view', to: '/support/parts-queue', label: 'Parts Requests', section: 'support_part_requests', action: 'view' },
+      { group: 'Old view', to: '/support-parts/queue', label: 'Parts Challans', section: 'support_part_challan', action: 'view' },
+      { group: 'Old view', to: '/support/tech-bucket', label: 'Technician Bucket', section: 'technician_bucket', action: 'view' },
+      { group: 'Old view', to: '/support/technicians', label: 'Technicians', section: 'support_technician', action: 'view' },
+      { group: 'Old view', to: '/support/settings', label: 'Support Settings', section: 'support_settings', action: 'view' },
     ],
   },
   {
@@ -181,6 +190,7 @@ export const SECTIONS = [
       // the buckets nor the due dates they rest on existed before Part 6.2.
       { to: '/carret/money/invoices', label: 'Customer Invoices (Carret)', section: 'customer_billing', action: 'view' },
       { to: '/carret/money/ageing', label: 'Ageing & Outstanding (Carret)', section: 'customer_billing', action: 'view' },
+      { to: '/carret/money/support-charges', label: 'Support Charges to Bill', section: 'customer_billing', action: 'view' },
       { to: '/finance/dashboard', label: 'Billing Dashboard', section: 'billing_dashboard', action: 'view' },
       { to: '/finance/dc-invoice', label: 'DC Invoice Queue', section: 'customer_billing', action: 'view' },
       { to: '/finance/sale-invoice-queue', label: 'Sale Invoice Queue', section: 'customer_billing', action: 'view' },

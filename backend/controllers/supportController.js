@@ -1201,10 +1201,17 @@ exports.listTechnicians = async (req, res) => {
                   WHEN u.role = 'warehouse' THEN 'warehouse'
                   ELSE 'internal'
                 END AS assignee_kind,
+                -- Open work counts both legs (visit assignee and pickup assignee) and leaves
+                -- out finished / cancelled items (it counted cancelled and warehouse-done ones).
                 (SELECT COUNT(DISTINCT i.ticket_id)::int FROM support_ticket_items i
-                    WHERE i.assigned_to = u.user_id AND i.status NOT IN ('resolved','closed')) AS open_ticket_count,
+                    WHERE (i.assigned_to = u.user_id OR i.pickup_assigned_to = u.user_id)
+                      AND i.status NOT IN ('resolved','closed','inventory_updated','cancelled','removed','delivered','awaiting_service_return')) AS open_ticket_count,
                 (SELECT COUNT(*)::int FROM support_ticket_items i
-                    WHERE i.assigned_to = u.user_id AND i.status NOT IN ('resolved','closed')) AS open_item_count
+                    WHERE (i.assigned_to = u.user_id OR i.pickup_assigned_to = u.user_id)
+                      AND i.status NOT IN ('resolved','closed','inventory_updated','cancelled','removed','delivered','awaiting_service_return')) AS open_item_count,
+                (SELECT COUNT(*)::int FROM support_ticket_items i
+                    WHERE (i.assigned_to = u.user_id OR i.pickup_assigned_to = u.user_id)
+                      AND (i.visit_scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS today_visits
              FROM users u
              WHERE u.active = true
                AND (
@@ -1322,7 +1329,31 @@ exports.getCustomerAssets = async (req, res) => {
              ORDER BY vsn.inventory_asset_code`,
             [customerId, SUPPORT_TICKET_ELIGIBLE_STATUSES]
         );
-        res.json({ success: true, assets: rows });
+        const assets = rows;
+        // WFH (work from home): shown when raising the ticket, because a return
+        // pickup or a replacement delivery to that laptop is chargeable.
+        const codes = [...new Set((assets || []).flatMap((a) => [a.ttspl_id, a.unique_serial_number, a.serial_number])
+            .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
+        if (codes.length) {
+            const wfh = await pool.query(
+                `SELECT DISTINCT ON (k) k, is_wfh FROM (
+                   SELECT UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) AS k,
+                          COALESCE(sos.is_wfh, FALSE) OR COALESCE(sol.is_wfh, FALSE) AS is_wfh,
+                          sos.created_at, sos.allocation_id
+                     FROM sales_order_serials sos
+                     JOIN sales_order_lines sol ON sol.id = sos.line_id
+                    WHERE sol.customer_id = $1
+                      AND UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) = ANY($2::text[])
+                 ) x ORDER BY k, created_at DESC NULLS LAST, allocation_id DESC`,
+                [customerId, codes]
+            );
+            const byCode = new Map(wfh.rows.map((r) => [r.k, r.is_wfh]));
+            for (const a of assets) {
+                a.is_wfh = [a.ttspl_id, a.unique_serial_number, a.serial_number]
+                    .some((c) => byCode.get(String(c || '').trim().toUpperCase()) === true);
+            }
+        }
+        res.json({ success: true, assets, wfh_charge: require('../services/supportChargesService').WFH_CHARGE });
     } catch (e) {
         console.error('support getCustomerAssets', e);
         res.status(500).json({ success: false, message: 'Failed to load assets' });
@@ -1558,6 +1589,12 @@ exports.createTicket = async (req, res) => {
 
         for (const item of items) {
             await insertTicketItem(client, ticket.id, { ...item, item_type: ticketCategory }, req.user.user_id);
+        }
+        // Appointment agreed with the customer (Carret new-ticket form) — shown on the technician's My work.
+        if (req.body.visit_scheduled_at) {
+            const slot = new Date(req.body.visit_scheduled_at);
+            if (Number.isNaN(slot.getTime())) throw Object.assign(new Error('Visit slot is not a valid date/time'), { status: 400 });
+            await client.query('UPDATE support_ticket_items SET visit_scheduled_at = $2 WHERE ticket_id = $1', [ticket.id, slot]);
         }
 
         await client.query('COMMIT');
@@ -5789,30 +5826,7 @@ exports.getAvailableAssets = async (req, res) => {
     try {
         const customerId = parseInt(req.params.customerId, 10);
         const assets = await supportInventoryService.getAvailableAssets(customerId);
-        // WFH (work from home): shown when raising the ticket, because a return
-        // pickup or a replacement delivery to that laptop is chargeable.
-        const codes = [...new Set((assets || []).flatMap((a) => [a.ttspl_id, a.unique_serial_number, a.serial_number])
-            .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
-        if (codes.length) {
-            const wfh = await pool.query(
-                `SELECT DISTINCT ON (k) k, is_wfh FROM (
-                   SELECT UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) AS k,
-                          COALESCE(sos.is_wfh, FALSE) OR COALESCE(sol.is_wfh, FALSE) AS is_wfh,
-                          sos.created_at, sos.allocation_id
-                     FROM sales_order_serials sos
-                     JOIN sales_order_lines sol ON sol.id = sos.line_id
-                    WHERE sol.customer_id = $1
-                      AND UPPER(COALESCE(sos.ttspl_id, sos.serial_number)) = ANY($2::text[])
-                 ) x ORDER BY k, created_at DESC NULLS LAST, allocation_id DESC`,
-                [customerId, codes]
-            );
-            const byCode = new Map(wfh.rows.map((r) => [r.k, r.is_wfh]));
-            for (const a of assets) {
-                a.is_wfh = [a.ttspl_id, a.unique_serial_number, a.serial_number]
-                    .some((c) => byCode.get(String(c || '').trim().toUpperCase()) === true);
-            }
-        }
-        res.json({ success: true, assets, wfh_charge: require('../services/supportChargesService').WFH_CHARGE });
+        res.json({ success: true, assets });
     } catch (e) {
         res.status(500).json({ success: false, message: 'Failed to load available assets' });
     }
@@ -6332,6 +6346,35 @@ exports.getMyWork = async (req, res) => {
     try {
         const jobs = await require('../services/supportMyWorkService').myWork(req.user.user_id);
         res.json({ success: true, jobs });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** PATCH /items/:itemId/appointment { visit_scheduled_at } — the lead sets / moves the visit slot. */
+exports.setItemAppointment = async (req, res) => {
+    try {
+        const itemId = parseInt(req.params.itemId, 10);
+        const raw = req.body?.visit_scheduled_at;
+        const slot = raw ? new Date(raw) : null;
+        if (raw && Number.isNaN(slot.getTime())) return res.status(400).json({ success: false, message: 'Not a valid date/time' });
+        const r = await pool.query(
+            `UPDATE support_ticket_items SET visit_scheduled_at = $2, updated_at = NOW()
+              WHERE id = $1 AND status NOT IN ('resolved','closed','inventory_updated','cancelled') RETURNING ticket_id`,
+            [itemId, slot]
+        );
+        if (!r.rowCount) return res.status(404).json({ success: false, message: 'Open item not found' });
+        await logAudit(pool, { itemId, ticketId: r.rows[0].ticket_id, userId: req.user.user_id, action: 'appointment_set', detail: { visit_scheduled_at: slot } });
+        res.json({ success: true, visit_scheduled_at: slot });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** GET /desk/queue — open tickets sorted into who acts next, with SLA (the lead's queue). */
+exports.getDeskQueue = async (req, res) => {
+    try {
+        res.json({ success: true, ...(await require('../services/supportDeskService').deskQueue({ allowedCustomerTypes: req.allowedCustomerTypes })) });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }

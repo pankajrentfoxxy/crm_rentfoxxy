@@ -189,6 +189,8 @@ router.get('/tickets/:ticketId/wfh', require('../controllers/supportController')
 const supportCtl = require('../controllers/supportController');
 router.get('/sla/board', supportCtl.getSlaBoard);
 router.get('/my-work', supportCtl.getMyWork);
+router.get('/desk/queue', supportCtl.getDeskQueue);
+router.patch('/items/:itemId/appointment', requireSupportLead, supportCtl.setItemAppointment);
 router.get('/tickets/:ticketId/sla', supportCtl.getTicketSla);
 router.post('/tickets/:ticketId/hold', requireSupportLead, supportCtl.holdTicket);
 router.post('/tickets/:ticketId/release-hold', requireSupportLead, supportCtl.releaseTicketHold);

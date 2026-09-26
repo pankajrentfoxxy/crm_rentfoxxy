@@ -97,3 +97,31 @@ creates the Service DC in one click → delivery → credit.
   close (trigger), mail via the email queue worker, public `/api/support-public/feedback/:token` (rate-limited, no
   contact details), `GET /support/csat/summary`. WhatsApp CSAT needs an approved Interakt template — not sent by
   WhatsApp yet (email only). QA today: 128 open tickets, 126 past SLA (old, stale).
+- **Step 3 — technician phone: DONE** (264f9907): Serve → My work / job screen / My parts.
+- **Step 4 — lead desk: DONE**: Serve → Queue (4 lanes by who acts next, SLA), Ticket record (SLA clocks, hold,
+  assign least-busy first, visit slot, WFH badge + charge, history), New ticket (customer → laptops with WFH →
+  issue + remarks → priority, visit slot), SLA & feedback; Money → Support charges to bill.
+- **Step 5 — menu: DONE**: Serve opens the new screens; v1 under "Old view".
+  Still on the old ticket screen (linked from the record): creating a pickup, replacement / swap / resend, the Service
+  DC, parts approval. Customer requests (QR / portal) open the old requests page.
+
+## QA click-through (qa.rentfoxxy.com)
+Technician (a support_tech login, on a phone):
+1. Serve → My work: jobs in appointment order; Call / Map work; late ones flagged.
+2. Open a visit: I have arrived (GPS) → scan/type the TTSPL → Result: Fixed (photo) → the customer gets an OTP →
+   enter OTP → the job leaves the list. Try "Needs a part" (request form asks *why* if chargeable, no price) and
+   "Needs pickup / replacement" (goes to the lead).
+3. Open a pickup: arrived → photo → scan laptop + charger → OTP → "Drop at the gate".
+4. My parts: sign a new challan; "Fitted on the laptop" (tick old part collected when asked).
+Lead (support_lead):
+5. Serve → Queue: lanes and counts; search; open a ticket.
+6. Ticket: SLA clocks; On hold (customer) pauses them, Release; Assign (least busy first, open/today counts);
+   Visit slot → shows on the technician's My work; a WFH laptop shows "Work from home" → Charge WFH ₹799 on a
+   return pickup (after its Return DC exists) or a replacement → check Delivery Charges after the live merge.
+7. New ticket: customer → laptops (WFH marked) → issue + remarks → priority + slot → raised → assign.
+8. SLA & feedback: board, technicians' load, feedback (feedback emails go out only where outbound mail is on).
+Warehouse / Accounts:
+9. Part marked chargeable → warehouse sets the price (`PATCH /support-parts/requests/:id/price`, no screen yet —
+   also set on "approve & customer DC") → fitted → Money → Support charges to bill → Add to the draft invoice.
+10. Floor: complete a support repair ticket → the support laptop shows "Repaired — ready to send back" in the
+    queue, and it can't be reserved by Sales.
