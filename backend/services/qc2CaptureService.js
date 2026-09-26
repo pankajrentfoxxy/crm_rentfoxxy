@@ -69,7 +69,8 @@ async function mintUniqueAccessNumber(db, maxAttempts = 12) {
     if (!clash.rows.length) return access;
   }
   // Fall back to 8-digit
-  return String(Math.floor(10000000 + Math.random() * 90000000)).slice(0, 8);
+  // Q21: never Math.random for an access code.
+  return String(crypto.randomInt(10000000, 100000000));
 }
 
 async function resolveProductionAssetForTicket(db, ticket) {
@@ -168,19 +169,26 @@ async function hasNewerPendingToken(db, row, excludeTokenId = row?.token_id) {
   return r.rows.length > 0;
 }
 
+// Production safety D (Q20, Q21): a FAILED check is final — re-running it
+// needs a new access number from the QC2 screen (a failed link could be
+// re-verified until it "matched"). An expired link can be revived, but never
+// past MAX_TOKEN_LIFE_HOURS from when it was made (it could be extended
+// forever).
+const MAX_TOKEN_LIFE_HOURS = 4;
 async function reactivateTokenIfAllowed(db, row) {
-  if (!row?.token_id || !['expired', 'failed'].includes(String(row.status || ''))) {
+  if (!row?.token_id || String(row.status || '') !== 'expired') {
     return false;
   }
   if (await hasNewerPendingToken(db, row)) return false;
-  await db.query(
+  const r = await db.query(
     `UPDATE qc2_capture_tokens
         SET status = 'pending',
-            expires_at = NOW() + ($2 || ' minutes')::interval
-      WHERE token_id = $1`,
-    [row.token_id, TOKEN_TTL_MINUTES]
+            expires_at = LEAST(NOW() + ($2 || ' minutes')::interval, created_at + ($3 || ' hours')::interval)
+      WHERE token_id = $1 AND created_at + ($3 || ' hours')::interval > NOW()
+      RETURNING token_id`,
+    [row.token_id, TOKEN_TTL_MINUTES, MAX_TOKEN_LIFE_HOURS]
   );
-  return true;
+  return r.rows.length > 0;
 }
 
 /** Extend / reactivate token when user downloads the Windows app. */
@@ -203,9 +211,9 @@ async function touchTokenForCapture(tokenId) {
   if (row.status === 'pending') {
     await pool.query(
       `UPDATE qc2_capture_tokens
-          SET expires_at = NOW() + ($2 || ' minutes')::interval
+          SET expires_at = LEAST(NOW() + ($2 || ' minutes')::interval, created_at + ($3 || ' hours')::interval)
         WHERE token_id = $1`,
-      [tokenId, TOKEN_TTL_MINUTES]
+      [tokenId, TOKEN_TTL_MINUTES, MAX_TOKEN_LIFE_HOURS]
     );
     return { ok: true, status: 'pending' };
   }
@@ -260,22 +268,14 @@ async function resolveByAccessNumber(accessNumber) {
 
   const pa = await getById(pool, row.production_asset_id);
   // Expected config = latest Inventory Asset configuration (not the GRN snapshot)
-  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
   return {
     ok: true,
     token: row.token_id,
     expires_at: row.expires_at,
     ticket_id: row.ticket_id,
-    expected_config: {
-      brand: expected.brand,
-      model: expected.model,
-      processor: expected.processor,
-      generation: expected.generation,
-      ram: expected.ram,
-      ssd: expected.ssd,
-      gpu: expected.gpu,
-      screen_size: expected.screen_size,
-    },
+    // Q20: not handed out before the check — knowing it let anyone post
+    // matching values back. The QC2 screen (logged in) shows it.
+    expected_config: null,
     ttspl_id: pa?.ttspl_id || null,
     serial_number: pa?.serial_number || null,
   };
@@ -285,7 +285,6 @@ async function getPublicSession(tokenId) {
   const row = await getTokenRow(tokenId);
   if (!row) return null;
   const pa = await getById(pool, row.production_asset_id);
-  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
   return {
     token: row.token_id,
     status: row.status,
@@ -297,15 +296,9 @@ async function getPublicSession(tokenId) {
     match_result: row.match_result,
     config_verified: row.status === 'matched',
     config_check: row.match_result,
-    expected_config: {
-      brand: expected.brand,
-      model: expected.model,
-      processor: expected.processor,
-      generation: expected.generation,
-      ram: expected.ram,
-      ssd: expected.ssd,
-      gpu: expected.gpu,
-    },
+    // Q20: not handed out before the check — knowing it let anyone post
+    // matching values back. The QC2 screen (logged in) shows it.
+    expected_config: null,
     ttspl_id: pa?.ttspl_id || null,
   };
 }
@@ -340,7 +333,11 @@ async function verifyQc2Configuration(tokenId, actual, ip) {
         expected,
       };
     }
-    if (row.status !== 'pending' && row.status !== 'failed') {
+    if (row.status === 'failed') {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 409, message: 'This check did not match. Generate a new access number on the QC2 screen to check again.' };
+    }
+    if (row.status !== 'pending') {
       if (row.status === 'expired') {
         const reactivated = await reactivateTokenIfAllowed(client, row);
         if (!reactivated) {
@@ -383,6 +380,16 @@ async function verifyQc2Configuration(tokenId, actual, ip) {
         [tokenId]
       );
       row = refreshed.rows[0];
+    }
+
+    const atQc2 = (await client.query(
+      `SELECT s.stage_name FROM tickets t JOIN stages s ON s.stage_id = t.current_stage_id WHERE t.ticket_id = $1`,
+      [row.ticket_id]
+    )).rows[0]?.stage_name === 'QC2';
+    if (!atQc2) {
+      await client.query(`UPDATE qc2_capture_tokens SET status = 'expired' WHERE token_id = $1`, [tokenId]);
+      await client.query('COMMIT');
+      return { ok: false, code: 409, message: 'This laptop is no longer at QC2 — the check link is closed.' };
     }
 
     const paRes = await client.query(

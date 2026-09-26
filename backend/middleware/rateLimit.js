@@ -27,12 +27,13 @@ const passthrough = (_req, _res, next) => next();
 
 const WINDOW_MS = 15 * 60 * 1000;
 
-function build({ max, message, skipSuccessfulRequests = false }) {
+function build({ max, message, skipSuccessfulRequests = false, keyGenerator }) {
   if (!rateLimit) return passthrough;
   return rateLimit({
     windowMs: WINDOW_MS,
     max,
     skipSuccessfulRequests,
+    ...(keyGenerator ? { keyGenerator } : {}),
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message },
@@ -105,7 +106,22 @@ const publicIntakeLimiter = build({
   message: 'Too many requests. Please wait 15 minutes before submitting another.',
 });
 
+/**
+ * Production safety D (Q22): configuration-check submissions. A mismatch
+ * answers 200, so captureLimiter (which skips successes) never counted
+ * repeated guesses. Every verify counts here.
+ */
+// Counted per IP *and* per link: every laptop on the warehouse network shares
+// one public IP, so a per-IP budget would stop a normal 50-laptop GRN. Ten
+// tries on one link is plenty for a real check and useless for guessing.
+const captureVerifyLimiter = build({
+  max: 10,
+  message: 'Too many checks on this link. Generate a new access number and try again in 15 minutes.',
+  keyGenerator: (req) => `${rateLimit?.ipKeyGenerator ? rateLimit.ipKeyGenerator(req.ip) : req.ip}|${req.baseUrl}${req.path}`,
+});
+
 module.exports = {
+  captureVerifyLimiter,
   loginLimiter,
   otpLimiter,
   otpSendLimiter,
