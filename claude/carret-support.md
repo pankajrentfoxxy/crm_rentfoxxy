@@ -92,3 +92,8 @@ creates the Service DC in one click → delivery → credit.
   `POST /support/items/:id/wfh-charge` (lead) puts Rs 799 on the return DC / replacement SO+DC `shiping_charges`.
   **After the live merge:** extend Delivery Charges (`deliveryChargesService.DC_CHARGES_CTE`, outbound only today) to
   include return DCs with a charge, so WFH return pickups show there too.
+- **Step 2 — SLA + CSAT: DONE** (migration 347). SLA computed on read (`services/supportSlaService.js`: business
+  hours, holds + part waits pause); `GET /support/sla/board`, `/tickets/:id/sla`, lead hold/release. CSAT: token on
+  close (trigger), mail via the email queue worker, public `/api/support-public/feedback/:token` (rate-limited, no
+  contact details), `GET /support/csat/summary`. WhatsApp CSAT needs an approved Interakt template — not sent by
+  WhatsApp yet (email only). QA today: 128 open tickets, 126 past SLA (old, stale).

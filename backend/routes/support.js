@@ -185,6 +185,13 @@ router.patch('/tickets/:ticketId/pickup-address', requireTicketLead, updatePicku
 router.post('/tickets/:ticketId/phases', requireTicketLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.get('/tickets/:ticketId/wfh', require('../controllers/supportController').getTicketWfh);
+// SLA + CSAT (claude/carret-support.md S5, S6)
+const supportCtl = require('../controllers/supportController');
+router.get('/sla/board', supportCtl.getSlaBoard);
+router.get('/tickets/:ticketId/sla', supportCtl.getTicketSla);
+router.post('/tickets/:ticketId/hold', requireSupportLead, supportCtl.holdTicket);
+router.post('/tickets/:ticketId/release-hold', requireSupportLead, supportCtl.releaseTicketHold);
+router.get('/csat/summary', requireSupportLead, supportCtl.getCsatSummary);
 router.post('/items/:itemId/wfh-charge', requireSupportLead, require('../controllers/supportController').chargeWfhDelivery);
 router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
 router.post('/tickets/:ticketId/cancel', requireSupportTicketCancel, cancelTicket);

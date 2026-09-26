@@ -239,7 +239,12 @@ const startEmailQueueWorker = async () => {
     queueInterval = setInterval(processQueue, QUEUE_POLL_INTERVAL_MS);
   }
   if (!followupInterval) {
-    followupInterval = setInterval(scanAndQueueFollowUpReminderEmails, FOLLOWUP_SCAN_INTERVAL_MS);
+    followupInterval = setInterval(() => {
+      scanAndQueueFollowUpReminderEmails();
+      // Support CSAT: feedback links for tickets closed since the last scan.
+      require('./supportCsatService').queueFeedbackMails()
+        .catch((err) => console.error('[csat] queue feedback mails:', err.message));
+    }, FOLLOWUP_SCAN_INTERVAL_MS);
   }
 
   await scanAndQueueFollowUpReminderEmails();

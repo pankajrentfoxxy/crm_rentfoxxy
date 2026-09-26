@@ -6269,3 +6269,60 @@ exports.chargeWfhDelivery = async (req, res) => {
         client.release();
     }
 };
+
+/* ---- SLA + CSAT (claude/carret-support.md S5, S6) ---- */
+const slaSvc = require('../services/supportSlaService');
+
+exports.getSlaBoard = async (req, res) => {
+    try {
+        res.json({ success: true, ...(await slaSvc.slaBoard({ allowedCustomerTypes: req.allowedCustomerTypes })) });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+exports.getTicketSla = async (req, res) => {
+    try {
+        const id = parseInt(req.params.ticketId, 10);
+        const sla = (await slaSvc.slaForTickets([id])).get(id);
+        if (!sla) return res.status(404).json({ success: false, message: 'Ticket not found' });
+        const holds = (await pool.query(
+            `SELECT h.*, u.name AS created_by_name FROM support_ticket_holds h LEFT JOIN users u ON u.user_id = h.created_by
+              WHERE h.ticket_id = $1 ORDER BY h.from_at DESC`, [id]
+        )).rows;
+        res.json({ success: true, sla, holds, targets: slaSvc.TARGETS });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+async function holdTxn(res, fn) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const out = await fn(client);
+        await client.query('COMMIT');
+        res.json({ success: true, ...out });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        res.status(e.status || 500).json({ success: false, message: e.message });
+    } finally {
+        client.release();
+    }
+}
+
+exports.holdTicket = (req, res) => holdTxn(res, (c) => slaSvc.setHold(c, {
+    ticketId: parseInt(req.params.ticketId, 10), reason: req.body?.reason || 'customer', note: req.body?.note, user: req.user,
+}));
+
+exports.releaseTicketHold = (req, res) => holdTxn(res, (c) => slaSvc.releaseHold(c, {
+    ticketId: parseInt(req.params.ticketId, 10), user: req.user,
+}));
+
+exports.getCsatSummary = async (req, res) => {
+    try {
+        res.json({ success: true, ...(await require('../services/supportCsatService').csatSummary({ days: req.query.days })) });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};

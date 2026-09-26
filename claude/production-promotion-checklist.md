@@ -166,8 +166,9 @@ Command for each group — dry run first, then the same with `--commit`:
 | ☐ | `344_support_status_rules.sql` | CHECK on support item / ticket / replacement-order status and item outcome; from→to status audit trigger | Support safety — dry run first: any value outside the list on live fails it (QA passed) |
 | ☐ | `345_support_repair_ready.sql` | `repair_ready_at` + trigger: floor ticket completed → support laptop ready to return; back-fills ones already done | Support S7 |
 | ☐ | `346_support_charges.sql` | part charge reason/marked/priced columns; one extra line per part request; WFH charge columns on support items | Support charges |
+| ☐ | `347_support_sla_csat.sql` | `support_ticket_holds`, `support_csat` + trigger (token on close) | Support SLA/CSAT — feedback mails go through the email queue (outbound switch) |
 
-All of 327–346 were applied to QA this way on 26 Sep. Set `VENDOR_REPLACEMENT_APPROVERS` on live only if the approver list should differ from pankkajyadav@rentfoxxy.com (plus the accounts role). They add columns/tables/rows; the files
+All of 327–347 were applied to QA this way on 26 Sep. Set `VENDOR_REPLACEMENT_APPROVERS` on live only if the approver list should differ from pankkajyadav@rentfoxxy.com (plus the accounts role). They add columns/tables/rows; the files
 that also UPDATE existing rows are 334, 335, 336 (Procure-to-stock status backfills) and 341
 (one checklist label) — read their dry-run output before `--commit`.
 
