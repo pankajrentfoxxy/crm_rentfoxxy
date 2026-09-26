@@ -102,7 +102,12 @@ first, because several change how the floor works, not just the screens.
    technicians can't pass QC / bulk-move / complete, `PUT /tickets/:id` status, chip-repair and
    part-request routes (F10–F12, P16), transactions on the move/assign/claim handlers (F14–F15),
    public QC capture links (Q20–Q22).
-1. **Data clean-up** (PD10), reviewed list first.
+1. **Data clean-up** (PD10) — list ready 26 Sep, **waiting for the floor manager's review**:
+   `node backend/scripts/floor-ticket-cleanup.js --csv <file>` (read-only) →
+   review (Approve column) → `--apply <reviewed.csv>` (`--dry-run` first). QA: 487 open tickets →
+   428 laptops to "in repair" (302 "returned", 126 "in stock" while on the floor), 12 tickets to
+   close (rented/sold/scrapped/with vendor/at Inventory), 47 keep; 98 idle 60+ days flagged CHECK.
+   Production needs its own run at promotion (same two steps).
 2. **Floor board** — stage queues with claim, my work, stuck/aged, holds.
 3. **Ticket record** — the laptop, its stage path, checklist per stage, parts, timers, history.
 4. **Parts on the floor** — request/approve/issue/fit/old part; parts approval; stock that agrees.
