@@ -507,12 +507,23 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
     const serialIns = await client.query(
       `INSERT INTO vendor_serial_numbers (
          po_id, grn_id, serial_number, inventory_asset_code, rental_start_date,
-         qc_status, inventory_status, extra
-       ) VALUES ($1,$2,$3,$4,$5::date,$6,'in_stock',$7::jsonb)
+         qc_status, extra
+       ) VALUES ($1,$2,$3,$4,$5::date,$6,$7::jsonb)
        RETURNING serial_id, serial_number, inventory_asset_code`,
       [poId, grnId, serialNumber, inventoryAssetCode, rentalStartDate, intakeTarget, JSON.stringify(extra)]
     );
     serialId = serialIns.rows[0].serial_id;
+
+    // Through the state machine, like every other receipt (it wrote
+    // 'in_stock' raw — even when a floor ticket is opened below, which made a
+    // laptop on the floor look available). Floor ticket → in_repair.
+    await transitionAsset(client, {
+      serialId,
+      toStatus: intakeTarget === 'pending' ? 'in_repair' : 'in_stock',
+      reason: intakeTarget === 'pending' ? 'QC Process intake — enters production' : 'QC Process intake — into stock',
+      actorUserId,
+      caller: 'qcProcessIntakeService.addLaptop',
+    });
 
     await client.query('COMMIT');
   } catch (e) {

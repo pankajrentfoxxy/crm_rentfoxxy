@@ -1261,9 +1261,23 @@ async function receivePoLineUnit(req, res) {
   let grnWasNew = false;
   let createdRow = null;
   let receiveConfig = buildConfigExtraFromLine(line);
+  let ticketResult = null;
 
   try {
     await client.query('BEGIN');
+
+    // The "not more than ordered" check above ran without a lock, so two
+    // receipts for the last unit could both pass. Lock the PO, then recount
+    // against everything committed so far.
+    await client.query('SELECT po_id FROM vendor_purchase_orders WHERE po_id = $1 FOR UPDATE', [poId]);
+    {
+      const qtyNow = await buildReceivedQtyMapsForPoIds([poId]);
+      const lineNow = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyNow.get(poId))[lineIndex];
+      if ((Number(lineNow?.receivedQty) || 0) + 1 > (Number(lineNow?.quantity) || 0)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: 'Cannot receive more units than ordered for this line.' });
+      }
+    }
 
     if (grnId != null && Number.isFinite(grnId)) {
       const g = await client.query(
@@ -1408,6 +1422,37 @@ async function receivePoLineUnit(req, res) {
       caller: 'purchaseOrders.receivePoLineUnit',
     });
 
+    // The floor ticket is part of the receipt: created in the same
+    // transaction, so a laptop can never be booked in_repair with no ticket
+    // (invisible to the floor, excluded from availability). If it cannot be
+    // created, nothing is received.
+    const receiveLine = { ...line, ...receiveConfig };
+    const poLabel = po.purchase_order_number || String(po.po_id);
+    const conditionNote = receivedCondition === 'part_missing'
+      ? `Condition: Part Missing (${partCategoryLabels(missingParts).join(', ')})`
+      : receivedCondition === 'not_on'
+        ? 'Condition: Not On — laptop does not power on'
+        : '';
+    const conditionParts = [
+      `GRN receive — PO ${poLabel}`,
+      conditionNote,
+      physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
+    ].filter(Boolean);
+    const initialCondition =
+      conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
+    ticketResult = await createTicketFromGrnReceive(client, {
+      serialId: createdRow.serial_id,
+      serialNumber: createdRow.serial_number,
+      inventoryAssetCode: createdRow.inventory_asset_code,
+      po,
+      line: receiveLine,
+      actorUserId: req.user?.user_id,
+      initialConditionOverride: initialCondition,
+      grnId: finalGrnId,
+      receivedCondition,
+      missingParts,
+    });
+
     await client.query('COMMIT');
   } catch (e) {
     try {
@@ -1463,38 +1508,6 @@ async function receivePoLineUnit(req, res) {
 
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
-  let ticketResult = null;
-  try {
-    const receiveLine = { ...line, ...receiveConfig };
-    const poLabel = po.purchase_order_number || String(po.po_id);
-    const conditionNote = receivedCondition === 'part_missing'
-      ? `Condition: Part Missing (${partCategoryLabels(missingParts).join(', ')})`
-      : receivedCondition === 'not_on'
-        ? 'Condition: Not On — laptop does not power on'
-        : '';
-    const conditionParts = [
-      `GRN receive — PO ${poLabel}`,
-      conditionNote,
-      physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
-    ].filter(Boolean);
-    const initialCondition =
-      conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
-    ticketResult = await createTicketFromGrnReceive(pool, {
-      serialId: createdRow.serial_id,
-      serialNumber: createdRow.serial_number,
-      inventoryAssetCode: createdRow.inventory_asset_code,
-      po,
-      line: receiveLine,
-      actorUserId: req.user?.user_id,
-      initialConditionOverride: initialCondition,
-      grnId: finalGrnId,
-      receivedCondition,
-      missingParts,
-    });
-  } catch (ticketErr) {
-    console.error('GRN ticket creation failed (unit receive):', ticketErr);
-    ticketResult = { ok: false, error: ticketErr.message };
-  }
 
   const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));

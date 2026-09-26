@@ -81,7 +81,33 @@ function configFromExtra(extraRaw) {
   return configFromPlainObject(ex);
 }
 
-async function ensureLockColumns(db) {
+// These columns come from migration 144. The ALTERs used to run on every
+// receipt and every GRN view — each an ACCESS EXCLUSIVE lock on three busy
+// tables. Now they run once per process, on the pool (never inside a
+// caller's transaction, whose rollback would undo them).
+let lockColumnsReady = null;
+async function ensureLockColumns() {
+  if (!lockColumnsReady) {
+    lockColumnsReady = addLockColumns(require('../config/db')).catch((err) => {
+      lockColumnsReady = null;
+      throw err;
+    });
+  }
+  return lockColumnsReady;
+}
+
+async function addLockColumns(db) {
+  // Read the catalog first: it takes no lock. ALTER TABLE takes ACCESS
+  // EXCLUSIVE, and run from the pool while a receipt transaction holds row
+  // locks on vendor_serial_numbers it waits for that receipt — which is
+  // waiting for this. Only alter when a column is genuinely missing.
+  const have = await db.query(
+    `SELECT COUNT(*)::int AS n FROM information_schema.columns
+      WHERE (table_name = 'vendor_serial_numbers' AND column_name IN ('grn_received_config', 'config_locked_at'))
+         OR (table_name = 'vendor_product_details' AND column_name = 'config_locked_at')
+         OR (table_name = 'vendor_goods_received_notes' AND column_name = 'config_locked_at')`
+  );
+  if (have.rows[0].n >= 4) return;
   await db.query(`
     ALTER TABLE vendor_serial_numbers
       ADD COLUMN IF NOT EXISTS grn_received_config JSONB,

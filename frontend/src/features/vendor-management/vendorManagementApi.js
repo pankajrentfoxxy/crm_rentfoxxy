@@ -122,16 +122,6 @@ export function fetchProductReceivedContext(poId) {
   return api.get(`${base}/purchase-orders/${poId}/product-received`);
 }
 
-/** Record one serial against a PO line (creates / reuses GRN; sets extra.line_index + product_detail_id) */
-export function receivePoLineSerial(poId, body) {
-  return api.post(`${base}/purchase-orders/${poId}/product-received/receive`, body);
-}
-
-/** Multi-unit receive: rental start date + N serials + auto TTSPL codes per unit */
-export function receivePoLineBulk(poId, body) {
-  return api.post(`${base}/purchase-orders/${poId}/product-received/receive-bulk`, body);
-}
-
 /** Sequential receive — one unit at a time with TTSPL + ticket */
 export function receivePoLineUnit(poId, body) {
   return api.post(`${base}/purchase-orders/${poId}/product-received/receive-unit`, body);
@@ -287,10 +277,6 @@ export function createGrn(poId, meta = {}) {
 
 export function fetchSerials(grnId, poId) {
   return api.get(`${base}/grns/${grnId}/purchase-orders/${poId}/serial-numbers`);
-}
-
-export function createSerial(payload) {
-  return api.post(`${base}/serial-numbers`, payload);
 }
 
 export function updateSerial(payload) {

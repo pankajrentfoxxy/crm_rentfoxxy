@@ -23,12 +23,15 @@ function parseTtsplNum(code) {
  * Active TTSPL numbers already assigned to a laptop row.
  * @param {import('pg').PoolClient} client
  */
-async function loadUsedTtsplNumbers(client) {
+async function loadUsedTtsplNumbers(client, { includeDeleted = false } = {}) {
+  // For ALLOCATION a deleted laptop's code still counts as used: re-issuing it
+  // would merge two laptops' audit histories and events under one TTSPL.
   const r = await client.query(
     `SELECT inventory_asset_code
        FROM vendor_serial_numbers
-      WHERE deleted_at IS NULL
-        AND inventory_asset_code ~ '^TTSPL[0-9]+$'`
+      WHERE ($1::boolean OR deleted_at IS NULL)
+        AND inventory_asset_code ~ '^TTSPL[0-9]+$'`,
+    [includeDeleted]
   );
   const used = new Set();
   for (const row of r.rows) {
@@ -57,7 +60,7 @@ async function allocateTtsplCodes(client, qty) {
     throw new Error('Inventory asset sequence missing — apply migration 036');
   }
 
-  const used = await loadUsedTtsplNumbers(client);
+  const used = await loadUsedTtsplNumbers(client, { includeDeleted: true });
   let cursor = Math.max(1, Number(seqRes.rows[0].next_num) || 1);
   const nums = [];
 

@@ -111,18 +111,17 @@ router.get(
   purchaseOrders.productReceivedValidators,
   purchaseOrders.getProductReceivedContext
 );
-router.post(
-  '/purchase-orders/:poId/product-received/receive',
-  authorizeEdit,
-  ...purchaseOrders.receiveSerialValidators,
-  purchaseOrders.receiveProductSerial
-);
-router.post(
-  '/purchase-orders/:poId/product-received/receive-bulk',
-  authorizeEdit,
-  ...purchaseOrders.receivePoLineBulkValidators,
-  purchaseOrders.receivePoLineBulk
-);
+// Procure safety B: one way to receive a laptop. The single-serial and bulk
+// receive paths skipped TTSPL allocation, the received condition, missing
+// parts and token bookkeeping; no screen used them. They now answer 410 and
+// point at receive-unit, which runs the configuration check.
+const retiredReceive = (req, res) => res.status(410).json({
+  success: false,
+  code: 'RECEIVE_PATH_RETIRED',
+  message: 'This receive path is retired. Receive each laptop through /product-received/receive-unit, which checks its configuration.',
+});
+router.post('/purchase-orders/:poId/product-received/receive', authorizeEdit, retiredReceive);
+router.post('/purchase-orders/:poId/product-received/receive-bulk', authorizeEdit, retiredReceive);
 router.post(
   '/purchase-orders/:poId/product-received/receive-unit',
   authorizeEdit,
@@ -208,7 +207,8 @@ router.get(
   serials.serialParams,
   serials.listSerials
 );
-router.post('/serial-numbers', authorizeCreate, serials.createSerial);
+// Inserted a laptop with no PO check, no TTSPL, no status and no check at all.
+router.post('/serial-numbers', authorizeCreate, retiredReceive);
 router.put('/serial-numbers/update', authorizeEdit, serials.serialUpdateValidators, serials.checkAndUpdate);
 
 // Vendor buyout of a rented unit sold in place (PHASE 21). Per-serial only:

@@ -36,8 +36,13 @@ class CaptureGateError extends Error {
 }
 
 /** Conditions for which the capture script can physically run. */
-const CONDITIONS_REQUIRING_TOKEN = new Set(['on']);
-const CONDITIONS_ALLOWING_WAIVER = new Set(['not_on', 'part_missing']);
+// D5 (26 Sep 2026): every laptop that powers on is checked. "Part missing"
+// used to allow a waiver, so a laptop whose configuration did NOT match could
+// be booked in by picking that condition and typing five characters. A
+// missing part does not stop the check (45 of 46 such laptops in 90 days ran
+// it); only a laptop that will not power on genuinely cannot.
+const CONDITIONS_REQUIRING_TOKEN = new Set(['on', 'part_missing']);
+const CONDITIONS_ALLOWING_WAIVER = new Set(['not_on']);
 
 function normalizeSerial(s) {
   return String(s || '').trim().toUpperCase();
@@ -116,7 +121,7 @@ async function assertUnitMayBeReceived(db, {
 
   if (CONDITIONS_REQUIRING_TOKEN.has(condition)) {
     throw new CaptureGateError(
-      `Serial ${serialNumber}: a laptop received as "On" must be verified through a capture link before it can be booked in`
+      `Serial ${serialNumber}: a laptop that powers on must be verified through a capture link before it can be booked in. Only a laptop that will not power on can be received without it.`
     );
   }
 

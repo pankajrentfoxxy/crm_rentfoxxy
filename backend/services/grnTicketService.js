@@ -256,7 +256,11 @@ async function createTicketFromGrnReceive(db, {
     });
   }
 
-  // Production Asset (working copy) — seeded from frozen GRN snapshot when available
+  // Production Asset (working copy) — seeded from frozen GRN snapshot when available.
+  // Non-fatal, but inside a caller's transaction a failed statement would
+  // abort the whole receipt, so it gets its own savepoint there.
+  const inTx = db && typeof db.release === 'function';
+  if (inTx) await db.query('SAVEPOINT grn_production_asset');
   try {
     const { createFromGrn } = require('./productionAssetService');
     const frozenRes = await db.query(
@@ -279,7 +283,9 @@ async function createTicketFromGrnReceive(db, {
       receivedCondition: condition,
       missingParts: missing,
     });
+    if (inTx) await db.query('RELEASE SAVEPOINT grn_production_asset');
   } catch (paErr) {
+    if (inTx) await db.query('ROLLBACK TO SAVEPOINT grn_production_asset').catch(() => {});
     console.error('Production asset create failed (non-fatal):', paErr.message);
   }
 
