@@ -3,6 +3,15 @@
  */
 
 const DC_ACTION_SUFFIXES = [
+  // Vendor repair challan (claude/carret-vendor-repair.md) — longest first.
+  '/repair-mail/preview',
+  '/repair-mail',
+  '/repair-request-pdf',
+  '/request-details',
+  '/replacement-check',
+  '/replacement-decision',
+  '/vendor-kept/preview',
+  '/vendor-kept',
   '/assignment',
   '/dispatch',
   '/cancel',

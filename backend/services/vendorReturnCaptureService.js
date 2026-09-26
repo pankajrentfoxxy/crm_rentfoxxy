@@ -49,7 +49,13 @@ async function mintUniqueAccessNumber(db, maxAttempts = 12) {
   return String(Math.floor(10000000 + Math.random() * 90000000)).slice(0, 8);
 }
 
-async function mintTokensForItems(client, { dcNumber, receiveDcNumber, items, createdBy }) {
+/**
+ * `mode: 'replacement'` (claude/carret-vendor-repair.md): the laptop being
+ * checked is the vendor's replacement, not ours — it is compared with the
+ * config of the laptop we sent, any serial the vendor sent is read (not ours),
+ * and a mismatch is recorded for approval rather than retried.
+ */
+async function mintTokensForItems(client, { dcNumber, receiveDcNumber, items, createdBy, mode = 'repaired' }) {
   const minted = [];
   for (const item of items || []) {
     if (!item?.id) continue;
@@ -68,8 +74,8 @@ async function mintTokensForItems(client, { dcNumber, receiveDcNumber, items, cr
     await client.query(
       `INSERT INTO vendor_return_capture_tokens
          (token_id, access_number, dc_number, receive_dc_number, item_id, ticket_id,
-          serial_id, ttspl_id, serial_number, expected_config, status, created_by, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11, NOW() + interval '48 hours')`,
+          serial_id, ttspl_id, serial_number, expected_config, status, created_by, expires_at, mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'pending',$11, NOW() + interval '48 hours', $12)`,
       [
         tokenId,
         accessNumber,
@@ -82,10 +88,13 @@ async function mintTokensForItems(client, { dcNumber, receiveDcNumber, items, cr
         item.serial_number || null,
         JSON.stringify(expected),
         createdBy || null,
+        mode === 'replacement' ? 'replacement' : 'repaired',
       ]
     );
     await client.query(
-      `UPDATE vendor_repair_dc_items SET return_config_token_id = $2 WHERE id = $1`,
+      mode === 'replacement'
+        ? `UPDATE vendor_repair_dc_items SET replacement_check_token_id = $2 WHERE id = $1`
+        : `UPDATE vendor_repair_dc_items SET return_config_token_id = $2 WHERE id = $1`,
       [item.id, tokenId]
     );
     minted.push({ token_id: tokenId, access_number: accessNumber, item_id: item.id });
@@ -157,7 +166,8 @@ async function resolveByAccessNumber(accessNumber) {
     receive_dc_number: row.receive_dc_number,
     expected_config: expected,
     ttspl_id: row.ttspl_id || null,
-    serial_number: row.serial_number || null,
+    serial_number: row.mode === 'replacement' ? null : (row.serial_number || null),
+    mode: row.mode || 'repaired',
   };
 }
 
@@ -173,7 +183,8 @@ async function getPublicSession(tokenId) {
     dc_number: row.dc_number,
     receive_dc_number: row.receive_dc_number,
     matched_at: row.matched_at,
-    serial_number: row.serial_number,
+    serial_number: row.mode === 'replacement' ? null : row.serial_number,
+    mode: row.mode || 'repaired',
     actual_config: row.actual_config,
     match_result: row.match_result,
     config_verified: row.status === 'matched',
@@ -225,6 +236,37 @@ async function verifyVendorReturnConfiguration(tokenId, actual, ip) {
       errors: configResult.errors || [],
       verified_at: new Date().toISOString(),
     };
+
+    if (row.mode === 'replacement') {
+      // A different model/config is not an error to retry: it is recorded,
+      // and receiving it then needs approval.
+      await client.query(
+        `UPDATE vendor_return_capture_tokens
+            SET status = $5, actual_config = $2::jsonb, match_result = $3::jsonb,
+                matched_at = NOW(), verified_by_ip = $4
+          WHERE token_id = $1`,
+        [tokenId, JSON.stringify(actual), JSON.stringify(matchPayload), ip ? String(ip).slice(0, 64) : null,
+          configResult.configurationMatched ? 'matched' : 'failed']
+      );
+      await client.query(
+        `UPDATE vendor_repair_dc_items
+            SET replacement_config_result = $2::jsonb, replacement_actual_config = $3::jsonb
+          WHERE id = $1`,
+        [row.item_id, JSON.stringify(matchPayload), JSON.stringify(actual)]
+      );
+      await client.query('COMMIT');
+      return {
+        ok: true,
+        mode: 'replacement',
+        configurationMatched: Boolean(configResult.configurationMatched),
+        checks: matchPayload.checks,
+        errors: matchPayload.errors,
+        expected,
+        message: configResult.configurationMatched
+          ? 'Same model and configuration as the laptop sent — now submit its serial.'
+          : 'Different from the laptop sent — submit its serial; receiving it will need approval.',
+      };
+    }
 
     if (configResult.configurationMatched) {
       await client.query(
@@ -307,13 +349,35 @@ async function submitVendorReturnSerial(tokenId, serialNumber) {
   await expireStaleTokens();
   const row = await getTokenRow(tokenId);
   if (!row) return { ok: false, code: 404, message: 'Capture link not found or expired' };
-  if (row.status !== 'matched' && row.status !== 'pending') {
+  if (row.status !== 'matched' && row.status !== 'pending' && !(row.mode === 'replacement' && row.status === 'failed')) {
     return { ok: false, code: 409, message: 'This capture link is no longer active' };
   }
 
   const serial = String(serialNumber || '').trim().toUpperCase();
   if (!serial || serial.length < 3) {
     return { ok: false, code: 400, message: 'Invalid serial number' };
+  }
+
+  if (row.mode === 'replacement') {
+    if (!['matched', 'failed'].includes(row.status)) {
+      return { ok: false, code: 428, message: 'Run the configuration check before submitting the serial number' };
+    }
+    if (serial === String(row.serial_number || '').trim().toUpperCase()) {
+      return { ok: false, code: 400, message: 'This is the laptop we sent, not a replacement — receive it as repaired.' };
+    }
+    const held = (await pool.query(
+      `SELECT inventory_asset_code, inventory_status FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL AND UPPER(TRIM(serial_number)) = $1
+          AND COALESCE(inventory_status, '') NOT IN ('returned_to_vendor', 'scrapped')
+        LIMIT 1`,
+      [serial]
+    )).rows[0];
+    if (held) {
+      return { ok: false, code: 409, message: `Serial ${serial} already belongs to ${held.inventory_asset_code || 'a laptop we hold'} — check the laptop.` };
+    }
+    await pool.query('UPDATE vendor_return_capture_tokens SET serial_number = $2 WHERE token_id = $1', [tokenId, serial]);
+    await pool.query('UPDATE vendor_repair_dc_items SET replacement_captured_serial = $2 WHERE id = $1', [row.item_id, serial]);
+    return { ok: true, serial_number: serial, mode: 'replacement' };
   }
 
   const expected = String(row.serial_number || '').trim().toUpperCase();

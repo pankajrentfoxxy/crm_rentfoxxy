@@ -37,6 +37,8 @@ export const SECTIONS = [
       { group: 'Procure to stock', to: '/carret/procure/arrivals', label: 'Vendor Arrivals', sections: ['guard_gate_checking', 'vendor_management'], section: 'vendor_management', action: 'view' },
       { group: 'Procure to stock', to: '/carret/procure/returns', label: 'Vendor Returns', sections: ['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], section: 'vendor_return_to_vendor', action: 'view' },
       { group: 'Procure to stock', to: '/carret/procure/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/vendor-rentals', label: 'Vendor Rentals', sections: ['vendor_management', 'vendor_billing_mgmt', 'vendor_repair_dc'], section: 'vendor_management', action: 'view' },
+      { group: 'Procure to stock', to: '/carret/procure/replacement-approvals', label: 'Replacement Approvals', sections: ['vendor_repair_dc', 'vendor_management', 'vendor_billing_mgmt'], section: 'vendor_repair_dc', action: 'view' },
       { group: 'Old view', to: '/vendor-management/purchase-orders', label: 'Purchase Orders (old)', section: 'vendor_management', action: 'view' },
       { group: 'Old view', to: '/vendor-management/spare-parts-po', label: 'Spare Parts PO (old)', section: 'parts_procurement', action: 'view' },
       { group: 'Old view', to: '/vendor-management/vendors', label: 'Vendors (old)', section: 'vendor_management', action: 'view' },

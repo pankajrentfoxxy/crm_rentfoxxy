@@ -25,7 +25,9 @@ import {
   vendorDeliveryStatusLabel,
   vendorRepairDispatchModeLabel,
 } from '../vendorRepairUi';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
+import RepairRentPanel from '../components/RepairRentPanel';
+import RepairItemActions, { RepairItemRentLines } from '../components/RepairItemActions';
 import VrdcEwayPanel from '../components/VrdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
@@ -195,6 +197,9 @@ export default function VendorRepairDcDetailPage() {
       vehicle_number: head.vehicle_number || '',
       vendor_pickup_person: head.vendor_pickup_person || '',
       vendor_pickup_mobile: head.vendor_pickup_mobile || '',
+      porter_person_name: head.porter_person_name || '',
+      porter_person_phone: head.porter_person_phone || '',
+      delivery_person_phone: head.inhouse_person_phone || head.delivery_person_phone || '',
     });
   }, []);
 
@@ -217,6 +222,8 @@ export default function VendorRepairDcDetailPage() {
     if (s === 'gate_received') return 'Guard inward done';
     if (s === 'received') return 'Received (repaired)';
     if (s === 'replacement_received') return 'Replacement received';
+    if (s === 'replacement_pending') return 'Replacement — waiting for approval';
+    if (s === 'vendor_kept') return 'Vendor kept it';
     if (s === 'draft') return 'Pending dispatch';
     return s.replace(/_/g, ' ');
   };
@@ -363,14 +370,14 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Enter warehouse signer name');
       return;
     }
-    const dispatchErr = validateVrdcDispatch(effectiveShipBy, dispatchFields);
+    const dispatchErr = validateVrtdcTransport(effectiveShipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
       return;
     }
     setDispatchBusy(true);
     try {
-      await signVendorRepairDispatch(dcNumber, {
+      const { data: signed } = await signVendorRepairDispatch(dcNumber, {
         ship_by: effectiveShipBy,
         ...dispatchFields,
         warehouse_esign: pendingWhDispatch || undefined,
@@ -380,6 +387,9 @@ export default function VendorRepairDcDetailPage() {
         dispatch_pod: pendingDispatchPod || undefined,
       });
       toast.success('E-signed — send to gate for outward scan');
+      const ew = signed?.eway_request;
+      if (ew?.required && ew.sent && !ew.already) toast.success('₹50,000 or more — Accounts has been mailed for the E-way Bill');
+      else if (ew?.required && !ew.sent) toast.error(`The E-way Bill mail to Accounts failed: ${ew.error || 'unknown'} — use “Send to Accounts” in the E-way panel.`, { duration: 9000 });
       setPendingWhDispatch(null);
       setPendingVendorDispatch(null);
       setPendingDispatchPod(null);
@@ -396,7 +406,7 @@ export default function VendorRepairDcDetailPage() {
   };
 
   const saveDispatchDetails = async () => {
-    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    const dispatchErr = validateVrtdcTransport(shipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
       return;
@@ -456,17 +466,28 @@ export default function VendorRepairDcDetailPage() {
           return;
         }
       }
-    } else if (receiveForm.receive_mode === 'replacement') {
-      if (!receiveForm.replacement_serial_number?.trim()) {
-        toast.error('Enter replacement serial number');
-        return;
-      }
-      if (!receiveForm.replacement_brand?.trim() || !receiveForm.replacement_model?.trim()) {
-        toast.error('Enter replacement brand and model');
-        return;
-      }
     }
     const bypassGateFlow = isSuperAdmin && receiveForm.bypass_gate_flow;
+    if (receiveForm.receive_mode === 'replacement') {
+      // The replacement check script reads an ON replacement (claude/carret-vendor-repair.md);
+      // typed details only for one that won't power on, a legacy challan, or a super-admin bypass.
+      const scripted = !dc?.gate_legacy && !bypassGateFlow && isOn && receiveTargetItem.replacement_approval_status !== 'approved';
+      if (scripted) {
+        if (!receiveTargetItem.replacement_config_result || !String(receiveTargetItem.replacement_captured_serial || '').trim()) {
+          toast.error('Run the replacement check first: “It\'s a replacement” on this laptop gives the access number for the script.');
+          return;
+        }
+      } else if (receiveTargetItem.replacement_approval_status !== 'approved') {
+        if (!receiveForm.replacement_serial_number?.trim()) {
+          toast.error('Enter replacement serial number');
+          return;
+        }
+        if (!receiveForm.replacement_brand?.trim() || !receiveForm.replacement_model?.trim()) {
+          toast.error('Enter replacement brand and model');
+          return;
+        }
+      }
+    }
     const needsScript = receiveForm.receive_mode !== 'replacement'
       && requiresConfigCapture(receiveForm.laptop_condition);
     if (!dc?.gate_legacy && !bypassGateFlow) {
@@ -507,7 +528,8 @@ export default function VendorRepairDcDetailPage() {
           replacement_generation: receiveForm.replacement_generation,
         })),
       });
-      toast.success(data.message || 'Laptop received');
+      if (data.pending_approval?.length && !data.received_item_ids?.length) toast(data.message, { icon: '⏳', duration: 8000 });
+      else toast.success(data.message || 'Laptop received');
       setReceiveOpen(false);
       setReceiveTargetItem(null);
       setReceiveSelectedIds([]);
@@ -597,6 +619,8 @@ export default function VendorRepairDcDetailPage() {
           ) : null}
         </div>
       </div>
+
+      <RepairRentPanel dc={dc} canAct={canDispatch || canProcess} onReload={load} />
 
       {dc.status === 'dispatch_ready' && (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm space-y-2">
@@ -799,7 +823,10 @@ export default function VendorRepairDcDetailPage() {
                     )}
                   </td>
                   <td className="p-3 text-xs text-center">1 Pcs.</td>
-                  <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>
+                  <td className="p-3 text-xs max-w-[220px]">
+                    {item.item_remarks || item.diagnosis_failed_reason || '—'}
+                    <RepairItemRentLines item={item} />
+                  </td>
                   <td className="p-3 text-xs capitalize">{itemStatusLabel(item)}</td>
                   <td className="p-3 text-xs text-slate-600">
                     {dc.dispatched_at ? <p>Sent: {fmtVendorRepairDate(dc.dispatched_at)}</p> : null}
@@ -829,8 +856,9 @@ export default function VendorRepairDcDetailPage() {
                     ) : null}
                     {!dc.dispatched_at && !item.returned_at ? '—' : null}
                   </td>
-                  <td className="p-3">
+                  <td className="p-3 space-y-2">
                     <Link to={`/floor-pipeline/tickets/${item.ticket_id}`} className="text-blue-600">#{item.ticket_id}</Link>
+                    <RepairItemActions dc={dc} item={item} canWarehouse={canProcess} canDecide={Boolean(dc.can_decide_replacement)} onReload={load} />
                   </td>
                 </tr>
               );
@@ -843,7 +871,7 @@ export default function VendorRepairDcDetailPage() {
         <h3 className="font-semibold">Send to vendor</h3>
         {dc.status === 'draft' && canDispatch ? (
           <>
-            <VrdcDispatchFields
+            <VrtdcTransportFields
               shipBy={shipBy}
               onShipByChange={setShipBy}
               fields={dispatchFields}
@@ -870,7 +898,7 @@ export default function VendorRepairDcDetailPage() {
               </p>
             )}
             {(dc.ship_by === 'by_porter' || dc.dispatch_mode === 'porter') && (
-              <p>Porter ID: {dc.porter_tracking_id || '—'}
+              <p>Porter: {dc.porter_person_name || '—'}{dc.porter_person_phone ? ` · ${dc.porter_person_phone}` : ''}{dc.vehicle_number ? ` · Vehicle: ${dc.vehicle_number}` : ''} · Booking: {dc.porter_tracking_id || '—'}
                 {dc.porter_order_id ? <> · Order: {dc.porter_order_id}</> : null}
                 {dc.porter_booking_url ? (
                   <> · <a href={dc.porter_booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Track</a></>
@@ -880,7 +908,7 @@ export default function VendorRepairDcDetailPage() {
             {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && (
               <p>
                 Delivery person: {dc.delivery_person_name || '—'}
-                {dc.delivery_person_phone ? ` · ${dc.delivery_person_phone}` : ''}
+                {(dc.inhouse_person_phone || dc.delivery_person_phone) ? ` · ${dc.inhouse_person_phone || dc.delivery_person_phone}` : ''}
                 {dc.vehicle_number ? ` · Vehicle: ${dc.vehicle_number}` : ''}
               </p>
             )}
@@ -1171,8 +1199,42 @@ export default function VendorRepairDcDetailPage() {
                       </a>
                     </div>
                   )
+                ) : receiveTargetItem.replacement_approval_status === 'approved' ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                    <p className="font-semibold">Approved by Accounts</p>
+                    <p className="font-mono mt-0.5">
+                      {[receiveTargetItem.replacement_proposed?.brand, receiveTargetItem.replacement_proposed?.model].filter(Boolean).join(' ')} · serial {receiveTargetItem.replacement_proposed?.serial_number}
+                    </p>
+                    <p className="mt-1">It becomes the replacement for {receiveTargetItem.ttspl_id}, billed from the day it reached the gate.</p>
+                  </div>
+                ) : (!dc.gate_legacy && !(isSuperAdmin && receiveForm.bypass_gate_flow) && receiveForm.laptop_condition === 'on') ? (
+                  <div className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs text-purple-900 space-y-1">
+                    {receiveTargetItem.replacement_config_result ? (
+                      <>
+                        <p className="font-semibold">
+                          {receiveTargetItem.replacement_config_result.configurationMatched
+                            ? 'Same model and configuration as the laptop sent — it will be accepted.'
+                            : 'Different from the laptop sent — receiving sends it to Accounts for approval.'}
+                        </p>
+                        <p className="font-mono">Serial {receiveTargetItem.replacement_captured_serial || '— (run the script again to read it)'}</p>
+                      </>
+                    ) : (
+                      <p>
+                        Close this, press <strong>It's a replacement</strong> on the laptop row for an access number, boot the replacement and run the
+                        vendor-return script. It reads the replacement's serial and configuration and compares them with the laptop we sent.
+                      </p>
+                    )}
+                    {receiveTargetItem.return_capture?.mode === 'replacement' && receiveTargetItem.return_capture?.access_number ? (
+                      <p className="font-mono font-semibold tracking-widest">Access {receiveTargetItem.return_capture.access_number}</p>
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="space-y-2 text-xs">
+                    {receiveForm.laptop_condition === 'not_on' && !dc.gate_legacy && !(isSuperAdmin && receiveForm.bypass_gate_flow) ? (
+                      <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        A replacement that won't power on can't be checked — receiving it sends it to Accounts for approval.
+                      </p>
+                    ) : null}
                     <p className="text-slate-600 font-medium">Original config (sent for repair)</p>
                     <div className="bg-slate-50 border rounded-lg p-2 space-y-1">
                       {(() => {

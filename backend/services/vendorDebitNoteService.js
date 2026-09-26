@@ -17,6 +17,7 @@ const SOURCE_TEXT = {
   return_challan: 'returned to the vendor on a return challan',
   replacement: 'kept by the vendor, who sent a replacement',
   rejected_at_receipt: 'rejected at the door on receipt',
+  vendor_kept: 'kept by the vendor, who could not repair it',
 };
 
 async function nextDebitNoteNumber(db) {

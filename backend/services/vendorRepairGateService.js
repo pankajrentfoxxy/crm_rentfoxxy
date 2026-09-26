@@ -54,6 +54,9 @@ async function applyOutwardGateVrdc(client, {
   if (String(head.item_domain || 'laptop') !== 'laptop') return null;
   if (head.gate_legacy) return null;
 
+  // Rs 50,000+ may not leave without the e-way bill (claude/carret-vendor-repair.md).
+  await require('./vrdcEwayComplianceService').assertVrdcCanLeaveGate(client, dcNumber);
+
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
         status = 'dispatched',

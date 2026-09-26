@@ -39,7 +39,6 @@ const {
   normalizeShipBy,
   shipByToDispatchMode,
   validateDispatchDetails,
-  dispatchPayloadFromBody,
   nextVendorRepairDcNumber,
   buildVrdcConfigurationString,
   resolveVrdcItemSpecs,
@@ -307,6 +306,10 @@ async function upsertReplacementSerial(client, {
   brand,
   model,
   generation,
+  processor = null,
+  ram = null,
+  storage = null,
+  rentalStartDate = null,
   vendorId,
   originalTtsplId,
   originalSerial,
@@ -347,12 +350,16 @@ async function upsertReplacementSerial(client, {
     `SELECT acquisition_type, extra FROM vendor_serial_numbers WHERE serial_id = $1`, [originalSerialId]
   )).rows[0] : null;
   const oex = orig?.extra && typeof orig.extra === 'object' ? orig.extra : {};
-  const today = new Date().toISOString().slice(0, 10);
+  // Billing starts the day it reached our gate (claude/carret-vendor-repair.md).
+  const today = rentalStartDate || new Date().toISOString().slice(0, 10);
   const tag = {
     asset_tag: 'replacement',
     brand: brand || null,
     model: model || null,
     generation: generation || null,
+    ...(processor ? { processor } : {}),
+    ...(ram ? { ram } : {}),
+    ...(storage ? { storage } : {}),
     source: 'vendor_repair_replacement',
     vendor_id: vendorId || null,
     configuration: [brand, model, generation].filter(Boolean).join(' · '),
@@ -399,6 +406,37 @@ async function upsertReplacementSerial(client, {
 }
 
 const { formatCompanyBlock } = require('../utils/companyDefaults');
+
+/**
+ * Laptop repair challans take the return challan's transport rules
+ * (claude/carret-vendor-repair.md): courier name + AWB; porter / vendor pickup
+ * / in-house need person, phone and vehicle. Returns the VRDC column values.
+ */
+async function repairTransportFromBody(client, body = {}) {
+  const { vrtdcTransportFromBody } = require('./vendorReturnToVendorService');
+  const t = await vrtdcTransportFromBody(client, {
+    ...body,
+    ship_by: body.ship_by || body.shipBy,
+    dispatch_mode: body.dispatch_mode || body.dispatchMode,
+  });
+  return {
+    ship_by: t.ship_by,
+    dispatch_mode: t.dispatch_mode,
+    courier_name: t.courier_name,
+    awb_number: t.awb_number,
+    courier_tracking_url: t.courier_tracking_url,
+    porter_tracking_id: t.porter_tracking_id,
+    porter_order_id: t.porter_order_id,
+    porter_booking_url: t.porter_booking_url,
+    porter_person_name: t.porter_person_name,
+    porter_person_phone: t.porter_person_phone,
+    delivery_person_id: t.delivery_person_id,
+    inhouse_person_phone: t.delivery_person_phone,
+    vehicle_number: t.vehicle_number,
+    vendor_pickup_person: t.vendor_pickup_person,
+    vendor_pickup_mobile: t.vendor_pickup_mobile,
+  };
+}
 
 function defaultBillingAddress() {
   return formatCompanyBlock();
@@ -563,9 +601,16 @@ async function listDiagnosisFailedTickets({
             COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), t.ram) AS ram,
             COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), t.storage) AS storage,
             ps.stage_name AS previous_stage_name,
-            pu.name AS previous_technician_name
+            pu.name AS previous_technician_name,
+            COALESCE(vsn.acquisition_type, dvpo.purchase_order_type) AS po_type,
+            dvpo.vendor_id AS rent_vendor_id,
+            dv.business_name AS rent_vendor_name,
+            vsn.vendor_rent_end_date AS rent_end_date,
+            dvpo.line_items -> COALESCE(NULLIF(vsn.extra->>'line_index', '')::int, 0) AS po_line
        FROM tickets t
        ${ticketJoins}
+       LEFT JOIN vendor_purchase_orders dvpo ON dvpo.po_id = vsn.po_id
+       LEFT JOIN vendors dv ON dv.vendor_id = dvpo.vendor_id
        LEFT JOIN stages ps ON ps.stage_id = t.previous_stage_id
        LEFT JOIN users pu ON pu.user_id = t.previous_technician_id
       WHERE t.status = 'diagnosis_failed'
@@ -586,9 +631,14 @@ async function listDiagnosisFailedTickets({
     if (key) seen.add(key);
     deduped.push(row);
   }
-  return deduped.map((r) => ({
+  const { declaredValueFromLine } = require('./vendorRepairMail');
+  return deduped.map(({ po_line: line, ...r }) => ({
     ...r,
     configuration: buildVrdcConfigurationString({ ...r, extra: r.serial_extra }),
+    // Pre-filled declared value (asset / purchase price) and whether rent to a
+    // vendor is running on it — the create form asks for a stop date then.
+    suggested_value: declaredValueFromLine(r.po_type, line),
+    is_vendor_rented: ['rental_purchase', 'rent_to_own'].includes(String(r.po_type || '')) && !r.rent_end_date,
   }));
 }
 
@@ -607,9 +657,11 @@ async function createOutForRepairDc(client, {
   warehouseName,
   warehouseAddress,
   itemRemarks = {},
+  itemIssueTypes = {},
   itemPrices = {},
   itemHsnCodes = {},
   itemVerifications = {},
+  rentStopDate,
   ewayBillNumber,
   ewayBillDate,
   ship_by,
@@ -625,6 +677,9 @@ async function createOutForRepairDc(client, {
   vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
+  porter_person_name,
+  porter_person_phone,
+  delivery_person_phone,
   actorUserId,
   actorName,
   actorRole,
@@ -638,7 +693,7 @@ async function createOutForRepairDc(client, {
   if (!vendorBillAddr) throw new Error('Vendor billing address is required');
   if (!shipAddr) throw new Error('Vendor shipping address is required');
   const billAddr = defaultBillingAddress();
-  const dispatch = dispatchPayloadFromBody({
+  const dispatch = await repairTransportFromBody(client, {
     ship_by: ship_by || shipBy,
     dispatch_mode,
     courier_name,
@@ -647,19 +702,29 @@ async function createOutForRepairDc(client, {
     porter_tracking_id,
     porter_order_id,
     porter_booking_url,
+    porter_person_name,
+    porter_person_phone,
     delivery_person_id,
+    delivery_person_phone,
     vehicle_number,
     vendor_pickup_person,
     vendor_pickup_mobile,
   });
+  const repairMail = require('./vendorRepairMail');
+  const reqMail = require('./vendorReturnRequestMail');
 
   const tRes = await client.query(
     `SELECT t.*, s.stage_name,
             vsn.extra AS serial_extra,
-            COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '') AS generation
+            COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '') AS generation,
+            COALESCE(vsn.acquisition_type, vpo.purchase_order_type) AS serial_po_type,
+            vpo.vendor_id AS serial_vendor_id,
+            vsn.vendor_rent_end_date AS serial_rent_end,
+            vpo.line_items -> COALESCE(NULLIF(vsn.extra->>'line_index', '')::int, 0) AS serial_po_line
        FROM tickets t
        LEFT JOIN stages s ON s.stage_id = t.current_stage_id
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
       WHERE t.ticket_id = ANY($1::int[]) FOR UPDATE OF t`,
     [ticketIds]
   );
@@ -682,6 +747,29 @@ async function createOutForRepairDc(client, {
   }
   if (invalid.length) {
     throw new Error('All selected laptops must be in Diagnosis Failed status');
+  }
+
+  // Each laptop: an issue type and remarks (claude/carret-vendor-repair.md).
+  for (const ticket of tRes.rows) {
+    const tid = ticket.ticket_id;
+    const issue = itemIssueTypes[tid] ?? itemIssueTypes[String(tid)];
+    if (!repairMail.issueLabel(issue)) {
+      throw Object.assign(new Error(`${ticket.ttspl_id || `#${tid}`}: choose the issue type`), { status: 400 });
+    }
+    const remark = String(itemRemarks[tid] ?? itemRemarks[String(tid)] ?? '').trim();
+    if (remark.length < 3) {
+      throw Object.assign(new Error(`${ticket.ttspl_id || `#${tid}`}: write the remarks for the vendor`), { status: 400 });
+    }
+  }
+  // Rent stops on laptops rented from this vendor; the date is required then.
+  const rentedHere = tRes.rows.filter((t) => ['rental_purchase', 'rent_to_own'].includes(String(t.serial_po_type || ''))
+    && vendorId && Number(t.serial_vendor_id) === Number(vendorId) && !t.serial_rent_end);
+  let stopDate = null;
+  if (rentStopDate || rentedHere.length) {
+    if (!rentStopDate) {
+      throw Object.assign(new Error(`${rentedHere.length} of these laptops are rented from this vendor — set the date their rent stops`), { status: 400 });
+    }
+    stopDate = reqMail.validateRequestDates({ rentStopDate }).rentStopDate;
   }
 
   const seenSerials = new Map();
@@ -715,9 +803,10 @@ async function createOutForRepairDc(client, {
   const itemFieldMap = {};
   for (const ticket of tRes.rows) {
     const tid = ticket.ticket_id;
+    // Declared value: what was entered, else the PO line's asset / purchase price.
     const price = parseItemPrice(
       itemPrices[tid] ?? itemPrices[String(tid)] ?? null
-    );
+    ) ?? repairMail.declaredValueFromLine(ticket.serial_po_type, ticket.serial_po_line);
     const hsn = resolveHsnForPersist({
       transactionType: 'repair',
       override: itemHsnCodes[tid] ?? itemHsnCodes[String(tid)] ?? null,
@@ -743,8 +832,9 @@ async function createOutForRepairDc(client, {
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
         porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
         vehicle_number, vendor_pickup_person, vendor_pickup_mobile,
-        eway_bill_number, eway_bill_date, item_domain
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'laptop')`,
+        eway_bill_number, eway_bill_date, item_domain,
+        rent_stop_date, porter_person_name, porter_person_phone, inhouse_person_phone
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'laptop',$28::date,$29,$30,$31)`,
     [
       dcNumber,
       vendorId || null,
@@ -773,15 +863,17 @@ async function createOutForRepairDc(client, {
       dispatch.vendor_pickup_mobile,
       eway.eway_bill_number,
       eway.eway_bill_date,
+      stopDate,
+      dispatch.porter_person_name,
+      dispatch.porter_person_phone,
+      dispatch.inhouse_person_phone,
     ]
   );
 
   for (const ticket of tRes.rows) {
     const configuration = buildVrdcConfigurationString({ ...ticket, extra: ticket.serial_extra });
-    const itemRemark = itemRemarks[ticket.ticket_id]
-      || itemRemarks[String(ticket.ticket_id)]
-      || ticket.diagnosis_failed_reason
-      || null;
+    const itemRemark = String(itemRemarks[ticket.ticket_id] ?? itemRemarks[String(ticket.ticket_id)] ?? '').trim();
+    const issueType = itemIssueTypes[ticket.ticket_id] ?? itemIssueTypes[String(ticket.ticket_id)];
     const fields = itemFieldMap[ticket.ticket_id] || { price: null, hsn: defaultHsn };
     const specs = resolveVrdcItemSpecs({ ...ticket, extra: ticket.serial_extra });
     const extra = ticket.serial_extra && typeof ticket.serial_extra === 'object' ? ticket.serial_extra : {};
@@ -789,11 +881,11 @@ async function createOutForRepairDc(client, {
     await client.query(
       `INSERT INTO vendor_repair_dc_items (
           dc_number, ticket_id, serial_id, ttspl_id, serial_number, configuration, item_remarks, item_status,
-          price, hsn_code, dispatch_config_snapshot
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10::jsonb)`,
+          price, hsn_code, dispatch_config_snapshot, issue_type
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10::jsonb,$11)`,
       [
         dcNumber, ticket.ticket_id, ticket.vendor_serial_id, ticket.ttspl_id, ticket.serial_number,
-        configuration, itemRemark, fields.price, fields.hsn, JSON.stringify(dispatchSnapshot),
+        configuration, itemRemark, fields.price, fields.hsn, JSON.stringify(dispatchSnapshot), issueType,
       ]
     );
     await client.query(
@@ -830,7 +922,47 @@ async function createOutForRepairDc(client, {
     });
   }
 
-  return { dc_number: dcNumber, total_declared: totalDeclared, eway_required: eway.eway_required };
+  const { requiresVrdcEway: needsRepairEway } = require('./vrdcEwayComplianceService');
+  return {
+    dc_number: dcNumber,
+    total_declared: totalDeclared,
+    eway_required: needsRepairEway(totalDeclared),
+    rent_stop_date: stopDate,
+    rented_from_vendor: rentedHere.length,
+  };
+}
+
+/**
+ * Before the vendor is mailed: change the rent stop date, and each laptop's
+ * issue type / remarks.
+ */
+async function updateRepairRequestDetails(client, { dcNumber, rentStopDate, itemIssueTypes = {}, itemRemarks = {} }) {
+  const head = (await client.query(
+    'SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE', [dcNumber]
+  )).rows[0];
+  if (!head) throw Object.assign(new Error('Vendor repair DC not found'), { status: 404 });
+  if (head.vendor_notified_at) throw Object.assign(new Error('The vendor has already been mailed — these can no longer change'), { status: 409 });
+  if (!['draft', 'dispatch_ready'].includes(head.status)) throw Object.assign(new Error(`This challan is ${head.status}`), { status: 409 });
+  const repairMail = require('./vendorRepairMail');
+  const reqMail = require('./vendorReturnRequestMail');
+  if (rentStopDate !== undefined) {
+    const stop = rentStopDate ? reqMail.validateRequestDates({ rentStopDate }).rentStopDate : null;
+    await client.query('UPDATE vendor_repair_delivery_challans SET rent_stop_date = $2::date, updated_at = NOW() WHERE dc_number = $1', [dcNumber, stop]);
+  }
+  const items = (await client.query('SELECT id, ticket_id, ttspl_id FROM vendor_repair_dc_items WHERE dc_number = $1', [dcNumber])).rows;
+  for (const it of items) {
+    const issue = itemIssueTypes[it.ticket_id] ?? itemIssueTypes[String(it.ticket_id)];
+    const remark = itemRemarks[it.ticket_id] ?? itemRemarks[String(it.ticket_id)];
+    if (issue !== undefined) {
+      if (!repairMail.issueLabel(issue)) throw Object.assign(new Error(`${it.ttspl_id}: choose the issue type`), { status: 400 });
+      await client.query('UPDATE vendor_repair_dc_items SET issue_type = $2 WHERE id = $1', [it.id, issue]);
+    }
+    if (remark !== undefined) {
+      if (String(remark).trim().length < 3) throw Object.assign(new Error(`${it.ttspl_id}: write the remarks`), { status: 400 });
+      await client.query('UPDATE vendor_repair_dc_items SET item_remarks = $2 WHERE id = $1', [it.id, String(remark).trim()]);
+    }
+  }
+  return { dc_number: dcNumber };
 }
 
 function vendorDisplayName(vendor) {
@@ -1008,7 +1140,10 @@ async function cancelVendorRepairDc(client, { dcNumber, reason, actorUserId, act
       WHERE dc_number = $1`,
     [dcNumber, actorUserId || null, why]
   );
-  return { dc_number: dcNumber, status: 'cancelled', laptops: items.length };
+  // The laptops never left: stopped rent is as if never stopped, and a vendor
+  // who was mailed is told (mail last; a failure undoes the cancel).
+  const rent = await require('./vendorRepairRentService').onChallanCancelled(client, { dcNumber, reason: why });
+  return { dc_number: dcNumber, status: 'cancelled', laptops: items.length, rent_pauses_voided: rent.voided, vendor_mailed: rent.mailed };
 }
 
 async function getVendorRepairDc(dcNumber) {
@@ -1105,6 +1240,7 @@ async function getVendorRepairDc(dcNumber) {
             matched_at: tok.matched_at,
             match_result: tok.match_result,
             serial_number: tok.serial_number,
+            mode: tok.mode || 'repaired',
           }
           : null,
       };
@@ -1121,9 +1257,12 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
   if (!head) throw new Error('Vendor repair DC not found');
   if (head.status !== 'draft') throw new Error('Dispatch details can only be edited while DC is in draft');
 
-  const dispatch = dispatchPayloadFromBody(body);
+  const dispatch = await repairTransportFromBody(client, body);
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
+        porter_person_name = $14,
+        porter_person_phone = $15,
+        inhouse_person_phone = $16,
         ship_by = $2,
         dispatch_mode = $3,
         courier_name = $4,
@@ -1152,6 +1291,9 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
       dispatch.vehicle_number,
+      dispatch.porter_person_name,
+      dispatch.porter_person_phone,
+      dispatch.inhouse_person_phone,
     ]
   );
   return { dc_number: dcNumber, ...dispatch };
@@ -1310,10 +1452,15 @@ async function signDispatchDc(client, {
   }
   if (head.status === 'returned') throw new Error('DC already returned');
   if (head.status !== 'draft') throw new Error('DC must be in draft to dispatch');
+  // New-format challans: the vendor is mailed (and rent paused) before the
+  // laptops can go to the gate.
+  if (head.rent_stop_date && !head.vendor_notified_at) {
+    throw Object.assign(new Error('Mail the vendor first — that is what stops the rent. Use "Mail the vendor" on this challan.'), { status: 409 });
+  }
 
   let dispatch = null;
   if (dispatchBody && (dispatchBody.ship_by || dispatchBody.shipBy || dispatchBody.dispatch_mode)) {
-    dispatch = dispatchPayloadFromBody(dispatchBody);
+    dispatch = await repairTransportFromBody(client, dispatchBody);
   } else if (head.ship_by || head.dispatch_mode) {
     dispatch = {
       ship_by: head.ship_by,
@@ -1328,6 +1475,9 @@ async function signDispatchDc(client, {
       vehicle_number: head.vehicle_number,
       vendor_pickup_person: head.vendor_pickup_person,
       vendor_pickup_mobile: head.vendor_pickup_mobile,
+      porter_person_name: head.porter_person_name,
+      porter_person_phone: head.porter_person_phone,
+      inhouse_person_phone: head.inhouse_person_phone,
     };
   } else {
     throw new Error('Send mode is required before dispatch (select Inhouse, Courier, Porter, or Vendor Pickup)');
@@ -1361,6 +1511,9 @@ async function signDispatchDc(client, {
         dispatch_pod_path = COALESCE($13, dispatch_pod_path),
         vendor_pickup_person = $16,
         vendor_pickup_mobile = $17,
+        porter_person_name = $19,
+        porter_person_phone = $20,
+        inhouse_person_phone = $21,
         status = 'dispatch_ready',
         items_dispatched_count = (SELECT COUNT(*)::int FROM vendor_repair_dc_items WHERE dc_number = $1),
         updated_at = NOW()
@@ -1384,6 +1537,9 @@ async function signDispatchDc(client, {
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
       dispatch.vehicle_number,
+      dispatch.porter_person_name || null,
+      dispatch.porter_person_phone || null,
+      dispatch.inhouse_person_phone || null,
     ]
   );
 
@@ -1461,6 +1617,14 @@ async function receiveItemsFromVendor(client, {
   itemsQuery += ` AND i.ticket_id = ANY($2::int[])`;
   const itemsRes = await client.query(itemsQuery, params);
   if (!itemsRes.rows.length) throw new Error('No dispatched items selected for receive');
+  // gate_inward_at of the ITEM row (t.* in the select can shadow item columns).
+  const itemCols = (await client.query(
+    `SELECT id, gate_inward_at, replacement_approval_status, replacement_proposed, replacement_config_result, replacement_captured_serial
+       FROM vendor_repair_dc_items WHERE id = ANY($1::int[])`,
+    [itemsRes.rows.map((r) => r.id)]
+  )).rows;
+  const colById = new Map(itemCols.map((r) => [r.id, r]));
+  for (const r of itemsRes.rows) Object.assign(r, colById.get(r.id) || {});
 
   const existingRecv = [...new Set(itemsRes.rows.map((i) => i.receive_dc_number).filter(Boolean))];
   let receiveDcNumber = existingRecv.length === 1 && itemsRes.rows.every((i) => i.receive_dc_number === existingRecv[0])
@@ -1485,12 +1649,60 @@ async function receiveItemsFromVendor(client, {
     );
   }
   const receivedItemIds = [];
+  const pendingApproval = [];
+  const rent = require('./vendorRepairRentService');
 
   for (const item of itemsRes.rows) {
     const receiveSpec = receiveMap.get(item.ticket_id) || { receive_mode: 'repaired' };
     const isReplacement = receiveSpec.receive_mode === 'replacement';
     const laptopCondition = normalizeCondition(receiveSpec.laptop_condition);
     const superAdminBypass = isSuperAdminGateBypass({ actorRole, bypassGateFlow, receiveSpec });
+
+    // Replacement (claude/carret-vendor-repair.md): the script compares it with
+    // the laptop we sent. Same model + config → accepted; different, or it
+    // won't power on to be read → Accounts / the approver decide first.
+    if (isReplacement && !head.gate_legacy && !superAdminBypass) {
+      if (item.replacement_approval_status === 'approved') {
+        const ap = item.replacement_proposed || {};
+        receiveSpec.replacement_serial_number = ap.serial_number || receiveSpec.replacement_serial_number;
+        receiveSpec.replacement_brand = ap.brand || receiveSpec.replacement_brand;
+        receiveSpec.replacement_model = ap.model || receiveSpec.replacement_model;
+        receiveSpec.replacement_generation = ap.generation || receiveSpec.replacement_generation;
+        receiveSpec.replacement_processor = ap.processor || null;
+        receiveSpec.replacement_ram = ap.ram || null;
+        receiveSpec.replacement_storage = ap.ssd || ap.storage || null;
+      } else {
+        const result = item.replacement_config_result;
+        const readable = requiresConfigVerification(laptopCondition);
+        if (readable && (!result || !String(item.replacement_captured_serial || '').trim())) {
+          throw new Error(
+            `Run the replacement check for ${item.ttspl_id}: "It's a replacement" on the challan gives an access number for the script.`
+          );
+        }
+        const { proposedFromChecks } = require('./vendorRepairMail');
+        const proposed = readable
+          ? { ...proposedFromChecks(result.checks, item.replacement_captured_serial), condition: laptopCondition }
+          : {
+            serial_number: String(receiveSpec.replacement_serial_number || '').trim() || null,
+            brand: String(receiveSpec.replacement_brand || '').trim() || null,
+            model: String(receiveSpec.replacement_model || '').trim() || null,
+            generation: String(receiveSpec.replacement_generation || '').trim() || null,
+            condition: laptopCondition,
+          };
+        if (!proposed.serial_number) throw new Error(`Replacement serial number required for ${item.ttspl_id}`);
+        if (!readable || !result.configurationMatched) {
+          pendingApproval.push(await rent.submitForApproval(client, { head, item, proposed, actorUserId }));
+          continue;
+        }
+        receiveSpec.replacement_serial_number = proposed.serial_number;
+        receiveSpec.replacement_brand = proposed.brand || receiveSpec.replacement_brand;
+        receiveSpec.replacement_model = proposed.model || receiveSpec.replacement_model;
+        receiveSpec.replacement_generation = proposed.generation || receiveSpec.replacement_generation;
+        receiveSpec.replacement_processor = proposed.processor || null;
+        receiveSpec.replacement_ram = proposed.ram || null;
+        receiveSpec.replacement_storage = proposed.ssd || null;
+      }
+    }
 
     if (!head.gate_legacy && !superAdminBypass) {
       if (!item.gate_inward_at) {
@@ -1538,6 +1750,10 @@ async function receiveItemsFromVendor(client, {
         brand: receiveSpec.replacement_brand.trim(),
         model: receiveSpec.replacement_model.trim(),
         generation: (receiveSpec.replacement_generation || '').trim() || null,
+        processor: receiveSpec.replacement_processor || null,
+        ram: receiveSpec.replacement_ram || null,
+        storage: receiveSpec.replacement_storage || null,
+        rentalStartDate: rent.arrivalDate(item),
         vendorId: head.vendor_id,
         originalTtsplId: item.ttspl_id,
         originalSerial: item.serial_number,
@@ -1698,11 +1914,20 @@ async function receiveItemsFromVendor(client, {
           replacement_dc_number: replacementDcNumber,
         },
       });
-      await client.query(
-        `UPDATE vendor_serial_numbers SET vendor_rent_end_date = COALESCE(vendor_rent_end_date, $2::date), updated_at = NOW()
-          WHERE serial_id = $1`,
-        [item.vendor_serial_id || item.serial_id, signedAt.toISOString().slice(0, 10)]
-      );
+      // Its rent was paused when it went for repair and never resumes: it ends
+      // the day before the pause. (Old-format challans: the receive day.)
+      const vendorRow = (await client.query(
+        `SELECT COALESCE(vsn.acquisition_type, vpo.purchase_order_type) AS po_type, vpo.vendor_id AS rent_vendor_id
+           FROM vendor_serial_numbers vsn LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+          WHERE vsn.serial_id = $1`,
+        [item.vendor_serial_id || item.serial_id]
+      )).rows[0] || {};
+      await rent.endItemRent(client, {
+        head,
+        item: { id: item.id, serial_id: item.vendor_serial_id || item.serial_id, ...vendorRow },
+        reason: 'replaced',
+        fallbackEnd: signedAt.toISOString().slice(0, 10),
+      });
       await require('./vendorDebitNoteService').draftForReturn(client, {
         serialId: item.vendor_serial_id || item.serial_id, source: 'replacement', sourceRef: replacementDcNumber, actorUserId,
       });
@@ -1755,6 +1980,8 @@ async function receiveItemsFromVendor(client, {
         actorName: itemWhSigner,
       });
     } else if (item.vendor_serial_id || item.serial_id) {
+      // Rent (paused when it went for repair) resumes on the gate-in date.
+      await rent.resumeItemPause(client, { itemId: item.id, resumedOn: rent.arrivalDate(item, signedAt) });
       // B20: a repaired laptop goes back to the Floor Manager's triage desk
       // with its ticket. It was booked in_stock here, so it could be sold while
       // still on the floor; floor QC is what puts it in stock.
@@ -1810,10 +2037,10 @@ async function receiveItemsFromVendor(client, {
 
   const countsRes = await client.query(
     `SELECT
-        COUNT(*) FILTER (WHERE COALESCE(item_status, 'draft') IN ('dispatched', 'dispatch_ready', 'gate_received'))::int AS pending,
-        COUNT(*) FILTER (WHERE item_status IN ('received', 'replacement_received'))::int AS received,
+        COUNT(*) FILTER (WHERE COALESCE(item_status, 'draft') IN ('dispatched', 'dispatch_ready', 'gate_received', 'replacement_pending'))::int AS pending,
+        COUNT(*) FILTER (WHERE item_status IN ('received', 'replacement_received', 'vendor_kept'))::int AS received,
         COUNT(*)::int AS total
-       FROM vendor_repair_dc_items WHERE dc_number = $1`,
+       FROM vendor_repair_dc_items WHERE dc_number = $1 AND COALESCE(item_status, '') <> 'cancelled'`,
     [dcNumber]
   );
   const { pending, received, total } = countsRes.rows[0] || { pending: 0, received: 0, total: 0 };
@@ -1846,7 +2073,8 @@ async function receiveItemsFromVendor(client, {
     items_total: total,
     items_pending: pending,
     received_item_ids: receivedItemIds,
-    receive_pdf_pending: true,
+    pending_approval: pendingApproval,
+    receive_pdf_pending: receivedItemIds.length > 0,
   };
 }
 
@@ -2364,6 +2592,7 @@ async function receiveErpRepairBack(client, { serialId, actorUserId, actorName, 
 }
 
 module.exports = {
+  updateRepairRequestDetails,
   ensureVendorRepairSchema,
   WAREHOUSE_ROLES,
   EWAY_VALUE_THRESHOLD,

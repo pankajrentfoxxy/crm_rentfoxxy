@@ -219,6 +219,8 @@ const carretMenuItems = [
   { icon: Truck, label: 'Vendor arrivals', path: '/carret/procure/arrivals', section: 'vendor_management' },
   { icon: Store, label: 'Vendors', path: '/carret/procure/vendors', section: 'vendor_management' },
   { icon: Truck, label: 'Vendor returns', path: '/carret/procure/returns', section: 'vendor_return_to_vendor' },
+  { icon: Store, label: 'Vendor rentals', path: '/carret/procure/vendor-rentals', section: 'vendor_management' },
+  { icon: Truck, label: 'Replacement approvals', path: '/carret/procure/replacement-approvals', section: 'vendor_repair_dc' },
   { icon: Boxes, label: 'Spare-parts orders', path: '/carret/procure/spare-parts-orders', section: 'vendor_management' },
   { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
   { icon: DollarSign, label: 'Ageing & Outstanding', path: '/carret/money/ageing', section: 'customer_billing' },

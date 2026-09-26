@@ -7,8 +7,17 @@ const { sendDispatchMail, isDispatchMailConfigured, getDispatchFromAddress } = r
 const {
   EWAY_VALUE_THRESHOLD,
   normalizeEwayBillNumber,
-  requiresVrdcEway,
 } = require('./vendorRepairDcShared');
+
+/**
+ * A laptop repair challan needs an e-way bill at Rs 50,000 and above (user's
+ * rule, 26 Sep 2026 — claude/carret-vendor-repair.md), the same as a return
+ * challan. The shared helper in vendorRepairDcShared keeps "above" for the
+ * part-repair and scrap challans that still use it.
+ */
+function requiresVrdcEway(totalValue) {
+  return Number(totalValue || 0) >= EWAY_VALUE_THRESHOLD;
+}
 
 const ACCOUNTS_EMAIL = process.env.ACCOUNTS_EMAIL || 'accounts@truetechservices.in';
 const ACCOUNTS_EMAIL_CC = process.env.ACCOUNTS_EMAIL_CC || 'adminn@rentfoxxy.com,pankkajyadav@rentfoxxy.com';
@@ -193,7 +202,55 @@ async function assertCanDownloadVrdcPdf(user, dcNumber) {
   );
 }
 
-async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, laptops = [], userTriggered = false }) {
+/** Brand + model with count and value, for the Accounts mail. */
+function summariseRepairByModel(items = []) {
+  const groups = new Map();
+  for (const row of items) {
+    if (['cancelled'].includes(row.item_status)) continue;
+    const cfg = String(row.configuration || '').split('·').map((x) => x.trim());
+    const brand = String(row.brand || row.ticket_brand || cfg[0] || '').trim() || '—';
+    const model = String(row.model || row.ticket_model || cfg[1] || '').trim() || '—';
+    const key = `${brand.toLowerCase()}|${model.toLowerCase()}`;
+    const g = groups.get(key) || { brand, model, count: 0, value: 0 };
+    g.count += 1;
+    g.value += Number.isFinite(Number(row.price)) ? Number(row.price) : 0;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.value - a.value);
+}
+
+/** How the challan travels, as label/value rows. */
+function describeRepairTransport(head = {}) {
+  const rows = [];
+  const by = String(head.ship_by || '');
+  if (by === 'by_courier') {
+    rows.push(['Mode', 'Courier']);
+    if (head.courier_name) rows.push(['Courier', head.courier_name]);
+    if (head.awb_number) rows.push(['Tracking ID (AWB)', head.awb_number]);
+  } else if (by === 'by_porter') {
+    rows.push(['Mode', 'Porter']);
+    if (head.porter_person_name) rows.push(['Porter person', head.porter_person_name]);
+    if (head.porter_person_phone) rows.push(['Phone', head.porter_person_phone]);
+    if (head.porter_tracking_id) rows.push(['Porter booking', head.porter_tracking_id]);
+  } else if (by === 'by_hand') {
+    rows.push(['Mode', 'In-house delivery']);
+    if (head.delivery_person_name) rows.push(['Delivery person', head.delivery_person_name]);
+    const ph = head.inhouse_person_phone || head.delivery_person_phone;
+    if (ph) rows.push(['Phone', ph]);
+  } else if (by === 'by_vendor_pickup') {
+    rows.push(['Mode', 'Vendor pickup']);
+    if (head.vendor_pickup_person) rows.push(['Pickup person', head.vendor_pickup_person]);
+    if (head.vendor_pickup_mobile) rows.push(['Phone', head.vendor_pickup_mobile]);
+  } else {
+    rows.push(['Mode', by || 'Not set']);
+  }
+  if (head.vehicle_number) rows.push(['Vehicle number', head.vehicle_number]);
+  return rows;
+}
+
+async function sendAccountsVrdcEwayEmail({
+  dcNumber, vendorName, productValue, laptops = [], userTriggered = false, summary = [], transport = [],
+}) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
       'Dispatch mail is not configured. Set DISPATCH_SMTP_HOST, DISPATCH_SMTP_USER, DISPATCH_SMTP_PASS, and DISPATCH_SMTP_FROM in backend/.env'
@@ -219,15 +276,21 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
     <div style="padding:24px;">
       <p style="margin:0 0 16px;font-size:15px;">Hi Accounts Team,</p>
       <p style="margin:0 0 16px;line-height:1.6;">
-        An <strong>Out for Repair Vendor Return DC (VRDC)</strong> exceeds ₹${escapeHtml(thresholdStr)} declared value
-        and needs an E-Way Bill before the VRDC PDF can be downloaded.
+        An <strong>Out for Repair Vendor Return DC (VRDC)</strong> is ₹${escapeHtml(thresholdStr)} or more in declared value
+        and needs an E-Way Bill before the laptops can leave the gate.
       </p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px;">
         <tr><td style="padding:8px 0;color:#64748b;width:160px;">VRDC Number</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(dcNumber)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Vendor</td><td style="padding:8px 0;">${escapeHtml(vendorName || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Total Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Laptop Count</td><td style="padding:8px 0;">${escapeHtml(String(laptops.length))}</td></tr>
+        ${transport.map(([k, v]) => `<tr><td style="padding:8px 0;color:#64748b;">${escapeHtml(k)}</td><td style="padding:8px 0;">${escapeHtml(v)}</td></tr>`).join('')}
       </table>
+      ${summary.length ? `<p style="margin:0 0 8px;font-weight:600;">By brand and model</p>
+      <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px;">
+        <tr style="background:#f8fafc;color:#64748b;text-align:left;"><th style="padding:6px 8px;">Brand</th><th style="padding:6px 8px;">Model</th><th style="padding:6px 8px;text-align:right;">Count</th><th style="padding:6px 8px;text-align:right;">Value</th></tr>
+        ${summary.map((g) => `<tr><td style="padding:6px 8px;">${escapeHtml(g.brand)}</td><td style="padding:6px 8px;">${escapeHtml(g.model)}</td><td style="padding:6px 8px;text-align:right;">${g.count}</td><td style="padding:6px 8px;text-align:right;">₹${escapeHtml(Number(g.value).toLocaleString('en-IN'))}</td></tr>`).join('')}
+      </table>` : ''}
       <p style="margin:0 0 8px;font-weight:600;">Laptops</p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px;">
         <tr style="background:#f8fafc;color:#64748b;text-align:left;">
@@ -279,6 +342,8 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
         '',
         `VRDC ${dcNumber} for vendor ${vendorName || '—'} requires an E-Way Bill.`,
         `Total declared value: ₹${valueStr} (threshold ₹${thresholdStr}).`,
+        ...transport.map(([k, v]) => `${k}: ${v}`),
+        ...summary.map((g) => `${g.brand} ${g.model}: ${g.count} laptop(s), ₹${Number(g.value).toLocaleString('en-IN')}`),
         `Laptops (${laptops.length}):`,
         laptopText,
         '',
@@ -308,6 +373,72 @@ async function sendAccountsVrdcEwayEmail({ dcNumber, vendorName, productValue, l
   return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL, cc: ACCOUNTS_EMAIL_CC, pdf_attached: true };
 }
 
+/**
+ * After a repair challan is signed for dispatch (after COMMIT): at Rs 50,000+
+ * the Accounts request goes by itself. A failure is recorded on the challan and
+ * the existing "Send to Accounts" button resends. Never throws.
+ */
+async function autoRequestVrdcEway(dcNumber, { actorUserId = null } = {}) {
+  try {
+    const svc = require('./vendorRepairDcService');
+    const dc = await svc.getVendorRepairDc(dcNumber);
+    if (!dc || dc.item_domain === 'part') return { required: false };
+    const productValue = await computeVrdcTotalValue(dcNumber);
+    if (!requiresVrdcEway(productValue)) return { required: false, product_value: productValue };
+    if (dc.accounts_notified_at || dc.eway_bill_number) return { required: true, sent: true, already: true, product_value: productValue };
+    try {
+      const r = await sendAccountsVrdcEwayEmail({
+        dcNumber,
+        vendorName: dc.vendor_name,
+        productValue,
+        laptops: laptopRowsFromItems(dc.items || []),
+        summary: summariseRepairByModel(dc.items || []),
+        transport: describeRepairTransport(dc),
+        userTriggered: true,
+      });
+      await pool.query(
+        `UPDATE vendor_repair_delivery_challans
+            SET accounts_notified_at = NOW(), accounts_notified_by = $2,
+                eway_auto_mail_at = NOW(), eway_auto_mail_error = NULL, updated_at = NOW()
+          WHERE dc_number = $1`,
+        [dcNumber, actorUserId || null]
+      );
+      return { required: true, sent: true, to: r.to, product_value: productValue };
+    } catch (err) {
+      const message = String(err.message || err).slice(0, 1000);
+      await pool.query(
+        'UPDATE vendor_repair_delivery_challans SET eway_auto_mail_error = $2 WHERE dc_number = $1',
+        [dcNumber, message]
+      ).catch(() => {});
+      return { required: true, sent: false, error: message, product_value: productValue };
+    }
+  } catch (err) {
+    console.error('[vrdcEway] auto request failed:', err.message);
+    return { required: null, sent: false, error: err.message };
+  }
+}
+
+/** The guard may not let a laptop repair challan out at Rs 50,000+ without the e-way bill. */
+async function assertVrdcCanLeaveGate(db, dcNumber) {
+  const head = (await db.query(
+    `SELECT eway_bill_number, COALESCE(item_domain, 'laptop') AS item_domain
+       FROM vendor_repair_delivery_challans WHERE dc_number = $1`,
+    [dcNumber]
+  )).rows[0];
+  if (!head || head.item_domain !== 'laptop') return;
+  const total = Number((await db.query(
+    'SELECT COALESCE(SUM(price), 0)::float AS t FROM vendor_repair_dc_items WHERE dc_number = $1',
+    [dcNumber]
+  )).rows[0].t || 0);
+  if (!requiresVrdcEway(total) || String(head.eway_bill_number || '').trim()) return;
+  const err = new Error(
+    `E-way Bill required before this repair challan can leave: declared value ₹${total.toLocaleString('en-IN')}`
+    + ` is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more. Ask Accounts to add the E-way Bill.`
+  );
+  err.status = 409;
+  throw err;
+}
+
 async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, ewayBillPdfPath, userId }) {
   const num = normalizeEwayBillNumber(ewayBillNumber);
   if (!num) throw new Error('E-Way Bill number is required');
@@ -318,7 +449,7 @@ async function saveVrdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, ewayBi
 
   const total = await computeVrdcTotalValue(dcNumber);
   if (!requiresVrdcEway(total)) {
-    throw new Error('E-Way Bill upload applies only when VRDC value is above the configured threshold');
+    throw new Error(`E-Way Bill upload applies only when the VRDC value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more`);
   }
 
   const existing = await pool.query(
@@ -363,6 +494,10 @@ module.exports = {
   purgeLockedVrdcPublicPdf,
   computeVrdcTotalValue,
   sendAccountsVrdcEwayEmail,
+  autoRequestVrdcEway,
+  assertVrdcCanLeaveGate,
+  summariseRepairByModel,
+  describeRepairTransport,
   saveVrdcEwayBill,
   canUploadVrdcEwayBill,
   laptopRowsFromItems,

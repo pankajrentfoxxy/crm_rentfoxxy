@@ -118,6 +118,11 @@ exports.createOutForRepair = async (req, res) => {
       warehouseName: req.body.warehouse_name || req.body.warehouseName,
       warehouseAddress: req.body.warehouse_address || req.body.warehouseAddress,
       itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
+      itemIssueTypes: req.body.item_issue_types || req.body.itemIssueTypes || {},
+      rentStopDate: req.body.rent_stop_date || req.body.rentStopDate,
+      porter_person_name: req.body.porter_person_name,
+      porter_person_phone: req.body.porter_person_phone,
+      delivery_person_phone: req.body.delivery_person_phone,
       itemPrices: req.body.item_prices || req.body.itemPrices || {},
       itemHsnCodes: req.body.item_hsn_codes || req.body.itemHsnCodes || {},
       itemVerifications: req.body.item_verifications || req.body.itemVerifications || {},
@@ -140,8 +145,8 @@ exports.createOutForRepair = async (req, res) => {
       actorRole: req.user.role,
     });
     await client.query('COMMIT');
-    const msg = result.eway_required
-      ? 'Vendor repair DC created — E-way Bill required before PDF download'
+    const msg = result.rent_stop_date
+      ? 'Repair challan created — now mail the vendor (that stops the rent), then sign it for dispatch'
       : 'Vendor repair DC created';
     res.json({ success: true, message: msg, ...result });
   } catch (err) {
@@ -199,6 +204,8 @@ exports.getVendorRepairDc = async (req, res) => {
         ...dc,
         eway_compliance,
         can_download_pdf: eway_compliance.can_download_pdf,
+        can_decide_replacement: require('../services/vendorRepairRentService').canApproveReplacement(req.user),
+        issue_types: require('../services/vendorRepairMail').ISSUE_TYPES,
       },
     });
   } catch (err) {
@@ -326,10 +333,15 @@ exports.signDispatch = async (req, res) => {
     }
   }
 
+  // Rs 50,000+: Accounts is mailed for the e-way bill by itself.
+  let ewayRequest = null;
+  if (result && !result.already_dispatched) {
+    ewayRequest = await vrdcEway.autoRequestVrdcEway(dcNumber, { actorUserId: req.user.user_id });
+  }
   const msg = result?.already_dispatched
     ? (result.status === 'dispatch_ready' ? 'Already e-signed — waiting for guard outward' : 'Already dispatched')
     : 'E-signed — send to gate for outward scan';
-  res.json({ success: true, message: msg, pdf_path: pdfPath, ...result });
+  res.json({ success: true, message: msg, pdf_path: pdfPath, eway_request: ewayRequest, ...result });
 };
 
 exports.receiveBack = async (req, res) => {
@@ -384,9 +396,12 @@ exports.receiveBack = async (req, res) => {
     }
   }
 
-  const msg = result.status === 'returned'
-    ? 'All laptops received — moved to Floor Manager'
-    : `Received ${result.tickets_updated} laptop(s) — ${result.items_pending} still out for repair`;
+  const waiting = result.pending_approval?.length || 0;
+  const msg = waiting && !result.received_item_ids?.length
+    ? `The replacement differs from the laptop sent — sent to Accounts for approval (${waiting})`
+    : result.status === 'returned'
+      ? 'All laptops received — moved to Floor Manager'
+      : `Received ${result.received_item_ids?.length || 0} laptop(s)${waiting ? `, ${waiting} replacement(s) waiting for approval` : ''} — ${result.items_pending} still pending`;
   res.json({ success: true, message: msg, receive_pdf_path: receivePdfPath, ...result });
 };
 
@@ -497,6 +512,8 @@ exports.sendAccountsVrdcEwayMail = async (req, res) => {
       vendorName: dc.vendor_name,
       productValue,
       laptops: vrdcEway.laptopRowsFromItems(dc.items || []),
+      summary: vrdcEway.summariseRepairByModel(dc.items || []),
+      transport: vrdcEway.describeRepairTransport(dc),
       userTriggered: true,
     });
 
@@ -740,3 +757,143 @@ exports.requireWarehouse = requireWarehouse;
 exports.requireDiagnosisFailedProcess = requireDiagnosisFailedProcess;
 exports.requireVendorRepairDispatch = requireVendorRepairDispatch;
 exports.requireVrdcEwayUpload = requireVrdcEwayUpload;
+
+/* ---- Repair request, rent pause, replacement, vendor keeps it (claude/carret-vendor-repair.md) ---- */
+const rentSvc = require('../services/vendorRepairRentService');
+
+async function inTxn(res, fn, { onError } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (onError) await onError(err).catch(() => {});
+    res.status(err.status || 400).json({ success: false, message: err.message || 'That did not work' });
+    return undefined;
+  } finally {
+    client.release();
+  }
+}
+
+exports.previewRepairMail = async (req, res) => {
+  try {
+    res.json({ success: true, preview: await rentSvc.previewRepairMail(req.params.dcNumber) });
+  } catch (err) {
+    res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+};
+
+exports.sendRepairMail = async (req, res) => {
+  const out = await inTxn(res, (c) => rentSvc.sendRepairMail(c, {
+    dcNumber: req.params.dcNumber, actorUserId: req.user.user_id, actorName: req.user.name || req.user.email,
+  }), { onError: async (err) => { if (err.notifyError) await rentSvc.writeNotifyError(req.params.dcNumber, err.notifyError); } });
+  if (out === undefined) return;
+  await logVrdcDcTicketActivities({
+    dcNumber: req.params.dcNumber, userId: req.user.user_id, action: 'vrdc_vendor_mailed',
+    notes: `Repair mail sent to ${out.to || 'the vendor'}${out.paused ? ` — rent stopped from ${out.rent_stop_date} on ${out.paused} laptop(s)` : ''}`,
+  }).catch(() => {});
+  res.json({ success: true, message: out.already_sent ? 'Already sent' : 'Mail sent to the vendor', ...out });
+};
+
+exports.downloadRepairRequestPdf = async (req, res) => {
+  try {
+    const rel = await rentSvc.repairRequestPdf(req.params.dcNumber);
+    const abs = path.join(__dirname, '../uploads', rel);
+    if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.download(abs, `Repair_request_${String(req.params.dcNumber).replace(/[^\w-]+/g, '_')}.pdf`);
+  } catch (err) {
+    res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+};
+
+exports.updateRequestDetails = async (req, res) => {
+  const b = req.body || {};
+  const out = await inTxn(res, (c) => svc.updateRepairRequestDetails(c, {
+    dcNumber: req.params.dcNumber,
+    rentStopDate: b.rent_stop_date !== undefined ? b.rent_stop_date : undefined,
+    itemIssueTypes: b.item_issue_types || {},
+    itemRemarks: b.item_remarks || {},
+  }));
+  if (out !== undefined) res.json({ success: true, message: 'Saved', ...out });
+};
+
+exports.startReplacementCheck = async (req, res) => {
+  const out = await inTxn(res, (c) => rentSvc.startReplacementCheck(c, {
+    dcNumber: req.params.dcNumber, itemId: req.body?.item_id, actorUserId: req.user.user_id,
+  }));
+  if (out !== undefined) res.json({ success: true, message: `Run the check on the replacement with access number ${out.access_number}`, ...out });
+};
+
+exports.decideReplacement = async (req, res) => {
+  const approve = req.body?.approve === true;
+  const out = await inTxn(res, (c) => rentSvc.decideReplacement(c, {
+    dcNumber: req.params.dcNumber, itemId: req.body?.item_id, approve, note: req.body?.note, user: req.user,
+  }));
+  if (out !== undefined) {
+    res.json({
+      success: true,
+      message: approve ? 'Approved — the warehouse can now receive it as the replacement' : 'Not accepted — the vendor has been mailed',
+      ...out,
+    });
+  }
+};
+
+exports.listReplacementApprovals = async (req, res) => {
+  try {
+    res.json({ success: true, data: await rentSvc.listPendingApprovals(), can_decide: rentSvc.canApproveReplacement(req.user) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.previewVendorKept = async (req, res) => {
+  try {
+    res.json({ success: true, preview: await rentSvc.previewVendorKept(req.params.dcNumber, req.body?.item_id, req.body?.reason) });
+  } catch (err) {
+    res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+};
+
+exports.markVendorKept = async (req, res) => {
+  const out = await inTxn(res, (c) => rentSvc.markVendorKept(c, {
+    dcNumber: req.params.dcNumber, itemId: req.body?.item_id, reason: req.body?.reason,
+    actorUserId: req.user.user_id, actorName: req.user.name || req.user.email,
+  }));
+  if (out !== undefined) res.json({ success: true, message: 'Mailed the vendor and recorded the laptop as returned to them', ...out });
+};
+
+exports.requireReplacementApprover = (req, res, next) => {
+  if (rentSvc.canApproveReplacement(req.user)) return next();
+  return res.status(403).json({ success: false, message: 'Only Accounts or the named approver can decide a replacement' });
+};
+
+exports.vendorRentalSummary = async (req, res) => {
+  try {
+    const { vendorRentalSummary } = require('../services/vendorRentalAssetsService');
+    res.json({ success: true, data: await vendorRentalSummary({ vendorId: req.query.vendor_id }) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.vendorRentalLaptops = async (req, res) => {
+  try {
+    const { vendorRentalLaptops } = require('../services/vendorRentalAssetsService');
+    res.json({
+      success: true,
+      data: await vendorRentalLaptops({
+        vendorId: req.query.vendor_id,
+        bucket: req.query.bucket,
+        replacementsOnly: req.query.replacements === '1' || req.query.replacements === 'true',
+        search: req.query.search,
+        limit: req.query.limit,
+      }),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

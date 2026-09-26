@@ -44,7 +44,7 @@ async function buildVendorBillHtml(bill, company) {
       <td>${escapeHtml(line.serial_number || '—')}</td>
       <td>${escapeHtml(fmtDate(line.received_date || line.rent_start))}</td>
       <td>${escapeHtml(line.return_date || line.rent_end ? fmtDate(line.return_date || line.rent_end) : '—')}</td>
-      <td class="num">${escapeHtml(String(line.days_in_month ?? '—'))}</td>
+      <td class="num">${escapeHtml(String(line.days_in_month ?? '—'))}${Number(line.paused_days) > 0 ? `<br/><span style="font-size:10px;color:#9a3412">${escapeHtml(String(line.paused_days))} day(s) at vendor for repair — not billed</span>` : ''}</td>
       <td class="num">${fmtMoneyInr(line.monthly_rate)}</td>
       <td class="num">${fmtMoneyInr(line.amount)}</td>
     </tr>`).join('');

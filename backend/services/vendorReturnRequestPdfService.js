@@ -176,4 +176,104 @@ async function generateReturnRequestPdf({ ticket, items, vendor, stopDate, picku
   return rel;
 }
 
-module.exports = { generateReturnRequestPdf };
+/**
+ * Repair request PDF — attached to the repair mail (claude/carret-vendor-repair.md):
+ * vendor, us, rent stop (for laptops rented from this vendor), and each laptop
+ * with its issue and remarks.
+ */
+async function generateRepairRequestPdf({ dc, items, vendor, stopDate, pausedCount }) {
+  const { issueLabel } = require('./vendorRepairMail');
+  const company = await loadCompany();
+  const dir = path.join(__dirname, '../uploads/vendor-repair-requests');
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(dc.dc_number).replace(/[^\w-]+/g, '_');
+  const rel = `vendor-repair-requests/${safe}.pdf`;
+  const abs = path.join(__dirname, '../uploads', rel);
+
+  await new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const stream = fs.createWriteStream(abs);
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+    doc.pipe(stream);
+
+    let y = drawCompanyHeader(doc, company, {
+      docTitle: 'Laptop Repair Request',
+      docNumber: dc.dc_number,
+      rightLabel: 'Repair challan',
+      rightValue: dc.dc_number,
+    });
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub)
+      .text(`Date: ${prettyDate(new Date())}`, L, y)
+      .text(`Laptops: ${items.length}`, 300, y);
+    y += 18;
+
+    if (pausedCount > 0) {
+      doc.rect(L, y, W, 34).fill(C.warm);
+      doc.rect(L, y, 4, 34).fill(C.warmLine);
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink)
+        .text(`Rent stopped from ${prettyDate(stopDate)} while with you for repair`, L + 12, y + 6, { width: W - 20 });
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+        .text('Rent starts again from the day each laptop (or its replacement) reaches our gate.', L + 12, y + 20, { width: W - 20 });
+      y += 44;
+    }
+
+    const colW = (W - 12) / 2;
+    const top = y;
+    const vendorLines = String(formatVendorBillingFromRow(vendor) || dc.vendor_name || '').split('\n');
+    const contact = [vendor?.contact_person_name, vendor?.contact_person_phone || vendor?.phone].filter(Boolean).join(' · ');
+    const leftEnd = box(doc, L, top, colW, 'Repair vendor', [...vendorLines, contact ? `Contact: ${contact}` : null, vendor?.email ? `Email: ${vendor.email}` : null]);
+    const rightEnd = box(doc, L + colW + 12, top, colW, 'From', [company.legal_name, company.address, company.gstin ? `GSTIN: ${company.gstin}` : null, company.email ? `Email: ${company.email}` : null]);
+    const bottom = Math.max(leftEnd, rightEnd);
+    doc.roundedRect(L, top, colW, bottom - top, 5).strokeColor(C.line).lineWidth(1).stroke();
+    doc.roundedRect(L + colW + 12, top, colW, bottom - top, 5).strokeColor(C.line).lineWidth(1).stroke();
+    y = bottom + 12;
+    if (dc.expected_return_date) {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('Return by', L, y);
+      doc.font('Helvetica').fontSize(9).text(prettyDate(dc.expected_return_date), L + 70, y);
+      y = doc.y + 8;
+    }
+
+    const cols = [
+      { label: '#', w: 20, align: 'right' },
+      { label: 'TTSPL ID', w: 66 },
+      { label: 'Serial no.', w: 74 },
+      { label: 'Configuration', w: 130 },
+      { label: 'Issue', w: 90 },
+      { label: 'Remarks', w: W - 380 },
+    ];
+    const header = (yy) => {
+      doc.rect(L, yy, W, 20).fill(C.teal);
+      let cx = L;
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7.5);
+      for (const c of cols) { doc.text(c.label, cx + 3, yy + 6, { width: c.w - 6, align: c.align || 'left' }); cx += c.w; }
+      return yy + 20;
+    };
+    doc.font('Helvetica-Bold').fontSize(10.5).fillColor(C.ink).text('Laptops sent for repair', L, y);
+    y = header(y + 14);
+    items.forEach((it, i) => {
+      const values = [String(i + 1), it.ttspl_id || '—', it.serial_number || '—', it.configuration || '—', issueLabel(it.issue_type) || '—', it.item_remarks || '—'];
+      doc.font('Helvetica').fontSize(7.5);
+      const h = Math.max(22, 10 + Math.max(...values.map((v, k) => doc.heightOfString(v, { width: cols[k].w - 6 }))));
+      if (y + h > 770) { doc.addPage(); y = header(40); }
+      let cx = L;
+      values.forEach((v, k) => {
+        doc.rect(cx, y, cols[k].w, h).strokeColor(C.line).lineWidth(0.6).stroke();
+        doc.font(k === 1 ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5).fillColor(C.ink)
+          .text(v, cx + 3, y + 5, { width: cols[k].w - 6, align: cols[k].align || 'left' });
+        cx += cols[k].w;
+      });
+      y += h;
+    });
+    y += 12;
+    if (y > 700) { doc.addPage(); y = 40; }
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+      .text('A replacement of a different model or configuration needs our approval before it is accepted.', L, y, { width: W });
+    doc.font('Helvetica').fontSize(9).text('Thanks and Regards,', L, doc.y + 10);
+    doc.font('Helvetica-Bold').text(SIGN_OFF, L, doc.y + 2);
+    doc.end();
+  });
+  return rel;
+}
+
+module.exports = { generateReturnRequestPdf, generateRepairRequestPdf };

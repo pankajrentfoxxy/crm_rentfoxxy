@@ -111,7 +111,11 @@ async function verifyConfiguration(req, res) {
       });
     }
     return res.json({
-      success: result.configurationMatched,
+      // A replacement check always goes on to read the serial: a mismatch is
+      // recorded for approval, not something to fix and re-run.
+      success: result.mode === 'replacement' ? true : result.configurationMatched,
+      mode: result.mode || 'repaired',
+      message: result.message || undefined,
       configurationMatched: result.configurationMatched,
       checks: result.checks,
       errors: result.errors,

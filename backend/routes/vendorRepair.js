@@ -62,6 +62,23 @@ router.post(...vrdcRoute('/cancel', ctrl.requireVendorRepairDispatch, ctrl.cance
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));
 router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.sendAccountsVrdcEwayMail));
 router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, wrapMulter(uploadVrdcEwayDoc.single('eway_bill_pdf')), ctrl.uploadVrdcEway));
+// Repair request, rent pause, replacement, vendor keeps it (claude/carret-vendor-repair.md)
+// Accounts / the named approver may not hold the repair sections — they still see what waits for them.
+const approverOrRepairView = (req, res, next) => (
+  require('../services/vendorRepairRentService').canApproveReplacement(req.user) ? next() : vendorRepairView(req, res, next)
+);
+router.get('/replacement-approvals', approverOrRepairView, ctrl.listReplacementApprovals);
+const rentalAssetsView = checkAnySectionPermission(['vendor_management', 'vendor_billing_mgmt', 'vendor_repair_dc'], 'view');
+router.get('/rental-assets', rentalAssetsView, ctrl.vendorRentalSummary);
+router.get('/rental-assets/laptops', rentalAssetsView, ctrl.vendorRentalLaptops);
+router.get(...vrdcRoute('/repair-mail/preview', vendorRepairView, ctrl.previewRepairMail));
+router.post(...vrdcRoute('/repair-mail', ctrl.requireVendorRepairDispatch, ctrl.sendRepairMail));
+router.get(...vrdcRoute('/repair-request-pdf', vendorRepairView, ctrl.downloadRepairRequestPdf));
+router.patch(...vrdcRoute('/request-details', ctrl.requireVendorRepairDispatch, ctrl.updateRequestDetails));
+router.post(...vrdcRoute('/replacement-check', ctrl.requireWarehouse, ctrl.startReplacementCheck));
+router.post(...vrdcRoute('/replacement-decision', ctrl.requireReplacementApprover, ctrl.decideReplacement));
+router.post(...vrdcRoute('/vendor-kept/preview', ctrl.requireWarehouse, ctrl.previewVendorKept));
+router.post(...vrdcRoute('/vendor-kept', ctrl.requireWarehouse, ctrl.markVendorKept));
 router.get(...vrdcRoute('', vendorRepairView, ctrl.getVendorRepairDc));
 
 router.post('/inventory/erp/:serialId/receive-back', ctrl.requireWarehouse, ctrl.receiveErpRepairBack);

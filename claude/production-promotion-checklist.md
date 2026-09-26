@@ -162,8 +162,9 @@ Command for each group — dry run first, then the same with `--commit`:
 | ☐ | `340_laptop_config_confirmations.sql` | new insert-only table | Production (this work) |
 | ☐ | `341_final_testing_item_label.sql` | one checklist label | Production (this work) |
 | ☐ | `342_vendor_return_request.sql` | return request dates/pickup/PDF/cancel columns; challan porter + in-house person, auto e-way mail record | Vendor return request (D10) — additive only |
+| ☐ | `343_vendor_repair_rent_pause.sql` | `vendor_rent_pauses`; repair challan rent stop / vendor mail / transport person / auto e-way columns; item issue type, replacement check + approval, vendor kept; capture token `mode` | Vendor repair (additive only) |
 
-All of 327–342 were applied to QA this way on 26 Sep. They add columns/tables/rows; the files
+All of 327–343 were applied to QA this way on 26 Sep. Set `VENDOR_REPLACEMENT_APPROVERS` on live only if the approver list should differ from pankkajyadav@rentfoxxy.com (plus the accounts role). They add columns/tables/rows; the files
 that also UPDATE existing rows are 334, 335, 336 (Procure-to-stock status backfills) and 341
 (one checklist label) — read their dry-run output before `--commit`.
 

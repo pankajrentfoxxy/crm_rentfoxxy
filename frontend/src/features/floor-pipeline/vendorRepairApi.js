@@ -138,3 +138,55 @@ export async function exportOutForRepairPdf(params) {
   });
   downloadBlobResponse(response, 'out_for_repair_inventory.pdf');
 }
+
+/* ---- Repair request, rent pause, replacement, vendor keeps it (claude/carret-vendor-repair.md) ---- */
+const dcPath = (dcNumber, suffix) => `${base}/dc/${encodeURIComponent(dcNumber)}${suffix}`;
+
+export function fetchRepairMailPreview(dcNumber) {
+  return api.get(dcPath(dcNumber, '/repair-mail/preview'));
+}
+
+export function sendRepairMail(dcNumber) {
+  return api.post(dcPath(dcNumber, '/repair-mail'));
+}
+
+export async function downloadRepairRequestPdf(dcNumber) {
+  try {
+    const response = await api.get(dcPath(dcNumber, '/repair-request-pdf'), { responseType: 'blob' });
+    downloadBlobResponse(response, `Repair_request_${String(dcNumber).replace(/[^\w-]+/g, '_')}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
+export function updateRepairRequestDetails(dcNumber, body) {
+  return api.patch(dcPath(dcNumber, '/request-details'), body);
+}
+
+export function startReplacementCheck(dcNumber, itemId) {
+  return api.post(dcPath(dcNumber, '/replacement-check'), { item_id: itemId });
+}
+
+export function decideReplacement(dcNumber, body) {
+  return api.post(dcPath(dcNumber, '/replacement-decision'), body);
+}
+
+export function previewVendorKept(dcNumber, body) {
+  return api.post(dcPath(dcNumber, '/vendor-kept/preview'), body);
+}
+
+export function markVendorKept(dcNumber, body) {
+  return api.post(dcPath(dcNumber, '/vendor-kept'), body);
+}
+
+export function fetchReplacementApprovals() {
+  return api.get(`${base}/replacement-approvals`);
+}
+
+export function fetchVendorRentalSummary(params) {
+  return api.get(`${base}/rental-assets`, { params });
+}
+
+export function fetchVendorRentalLaptops(params) {
+  return api.get(`${base}/rental-assets/laptops`, { params });
+}

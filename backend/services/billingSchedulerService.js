@@ -3557,6 +3557,26 @@ async function generateVendorBill(vendorId, month, year) {
     const lineItems = [];
     let subtotal = 0;
 
+    // Vendor repair (claude/carret-vendor-repair.md): days a laptop was with
+    // the vendor with rent stopped are not billed. A cancelled pause never
+    // happened; `to` is the day before rent resumed (the resume day is billed).
+    const pauseRes = await client.query(
+      `SELECT serial_id, paused_from, resumed_on
+         FROM vendor_rent_pauses
+        WHERE serial_id = ANY($1::int[])
+          AND COALESCE(closed_reason, '') <> 'cancelled'
+          AND paused_from <= $2::date
+          AND (resumed_on IS NULL OR resumed_on > $3::date)`,
+      [serialsRes.rows.map((r) => r.serial_id), toLocalYmd(monthEnd), toLocalYmd(monthStart)]
+    );
+    const pausesBySerial = new Map();
+    for (const p of pauseRes.rows) {
+      const list = pausesBySerial.get(p.serial_id) || [];
+      const to = p.resumed_on ? new Date(new Date(p.resumed_on).getFullYear(), new Date(p.resumed_on).getMonth(), new Date(p.resumed_on).getDate() - 1) : null;
+      list.push({ from: p.paused_from, to });
+      pausesBySerial.set(p.serial_id, list);
+    }
+
     for (const row of serialsRes.rows) {
       // BL3, vendor side. calcVendorLineAmount now returns null for a
       // non-positive rate as well as for a serial outside the month, so name the
@@ -3579,6 +3599,7 @@ async function generateVendorBill(vendorId, month, year) {
         monthStart,
         monthEnd,
         monthlyRate: row.rental_monthly_rate,
+        pauses: pausesBySerial.get(row.serial_id) || [],
       });
       if (!calc) continue;
 
@@ -3593,6 +3614,7 @@ async function generateVendorBill(vendorId, month, year) {
         rent_end: toLocalYmd(calc.effectiveEnd),
         is_returned: Boolean(row.returned_at),
         days_in_month: calc.days,
+        paused_days: calc.pausedDays || 0,
         monthly_rate: calc.monthlyRate,
         daily_rate: calc.dailyRate,
         amount: calc.amount,

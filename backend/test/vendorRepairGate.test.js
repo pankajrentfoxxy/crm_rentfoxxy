@@ -122,6 +122,9 @@ describe('vendorRepairGate', { concurrency: 1 }, () => {
         itemVerifications: {
           [laptop.ticketId]: { ttspl: laptop.ttspl, serial: laptop.serialNumber },
         },
+        // Required per laptop since the repair-request change (carret-vendor-repair.md).
+        itemIssueTypes: { [laptop.ticketId]: 'motherboard' },
+        itemRemarks: { [laptop.ticketId]: 'Gate test laptop' },
         ship_by: shipBy,
         courier_name: 'Test Courier',
         awb_number: `AWB${laptop.ticketId}GATE`,

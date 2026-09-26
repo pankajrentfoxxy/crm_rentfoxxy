@@ -10,7 +10,8 @@ import VendorSearchSelect from '../../vendor-management/components/VendorSearchS
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
 import { fetchDiagnosisFailedTickets, createOutForRepairDc, fetchVendorRepairCompanyDefaults } from '../vendorRepairApi';
 import { DEFAULT_BILLING_ADDRESS, formatVendorBillingFromVendor, formatVendorShippingFromVendor } from '../vendorRepairUi';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
+import { REPAIR_ISSUE_TYPES, todayIst, addDaysYmd } from '../repairIssueTypes';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
@@ -51,6 +52,8 @@ export default function DiagnosisFailedPage() {
   const [shipBy, setShipBy] = useState('');
   const [dispatchFields, setDispatchFields] = useState({});
   const [itemRemarks, setItemRemarks] = useState({});
+  const [itemIssueTypes, setItemIssueTypes] = useState({});
+  const [rentStopDate, setRentStopDate] = useState('');
   const [itemPrices, setItemPrices] = useState({});
   const [itemHsnCodes, setItemHsnCodes] = useState({});
   const [itemVerifications, setItemVerifications] = useState({});
@@ -131,16 +134,21 @@ export default function DiagnosisFailedPage() {
 
   const openModal = () => {
     const remarksInit = {};
+    const issuesInit = {};
     const pricesInit = {};
     const hsnInit = {};
     const verifyInit = {};
     selectedRows.forEach((r) => {
       remarksInit[r.ticket_id] = r.diagnosis_failed_reason || '';
-      pricesInit[r.ticket_id] = '';
+      issuesInit[r.ticket_id] = '';
+      // Declared value from the PO line (asset / purchase price) — editable.
+      pricesInit[r.ticket_id] = r.suggested_value != null ? String(r.suggested_value) : '';
       hsnInit[r.ticket_id] = defaultHsn;
       verifyInit[r.ticket_id] = { ttspl: '', serial: '' };
     });
     setItemRemarks(remarksInit);
+    setItemIssueTypes(issuesInit);
+    setRentStopDate(todayIst());
     setItemPrices(pricesInit);
     setItemHsnCodes(hsnInit);
     setItemVerifications(verifyInit);
@@ -155,7 +163,12 @@ export default function DiagnosisFailedPage() {
     }, 0),
     [selectedRows, itemPrices]
   );
-  const ewayInfoRequired = totalDeclaredValue > ewayThreshold;
+  const ewayInfoRequired = totalDeclaredValue >= ewayThreshold;
+  // Laptops rented from the chosen repair vendor: their rent stops while away.
+  const rentedHere = useMemo(
+    () => selectedRows.filter((r) => r.is_vendor_rented && form.vendor_id && String(r.rent_vendor_id) === String(form.vendor_id)),
+    [selectedRows, form.vendor_id]
+  );
 
   const onVendorChange = async (vendorId) => {
     if (!vendorId) {
@@ -195,10 +208,26 @@ export default function DiagnosisFailedPage() {
       toast.error('Vendor billing and shipping addresses are required');
       return;
     }
-    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    const dispatchErr = validateVrtdcTransport(shipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
       return;
+    }
+    if (rentedHere.length) {
+      const today = todayIst();
+      if (!rentStopDate) { toast.error('Set the date rent stops'); return; }
+      if (rentStopDate < today) { toast.error('Rent stop date can’t be in the past'); return; }
+      if (rentStopDate > addDaysYmd(today, 30)) { toast.error('Rent stop date can be at most 30 days ahead'); return; }
+    }
+    for (const r of selectedRows) {
+      if (!itemIssueTypes[r.ticket_id]) {
+        toast.error(`Choose the issue type for ${r.ttspl_id || `#${r.ticket_id}`}`);
+        return;
+      }
+      if (String(itemRemarks[r.ticket_id] || '').trim().length < 3) {
+        toast.error(`Write the remarks for ${r.ttspl_id || `#${r.ticket_id}`}`);
+        return;
+      }
     }
     for (const r of selectedRows) {
       const hsn = String(itemHsnCodes[r.ticket_id] || '').trim();
@@ -242,6 +271,8 @@ export default function DiagnosisFailedPage() {
         warehouse_name: form.warehouse_name.trim() || undefined,
         warehouse_address: DEFAULT_BILLING_ADDRESS,
         item_remarks: itemRemarks,
+        item_issue_types: itemIssueTypes,
+        rent_stop_date: rentedHere.length ? rentStopDate : undefined,
         item_prices: itemPrices,
         item_hsn_codes: canOverrideHsn ? itemHsnCodes : undefined,
         item_verifications: itemVerifications,
@@ -256,6 +287,9 @@ export default function DiagnosisFailedPage() {
         vehicle_number: dispatchFields.vehicle_number || undefined,
         vendor_pickup_person: dispatchFields.vendor_pickup_person,
         vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile,
+        porter_person_name: dispatchFields.porter_person_name,
+        porter_person_phone: dispatchFields.porter_person_phone,
+        delivery_person_phone: dispatchFields.delivery_person_phone,
       });
       toast.success(data.message || (data.eway_required
         ? 'VRDC created — E-way Bill required before PDF download'
@@ -475,12 +509,22 @@ export default function DiagnosisFailedPage() {
             <p className="text-[11px] text-slate-500">
               Declared value: ₹{totalDeclaredValue.toLocaleString('en-IN')}
               {ewayInfoRequired
-                ? ` — E-way Bill will be required before PDF download (above ₹${ewayThreshold.toLocaleString('en-IN')})`
-                : ` — E-way Bill not required at or below ₹${ewayThreshold.toLocaleString('en-IN')}`}
+                ? ` — ₹${ewayThreshold.toLocaleString('en-IN')} or more: Accounts is mailed for the E-way Bill when you sign it for dispatch; it can't leave the gate without it`
+                : ` — E-way Bill not needed below ₹${ewayThreshold.toLocaleString('en-IN')}`}
             </p>
+            {rentedHere.length > 0 ? (
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+                <label className="block text-xs font-semibold text-orange-900 mb-1">Rent stops from *</label>
+                <input type="date" min={todayIst()} max={addDaysYmd(todayIst(), 30)} className="border rounded-lg px-3 py-2 text-sm" value={rentStopDate} onChange={(e) => setRentStopDate(e.target.value)} />
+                <p className="text-[11px] text-orange-900 mt-1">
+                  {rentedHere.length} of these laptops are rented from this vendor. Their rent stops from this date once you mail the vendor
+                  (next step, on the challan) and starts again the day each one is back at our gate.
+                </p>
+              </div>
+            ) : null}
             <div className="rounded-lg border p-3 bg-slate-50/80">
               <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Send to vendor</p>
-              <VrdcDispatchFields
+              <VrtdcTransportFields
                 shipBy={shipBy}
                 onShipByChange={setShipBy}
                 fields={dispatchFields}
@@ -494,14 +538,31 @@ export default function DiagnosisFailedPage() {
             </div>
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                Per-laptop verify TTSPL + Serial / Price / HSN / remarks
+                Per laptop: verify TTSPL + serial · issue · remarks · declared value · HSN
               </div>
               <div className="divide-y max-h-72 overflow-y-auto">
                 {selectedRows.map((r) => (
                   <div key={r.ticket_id} className="p-3 space-y-2">
                     <p className="text-xs font-mono text-slate-700">
                       Expected: {r.ttspl_id || '—'} · SN {r.serial_number || '—'} · #{r.ticket_id}
+                      {r.is_vendor_rented ? (
+                        <span className={`ml-2 font-sans ${form.vendor_id && String(r.rent_vendor_id) === String(form.vendor_id) ? 'text-orange-700' : 'text-slate-500'}`}>
+                          · rented from {r.rent_vendor_name || 'a vendor'}
+                          {form.vendor_id && String(r.rent_vendor_id) !== String(form.vendor_id) ? ' (rent continues — different vendor)' : ''}
+                        </span>
+                      ) : null}
                     </p>
+                    <div>
+                      <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Issue *</label>
+                      <select
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs"
+                        value={itemIssueTypes[r.ticket_id] || ''}
+                        onChange={(e) => setItemIssueTypes((m) => ({ ...m, [r.ticket_id]: e.target.value }))}
+                      >
+                        <option value="">Choose…</option>
+                        {REPAIR_ISSUE_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Verify TTSPL *</label>
@@ -542,6 +603,7 @@ export default function DiagnosisFailedPage() {
                           onChange={(e) => setItemPrices((m) => ({ ...m, [r.ticket_id]: e.target.value }))}
                           placeholder="Declared value"
                         />
+                        {r.suggested_value != null ? <p className="text-[10px] text-slate-500 mt-0.5">From the PO: ₹{Number(r.suggested_value).toLocaleString('en-IN')}</p> : null}
                       </div>
                       <div>
                         <label className="block text-[10px] font-medium text-slate-500 mb-0.5">
@@ -562,7 +624,7 @@ export default function DiagnosisFailedPage() {
                       rows={2}
                       value={itemRemarks[r.ticket_id] || ''}
                       onChange={(e) => setItemRemarks((m) => ({ ...m, [r.ticket_id]: e.target.value }))}
-                      placeholder="Repair notes for this laptop"
+                      placeholder="Remarks for the vendor (required)"
                     />
                   </div>
                 ))}

@@ -150,8 +150,33 @@ function calcRepairWindowCreditAmount({ rentMonthlyRate, warehouseReceivedAt, di
   };
 }
 
-/** Vendor bill line pro-rata for one serial in a calendar month. */
-function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, monthlyRate }) {
+/**
+ * Days of [start, end] (inclusive) covered by rent pauses. A pause is
+ * { from, to } — `from` is the first unbilled day, `to` the last unbilled day
+ * (the day before rent resumed), or null while still paused. Overlapping
+ * pauses are not double-counted.
+ */
+function pausedDaysInRange(pauses, start, end) {
+  if (!Array.isArray(pauses) || !pauses.length) return 0;
+  const toDay = (d) => Math.round(new Date(d.getFullYear(), d.getMonth(), d.getDate()) / MS_PER_DAY);
+  const s = toDay(start);
+  const e = toDay(end);
+  const paused = new Set();
+  for (const p of pauses) {
+    if (!p || !p.from) continue;
+    const from = toDay(new Date(p.from));
+    const to = p.to ? toDay(new Date(p.to)) : e;
+    for (let d = Math.max(from, s); d <= Math.min(to, e); d += 1) paused.add(d);
+  }
+  return paused.size;
+}
+
+/**
+ * Vendor bill line pro-rata for one serial in a calendar month. `pauses`
+ * (vendor repair, claude/carret-vendor-repair.md) are days the laptop was with
+ * the vendor and rent was stopped; they are taken out of the billed days.
+ */
+function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, monthlyRate, pauses = [] }) {
   const received = new Date(receivedAt);
   const returned = returnedAt ? new Date(returnedAt) : null;
   const effectiveStart = received > monthStart ? received : monthStart;
@@ -159,7 +184,10 @@ function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, mo
   if (effectiveStart > effectiveEnd) return null;
 
   const daysInMonth = monthEnd.getDate();
-  const days = Math.max(1, Math.round((effectiveEnd - effectiveStart) / MS_PER_DAY) + 1);
+  const spanDays = Math.max(1, Math.round((effectiveEnd - effectiveStart) / MS_PER_DAY) + 1);
+  const pausedDays = pausedDaysInRange(pauses, effectiveStart, effectiveEnd);
+  const days = spanDays - pausedDays;
+  if (days <= 0) return null;
   const rate = parseFloat(monthlyRate || 0);
 
   // BL3, vendor side. `parseFloat(monthlyRate || 0)` produced a Rs 0 line
@@ -176,6 +204,7 @@ function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, mo
 
   return {
     days,
+    pausedDays,
     amount,
     dailyRate: parseFloat(dailyRate.toFixed(2)),
     monthlyRate: rate,
@@ -194,6 +223,7 @@ module.exports = {
   calcReturnCreditNoteAmount,
   calcRepairWindowCreditAmount,
   calcVendorLineAmount,
+  pausedDaysInRange,
   FREQUENCY_MONTHS,
   normalizeBillingFrequency,
   billingPeriodEnd,
