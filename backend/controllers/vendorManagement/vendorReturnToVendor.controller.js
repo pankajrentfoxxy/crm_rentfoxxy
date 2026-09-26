@@ -315,21 +315,24 @@ exports.setItemValues = async (req, res) => {
   try {
     requireWarehouseRole(req.user?.role);
     const dcNumber = req.params.dcNumber;
+    // Checked under the row lock, inside the transaction (it was read before
+    // BEGIN, so the DC could leave draft between the check and the write).
+    await client.query('BEGIN');
     const head = await client.query(
-      `SELECT status FROM vendor_return_delivery_challans WHERE dc_number = $1`,
+      `SELECT status FROM vendor_return_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
       [dcNumber]
     );
     if (!head.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Return DC not found' });
     }
     if (head.rows[0].status !== 'draft') {
+      await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
         message: `Values can only be changed while the DC is a draft — this one is ${head.rows[0].status}`,
       });
     }
-
-    await client.query('BEGIN');
 
     const applyToAll = req.body.apply_to_all;
     if (applyToAll !== undefined && applyToAll !== null && applyToAll !== '') {

@@ -495,82 +495,77 @@ async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
   if (!live.length) throw new Error('No live laptops on this ticket');
 
   const { html, text, subject } = buildNotifyBodies(head, live);
-  let ok = false;
-  try {
-    ok = await sendDispatchMail({
-      to: email,
-      cc: RETURN_NOTIFY_CC || undefined,
-      subject,
-      text,
-      html,
+
+  // Database first, email last, all in the caller's transaction: if the email
+  // fails, everything rolls back and the vendor was told nothing; the vendor
+  // is only told rent stopped once our records say so. (It used to send the
+  // email first, and record failures through the pool on the row this
+  // transaction had locked — which hung the request until timeout.)
+  await client.query(
+    `UPDATE vendor_return_tickets
+        SET vendor_notified_at = NOW(), vendor_notified_by = $2,
+            status = 'notified', notify_error = NULL, updated_at = NOW()
+      WHERE ticket_number = $1`,
+    [ticketNumber, actorUserId || null]
+  );
+  await client.query(
+    `UPDATE vendor_return_ticket_items
+        SET item_status = 'rental_stopped', rental_stopped_at = NOW()
+      WHERE ticket_number = $1 AND item_status = 'requested'`,
+    [ticketNumber]
+  );
+  await client.query(
+    `UPDATE vendor_serial_numbers vsn
+        SET vendor_rent_end_date = COALESCE(vsn.vendor_rent_end_date, CURRENT_DATE),
+            updated_at = NOW()
+       FROM vendor_return_ticket_items i
+      WHERE i.serial_id = vsn.serial_id AND i.ticket_number = $1
+        AND i.item_status <> 'cancelled'`,
+    [ticketNumber]
+  );
+  await persistDerivedStatus(client, ticketNumber);
+
+  for (const item of live) {
+    await logTtsplEvent({
+      db: client,
+      vendorSerialId: item.serial_id,
+      ttsplId: item.ttspl_id,
+      eventType: 'vendor_return_rental_stopped',
+      description: `Vendor notified — rental stopped on ${ticketNumber}`,
+      metadata: { ticket_number: ticketNumber },
+      actorUserId,
+      actorName,
     });
+  }
+
+  let ok = false;
+  let mailError = null;
+  try {
+    ok = await sendDispatchMail({ to: email, cc: RETURN_NOTIFY_CC || undefined, subject, text, html });
   } catch (err) {
-    await writeNotifyError(ticketNumber, err.message || String(err));
-    const fail = new Error('Vendor notification email could not be sent.');
-    fail.status = 503;
-    throw fail;
+    mailError = err.message || String(err);
   }
   if (!ok) {
-    await writeNotifyError(ticketNumber, 'sendDispatchMail returned false');
-    const fail = new Error('Vendor notification email could not be sent.');
+    const fail = new Error('Vendor notification email could not be sent. Nothing was changed.');
     fail.status = 503;
+    // Written by the caller AFTER its rollback, when the row is unlocked.
+    fail.notifyError = mailError || 'sendDispatchMail returned false';
+    fail.ticketNumber = ticketNumber;
     throw fail;
   }
 
-  try {
-    await client.query(
-      `UPDATE vendor_return_tickets
-          SET vendor_notified_at = NOW(), vendor_notified_by = $2,
-              status = 'notified', notify_error = NULL, updated_at = NOW()
-        WHERE ticket_number = $1`,
-      [ticketNumber, actorUserId || null]
-    );
-    await client.query(
-      `UPDATE vendor_return_ticket_items
-          SET item_status = 'rental_stopped', rental_stopped_at = NOW()
-        WHERE ticket_number = $1 AND item_status = 'requested'`,
-      [ticketNumber]
-    );
-    await client.query(
-      `UPDATE vendor_serial_numbers vsn
-          SET vendor_rent_end_date = COALESCE(vsn.vendor_rent_end_date, CURRENT_DATE),
-              updated_at = NOW()
-         FROM vendor_return_ticket_items i
-        WHERE i.serial_id = vsn.serial_id AND i.ticket_number = $1
-          AND i.item_status <> 'cancelled'`,
-      [ticketNumber]
-    );
-    await persistDerivedStatus(client, ticketNumber);
-
-    for (const item of live) {
-      await logTtsplEvent({
-        db: client,
-        vendorSerialId: item.serial_id,
-        ttsplId: item.ttspl_id,
-        eventType: 'vendor_return_rental_stopped',
-        description: `Vendor notified — rental stopped on ${ticketNumber}`,
-        metadata: { ticket_number: ticketNumber },
-        actorUserId,
-        actorName,
-      });
-    }
-
-    await logVendorAudit({
-      actorUserId,
-      vendorId: head.vendor_id,
-      entityType: 'vendor_return_ticket',
-      entityId: ticketNumber,
-      action: 'vendor_notified',
-      payload: {
-        serial_ids: live.map((i) => i.serial_id),
-        stopped_on: new Date().toISOString().slice(0, 10),
-        email,
-      },
-    });
-  } catch (err) {
-    await writeNotifyError(ticketNumber, `email sent, rent stop failed: ${err.message}`);
-    throw err;
-  }
+  await logVendorAudit({
+    actorUserId,
+    vendorId: head.vendor_id,
+    entityType: 'vendor_return_ticket',
+    entityId: ticketNumber,
+    action: 'vendor_notified',
+    payload: {
+      serial_ids: live.map((i) => i.serial_id),
+      stopped_on: new Date().toISOString().slice(0, 10),
+      email,
+    },
+  });
 
   return { already_notified: false, ticket: await getTicket(ticketNumber, client) };
 }
@@ -762,6 +757,7 @@ async function cancelTicket(client, { ticketNumber, reason, actorUserId, actorNa
 }
 
 module.exports = {
+  writeNotifyError,
   RENTAL_PO_TYPES,
   LIVE_ITEM_STATUSES,
   deriveTicketStatus,

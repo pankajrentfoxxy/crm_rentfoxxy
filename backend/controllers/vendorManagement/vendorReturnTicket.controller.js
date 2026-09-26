@@ -103,6 +103,10 @@ exports.notifyVendor = async (req, res) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
+    // Now that the row is unlocked, record why the email failed.
+    if (err.notifyError && err.ticketNumber) {
+      await svc.writeNotifyError(err.ticketNumber, err.notifyError).catch(() => {});
+    }
     handleError(res, err);
   } finally {
     client.release();

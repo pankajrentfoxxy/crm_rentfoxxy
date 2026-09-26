@@ -69,6 +69,9 @@ function requireWarehouseRole(role) {
 }
 
 async function nextVendorReturnDcNumber(client) {
+  // Serialised for the caller's transaction: plain MAX()+1 let two concurrent
+  // creates take the same VRTDC number (the second failed on the unique key).
+  await client.query('SELECT pg_advisory_xact_lock($1)', [840011]);
   const fy = currentFinancialYearLabel();
   const r = await client.query(
     `SELECT COALESCE(MAX((regexp_match(dc_number, '/([0-9]+)$'))[1]::int), 0) + 1 AS n
@@ -478,6 +481,22 @@ async function dispatchReturnDc(client, {
   const { saveDeclaredValues } = require('./vrtdcEwayComplianceService');
   await saveDeclaredValues(client, dcNumber, declared_values || declaredValues || {});
 
+  // Every laptop needs a value before it goes to the gate. A blank counted as
+  // Rs 0, so a DC with no values never needed an e-way bill and walked
+  // through the gate check.
+  const missing = await client.query(
+    `SELECT COALESCE(ttspl_id, serial_number) AS unit FROM vendor_return_dc_items
+      WHERE dc_number = $1 AND COALESCE(declared_value, 0) <= 0`,
+    [dcNumber]
+  );
+  if (missing.rows.length) {
+    const err = new Error(
+      `Enter the declared value for every laptop before sending to the gate (missing: ${missing.rows.map((r) => r.unit).join(', ')}).`
+    );
+    err.status = 400;
+    throw err;
+  }
+
   const dispatch = dispatchPayloadFromBody({
     ship_by: ship_by || shipBy,
     dispatch_mode,
@@ -696,6 +715,7 @@ async function cancelReturnDc(client, { dcNumber, actorUserId, actorName }) {
 }
 
 module.exports = {
+  nextVendorReturnDcNumber,
   WAREHOUSE_ROLES,
   INVENTORY_STATUS_FILTERS,
   actorFromReq,

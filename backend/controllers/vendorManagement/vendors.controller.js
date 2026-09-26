@@ -296,6 +296,7 @@ function createValidators() {
 }
 
 async function createVendor(req, res) {
+  let client = null;
   await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
@@ -321,9 +322,13 @@ async function createVendor(req, res) {
     const logo_url = saveUploadedFile(req.files?.logo?.[0]);
     const ext = pickExtendedVendorFields(req.body);
 
-    await pool.query('BEGIN');
+    // One connection for the whole transaction: BEGIN/COMMIT through the
+    // pool could land on different connections, so the rollback protected
+    // nothing and a BEGIN could leave a pooled connection mid-transaction.
+    client = await pool.connect();
+    await client.query('BEGIN');
 
-    const ins = await pool.query(
+    const ins = await client.query(
       `INSERT INTO vendors (
         status, first_name, last_name, business_name, email, phone, password_hash, vendor_portal_password_hash, address,
         business_type, registration_date, state, city, pincode,
@@ -383,18 +388,18 @@ async function createVendor(req, res) {
     const shopLogo = saveUploadedFile(req.files?.logo?.[0]);
     const shopBanner = saveUploadedFile(req.files?.banner?.[0]);
 
-    await pool.query(
+    await client.query(
       `INSERT INTO vendor_shops (vendor_id, name, address, contact, image_url, banner_url)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [v.vendor_id, req.body.business_name, req.body.address, req.body.number, shopLogo, shopBanner]
     );
 
-    await pool.query(
+    await client.query(
       `INSERT INTO vendor_wallets (vendor_id) VALUES ($1) ON CONFLICT (vendor_id) DO NOTHING`,
       [v.vendor_id]
     );
 
-    await pool.query('COMMIT');
+    await client.query('COMMIT');
 
     try {
       const { upsertCredential } = require('../../services/authCredentialsService');
@@ -420,9 +425,11 @@ async function createVendor(req, res) {
 
     res.status(201).json({ success: true, message: 'Vendor added successfully', data: normalizeVendorRow(v) });
   } catch (e) {
-    await pool.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error(e);
     res.status(500).json({ success: false, message: e.message || 'Create failed' });
+  } finally {
+    if (client) client.release();
   }
 }
 
@@ -675,14 +682,17 @@ async function deleteVendor(req, res) {
       .json({ success: false, error: "Vendor's shop details not found.", message: "Vendor's shop details not found." });
   }
 
-  await pool.query('BEGIN');
+  const client = await pool.connect();
   try {
-    await pool.query(`UPDATE vendor_shops SET deleted_at = NOW() WHERE vendor_id = $1`, [vendor_id]);
-    await pool.query(`UPDATE vendors SET deleted_at = NOW() WHERE vendor_id = $1`, [vendor_id]);
-    await pool.query('COMMIT');
+    await client.query('BEGIN');
+    await client.query(`UPDATE vendor_shops SET deleted_at = NOW() WHERE vendor_id = $1`, [vendor_id]);
+    await client.query(`UPDATE vendors SET deleted_at = NOW() WHERE vendor_id = $1`, [vendor_id]);
+    await client.query('COMMIT');
   } catch (e) {
-    await pool.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     throw e;
+  } finally {
+    client.release();
   }
 
   await logVendorAudit({
@@ -1140,20 +1150,32 @@ async function exportVendorLaptopsExcel(req, res) {
   }
 }
 
+
+/** Express 4 does not catch async errors: without this a DB error left the request hanging. */
+const withErrors = (name, fn) => async (req, res, next) => {
+  try {
+    return await fn(req, res, next);
+  } catch (err) {
+    console.error(`${name}:`, err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message || 'Server error' });
+    return undefined;
+  }
+};
+
 module.exports = {
   redactVendor,
   buildMulter,
   listValidators,
-  listVendors,
+  listVendors: withErrors('listVendors', listVendors),
   getValidators,
   getVendor,
   lookupValidators,
-  lookupVendor,
+  lookupVendor: withErrors('lookupVendor', lookupVendor),
   createValidators,
   createVendor,
   updateValidatorsFixed,
-  updateVendor,
-  deleteVendor,
+  updateVendor: withErrors('updateVendor', updateVendor),
+  deleteVendor: withErrors('deleteVendor', deleteVendor),
   loginAsVendor,
   portalAccessValidators,
   updatePortalAccess,

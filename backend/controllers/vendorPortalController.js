@@ -446,6 +446,23 @@ async function uploadPurchaseOrderInvoice(req, res) {
       });
     }
 
+    // The same vendor cannot use one invoice number on two POs (the portal
+    // skipped the check the CRM applies). Per vendor: two different vendors
+    // can legitimately both issue "INV-001".
+    const dup = await pool.query(
+      `SELECT purchase_order_number FROM vendor_purchase_orders
+        WHERE vendor_id = $1 AND po_id <> $2 AND deleted_at IS NULL
+          AND (LOWER(TRIM(vendor_invoice_number)) = LOWER($3) OR LOWER(TRIM(bill_name)) = LOWER($3))
+        LIMIT 1`,
+      [req.vendor.vendor_id, poId, invoice_number]
+    );
+    if (dup.rows.length) {
+      return res.status(409).json({
+        success: false,
+        message: `Invoice ${invoice_number} is already on purchase order ${dup.rows[0].purchase_order_number}.`,
+      });
+    }
+
     const relativePath = `/uploads/vendor-invoice-uploads/${poId}/${req.file.filename}`;
     const billFilesJson = JSON.stringify([relativePath]);
     await pool.query(

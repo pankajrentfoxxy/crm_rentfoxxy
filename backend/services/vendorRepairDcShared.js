@@ -246,6 +246,9 @@ function dispatchPayloadFromBody(body) {
 }
 
 async function nextVendorRepairDcNumber(client) {
+  // Serialised for the caller's transaction: plain MAX()+1 let two concurrent
+  // creates take the same VRDC number (the second failed on the unique key).
+  await client.query('SELECT pg_advisory_xact_lock($1)', [840012]);
   const fy = currentFinancialYearLabel();
   const r = await client.query(
     `SELECT COALESCE(MAX((regexp_match(dc_number, '/([0-9]+)$'))[1]::int), 0) + 1 AS n
