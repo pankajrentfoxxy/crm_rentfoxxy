@@ -162,6 +162,7 @@ export const SECTIONS = [
     items: [
       { group: 'Support desk', to: '/carret/serve/queue', label: 'Queue', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/tickets/new', label: 'New ticket', section: 'support_tickets', action: 'create' },
+      { group: 'Support desk', to: '/carret/serve/parts-desk', label: 'Parts desk', section: 'support_part_challan', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/insights', label: 'SLA & feedback', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/support/requests', label: 'Customer requests', section: 'support_tickets', action: 'view' },
       { group: 'Technician', to: '/carret/serve/my-work', label: 'My work', section: 'support_tickets', action: 'view' },

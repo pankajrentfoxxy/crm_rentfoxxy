@@ -13,8 +13,8 @@ import { errMsg } from './serveShared';
  *
  * Customer → the laptops they have with us (work-from-home ones marked: a
  * pickup / replacement to them is chargeable, Rs 799 + GST) → issue + remarks
- * per laptop → priority, visit slot, contact → a complaint ticket. Pickup and
- * replacement tickets are raised from the ticket (Old view) as today.
+ * per laptop → priority, visit slot, contact → a complaint ticket. Pickup, replacement
+ * and Service DC are then run from the ticket record (TicketActions).
  */
 export default function NewTicketPage() {
   const navigate = useNavigate();

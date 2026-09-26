@@ -10,6 +10,8 @@ import {
   assignItem, chargeWfh, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
   setAppointment,
 } from './serveApi';
+import { usePermission } from '../../../hooks/usePermission';
+import TicketActions from './TicketActions';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -37,6 +39,7 @@ function Clock({ label, c }) {
 export default function TicketRecordPage() {
   const { ticketId } = useParams();
   const navigate = useNavigate();
+  const { hasPermission } = usePermission();
   const [t, setT] = useState(null);
   const [sla, setSla] = useState(null);
   const [wfh, setWfh] = useState({});
@@ -153,6 +156,7 @@ export default function TicketRecordPage() {
         <Section title={`Laptops · ${items.length}`}>
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
         </Section>
+        {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
         <Section title="Contact and address">
           <KeyValue cols={2} items={[
             { label: 'Phone', value: tk.display_phone },

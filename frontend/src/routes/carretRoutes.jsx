@@ -40,6 +40,7 @@ const ServeQueuePage = React.lazy(() => import('../features/carret/serve/QueuePa
 const ServeTicketRecordPage = React.lazy(() => import('../features/carret/serve/TicketRecordPage'));
 const ServeNewTicketPage = React.lazy(() => import('../features/carret/serve/NewTicketPage'));
 const ServeInsightsPage = React.lazy(() => import('../features/carret/serve/InsightsPage'));
+const ServePartsDeskPage = React.lazy(() => import('../features/carret/serve/PartsDeskPage'));
 const SupportChargesToBillPage = React.lazy(() => import('../features/carret/serve/ChargesToBillPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
 const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
@@ -135,6 +136,7 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/serve/tickets/:ticketId', element: guard('support_tickets', 'view', <ServeTicketRecordPage />) },
       { path: '/carret/serve/insights', element: guard('support_tickets', 'view', <ServeInsightsPage />) },
       { path: '/carret/money/support-charges', element: guard('customer_billing', 'view', <SupportChargesToBillPage />) },
+      { path: '/carret/serve/parts-desk', element: guard('support_part_challan', 'view', <ServePartsDeskPage />) },
       { path: '/carret/serve/my-parts', element: guardAny(['support_part_requests', 'support_tickets'], 'view', <ServeMyPartsPage />) },
       { path: '/carret/procure/replacement-approvals', element: guardAny(['vendor_repair_dc', 'vendor_management', 'vendor_billing_mgmt'], 'view', <ReplacementApprovalsPage />) },
       { path: '/carret/procure/vendor-rentals', element: guardAny(['vendor_management', 'vendor_billing_mgmt', 'vendor_repair_dc'], 'view', <VendorRentalsPage />) },

@@ -125,3 +125,21 @@ Warehouse / Accounts:
    also set on "approve & customer DC") → fitted → Money → Support charges to bill → Add to the draft invoice.
 10. Floor: complete a support repair ticket → the support laptop shows "Repaired — ready to send back" in the
     queue, and it can't be reserved by Sales.
+
+## Step 6 — ticket actions and the parts desk on Carret (26 Sep 2026)
+
+- Ticket record (`/carret/serve/tickets/:id`) now runs pickup (schedule, assign,
+  change who collects, courier details, cancel), replacement (start / add, move
+  to replacement, swap from repair, send another laptop, resend) and Service DC
+  (raise, PDF, change technician) — `serve/TicketActions.jsx`, same endpoints
+  and gates as the old ticket screen.
+- Support parts desk (`/carret/serve/parts-desk`, section `support_part_challan`):
+  requests (unit picker, hand to technician + signature, send to customer Part
+  DC, set price, cancel), returns (warehouse signs), moves (approve / reject),
+  Part DCs (courier, delivered, RPDC received).
+- Old screens stay until sign-off. No backend change; QA build swapped 26 Sep.
+
+QA click-through: open a ticket with a complaint → Schedule pickup → Assign →
+receive at warehouse → Service DC; on another, mark replacement → Start
+replacement. Parts desk: raise a part from My work → approve to technician →
+sign; mark one chargeable → set price → send to customer.

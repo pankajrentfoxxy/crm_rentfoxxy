@@ -223,6 +223,7 @@ const carretMenuItems = [
   { icon: Truck, label: 'Replacement approvals', path: '/carret/procure/replacement-approvals', section: 'vendor_repair_dc' },
   { icon: Boxes, label: 'Spare-parts orders', path: '/carret/procure/spare-parts-orders', section: 'vendor_management' },
   { icon: Wrench, label: 'Support queue', path: '/carret/serve/queue', section: 'support_tickets' },
+  { icon: Wrench, label: 'Support parts desk', path: '/carret/serve/parts-desk', section: 'support_part_challan' },
   { icon: Wrench, label: 'My work (technician)', path: '/carret/serve/my-work', section: 'support_tickets' },
   { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
   { icon: DollarSign, label: 'Support charges to bill', path: '/carret/money/support-charges', section: 'customer_billing' },
