@@ -71,7 +71,7 @@ async function findFirstOutboundDcNumberForSo(db, salesOrderNumber) {
        FROM delivery_challan_lines
       WHERE sales_order_number = $1
         AND COALESCE(movement_type, 'outbound') = 'outbound'
-        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected')
         AND (
           dc_number ILIKE 'DC/%'
           OR dc_number ILIKE 'DC-%'
@@ -249,7 +249,7 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
             FROM delivery_challan_lines o
            WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
              AND o.customer_id = $1
-             AND COALESCE(o.status, '') NOT IN ('cancelled')
+             AND COALESCE(o.status, '') NOT IN ('cancelled', 'rejected')
              AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
              AND COALESCE(o.delivered_at, o.created_at) >
                  COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
@@ -281,7 +281,7 @@ async function loadCustomerOutboundDeliveryDates(client, customerId, serialIds) 
        JOIN delivery_challan_lines dcl
          ON COALESCE(dcl.movement_type, 'outbound') = 'outbound'
         AND dcl.customer_id = $1
-        AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+        AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
         AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
       WHERE vsn.serial_id = ANY($2::int[])
       ORDER BY vsn.serial_id, dcl.delivered_at DESC NULLS LAST, dcl.created_at DESC`,
@@ -291,6 +291,88 @@ async function loadCustomerOutboundDeliveryDates(client, customerId, serialIds) 
     bySerial.set(Number(row.serial_id), parseInvoiceLineDate(row.delivery_date));
   }
   return bySerial;
+}
+
+/**
+ * What THIS customer has already been charged for, per laptop: the day spans on
+ * its non-cancelled rental lines, less the spans handed back by return credit
+ * notes. Also the rent_end of every OTHER customer's lines, so a watermark that
+ * one customer's prepaid invoice left on vendor_serial_numbers can be told apart
+ * from this customer's own.
+ *
+ * vendor_serial_numbers.rent_billed_until is one date per laptop, not per
+ * customer, and the normal return -> QC -> stock path does not clear it. So a
+ * laptop prepaid by customer A through the 30th, returned mid-month and
+ * re-rented to B on the 18th reached B with "billed until the 30th" and B was
+ * never charged for the 18th-30th (TTSPL5465, TTSPL5636, TTSPL7258, TTSPL3070 in
+ * September). The same single date, wiped by the stock step during a repair
+ * loop, is how TTSPL4019 would have been charged twice for 25-30 September.
+ */
+async function loadCustomerBilledCoverage(client, customerId, serialIds) {
+  const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
+  const own = new Map();
+  const otherEnds = new Map();
+  if (!customerId || !ids.length) return { own, otherEnds };
+  const lines = await client.query(
+    `SELECT cil.serial_id, ci.customer_id,
+            cil.rent_start::text AS rent_start, cil.rent_end::text AS rent_end
+       FROM customer_invoice_lines cil
+       JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+      WHERE cil.serial_id = ANY($1::int[])
+        AND COALESCE(cil.line_type, 'rental') <> 'security'
+        AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
+        AND cil.rent_start IS NOT NULL AND cil.rent_end IS NOT NULL`,
+    [ids]
+  );
+  const credits = await client.query(
+    `SELECT (li->>'serial_id')::int AS serial_id,
+            COALESCE(li->>'from_date', li->>'rent_start') AS from_date,
+            COALESCE(li->>'to_date', li->>'rent_end') AS to_date
+       FROM customer_credit_notes cn,
+            jsonb_array_elements(COALESCE(cn.line_items, '[]'::jsonb)) li
+      WHERE cn.customer_id = $1
+        AND cn.status <> 'cancelled'
+        AND COALESCE(cn.credit_note_type, 'return') = 'return'
+        AND NULLIF(li->>'serial_id', '') ~ '^[0-9]+$'
+        AND (li->>'serial_id')::int = ANY($2::int[])`,
+    [customerId, ids]
+  );
+  const creditBySerial = new Map();
+  for (const c of credits.rows) {
+    if (!c.from_date || !c.to_date) continue;
+    if (!creditBySerial.has(c.serial_id)) creditBySerial.set(c.serial_id, []);
+    creditBySerial.get(c.serial_id).push([String(c.from_date).slice(0, 10), String(c.to_date).slice(0, 10)]);
+  }
+  for (const l of lines.rows) {
+    const sid = Number(l.serial_id);
+    const span = [String(l.rent_start).slice(0, 10), String(l.rent_end).slice(0, 10)];
+    if (Number(l.customer_id) === Number(customerId)) {
+      if (!own.has(sid)) own.set(sid, { billed: [], credited: creditBySerial.get(sid) || [] });
+      own.get(sid).billed.push(span);
+    } else {
+      if (!otherEnds.has(sid)) otherEnds.set(sid, new Set());
+      otherEnds.get(sid).add(span[1]);
+    }
+  }
+  return { own, otherEnds };
+}
+
+function isDayBilled(coverage, ymd) {
+  if (!coverage) return false;
+  const inAny = (spans) => spans.some(([a, b]) => ymd >= a && ymd <= b);
+  return inAny(coverage.billed) && !inAny(coverage.credited);
+}
+
+/** Last day of the unbroken run of already-billed days starting at `from`, or null. */
+function billedThrough(coverage, from) {
+  if (!coverage || !from) return null;
+  let day = new Date(from);
+  let last = null;
+  for (let i = 0; i < 400 && isDayBilled(coverage, toLocalYmd(day)); i += 1) {
+    last = new Date(day);
+    day = addDays(day, 1);
+  }
+  return last;
 }
 
 const DC_SERIAL_ELEM_SQL = `
@@ -308,7 +390,7 @@ const DC_SERIAL_ELEM_SQL = `
  * Never writes rent_billed_until on a serial that belongs to another customer.
  */
 async function buildCompletedOccupancyLines(client, {
-  customerId, month, year, includeCurrentMonthStarts = false,
+  customerId, month, year, includeCurrentMonthStarts = false, pendingLines = [],
 }) {
   const { prevStart, prevEnd } = previousMonthRange(month, year);
   const monthEnd = new Date(year, month, 0);
@@ -325,7 +407,7 @@ async function buildCompletedOccupancyLines(client, {
          FROM delivery_challan_lines dcl, ${DC_SERIAL_ELEM_SQL}
         WHERE dcl.customer_id = $1
           AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
-          AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+          AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
           AND NULLIF(split_part(elem, '|', 3), '') <> ''
      ),
      ret AS (
@@ -384,33 +466,66 @@ async function buildCompletedOccupancyLines(client, {
           LIMIT 1
        ) so ON TRUE
       WHERE occ.return_date BETWEEN $2::date AND $3::date
-        AND COALESCE(so.rate, 0) > 1
-        AND NOT EXISTS (
-          SELECT 1
-            FROM customer_invoice_lines cil
-            JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
-           WHERE ci.customer_id = $1
-             AND cil.serial_id = vsn.serial_id
-             AND COALESCE(cil.line_type, 'rental') <> 'security'
-             AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
-             AND cil.rent_start <= occ.return_date
-             AND cil.rent_end >= occ.delivery_date
-        )`,
+        AND COALESCE(so.rate, 0) > 1`,
     [customerId, toLocalYmd(windowStart), toLocalYmd(windowEnd)]
   );
+
+  // Bill only the days of each stay that nobody has charged for yet, from the
+  // start of the window to warehouse receipt. Skipping the whole stay whenever
+  // any day overlapped an invoice line lost the unbilled tail: TTSPL3552 was
+  // billed 25-31 August, reached the warehouse on 9 September, and 1-9 September
+  // was never billed. Days already charged (net of return credit notes, or
+  // acknowledged as billed in Zoho) are left alone, so nothing is billed twice.
+  const serialIds = [...new Set(rows.map((row) => Number(row.serial_id)))];
+  const coverage = await loadCustomerBilledCoverage(client, customerId, serialIds);
+  const zohoAcks = await loadZohoBillingAcks(client, customerId, serialIds);
+  // Days the same run is already billing on its main path (a laptop still with
+  // the customer is billed continuously there) must not be billed again here.
+  const takenDays = new Map();
+  for (const line of pendingLines) {
+    const sid = Number(line.serial_id);
+    if (!sid || isSecurityLine(line) || !line.rent_start || !line.rent_end) continue;
+    if (!takenDays.has(sid)) takenDays.set(sid, new Set());
+    for (let d = new Date(line.rent_start); d <= new Date(line.rent_end); d = addDays(d, 1)) {
+      takenDays.get(sid).add(toLocalYmd(d));
+    }
+  }
 
   const lineItems = [];
   let periodStart = null;
   let periodEnd = null;
   for (const row of rows) {
-    const billStart = new Date(row.delivery_date);
+    const stayStart = new Date(row.delivery_date);
     const billEnd = new Date(row.return_date);
-    if (Number.isNaN(billStart.getTime()) || Number.isNaN(billEnd.getTime()) || billStart > billEnd) {
+    if (Number.isNaN(stayStart.getTime()) || Number.isNaN(billEnd.getTime()) || stayStart > billEnd) {
       continue;
     }
     const monthlyRate = parseFloat(row.occupancy_rate || 0);
     if (monthlyRate <= 1) continue;
-    for (const seg of monthSegments(billStart, billEnd)) {
+    const sid = Number(row.serial_id);
+    const ackThrough = zohoAcks.get(sid)?.rent_billed_through || null;
+    if (!takenDays.has(sid)) takenDays.set(sid, new Set());
+    const taken = takenDays.get(sid);
+    const spans = [];
+    let spanStart = null;
+    let day = stayStart < windowStart ? new Date(windowStart) : new Date(stayStart);
+    for (; day <= billEnd; day = addDays(day, 1)) {
+      const ymd = toLocalYmd(day);
+      const covered = isDayBilled(coverage.own.get(sid), ymd)
+        || (ackThrough && ymd <= ackThrough)
+        || taken.has(ymd);
+      if (!covered) {
+        taken.add(ymd);
+        if (!spanStart) spanStart = new Date(day);
+      } else if (spanStart) {
+        spans.push([spanStart, addDays(day, -1)]);
+        spanStart = null;
+      }
+    }
+    if (spanStart) spans.push([spanStart, billEnd]);
+    if (!spans.length) continue;
+    const billStart = spans[0][0];
+    for (const seg of spans.flatMap(([from, to]) => monthSegments(from, to))) {
       const days = daysInclusive(seg.segStart, seg.segEnd);
       const dailyRate = monthlyRate / seg.daysInMonth;
       const amount = parseFloat((dailyRate * days).toFixed(2));
@@ -656,12 +771,22 @@ async function buildCustomerInvoiceLines(client, {
     serialIdsForWindow
   );
   const zohoAckBySerial = await loadZohoBillingAcks(client, customerId, serialIdsForWindow);
+  const coverage = await loadCustomerBilledCoverage(client, customerId, serialIdsForWindow);
 
   for (const row of serialsRes.rows) {
     const rentStart = new Date(row.rent_start_date);
     const ack = zohoAckBySerial.get(Number(row.serial_id));
     const ackUntil = ack?.rent_billed_through ? new Date(ack.rent_billed_through) : null;
-    const rowUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
+    let rowUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
+    const ownCoverage = coverage.own.get(Number(row.serial_id));
+    // A watermark that matches another customer's line end, and none of this
+    // customer's, was left by the previous renter: it says nothing about us.
+    if (rowUntil) {
+      const untilYmd = toLocalYmd(rowUntil);
+      const fromOther = coverage.otherEnds.get(Number(row.serial_id))?.has(untilYmd);
+      const fromOwn = ownCoverage?.billed.some(([, end]) => end === untilYmd);
+      if (fromOther && !fromOwn) rowUntil = null;
+    }
     const billedUntil = rowUntil && ackUntil
       ? (ackUntil > rowUntil ? ackUntil : rowUntil)
       : (ackUntil || rowUntil);
@@ -683,6 +808,11 @@ async function buildCustomerInvoiceLines(client, {
         if (dispatchStart < billStart) billStart = dispatchStart;
       }
     }
+
+    // Never charge this customer twice for the same day. Skip the run of days
+    // already on its own invoice lines (net of return credit notes) from here.
+    const alreadyBilled = billedThrough(ownCoverage, billStart);
+    if (alreadyBilled) billStart = addDays(alreadyBilled, 1);
 
     // Previous-month catch-up only when THIS customer's outbound DC has a
     // marked delivery in that month. Unmarked POD or an older delivery
@@ -777,7 +907,7 @@ async function buildCustomerInvoiceLines(client, {
   }
 
   const occupancy = await buildCompletedOccupancyLines(client, {
-    customerId, month, year, includeCurrentMonthStarts,
+    customerId, month, year, includeCurrentMonthStarts, pendingLines: lineItems,
   });
   const occupancyLines = scopedIds.length
     ? occupancy.lineItems.filter((line) => scopedIds.includes(Number(line.serial_id)))
@@ -1579,7 +1709,7 @@ async function ensureInvoiceSecurityLines(client, {
                     FROM delivery_challan_lines dcl
                    WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
                      AND dcl.customer_id = $2
-                     AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+                     AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
                      AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
                      AND dcl.delivered_at IS NOT NULL
                    ORDER BY dcl.delivered_at DESC
@@ -2300,7 +2430,7 @@ async function createMissingReturnCreditNotes(client, {
             FROM delivery_challan_lines o
            WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
              AND o.customer_id = $1
-             AND COALESCE(o.status, '') NOT IN ('cancelled')
+             AND COALESCE(o.status, '') NOT IN ('cancelled', 'rejected')
              AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
              AND COALESCE(o.delivered_at, o.created_at) >
                  COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
@@ -3505,6 +3635,105 @@ function startBillingScheduler() {
   billingLog.info('Billing scheduler started (customer: 1st 00:01 IST, vendor: last day 23:59 IST)');
 }
 
+/**
+ * A DC the customer refused never delivered anything, but gate dispatch may
+ * already have billed it (first order of a new customer), and nothing undid
+ * that: TTSPL7576 (INV-1066), TTSPL7002 (INV-1013), TTSPL5171 (INV-1047),
+ * TTSPL5782 (INV-1069) and two laptops on INV-1105 were all charged to a
+ * customer who sent them back at the door.
+ *
+ * Runs in the rejection's own transaction. Lines from this DC's dispatch date
+ * onward come off a draft invoice (rent and its security, with the held
+ * deposit); on an invoice already sent the days go back as a pending credit
+ * note for finance. The laptop's billing anchors are cleared so its next
+ * delivery starts clean.
+ */
+async function reverseBillingForRejectedDc(client, { dcNumber, actorUserId = null }) {
+  const head = await client.query(
+    `SELECT MAX(customer_id) AS customer_id,
+            (MIN(COALESCE(dispatched_at, created_at)) AT TIME ZONE 'Asia/Kolkata')::date::text AS dispatch_date
+       FROM delivery_challan_lines
+      WHERE dc_number = $1 AND COALESCE(movement_type, 'outbound') = 'outbound'`,
+    [dcNumber]
+  );
+  const customerId = head.rows[0]?.customer_id;
+  const dispatchDate = head.rows[0]?.dispatch_date;
+  if (!customerId || !dispatchDate) return { reversed: 0 };
+
+  const serialRes = await client.query(
+    `SELECT DISTINCT vsn.serial_id
+       FROM delivery_challan_lines dcl, ${DC_SERIAL_ELEM_SQL}
+       JOIN vendor_serial_numbers vsn
+         ON UPPER(vsn.inventory_asset_code) = UPPER(NULLIF(split_part(elem, '|', 3), ''))
+      WHERE dcl.dc_number = $1`,
+    [dcNumber]
+  );
+  const serialIds = serialRes.rows.map((row) => Number(row.serial_id));
+  if (!serialIds.length) return { reversed: 0 };
+
+  const hits = await client.query(
+    `SELECT ci.invoice_id, ci.status, cil.line_id, cil.serial_id,
+            COALESCE(cil.line_type, 'rental') AS line_type, cil.rent_start::text AS rent_start
+       FROM customer_invoice_lines cil
+       JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+      WHERE ci.customer_id = $1
+        AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
+        AND cil.serial_id = ANY($2::int[])
+        AND cil.rent_start >= $3::date`,
+    [customerId, serialIds, dispatchDate]
+  );
+  let reversed = 0;
+  const byInvoice = new Map();
+  for (const hit of hits.rows) {
+    if (!byInvoice.has(hit.invoice_id)) byInvoice.set(hit.invoice_id, []);
+    byInvoice.get(hit.invoice_id).push(hit);
+  }
+  for (const [invoiceId, invHits] of byInvoice) {
+    if (String(invHits[0].status || '').toLowerCase() !== 'draft') {
+      for (const serialId of new Set(invHits.filter((h) => h.line_type !== 'security').map((h) => Number(h.serial_id)))) {
+        await createReturnCreditNote(client, {
+          serialId,
+          customerId,
+          returnDate: addDays(new Date(dispatchDate), -1),
+          actorUserId,
+          source: 'delivery_rejected',
+        });
+        reversed += 1;
+      }
+      continue;
+    }
+    const invRes = await client.query(
+      `SELECT invoice_id, invoice_number, status, line_items, subtotal, gst_percent,
+              credit_note_adjustment, from_date, to_date
+         FROM customer_invoices WHERE invoice_id = $1 FOR UPDATE`,
+      [invoiceId]
+    );
+    const inv = invRes.rows[0];
+    const dropKeys = new Set(invHits.map((h) => `${h.serial_id}|${h.line_type === 'security' ? 'security' : 'rental'}|${String(h.rent_start).slice(0, 10)}`));
+    const keep = invoiceLinesArray(inv.line_items).filter((line) => !dropKeys.has(
+      `${line.serial_id}|${isSecurityLine(line) ? 'security' : 'rental'}|${String(line.rent_start || '').slice(0, 10)}`
+    ));
+    await client.query('DELETE FROM customer_invoice_lines WHERE line_id = ANY($1::int[])', [invHits.map((h) => h.line_id)]);
+    await client.query(
+      `DELETE FROM customer_security_deposits
+        WHERE invoice_id = $1 AND serial_id = ANY($2::int[]) AND status = 'held'`,
+      [invoiceId, [...new Set(invHits.map((h) => Number(h.serial_id)))]]
+    );
+    await persistDraftInvoiceLines(client, inv, keep, inv.from_date, inv.to_date);
+    reversed += invHits.length;
+  }
+  await client.query(
+    `UPDATE vendor_serial_numbers
+        SET rent_billed_until = NULL, rent_start_date = NULL, updated_at = NOW()
+      WHERE serial_id = ANY($1::int[]) AND current_dc_number = $2`,
+    [serialIds, dcNumber]
+  );
+  if (reversed) {
+    billingLog.info({ dcNumber, customerId, reversed }, 'Reversed billing for a rejected delivery');
+  }
+  return { reversed };
+}
+
 module.exports = {
   startBillingScheduler,
   generateCustomerInvoice,
@@ -3513,6 +3742,7 @@ module.exports = {
   generateVendorBill,
   generateAllVendorBills,
   createReturnCreditNote,
+  reverseBillingForRejectedDc,
   approveAndApplyCreditNote,
   approveSelectedCreditNoteLines,
   runBillingBatch,

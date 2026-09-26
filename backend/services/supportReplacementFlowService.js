@@ -490,7 +490,7 @@ async function collectSerialIdsFromDc(client, dcNumber) {
 /** Outbound DC delivered — one unit per SO line. */
 async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
   const meta = await client.query(
-    `SELECT dc_purpose, support_ticket_id, sales_order_number
+    `SELECT dc_purpose, support_ticket_id, sales_order_number, dispatch_mode, dispatched_at
        FROM delivery_challan_lines WHERE dc_number = $1 AND movement_type = 'outbound' LIMIT 1`,
     [dcNumber]
   );
@@ -515,13 +515,22 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
     if (!order || order.delivery_completed_at) continue;
 
     const ticketRes = await client.query('SELECT customer_id FROM support_tickets WHERE id = $1', [order.ticket_id]);
+    const dispatchedRes = await client.query(
+      'SELECT dispatched_at FROM vendor_serial_numbers WHERE serial_id = $1',
+      [serialId]
+    );
 
+    // The replacement's rent starts by the same dispatch rule as any rental
+    // (computeRentStart: in-house/porter = dispatch day, courier = delivery or
+    // dispatch + 3, whichever is first). Passing 'inhouse' with no dispatch time
+    // made it the moment someone confirmed delivery.
     await inventorySM.markDelivered(client, serialId, {
       quotationType: 'rental',
       dcNumber,
       customerId: ticketRes.rows[0]?.customer_id,
       entityCode: 'rentfoxxy',
-      dispatchMode: 'inhouse',
+      dispatchMode: row.dispatch_mode || 'inhouse',
+      dispatchedAt: dispatchedRes.rows[0]?.dispatched_at || row.dispatched_at || null,
       deliveredAt: new Date(),
       rentMonthlyRate: order.old_rent_monthly_rate != null ? Number(order.old_rent_monthly_rate) : null,
       actorUserId: actor.user_id,
