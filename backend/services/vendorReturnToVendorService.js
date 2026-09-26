@@ -12,10 +12,23 @@ const { logTtsplEvent } = require('./ttsplAuditService');
 const { transitionAsset, STATUS } = require('./inventoryStateMachine');
 const {
   currentFinancialYearLabel,
-  dispatchPayloadFromBody,
+  normalizeShipBy,
+  shipByToDispatchMode,
+  normalizeVehicleNumber,
 } = require('./vendorRepairDcShared');
+const { parseIndianMobile } = require('../utils/phoneValidation');
 
 const WAREHOUSE_STATUSES = new Set(['in_stock', 'returned', 'qc_failed']);
+// D10: a rented laptop in good condition, rent still running, goes back only
+// through a return request (the vendor gets the mail + PDF and rent stops on a
+// chosen date). Direct challans are for QC-failed / rejected-at-door units.
+const RENTAL_PO_TYPES = ['rental_purchase', 'rent_to_own'];
+const REQUEST_ONLY_STATUSES = ['in_stock', 'returned'];
+const NEEDS_RETURN_REQUEST_SQL = `(
+  vpo.purchase_order_type = ANY(ARRAY['rental_purchase','rent_to_own'])
+  AND vsn.inventory_status IN ('in_stock','returned')
+  AND vsn.vendor_rent_end_date IS NULL
+)`;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'procurement']);
 
 // Two different meanings of "returned" were being conflated. A unit whose
@@ -94,10 +107,12 @@ function buildConfig(vsn) {
   ].filter(Boolean).join(' / ');
 }
 
-async function assertSerialEligible(client, serialId, { vendorId, poId } = {}) {
+async function assertSerialEligible(client, serialId, { vendorId, poId, viaReturnRequest = false } = {}) {
   const r = await client.query(
     `SELECT vsn.*,
             vpo.po_id, vpo.purchase_order_number AS po_number, vpo.vendor_id,
+            vpo.purchase_order_type,
+            vpo.line_items -> COALESCE(NULLIF(vsn.extra->>'line_index', '')::int, 0) ->> 'asset_value' AS line_asset_value,
             v.business_name AS vendor_name
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
@@ -139,6 +154,17 @@ async function assertSerialEligible(client, serialId, { vendorId, poId } = {}) {
     throw new Error(
       `${row.inventory_asset_code || row.serial_number}: already returned to vendor`
     );
+  }
+  if (!viaReturnRequest
+      && RENTAL_PO_TYPES.includes(String(row.purchase_order_type || ''))
+      && REQUEST_ONLY_STATUSES.includes(String(row.inventory_status || ''))
+      && !row.vendor_rent_end_date) {
+    const err = new Error(
+      `${row.inventory_asset_code || row.serial_number}: a rented laptop in good condition goes back through a return request `
+      + '(Vendor returns → Rental returns), so the vendor is told and rent stops on a set date'
+    );
+    err.status = 409;
+    throw err;
   }
   return row;
 }
@@ -191,6 +217,7 @@ async function listEligibleLaptops({ vendorId, poId, search, inventoryStatus, pa
               COALESCE(vsn.extra->>'brand', '') AS brand,
               COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
               COALESCE(vsn.rejected_at_receipt, FALSE) AS rejected_at_receipt,
+              ${NEEDS_RETURN_REQUEST_SQL} AS needs_return_request,
               vsn.receipt_rejection_reason,
               (SELECT t.floor_manager_qc_fail_reason FROM tickets t
                 WHERE t.vendor_serial_id = vsn.serial_id AND t.floor_manager_qc_failed
@@ -309,7 +336,8 @@ async function getReturnDc(dcNumber) {
             v.business_name AS vendor_business_name,
             v.address AS vendor_reg_address,
             v.shipping_address AS vendor_ship_address,
-            v.contact_person_name, v.contact_person_phone, v.phone
+            v.contact_person_name, v.contact_person_phone, v.phone,
+            v.gst_number AS vendor_gst_number
        FROM vendor_return_delivery_challans d
        LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = d.po_id
        LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
@@ -343,6 +371,7 @@ async function createReturnDc(client, {
   contactPerson,
   contactMobile,
   itemReturnReasons = {},
+  viaReturnRequest = false,
   actorUserId,
   actorName,
 }) {
@@ -354,7 +383,7 @@ async function createReturnDc(client, {
 
   const serialRows = [];
   for (const sid of ids) {
-    serialRows.push(await assertSerialEligible(client, sid, { vendorId, poId }));
+    serialRows.push(await assertSerialEligible(client, sid, { vendorId, poId, viaReturnRequest }));
   }
 
   const vendorIds = [...new Set(serialRows.map((r) => Number(r.vendor_id)))];
@@ -418,8 +447,8 @@ async function createReturnDc(client, {
       `INSERT INTO vendor_return_dc_items (
          dc_number, serial_id, po_id, grn_id, original_vendor_id,
          ttspl_id, serial_number, brand, model, configuration,
-         warehouse_carret, warehouse_carret_slot, return_reason, item_status
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'draft')`,
+         warehouse_carret, warehouse_carret_slot, return_reason, item_status, declared_value
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'draft',$14)`,
       [
         dcNumber, vsn.serial_id, vsn.po_id, vsn.grn_id, resolvedVendorId,
         ttspl, vsn.serial_number,
@@ -429,6 +458,9 @@ async function createReturnDc(client, {
         vsn.warehouse_carret || null,
         vsn.warehouse_carret_slot || null,
         itemReason,
+        // Pre-filled from the PO line's asset value when there is one; the
+        // warehouse still confirms every value before the gate.
+        Number(vsn.line_asset_value) > 0 ? Number(vsn.line_asset_value) : null,
       ]
     );
     await client.query(
@@ -451,6 +483,94 @@ async function createReturnDc(client, {
   return { dc_number: dcNumber };
 }
 
+function badTransport(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+function requiredText(value, message) {
+  const v = String(value || '').trim();
+  if (!v) throw badTransport(message);
+  return v;
+}
+
+function requiredMobile(value, label) {
+  const r = parseIndianMobile(value, { required: true, label });
+  if (!r.ok) throw badTransport(r.error);
+  return r.value;
+}
+
+function requiredVehicle(value, label) {
+  const v = normalizeVehicleNumber(value);
+  if (!v) throw badTransport(`${label} is required`);
+  return v;
+}
+
+/**
+ * How a return challan travels (VRTDC only — the repair challan keeps its own
+ * rules in vendorRepairDcShared). Every mode names who carries it:
+ *   Courier       courier name + tracking ID (AWB)
+ *   Porter        person, phone, vehicle (bike) number; booking ID optional
+ *   Vendor pickup person, phone, vehicle number
+ *   In-house      our delivery person (whose technician bucket it lands in once
+ *                 the guard scans it out), phone, vehicle number
+ */
+async function vrtdcTransportFromBody(db, body = {}) {
+  const shipBy = normalizeShipBy(body.ship_by, body.dispatch_mode);
+  if (!shipBy) throw badTransport('Choose how it travels: Courier, Porter, In-house or Vendor pickup');
+  const out = {
+    ship_by: shipBy,
+    dispatch_mode: shipByToDispatchMode(shipBy),
+    courier_name: null,
+    awb_number: null,
+    courier_tracking_url: null,
+    porter_tracking_id: null,
+    porter_order_id: null,
+    porter_booking_url: null,
+    porter_person_name: null,
+    porter_person_phone: null,
+    delivery_person_id: null,
+    delivery_person_name: null,
+    delivery_person_phone: null,
+    vehicle_number: null,
+    vendor_pickup_person: null,
+    vendor_pickup_mobile: null,
+  };
+  const opt = (v) => String(v || '').trim() || null;
+  if (shipBy === 'by_courier') {
+    out.courier_name = requiredText(body.courier_name, 'Courier name is required');
+    out.awb_number = requiredText(body.awb_number, 'Courier tracking ID (AWB) is required');
+    out.courier_tracking_url = opt(body.courier_tracking_url);
+  } else if (shipBy === 'by_porter') {
+    out.porter_person_name = requiredText(body.porter_person_name, 'Porter person name is required');
+    out.porter_person_phone = requiredMobile(body.porter_person_phone, 'Porter person phone');
+    out.vehicle_number = requiredVehicle(body.vehicle_number, 'Porter bike / vehicle number');
+    out.porter_tracking_id = opt(body.porter_tracking_id);
+    out.porter_order_id = opt(body.porter_order_id);
+    out.porter_booking_url = opt(body.porter_booking_url);
+  } else if (shipBy === 'by_vendor_pickup') {
+    out.vendor_pickup_person = requiredText(body.vendor_pickup_person, 'Vendor pickup person name is required');
+    out.vendor_pickup_mobile = requiredMobile(body.vendor_pickup_mobile, 'Vendor pickup phone');
+    out.vehicle_number = requiredVehicle(body.vehicle_number, 'Vendor pickup bike / vehicle number');
+  } else if (shipBy === 'by_hand') {
+    const id = Number(body.delivery_person_id);
+    if (!Number.isFinite(id) || id <= 0) throw badTransport('Choose our delivery person for In-house');
+    const t = (await db.query(
+      `SELECT technician_id, first_name, last_name, phone, is_active
+         FROM delivery_technicians WHERE technician_id = $1`,
+      [id]
+    )).rows[0];
+    if (!t) throw badTransport('That delivery person was not found');
+    if (t.is_active === false) throw badTransport('That delivery person is inactive');
+    out.delivery_person_id = t.technician_id;
+    out.delivery_person_name = [t.first_name, t.last_name].filter(Boolean).join(' ').trim() || null;
+    out.delivery_person_phone = requiredMobile(body.delivery_person_phone || t.phone, 'Delivery person phone');
+    out.vehicle_number = requiredVehicle(body.vehicle_number, 'In-house bike / vehicle number');
+  }
+  return out;
+}
+
 async function dispatchReturnDc(client, {
   dcNumber,
   ship_by,
@@ -466,6 +586,9 @@ async function dispatchReturnDc(client, {
   vehicle_number,
   vendor_pickup_person,
   vendor_pickup_mobile,
+  porter_person_name,
+  porter_person_phone,
+  delivery_person_phone,
   declared_values,
   declaredValues,
   actorUserId,
@@ -502,7 +625,7 @@ async function dispatchReturnDc(client, {
     throw err;
   }
 
-  const dispatch = dispatchPayloadFromBody({
+  const dispatch = await vrtdcTransportFromBody(client, {
     ship_by: ship_by || shipBy,
     dispatch_mode,
     courier_name,
@@ -511,7 +634,10 @@ async function dispatchReturnDc(client, {
     porter_tracking_id,
     porter_order_id,
     porter_booking_url,
+    porter_person_name,
+    porter_person_phone,
     delivery_person_id,
+    delivery_person_phone,
     vehicle_number,
     vendor_pickup_person,
     vendor_pickup_mobile,
@@ -533,6 +659,10 @@ async function dispatchReturnDc(client, {
         -- B13: accepted at dispatch and then dropped before migration 335.
         porter_order_id = $12,
         porter_booking_url = $13,
+        porter_person_name = $14,
+        porter_person_phone = $15,
+        delivery_person_name = $16,
+        delivery_person_phone = $17,
         updated_at = NOW()
       WHERE dc_number = $1`,
     [
@@ -547,8 +677,12 @@ async function dispatchReturnDc(client, {
       dispatch.vehicle_number,
       dispatch.vendor_pickup_person,
       dispatch.vendor_pickup_mobile,
-      dispatch.porter_order_id || null,
-      dispatch.porter_booking_url || null,
+      dispatch.porter_order_id,
+      dispatch.porter_booking_url,
+      dispatch.porter_person_name,
+      dispatch.porter_person_phone,
+      dispatch.delivery_person_name,
+      dispatch.delivery_person_phone,
     ]
   );
 
@@ -750,5 +884,6 @@ module.exports = {
   dispatchReturnDc,
   confirmGateOutwardVrtdc,
   completeVendorReturn,
+  vrtdcTransportFromBody,
   cancelReturnDc,
 };

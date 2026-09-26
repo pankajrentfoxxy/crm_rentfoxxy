@@ -9,7 +9,7 @@ import { usePermission } from '../../../hooks/usePermission';
 import {
   cancelReturnToVendorDc, completeReturnToVendorDc, dispatchReturnToVendorDc, downloadReturnToVendorDcPdf, fetchReturnToVendorDc,
 } from '../../vendor-management/vendorManagementApi';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
 import VrtdcEwayPanel from '../../vendor-management/components/VrtdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { errMsg } from './procureShared';
@@ -23,7 +23,15 @@ import { errMsg } from './procureShared';
  * again ("returned to vendor", D9) and drafts a debit note for each (D12).
  * Then mark it received by the vendor.
  */
-const SHIP_LABEL = { by_hand: 'Our delivery person', by_courier: 'Courier', by_porter: 'Porter', by_vendor_pickup: 'Vendor pickup' };
+const SHIP_LABEL = { by_hand: 'In-house', by_courier: 'Courier', by_porter: 'Porter', by_vendor_pickup: 'Vendor pickup' };
+
+function transportLine(dc) {
+  if (dc.ship_by === 'by_courier') return [dc.courier_name, dc.awb_number && `AWB ${dc.awb_number}`].filter(Boolean).join(' · ');
+  if (dc.ship_by === 'by_porter') return [dc.porter_person_name, dc.porter_person_phone, dc.vehicle_number, dc.porter_tracking_id && `booking ${dc.porter_tracking_id}`].filter(Boolean).join(' · ');
+  if (dc.ship_by === 'by_vendor_pickup') return [dc.vendor_pickup_person, dc.vendor_pickup_mobile, dc.vehicle_number].filter(Boolean).join(' · ');
+  if (dc.ship_by === 'by_hand') return [dc.delivery_person_name, dc.delivery_person_phone, dc.vehicle_number].filter(Boolean).join(' · ');
+  return '';
+}
 
 export default function ReturnChallanRecordPage() {
   const { dcNumber: raw } = useParams();
@@ -67,21 +75,41 @@ export default function ReturnChallanRecordPage() {
   const total = live.reduce((n, i) => n + (Number(valueOf(i)) || 0), 0);
   const missing = live.filter((i) => !(Number(valueOf(i)) > 0)).length;
 
-  const sendToGate = () => {
-    const err = validateVrdcDispatch(shipBy, fields);
+  const sendToGate = async () => {
+    const err = validateVrtdcTransport(shipBy, fields);
     if (err) { toast.error(err); return; }
     if (missing) { toast.error(`Enter the declared value for ${missing} laptop(s)`); return; }
-    run('dispatch', () => dispatchReturnToVendorDc(dcNumber, {
-      ship_by: shipBy,
-      ...fields,
-      delivery_person_id: fields.delivery_person_id || undefined,
-      declared_values: Object.fromEntries(live.map((i) => [i.serial_id, Number(valueOf(i))])),
-    }), 'Sent to the gate — the guard scans it out');
+    setBusy('dispatch');
+    try {
+      const { data } = await dispatchReturnToVendorDc(dcNumber, {
+        ship_by: shipBy,
+        ...fields,
+        delivery_person_id: fields.delivery_person_id || undefined,
+        declared_values: Object.fromEntries(live.map((i) => [i.serial_id, Number(valueOf(i))])),
+      });
+      const ew = data?.eway_request || {};
+      if (ew.required && ew.sent) toast.success('Sent to the gate. Worth ₹50,000 or more — Accounts has been mailed for the e-way bill.');
+      else if (ew.required) toast.error(`Sent to the gate, but the e-way mail to Accounts failed: ${ew.error || 'unknown error'}. Use “Send for E-way bill” below.`, { duration: 9000 });
+      else toast.success('Sent to the gate — the guard scans it out');
+      load();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy('');
+    }
   };
 
   let next;
   if (st === 'draft') next = <Notice tone="info" title="Draft">Enter each laptop’s value and how it travels, then send it to the gate.</Notice>;
-  else if (st === 'dispatch_ready') next = <Notice tone="warn" title="At the gate">The guard scans it out. Above the e-way threshold it can’t leave without the e-way bill.</Notice>;
+  else if (st === 'dispatch_ready') {
+    next = (
+      <Notice tone="warn" title="At the gate">
+        The guard scans it out. At ₹50,000 or more it can’t leave until Accounts adds the e-way bill.
+        {dc.ship_by === 'by_hand' && ' Once scanned out it appears in the delivery person’s technician bucket.'}
+        {dc.eway_auto_mail_error && !dc.accounts_notified_at && <><br /><strong>The automatic mail to Accounts failed:</strong> {dc.eway_auto_mail_error} — use “Send for E-way bill” below.</>}
+      </Notice>
+    );
+  }
   else if (st === 'dispatched') {
     next = (
       <Notice tone="info" title="On its way to the vendor" action={canEdit && <Button variant="primary" disabled={busy === 'complete'} onClick={() => setConfirm({ title: 'The vendor has these laptops?', body: 'Marks the return complete.', label: 'Vendor received', tone: 'good', go: () => run('complete', () => completeReturnToVendorDc(dcNumber), 'Marked received by the vendor') })}>Vendor received</Button>}>
@@ -149,12 +177,13 @@ export default function ReturnChallanRecordPage() {
           )}
         >
           <DataTable columns={cols} rows={items} rowKey={(i) => i.id} />
+          {st === 'draft' && <p className="text-ink-3" style={{ marginTop: '8px' }}>At ₹50,000 or more in total, Accounts is mailed for the e-way bill automatically when you send it to the gate.</p>}
           {st === 'draft' && missing > 0 && <p style={{ color: 'var(--alert-warn)', marginTop: '8px' }}>⚠ {missing} laptop(s) have no declared value yet.</p>}
         </Section>
 
         {st === 'draft' && canEdit && (
           <Section title="How it travels">
-            <VrdcDispatchFields shipBy={shipBy} onShipByChange={setShipBy} fields={fields} onFieldsChange={setFields} deliveryTechnicians={techs} disabled={busy === 'dispatch'} />
+            <VrtdcTransportFields shipBy={shipBy} onShipByChange={setShipBy} fields={fields} onFieldsChange={setFields} deliveryTechnicians={techs} disabled={busy === 'dispatch'} />
             <div className="flex justify-end" style={{ marginTop: '12px' }}>
               <Button variant="primary" disabled={busy === 'dispatch'} onClick={sendToGate}>{busy === 'dispatch' ? 'Sending…' : 'Send to the gate'}</Button>
             </div>
@@ -172,7 +201,7 @@ export default function ReturnChallanRecordPage() {
             { label: 'Ship to (vendor)', value: <span style={{ whiteSpace: 'pre-line' }}>{dc.shipping_address}</span> },
             { label: 'From (warehouse)', value: <span style={{ whiteSpace: 'pre-line' }}>{dc.warehouse_address}</span> },
             { label: 'Vendor contact', value: [dc.contact_person, dc.contact_mobile].filter(Boolean).join(' · ') },
-            { label: 'Transport', value: [dc.courier_name, dc.awb_number, dc.porter_tracking_id, dc.porter_order_id, dc.vehicle_number, dc.vendor_pickup_person].filter(Boolean).join(' · ') },
+            { label: 'Transport', value: [SHIP_LABEL[dc.ship_by], transportLine(dc)].filter(Boolean).join(' — ') || '—' },
           ]}
           />
         </Section>

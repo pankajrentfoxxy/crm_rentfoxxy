@@ -69,6 +69,10 @@ exports.createTicket = async (req, res) => {
       vendorId: body.vendor_id || body.vendorId,
       serialIds: body.serial_ids || body.serialIds || [],
       returnReason: body.return_reason || body.returnReason,
+      reasonCode: body.reason_code || body.reasonCode,
+      rentStopDate: body.rent_stop_date || body.rentStopDate,
+      pickupDate: body.pickup_date || body.pickupDate,
+      pickupTime: body.pickup_time || body.pickupTime,
       remarks: body.remarks,
       ...actor,
     });
@@ -82,6 +86,58 @@ exports.createTicket = async (req, res) => {
     handleError(res, err);
   } finally {
     client.release();
+  }
+};
+
+exports.updateTicket = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    requireWarehouseRole(req.user?.role);
+    const body = req.body || {};
+    const pick = (a, b) => (body[a] !== undefined ? body[a] : body[b]);
+    await client.query('BEGIN');
+    const ticket = await svc.updateTicket(client, {
+      ticketNumber: ticketNumberFromReq(req),
+      reasonCode: pick('reason_code', 'reasonCode'),
+      returnReason: pick('return_reason', 'returnReason'),
+      rentStopDate: pick('rent_stop_date', 'rentStopDate'),
+      pickupDate: pick('pickup_date', 'pickupDate'),
+      pickupTime: pick('pickup_time', 'pickupTime'),
+      remarks: body.remarks,
+      actorUserId: actorFromReq(req).actorUserId,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, ticket });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    handleError(res, err);
+  } finally {
+    client.release();
+  }
+};
+
+exports.previewRequest = async (req, res) => {
+  try {
+    const preview = await svc.previewRequest(ticketNumberFromReq(req));
+    res.json({ success: true, preview });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+exports.downloadRequestPdf = async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const ticketNumber = ticketNumberFromReq(req);
+    const rel = await svc.requestPdf(ticketNumber);
+    const abs = path.join(__dirname, '../../uploads', rel);
+    if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
+    const name = `Return_request_${String(ticketNumber).replace(/[^\w-]+/g, '_')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.download(abs, name);
+  } catch (err) {
+    handleError(res, err);
   }
 };
 

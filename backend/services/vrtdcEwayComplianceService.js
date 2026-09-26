@@ -3,7 +3,7 @@
  *
  * A port of vrdcEwayComplianceService for the return-to-vendor consignment,
  * which had no e-way support at all. Deliberately reuses the VRDC primitives —
- * EWAY_VALUE_THRESHOLD, normalizeEwayBillNumber, requiresVrdcEway — rather than
+ * EWAY_VALUE_THRESHOLD, normalizeEwayBillNumber — rather than
  * restating the threshold, so there is one number to change if the law does.
  *
  * Shape of the flow, matching VRDC:
@@ -33,8 +33,16 @@ const { escapeHtml } = require('../utils/escapeHtml');
 const {
   EWAY_VALUE_THRESHOLD,
   normalizeEwayBillNumber,
-  requiresVrdcEway,
 } = require('./vendorRepairDcShared');
+
+/**
+ * A return challan needs an e-way bill at Rs 50,000 and above (user's rule,
+ * 26 Sep 2026 — claude/carret-vendor-return-request.md). The repair challan
+ * (VRDC) keeps its own "above" rule in vendorRepairDcShared.
+ */
+function requiresVrtdcEway(totalValue) {
+  return Number(totalValue || 0) >= EWAY_VALUE_THRESHOLD;
+}
 
 const ACCOUNTS_EMAIL = process.env.ACCOUNTS_EMAIL || 'accounts@truetechservices.in';
 const ACCOUNTS_EMAIL_CC = process.env.ACCOUNTS_EMAIL_CC || 'adminn@rentfoxxy.com,pankkajyadav@rentfoxxy.com';
@@ -92,7 +100,7 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
     }, 0)
     : await computeVrtdcTotalValue(head.dc_number);
 
-  const needsEway = requiresVrdcEway(productValue);
+  const needsEway = requiresVrtdcEway(productValue);
   const ewayComplete = isVrtdcEwayComplete(head, needsEway);
   const isSuperAdmin = user?.role === 'super_admin';
   const canUpload = isSuperAdmin || await canUploadVrtdcEwayBill(user, permissionCache);
@@ -131,7 +139,7 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
     eway_bill_uploaded_at: head?.eway_bill_uploaded_at || null,
     lock_message: needsEway && !ewayComplete
       ? (canUpload
-        ? `Consignment is ${money(productValue)}, above the ${money(EWAY_VALUE_THRESHOLD)} threshold. Enter the E-way Bill below to release it to the gate.`
+        ? `Consignment is ${money(productValue)}, at or above the ${money(EWAY_VALUE_THRESHOLD)} threshold. Enter the E-way Bill below to release it to the gate.`
         : `Consignment is ${money(productValue)}. The gate cannot release it until Accounts adds the E-way Bill.`)
       : null,
   };
@@ -153,7 +161,7 @@ async function assertVrtdcPdfDownloadable(dcNumber, user, db = pool) {
   const head = r.rows[0];
   if (!head) throw new Error('Return DC not found');
   const total = await computeVrtdcTotalValue(dcNumber, db);
-  if (!requiresVrdcEway(total)) return { ok: true, required: false };
+  if (!requiresVrtdcEway(total)) return { ok: true, required: false };
   if (isVrtdcEwayComplete(head, true)) return { ok: true, required: true };
   const err = new Error(
     `This challan is locked: declared value ${money(total)} is above ${money(EWAY_VALUE_THRESHOLD)}`
@@ -173,7 +181,7 @@ async function assertVrtdcCanLeaveGate(dcNumber, db = pool) {
   const head = r.rows[0];
   if (!head) throw new Error('Return DC not found');
   const total = await computeVrtdcTotalValue(dcNumber, db);
-  if (!requiresVrdcEway(total)) return { ok: true, total, required: false };
+  if (!requiresVrtdcEway(total)) return { ok: true, total, required: false };
   if (isVrtdcEwayComplete(head, true)) return { ok: true, total, required: true };
   const err = new Error(
     `E-way Bill required before this consignment can leave: declared value ${money(total)}`
@@ -181,6 +189,23 @@ async function assertVrtdcCanLeaveGate(dcNumber, db = pool) {
   );
   err.status = 409;
   throw err;
+}
+
+/** Brand + model, with how many and their total value — for the Accounts mail. */
+function summariseByModel(items = []) {
+  const groups = new Map();
+  for (const row of items) {
+    if (row.item_status === 'cancelled') continue;
+    const brand = String(row.brand || '').trim() || '—';
+    const model = String(row.model || '').trim() || '—';
+    const key = `${brand.toLowerCase()}|${model.toLowerCase()}`;
+    const g = groups.get(key) || { brand, model, count: 0, value: 0 };
+    g.count += 1;
+    const v = Number(row.declared_value);
+    g.value += Number.isFinite(v) ? v : 0;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.value - a.value);
 }
 
 function laptopRowsFromItems(items = []) {
@@ -216,7 +241,9 @@ function describeTransport(head) {
     if (head.awb_number) rows.push(['AWB', head.awb_number]);
   } else if (shipBy === 'by_porter') {
     rows.push(['Mode', 'Porter']);
-    if (head.porter_tracking_id) rows.push(['Porter tracking', head.porter_tracking_id]);
+    if (head.porter_person_name) rows.push(['Porter person', head.porter_person_name]);
+    if (head.porter_person_phone) rows.push(['Phone', head.porter_person_phone]);
+    if (head.porter_tracking_id) rows.push(['Porter booking', head.porter_tracking_id]);
   } else if (shipBy === 'by_hand') {
     rows.push(['Mode', 'In-house delivery']);
     if (head.delivery_person_name) rows.push(['Delivery person', head.delivery_person_name]);
@@ -244,6 +271,13 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
   const vendorName = head.vendor_name || head.vendor_business_name || 'Vendor';
   const portalUrl = `${FRONTEND_URL}/vendor-management/return-to-vendor/${encodeURIComponent(dcNumber)}`;
   const transport = describeTransport(head);
+  const summary = summariseByModel(items);
+  const summaryRows = summary.map((g) => `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${escapeHtml(g.brand)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${escapeHtml(g.model)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">${g.count}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">${escapeHtml(money(g.value))}</td>
+    </tr>`).join('');
 
   const transportRows = transport
     .map(([k, v]) => `<tr><td style="padding:3px 10px 3px 0;color:#64748b;">${escapeHtml(k)}</td><td style="padding:3px 0;font-weight:600;">${escapeHtml(v)}</td></tr>`)
@@ -255,9 +289,22 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
       <table style="border-collapse:collapse;margin:12px 0;">
         <tr><td style="padding:3px 10px 3px 0;color:#64748b;">Return DC</td><td style="padding:3px 0;font-weight:600;font-family:monospace;">${escapeHtml(dcNumber)}</td></tr>
         <tr><td style="padding:3px 10px 3px 0;color:#64748b;">Vendor</td><td style="padding:3px 0;font-weight:600;">${escapeHtml(vendorName)}</td></tr>
+        ${head.vendor_gst_number ? `<tr><td style="padding:3px 10px 3px 0;color:#64748b;">Vendor GSTIN</td><td style="padding:3px 0;font-weight:600;font-family:monospace;">${escapeHtml(head.vendor_gst_number)}</td></tr>` : ''}
         <tr><td style="padding:3px 10px 3px 0;color:#64748b;">Laptops</td><td style="padding:3px 0;font-weight:600;">${laptops.length}</td></tr>
         <tr><td style="padding:3px 10px 3px 0;color:#64748b;">Declared value</td><td style="padding:3px 0;font-weight:600;">${escapeHtml(money(productValue))}</td></tr>
         ${transportRows}
+      </table>
+      <p style="margin:14px 0 6px;font-weight:600;">By brand and model</p>
+      <table style="border-collapse:collapse;font-size:13px;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #cbd5e1;">Brand</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #cbd5e1;">Model</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #cbd5e1;">Count</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #cbd5e1;">Value</th>
+        </tr></thead>
+        <tbody>${summaryRows}
+          <tr><td colspan="2" style="padding:6px 8px;font-weight:600;">Total</td><td style="padding:6px 8px;text-align:right;font-weight:600;">${laptops.length}</td><td style="padding:6px 8px;text-align:right;font-weight:600;">${escapeHtml(money(productValue))}</td></tr>
+        </tbody>
       </table>
       <p style="margin:14px 0 6px;font-weight:600;">Ship to</p>
       <p style="margin:0;white-space:pre-line;color:#334155;">${escapeHtml(head.shipping_address || head.vendor_address || '—')}</p>
@@ -282,6 +329,9 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
     `Laptops: ${laptops.length}`,
     `Declared value: ${money(productValue)}`,
     ...transport.map(([k, v]) => `${k}: ${v}`),
+    '',
+    'By brand and model:',
+    ...summary.map((g) => `${g.brand} ${g.model}: ${g.count} laptop(s), ${money(g.value)}`),
     '',
     'Action required: raise the E-way Bill and enter it in the CRM.',
     'The consignment cannot leave the gate until then.',
@@ -337,6 +387,41 @@ async function sendAccountsVrtdcEwayEmail({ dcNumber, head, items = [], actorUse
   return { sent: true, to: ACCOUNTS_EMAIL, cc: ACCOUNTS_EMAIL_CC, product_value: productValue };
 }
 
+/**
+ * Called after a return challan is sent to the gate (after COMMIT). At Rs 50,000
+ * and above the Accounts request goes by itself; a failure is recorded on the
+ * challan and the "Send for E-way bill" button resends. Never throws.
+ */
+async function autoRequestVrtdcEway(dcNumber, { actorUserId = null } = {}) {
+  try {
+    const { getReturnDc } = require('./vendorReturnToVendorService');
+    const dc = await getReturnDc(dcNumber);
+    if (!dc) return { required: false };
+    const items = (dc.items || []).filter((i) => i.item_status !== 'cancelled');
+    const total = items.reduce((n, i) => n + (Number(i.declared_value) || 0), 0);
+    if (!requiresVrtdcEway(total)) return { required: false, product_value: total };
+    if (dc.accounts_notified_at) return { required: true, sent: true, already: true, product_value: total };
+    try {
+      const r = await sendAccountsVrtdcEwayEmail({ dcNumber, head: dc, items, actorUserId, userTriggered: true });
+      await pool.query(
+        `UPDATE vendor_return_delivery_challans SET eway_auto_mail_at = NOW(), eway_auto_mail_error = NULL WHERE dc_number = $1`,
+        [dcNumber]
+      );
+      return { required: true, sent: true, to: r.to, product_value: total };
+    } catch (err) {
+      const message = String(err.message || err).slice(0, 1000);
+      await pool.query(
+        `UPDATE vendor_return_delivery_challans SET eway_auto_mail_error = $2 WHERE dc_number = $1`,
+        [dcNumber, message]
+      ).catch(() => {});
+      return { required: true, sent: false, error: message, product_value: total };
+    }
+  } catch (err) {
+    console.error('[vrtdcEway] auto request failed:', err.message);
+    return { required: null, sent: false, error: err.message };
+  }
+}
+
 /** Accounts records the E-way Bill. Regenerates the PDF so it carries the number. */
 async function saveVrtdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, ewayBillPdfPath, userId }) {
   const num = normalizeEwayBillNumber(ewayBillNumber);
@@ -347,9 +432,9 @@ async function saveVrtdcEwayBill({ dcNumber, ewayBillNumber, ewayBillDate, ewayB
   }
 
   const total = await computeVrtdcTotalValue(dcNumber);
-  if (!requiresVrdcEway(total)) {
+  if (!requiresVrtdcEway(total)) {
     throw new Error(
-      `E-Way Bill applies only above ${money(EWAY_VALUE_THRESHOLD)} — this consignment is declared at ${money(total)}.`
+      `E-Way Bill applies only from ${money(EWAY_VALUE_THRESHOLD)} — this consignment is declared at ${money(total)}.`
       + ' Enter the declared values on the laptops first if that looks wrong.'
     );
   }
@@ -418,8 +503,11 @@ module.exports = {
   assertVrtdcPdfDownloadable,
   canUploadVrtdcEwayBill,
   sendAccountsVrtdcEwayEmail,
+  autoRequestVrtdcEway,
+  summariseByModel,
+  describeTransport,
   saveVrtdcEwayBill,
   saveDeclaredValues,
   laptopRowsFromItems,
-  requiresVrtdcEway: requiresVrdcEway,
+  requiresVrtdcEway,
 };

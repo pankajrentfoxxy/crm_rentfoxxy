@@ -25,6 +25,8 @@ const DC_ACTION_SUFFIXES = [
   '/verify-serial',
   '/deliver',
   '/notify',
+  '/preview',
+  '/request-pdf',
   '/items/cancel',
   '/rental-invoice/pdf',
   '/bluedart-awb/pdf',

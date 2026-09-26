@@ -1,5 +1,8 @@
 /**
- * Vendor rental-return tickets (VRT). Wraps VRTDC; rent stops on successful vendor notify.
+ * Vendor rental-return tickets (VRT) — the return request (D10,
+ * claude/carret-vendor-return-request.md). The user picks the rent stop date
+ * (today or later) and a pickup slot; sending mails the vendor with a PDF and
+ * stops the rent from that date. Wraps VRTDC for the laptops leaving.
  */
 const pool = require('../config/db');
 const { nextFinancialYearNumber } = require('./salesManagementService');
@@ -8,6 +11,7 @@ const { logVendorAudit } = require('./vendorAuditLogService');
 const { sendDispatchMail, isDispatchMailConfigured } = require('./dispatchEmailService');
 const { formatCompanyBlock } = require('../utils/companyDefaults');
 const { createReturnDc } = require('./vendorReturnToVendorService');
+const reqMail = require('./vendorReturnRequestMail');
 
 const RENTAL_PO_TYPES = ['rental_purchase', 'rent_to_own'];
 // The warehouse statuses a rented unit can sit in while the vendor bill is still
@@ -19,7 +23,11 @@ const RENTAL_PO_TYPES = ['rental_purchase', 'rent_to_own'];
 // outward states stay out: the unit is not ours to hand over yet.
 const ELIGIBLE_STATUSES = ['in_stock', 'returned', 'qc_failed'];
 const LIVE_ITEM_STATUSES = ['requested', 'rental_stopped', 'dc_created', 'handed_over', 'vendor_received'];
-const RETURN_NOTIFY_CC = process.env.VENDOR_RETURN_NOTIFY_CC || process.env.ACCOUNTS_EMAIL_CC || '';
+// VENDOR_RETURN_NOTIFY_CC is the older name; VENDOR_RETURN_REQUEST_CC wins.
+function returnMailCc() {
+  if (String(process.env.VENDOR_RETURN_REQUEST_CC || '').trim()) return reqMail.requestCc();
+  return String(process.env.VENDOR_RETURN_NOTIFY_CC || '').trim() || reqMail.requestCc();
+}
 
 const OPEN_TICKET_ITEM_SQL = `
   EXISTS (
@@ -28,14 +36,6 @@ const OPEN_TICKET_ITEM_SQL = `
        AND i.item_status NOT IN ('cancelled','vendor_received')
   )
 `;
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function deriveTicketStatus(items) {
   const live = (items || []).filter((i) => i.item_status !== 'cancelled');
@@ -109,6 +109,9 @@ async function listEligibleLaptops({ vendorId, search, page = 1, limit = 50 }) {
               v.business_name AS vendor_name,
               COALESCE(vsn.extra->>'brand', '') AS brand,
               COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
+              COALESCE(vsn.extra->>'processor', '') AS processor,
+              COALESCE(vsn.extra->>'ram', '') AS ram,
+              COALESCE(vsn.extra->>'storage', '') AS storage,
               COALESCE(
                 NULLIF(vsn.rent_monthly_rate, 0),
                 NULLIF((vpo.line_items->0->>'rate')::numeric, 0),
@@ -170,7 +173,8 @@ async function listEligibleVendors() {
 
 async function getTicket(ticketNumber, db = pool) {
   const head = await db.query(
-    `SELECT t.*, v.email AS vendor_email_live, v.phone AS vendor_phone
+    `SELECT t.*, v.email AS vendor_email_live, v.phone AS vendor_phone,
+            v.contact_person_name AS vendor_contact_name
        FROM vendor_return_tickets t
        LEFT JOIN vendors v ON v.vendor_id = t.vendor_id AND v.deleted_at IS NULL
       WHERE t.ticket_number = $1`,
@@ -193,8 +197,12 @@ async function getTicket(ticketNumber, db = pool) {
       ORDER BY d.created_at`,
     [ticketNumber]
   );
+  const h = head.rows[0];
   const ticket = {
-    ...head.rows[0],
+    ...h,
+    rent_stop_date: reqMail.ymd(h.rent_stop_date),
+    pickup_date: reqMail.ymd(h.pickup_date),
+    reason_label: reqMail.reasonLabel(h.reason_code, h.return_reason),
     items: items.rows,
     dcs: dcs.rows,
     derived_status: deriveTicketStatus(items.rows),
@@ -234,7 +242,11 @@ async function listTickets({ status, vendorId, page = 1, limit = 25 }) {
   ]);
 
   return {
-    data: list.rows,
+    data: list.rows.map((r) => ({
+      ...r,
+      rent_stop_date: reqMail.ymd(r.rent_stop_date),
+      pickup_date: reqMail.ymd(r.pickup_date),
+    })),
     pagination: {
       page: Math.max(1, page),
       limit,
@@ -306,11 +318,22 @@ async function createTicket(client, {
   vendorId,
   serialIds,
   returnReason,
+  reasonCode,
+  rentStopDate,
+  pickupDate,
+  pickupTime,
   remarks,
   actorUserId,
   actorName,
 }) {
   if (!vendorId) throw new Error('Vendor is required');
+  const code = reasonCode ? String(reasonCode).trim() : null;
+  if (code && !reqMail.REASONS[code]) throw Object.assign(new Error('Unknown return reason'), { status: 400 });
+  if (code === 'other' && String(returnReason || '').trim().length < 3) {
+    throw Object.assign(new Error('Say why the laptops are going back'), { status: 400 });
+  }
+  const dates = reqMail.validateRequestDates({ rentStopDate, pickupDate, pickupTime });
+  const reasonStored = code && code !== 'other' ? reqMail.REASONS[code].label : (returnReason || null);
   if (!Array.isArray(serialIds) || !serialIds.length) throw new Error('Select at least one laptop');
   const ids = [...new Set(serialIds.map((id) => Number(id)).filter((n) => Number.isFinite(n)))];
   if (!ids.length) throw new Error('Invalid serial selection');
@@ -334,16 +357,20 @@ async function createTicket(client, {
   await client.query(
     `INSERT INTO vendor_return_tickets (
        ticket_number, vendor_id, vendor_name, vendor_email, return_reason, remarks,
-       status, request_date, created_by
-     ) VALUES ($1,$2,$3,$4,$5,$6,'requested',CURRENT_DATE,$7)`,
+       status, request_date, created_by, reason_code, rent_stop_date, pickup_date, pickup_time
+     ) VALUES ($1,$2,$3,$4,$5,$6,'requested',CURRENT_DATE,$7,$8,$9::date,$10::date,$11)`,
     [
       ticketNumber,
       vendor.vendor_id,
       vendorName,
       vendor.email || null,
-      returnReason || null,
+      reasonStored,
       remarks || null,
       actorUserId || null,
+      code,
+      dates.rentStopDate,
+      dates.pickupDate,
+      dates.pickupTime,
     ]
   );
 
@@ -390,76 +417,60 @@ async function createTicket(client, {
     entityType: 'vendor_return_ticket',
     entityId: ticketNumber,
     action: 'ticket_created',
-    payload: { serial_ids: ids, return_reason: returnReason || null },
+    payload: {
+      serial_ids: ids, return_reason: reasonStored, rent_stop_date: dates.rentStopDate,
+      pickup_date: dates.pickupDate, pickup_time: dates.pickupTime,
+    },
   });
 
   return getTicket(ticketNumber, client);
 }
 
-function buildNotifyBodies(ticket, items) {
-  const warehouse = formatCompanyBlock();
-  const rows = items.filter((i) => i.item_status !== 'cancelled');
-  const stopDate = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
+/** Change the reason, dates or note before the vendor is told. */
+async function updateTicket(client, {
+  ticketNumber, reasonCode, returnReason, rentStopDate, pickupDate, pickupTime, remarks, actorUserId,
+}) {
+  const headRes = await client.query(
+    `SELECT * FROM vendor_return_tickets WHERE ticket_number = $1 FOR UPDATE`,
+    [ticketNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) throw Object.assign(new Error('Return request not found'), { status: 404 });
+  if (head.status !== 'requested' || head.vendor_notified_at) {
+    throw Object.assign(new Error('The vendor has already been told — this request can no longer be changed'), { status: 409 });
+  }
+  const code = reasonCode !== undefined ? (reasonCode ? String(reasonCode).trim() : null) : head.reason_code;
+  if (code && !reqMail.REASONS[code]) throw Object.assign(new Error('Unknown return reason'), { status: 400 });
+  const free = returnReason !== undefined ? returnReason : head.return_reason;
+  if (code === 'other' && String(free || '').trim().length < 3) {
+    throw Object.assign(new Error('Say why the laptops are going back'), { status: 400 });
+  }
+  const dates = reqMail.validateRequestDates({
+    rentStopDate: rentStopDate !== undefined ? rentStopDate : reqMail.ymd(head.rent_stop_date),
+    pickupDate: pickupDate !== undefined ? pickupDate : reqMail.ymd(head.pickup_date),
+    pickupTime: pickupTime !== undefined ? pickupTime : head.pickup_time,
   });
-  const requestDate = ticket.request_date
-    ? new Date(ticket.request_date).toLocaleDateString('en-IN', {
-      day: '2-digit', month: 'short', year: 'numeric',
-    })
-    : stopDate;
-
-  const tableRows = rows.map((r) => (
-    `<tr>
-      <td style="padding:6px 8px;border:1px solid #e5e7eb">${escapeHtml(r.ttspl_id)}</td>
-      <td style="padding:6px 8px;border:1px solid #e5e7eb">${escapeHtml(r.serial_number)}</td>
-      <td style="padding:6px 8px;border:1px solid #e5e7eb">${escapeHtml([r.brand, r.model].filter(Boolean).join(' '))}</td>
-      <td style="padding:6px 8px;border:1px solid #e5e7eb">${escapeHtml(r.configuration)}</td>
-    </tr>`
-  )).join('');
-
-  const html = `
-    <p>Dear ${escapeHtml(ticket.vendor_name || 'Vendor')},</p>
-    <p>Please collect the following rental units from our warehouse. Vendor rental on these units <strong>stops from ${escapeHtml(stopDate)}</strong>.</p>
-    <p>
-      Ticket: <strong>${escapeHtml(ticket.ticket_number)}</strong><br/>
-      Request date: ${escapeHtml(requestDate)}<br/>
-      Rent stop date: ${escapeHtml(stopDate)}
-    </p>
-    <table style="border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="background:#0e7490;color:#fff">
-          <th style="padding:6px 8px;text-align:left">Asset ID</th>
-          <th style="padding:6px 8px;text-align:left">Serial</th>
-          <th style="padding:6px 8px;text-align:left">Brand / Model</th>
-          <th style="padding:6px 8px;text-align:left">Configuration</th>
-        </tr>
-      </thead>
-      <tbody>${tableRows}</tbody>
-    </table>
-    <p>The laptops are ready for collection at:</p>
-    <pre style="font-family:inherit;white-space:pre-wrap">${escapeHtml(warehouse)}</pre>
-    ${ticket.return_reason ? `<p>Reason: ${escapeHtml(ticket.return_reason)}</p>` : ''}
-    <p>Regards,<br/>Rentfoxxy Warehouse</p>
-  `;
-
-  const text = [
-    `Dear ${ticket.vendor_name || 'Vendor'},`,
-    '',
-    `Please collect the following rental units. Vendor rental stops from ${stopDate}.`,
-    `Ticket: ${ticket.ticket_number}`,
-    `Request date: ${requestDate}`,
-    `Rent stop date: ${stopDate}`,
-    '',
-    ...rows.map((r) => `- ${r.ttspl_id || ''}  ${r.serial_number || ''}  ${[r.brand, r.model].filter(Boolean).join(' ')}`),
-    '',
-    'Ready for collection at:',
-    warehouse,
-    ticket.return_reason ? `Reason: ${ticket.return_reason}` : '',
-    '',
-    'Regards, Rentfoxxy Warehouse',
-  ].filter(Boolean).join('\n');
-
-  return { html, text, subject: `Vendor return ${ticket.ticket_number} — units ready for collection` };
+  await client.query(
+    `UPDATE vendor_return_tickets
+        SET reason_code = $2, return_reason = $3, rent_stop_date = $4::date,
+            pickup_date = $5::date, pickup_time = $6, remarks = $7, updated_at = NOW()
+      WHERE ticket_number = $1`,
+    [
+      ticketNumber, code,
+      code && code !== 'other' ? reqMail.REASONS[code].label : (free || null),
+      dates.rentStopDate, dates.pickupDate, dates.pickupTime,
+      remarks !== undefined ? (remarks || null) : head.remarks,
+    ]
+  );
+  await logVendorAudit({
+    actorUserId,
+    vendorId: head.vendor_id,
+    entityType: 'vendor_return_ticket',
+    entityId: ticketNumber,
+    action: 'ticket_updated',
+    payload: { reason_code: code, rent_stop_date: dates.rentStopDate, pickup_date: dates.pickupDate, pickup_time: dates.pickupTime },
+  });
+  return getTicket(ticketNumber, client);
 }
 
 async function writeNotifyError(ticketNumber, message) {
@@ -469,44 +480,141 @@ async function writeNotifyError(ticketNumber, message) {
   );
 }
 
-async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
-  const headRes = await client.query(
-    `SELECT * FROM vendor_return_tickets WHERE ticket_number = $1 FOR UPDATE`,
+/**
+ * Everything the mail and the PDF need, read on the caller's connection (the
+ * send runs inside its transaction). Items: live (not cancelled), with PO number
+ * and the laptop's own spec fields.
+ */
+async function loadRequestContext(db, ticketNumber, { lock = false } = {}) {
+  const headRes = await db.query(
+    `SELECT * FROM vendor_return_tickets WHERE ticket_number = $1${lock ? ' FOR UPDATE' : ''}`,
     [ticketNumber]
   );
   const head = headRes.rows[0];
-  if (!head) throw new Error('Return ticket not found');
+  if (!head) throw Object.assign(new Error('Return request not found'), { status: 404 });
+  const vendor = (await db.query(
+    `SELECT * FROM vendors WHERE vendor_id = $1`,
+    [head.vendor_id]
+  )).rows[0] || null;
+  const itemsRes = await db.query(
+    `SELECT i.*, vpo.purchase_order_number AS po_number, vsn.extra AS serial_extra
+       FROM vendor_return_ticket_items i
+       LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = i.po_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
+      WHERE i.ticket_number = $1
+      ORDER BY i.id`,
+    [ticketNumber]
+  );
+  const { resolveVrdcItemSpecs } = require('./vendorRepairDcShared');
+  const items = itemsRes.rows.map((r) => {
+    const spec = resolveVrdcItemSpecs({ ...r, extra: r.serial_extra || {} });
+    return {
+      ...r,
+      brand: spec.brand || r.brand,
+      model: spec.model || r.model,
+      processor: spec.processor,
+      generation: spec.generation,
+      ram: spec.ram,
+      storage: spec.storage,
+    };
+  });
+  return { head, vendor, items };
+}
+
+/** The stop date a send would apply: the chosen one, or today if none was set. */
+function effectiveStopDate(head) {
+  return reqMail.ymd(head.rent_stop_date) || reqMail.todayIst();
+}
+
+function mailParts({ head, vendor, items, stopDate }) {
+  const live = items.filter((i) => i.item_status !== 'cancelled');
+  const to = String(vendor?.email || head.vendor_email || '').trim();
+  const cc = returnMailCc();
+  const mail = reqMail.buildRequestMail({
+    ticket: { ...head, vendor_name: head.vendor_name || vendor?.business_name },
+    items: live,
+    stopDate,
+    contactName: vendor?.contact_person_name || null,
+    pickupAddress: formatCompanyBlock(),
+  });
+  return { live, to, cc, ...mail };
+}
+
+/** What "Send to vendor" would send — for the screen, before anything changes. */
+async function previewRequest(ticketNumber) {
+  const ctx = await loadRequestContext(pool, ticketNumber);
+  const stopDate = effectiveStopDate(ctx.head);
+  const parts = mailParts({ ...ctx, stopDate });
+  return {
+    to: parts.to || null,
+    cc: parts.cc,
+    subject: parts.subject,
+    html: parts.html,
+    rent_stop_date: stopDate,
+    last_billed_date: reqMail.lastBilledDay(stopDate),
+    stop_date_passed: stopDate < reqMail.todayIst(),
+    laptops: parts.live.length,
+  };
+}
+
+async function buildRequestPdf(db, ctx, stopDate) {
+  const { generateReturnRequestPdf } = require('./vendorReturnRequestPdfService');
+  const live = ctx.items.filter((i) => i.item_status !== 'cancelled');
+  return generateReturnRequestPdf({
+    ticket: { ...ctx.head, reason_label: reqMail.reasonLabel(ctx.head.reason_code, ctx.head.return_reason) },
+    items: live,
+    vendor: ctx.vendor,
+    stopDate,
+  });
+}
+
+/** The request PDF for download (as it stands now). */
+async function requestPdf(ticketNumber) {
+  const ctx = await loadRequestContext(pool, ticketNumber);
+  return buildRequestPdf(pool, ctx, effectiveStopDate(ctx.head));
+}
+
+async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
+  const ctx = await loadRequestContext(client, ticketNumber, { lock: true });
+  const { head } = ctx;
   if (head.status === 'cancelled') throw new Error('Ticket is cancelled');
   if (head.vendor_notified_at) {
     return { already_notified: true, ticket: await getTicket(ticketNumber, client) };
   }
 
-  const email = String(head.vendor_email || '').trim();
-  if (!email) throw new Error('Vendor has no email address on file.');
+  // D10: the chosen date, never in the past. A request drafted for today and
+  // sent tomorrow must be re-dated, or the vendor is told rent stopped on a
+  // day that has gone.
+  const stopDate = effectiveStopDate(head);
+  if (stopDate < reqMail.todayIst()) {
+    throw Object.assign(
+      new Error(`The rent stop date ${reqMail.prettyDate(stopDate)} has passed — change it to today or later before sending`),
+      { status: 409 }
+    );
+  }
+  const lastBilled = reqMail.lastBilledDay(stopDate);
+
+  const parts = mailParts({ ...ctx, stopDate });
+  if (!parts.to) throw new Error('Vendor has no email address on file.');
   if (!isDispatchMailConfigured()) {
     throw new Error('Dispatch email is not configured (DISPATCH_SMTP_*).');
   }
-
-  const itemsRes = await client.query(
-    `SELECT * FROM vendor_return_ticket_items WHERE ticket_number = $1 ORDER BY id`,
-    [ticketNumber]
-  );
-  const live = itemsRes.rows.filter((i) => i.item_status !== 'cancelled');
-  if (!live.length) throw new Error('No live laptops on this ticket');
-
-  const { html, text, subject } = buildNotifyBodies(head, live);
+  if (!parts.live.length) throw new Error('No live laptops on this ticket');
 
   // Database first, email last, all in the caller's transaction: if the email
   // fails, everything rolls back and the vendor was told nothing; the vendor
   // is only told rent stopped once our records say so. (It used to send the
   // email first, and record failures through the pool on the row this
   // transaction had locked — which hung the request until timeout.)
+  const pdfRel = await buildRequestPdf(client, ctx, stopDate);
   await client.query(
     `UPDATE vendor_return_tickets
         SET vendor_notified_at = NOW(), vendor_notified_by = $2,
-            status = 'notified', notify_error = NULL, updated_at = NOW()
+            status = 'notified', notify_error = NULL,
+            rent_stop_date = $3::date, notify_to = $4, notify_cc = $5, request_pdf_path = $6,
+            updated_at = NOW()
       WHERE ticket_number = $1`,
-    [ticketNumber, actorUserId || null]
+    [ticketNumber, actorUserId || null, stopDate, parts.to, parts.cc, pdfRel]
   );
   await client.query(
     `UPDATE vendor_return_ticket_items
@@ -514,25 +622,27 @@ async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
       WHERE ticket_number = $1 AND item_status = 'requested'`,
     [ticketNumber]
   );
+  // vendor_rent_end_date is the last billed day (inclusive), so "stops from
+  // the 1st" stores the 30th.
   await client.query(
     `UPDATE vendor_serial_numbers vsn
-        SET vendor_rent_end_date = COALESCE(vsn.vendor_rent_end_date, CURRENT_DATE),
+        SET vendor_rent_end_date = COALESCE(vsn.vendor_rent_end_date, $2::date),
             updated_at = NOW()
        FROM vendor_return_ticket_items i
       WHERE i.serial_id = vsn.serial_id AND i.ticket_number = $1
         AND i.item_status <> 'cancelled'`,
-    [ticketNumber]
+    [ticketNumber, lastBilled]
   );
   await persistDerivedStatus(client, ticketNumber);
 
-  for (const item of live) {
+  for (const item of parts.live) {
     await logTtsplEvent({
       db: client,
       vendorSerialId: item.serial_id,
       ttsplId: item.ttspl_id,
       eventType: 'vendor_return_rental_stopped',
-      description: `Vendor notified — rental stopped on ${ticketNumber}`,
-      metadata: { ticket_number: ticketNumber },
+      description: `Return request ${ticketNumber} sent to the vendor — rent stops from ${stopDate}`,
+      metadata: { ticket_number: ticketNumber, rent_stop_date: stopDate, last_billed_date: lastBilled },
       actorUserId,
       actorName,
     });
@@ -541,7 +651,15 @@ async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
   let ok = false;
   let mailError = null;
   try {
-    ok = await sendDispatchMail({ to: email, cc: RETURN_NOTIFY_CC || undefined, subject, text, html });
+    ok = await sendDispatchMail({
+      to: parts.to,
+      cc: parts.cc || undefined,
+      subject: parts.subject,
+      text: parts.text,
+      html: parts.html,
+      pdfRelativePath: `uploads/${pdfRel}`,
+      userTriggered: true,
+    });
   } catch (err) {
     mailError = err.message || String(err);
   }
@@ -561,9 +679,11 @@ async function notifyVendor(client, { ticketNumber, actorUserId, actorName }) {
     entityId: ticketNumber,
     action: 'vendor_notified',
     payload: {
-      serial_ids: live.map((i) => i.serial_id),
-      stopped_on: new Date().toISOString().slice(0, 10),
-      email,
+      serial_ids: parts.live.map((i) => i.serial_id),
+      rent_stop_date: stopDate,
+      last_billed_date: lastBilled,
+      email: parts.to,
+      cc: parts.cc,
     },
   });
 
@@ -608,6 +728,7 @@ async function createDcFromTicket(client, {
   }
 
   const created = await createReturnDc(client, {
+    viaReturnRequest: true,
     serialIds: ids,
     vendorId: head.vendor_id,
     returnReason: returnReason || head.return_reason,
@@ -684,18 +805,31 @@ async function cancelTicketItems(client, { ticketNumber, serialIds, reason, acto
   if (!Array.isArray(serialIds) || !serialIds.length) throw new Error('Select at least one laptop');
   const ids = [...new Set(serialIds.map((id) => Number(id)).filter((n) => Number.isFinite(n)))];
 
+  const head = (await client.query(
+    `SELECT * FROM vendor_return_tickets WHERE ticket_number = $1 FOR UPDATE`,
+    [ticketNumber]
+  )).rows[0];
+  if (!head) throw Object.assign(new Error('Return request not found'), { status: 404 });
+
   const items = await client.query(
     `SELECT * FROM vendor_return_ticket_items
       WHERE ticket_number = $1 AND serial_id = ANY($2::int[])
       FOR UPDATE`,
     [ticketNumber, ids]
   );
+  if (items.rows.length !== ids.length) throw new Error('One or more laptops are not on this request');
   for (const item of items.rows) {
     if (!['requested', 'rental_stopped'].includes(item.item_status)) {
       throw new Error(
         `${item.ttspl_id || item.serial_number}: cannot cancel after a return DC is created`
       );
     }
+  }
+  // Laptops the vendor has already been told about: the vendor gets told the
+  // return is off, so there has to be a reason to give.
+  const told = items.rows.filter((i) => i.item_status === 'rental_stopped');
+  if (told.length && String(reason || '').trim().length < 3) {
+    throw Object.assign(new Error('Give a reason — the vendor is told these laptops are no longer coming back'), { status: 400 });
   }
 
   await client.query(
@@ -711,17 +845,79 @@ async function cancelTicketItems(client, { ticketNumber, serialIds, reason, acto
         AND vendor_return_ticket_number = $2`,
     [ids, ticketNumber]
   );
-  // Do not clear vendor_rent_end_date — cancelled ticket does not restart rent.
+
+  // D10: the laptop stays with us, so its rent resumes — but only where the end
+  // date is still the one this request set (older requests stopped rent on the
+  // day of the mail) and the laptop is still in our warehouse.
+  let resumed = [];
+  if (told.length) {
+    const r = await client.query(
+      `UPDATE vendor_serial_numbers vsn
+          SET vendor_rent_end_date = NULL, updated_at = NOW()
+         FROM vendor_return_ticket_items i
+        WHERE i.ticket_number = $1
+          AND i.serial_id = vsn.serial_id
+          AND i.serial_id = ANY($2::int[])
+          AND vsn.vendor_rent_end_date = COALESCE($3::date - 1, i.rental_stopped_at::date)
+          AND vsn.inventory_status = ANY($4::text[])
+        RETURNING vsn.serial_id`,
+      [ticketNumber, told.map((i) => i.serial_id), head.rent_stop_date, ELIGIBLE_STATUSES]
+    );
+    resumed = r.rows.map((x) => x.serial_id);
+  }
   await persistDerivedStatus(client, ticketNumber);
+
+  for (const item of told) {
+    await logTtsplEvent({
+      db: client,
+      vendorSerialId: item.serial_id,
+      ttsplId: item.ttspl_id,
+      eventType: 'vendor_return_cancelled',
+      description: resumed.includes(item.serial_id)
+        ? `Taken off return request ${ticketNumber} — vendor rent resumes`
+        : `Taken off return request ${ticketNumber}`,
+      metadata: { ticket_number: ticketNumber, reason: reason || null, rent_resumed: resumed.includes(item.serial_id) },
+      actorUserId,
+      actorName,
+    });
+  }
 
   await logVendorAudit({
     actorUserId,
-    vendorId: null,
+    vendorId: head.vendor_id,
     entityType: 'vendor_return_ticket',
     entityId: ticketNumber,
     action: 'items_cancelled',
-    payload: { serial_ids: ids, reason: reason || null },
+    payload: { serial_ids: ids, reason: reason || null, rent_resumed: resumed },
   });
+
+  // Mail last, like the send: if it can't go, nothing above is kept.
+  if (told.length) {
+    const vendor = (await client.query('SELECT * FROM vendors WHERE vendor_id = $1', [head.vendor_id])).rows[0];
+    const to = String(vendor?.email || head.notify_to || head.vendor_email || '').trim();
+    if (!to) throw new Error('Vendor has no email address on file — cannot tell them the return is off.');
+    const remaining = (await client.query(
+      `SELECT COUNT(*)::int AS n FROM vendor_return_ticket_items
+        WHERE ticket_number = $1 AND item_status <> 'cancelled'`,
+      [ticketNumber]
+    )).rows[0].n;
+    const mail = reqMail.buildCancelMail({
+      ticket: head, items: told, contactName: vendor?.contact_person_name || null, remainingCount: remaining, reason,
+    });
+    let ok = false;
+    try {
+      ok = await sendDispatchMail({
+        to, cc: head.notify_cc || returnMailCc(), subject: mail.subject, text: mail.text, html: mail.html, userTriggered: true,
+      });
+    } catch (_) { ok = false; }
+    if (!ok) {
+      throw Object.assign(new Error('The cancellation mail to the vendor could not be sent. Nothing was changed.'), { status: 503 });
+    }
+    await client.query(
+      `UPDATE vendor_return_tickets SET cancel_mail_sent_at = NOW(), updated_at = NOW() WHERE ticket_number = $1`,
+      [ticketNumber]
+    );
+  }
 
   return getTicket(ticketNumber, client);
 }
@@ -749,7 +945,7 @@ async function cancelTicket(client, { ticketNumber, reason, actorUserId, actorNa
   }
   await client.query(
     `UPDATE vendor_return_tickets
-        SET status = 'cancelled', remarks = COALESCE($2::text, remarks), updated_at = NOW()
+        SET status = 'cancelled', cancelled_at = NOW(), cancel_reason = $2::text, updated_at = NOW()
       WHERE ticket_number = $1`,
     [ticketNumber, reason || null]
   );
@@ -766,6 +962,9 @@ module.exports = {
   listTickets,
   getTicket,
   createTicket,
+  updateTicket,
+  previewRequest,
+  requestPdf,
   notifyVendor,
   createDcFromTicket,
   syncFromDc,

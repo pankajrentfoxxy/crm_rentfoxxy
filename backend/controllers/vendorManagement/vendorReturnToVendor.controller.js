@@ -113,7 +113,11 @@ exports.dispatchDc = async (req, res) => {
       ...actor,
     });
     await client.query('COMMIT');
-    res.json({ success: true, dc });
+    // At Rs 50,000 and above the e-way request to Accounts goes by itself, after
+    // the commit so a mail problem can't undo the send-to-gate.
+    const { autoRequestVrtdcEway } = require('../../services/vrtdcEwayComplianceService');
+    const ewayRequest = await autoRequestVrtdcEway(dc.dc_number, { actorUserId: actor.actorUserId });
+    res.json({ success: true, dc, eway_request: ewayRequest });
   } catch (err) {
     await client.query('ROLLBACK');
     handleError(res, err);

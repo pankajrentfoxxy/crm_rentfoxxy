@@ -30,6 +30,8 @@ const VendorArrivalsPage = React.lazy(() => import('../features/carret/procure/V
 const DeliveryReceivePage = React.lazy(() => import('../features/carret/procure/DeliveryReceivePage'));
 const VendorReturnsPage = React.lazy(() => import('../features/carret/procure/VendorReturnsPage'));
 const ReturnChallanRecordPage = React.lazy(() => import('../features/carret/procure/ReturnChallanRecordPage'));
+const ReturnRequestFormPage = React.lazy(() => import('../features/carret/procure/ReturnRequestFormPage'));
+const ReturnRequestRecordPage = React.lazy(() => import('../features/carret/procure/ReturnRequestRecordPage'));
 const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
 const FloorTicketPage = React.lazy(() => import('../features/carret/produce/FloorTicketPage'));
 const PartsDeskPage = React.lazy(() => import('../features/carret/produce/PartsDeskPage'));
@@ -114,6 +116,8 @@ export const carretRoutes = CARRET_ENABLED
       // One area for everything going back to a vendor (step 6). The two old
       // Carret list paths open it too.
       { path: '/carret/procure/returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
+      { path: '/carret/procure/return-requests/new', element: guardAny(['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], 'create', <ReturnRequestFormPage />) },
+      { path: '/carret/procure/return-requests/:ticketNumber', element: guardAny(['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], 'view', <ReturnRequestRecordPage />) },
       { path: '/carret/procure/returns/:dcNumber', element: guardAny(['vendor_return_to_vendor', 'vendor_management'], 'view', <ReturnChallanRecordPage />) },
       { path: '/carret/procure/vendor-returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
       { path: '/carret/procure/vendor-repair', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },

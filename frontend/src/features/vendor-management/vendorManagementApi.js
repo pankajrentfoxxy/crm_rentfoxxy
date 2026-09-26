@@ -450,6 +450,29 @@ export function cancelVendorReturnTicket(ticketNumber, payload) {
   return api.post(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/cancel`, payload);
 }
 
+/** Change a return request's reason, dates or note before the vendor is told. */
+export function updateVendorReturnTicket(ticketNumber, payload) {
+  return api.patch(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}`, payload);
+}
+
+/** The mail "Send to vendor" would send (subject, To, CC, HTML) — nothing changes. */
+export function fetchVendorReturnTicketPreview(ticketNumber) {
+  return api.get(`${base}/return-ticket/${encodeURIComponent(ticketNumber)}/preview`);
+}
+
+export async function downloadVendorReturnRequestPdf(ticketNumber) {
+  try {
+    const response = await api.get(
+      `${base}/return-ticket/${encodeURIComponent(ticketNumber)}/request-pdf`,
+      { responseType: 'blob' }
+    );
+    const safe = String(ticketNumber).replace(/[^\w-]+/g, '_');
+    downloadBlobResponse(response, `Return_request_${safe}.pdf`);
+  } catch (err) {
+    throw new Error(await parseBlobError(err));
+  }
+}
+
 export async function downloadReturnToVendorDcPdf(dcNumber) {
   try {
     const response = await api.get(

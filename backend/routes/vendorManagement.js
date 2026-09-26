@@ -413,6 +413,9 @@ router.post(...prefixedDcRoute(vrtBase, '/notify', ...vrtEdit, vendorReturnTicke
 router.post(...prefixedDcRoute(vrtBase, '/dc', ...vrtEdit, vendorReturnTicket.createDc));
 router.post(...prefixedDcRoute(vrtBase, '/items/cancel', ...vrtEdit, vendorReturnTicket.cancelItems));
 router.post(...prefixedDcRoute(vrtBase, '/cancel', ...vrtEdit, vendorReturnTicket.cancelTicket));
+router.get(...prefixedDcRoute(vrtBase, '/preview', ...authorizeReturnTicket, vendorReturnTicket.previewRequest));
+router.get(...prefixedDcRoute(vrtBase, '/request-pdf', ...authorizeReturnTicket, vendorReturnTicket.downloadRequestPdf));
+router.patch(...prefixedDcRoute(vrtBase, '', ...vrtEdit, vendorReturnTicket.updateTicket));
 router.get(...prefixedDcRoute(vrtBase, '', ...authorizeReturnTicket, vendorReturnTicket.getTicket));
 router.get('/return-ticket/:ticketNumber', authorizeReturnTicket, vendorReturnTicket.getTicket);
 router.post('/return-ticket/:ticketNumber/notify', vrtEdit, vendorReturnTicket.notifyVendor);

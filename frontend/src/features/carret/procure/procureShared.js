@@ -36,10 +36,11 @@ const ACTIONS = {
   receive_unit_on_po_line: 'Laptop received',
   receive_bulk_on_spare_po_line: 'Spare parts received',
   status_auto_receive_progress: 'PO receiving progressed',
-  ticket_created: 'Return ticket raised',
-  vendor_notified: 'Vendor notified of a return',
+  ticket_created: 'Return request raised',
+  ticket_updated: 'Return request changed',
+  vendor_notified: 'Return request sent to the vendor',
   vrtdc_created: 'Return challan made',
-  items_cancelled: 'Return items cancelled',
+  items_cancelled: 'Laptops taken off a return request',
   line_specs_updated: 'PO line specs changed',
 };
 export const actionLabel = (a) => ACTIONS[a] || String(a || '').replace(/_/g, ' ');

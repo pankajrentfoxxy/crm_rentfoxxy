@@ -161,8 +161,9 @@ Command for each group — dry run first, then the same with `--commit`:
 | ☐ | `339_floor_stage_forms.sql` | `diagnosis_results.answers`, `.outcome`; Chip + Body & Paint checklists | Production (this work) |
 | ☐ | `340_laptop_config_confirmations.sql` | new insert-only table | Production (this work) |
 | ☐ | `341_final_testing_item_label.sql` | one checklist label | Production (this work) |
+| ☐ | `342_vendor_return_request.sql` | return request dates/pickup/PDF/cancel columns; challan porter + in-house person, auto e-way mail record | Vendor return request (D10) — additive only |
 
-All of 327–341 were applied to QA this way on 26 Sep. They add columns/tables/rows; the files
+All of 327–342 were applied to QA this way on 26 Sep. They add columns/tables/rows; the files
 that also UPDATE existing rows are 334, 335, 336 (Procure-to-stock status backfills) and 341
 (one checklist label) — read their dry-run output before `--commit`.
 

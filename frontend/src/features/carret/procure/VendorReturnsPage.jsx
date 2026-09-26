@@ -25,20 +25,22 @@ import { errMsg } from './procureShared';
 const TABS = [
   { key: 'send', label: 'To send back' },
   { key: 'challans', label: 'Return challans' },
-  { key: 'tickets', label: 'Rental returns' },
+  { key: 'tickets', label: 'Return requests' },
   { key: 'repairs', label: 'Repairs' },
   { key: 'debit', label: 'Debit notes' },
 ];
 const enc = encodeURIComponent;
 const DC_LABEL = { draft: 'Draft', dispatch_ready: 'At the gate', dispatched: 'With the transporter', completed: 'Vendor has it', cancelled: 'Cancelled' };
 const VRDC_LABEL = { draft: 'Draft', dispatch_ready: 'At the gate', dispatched: 'With vendor', partially_returned: 'Part back', returned: 'Back', cancelled: 'Cancelled' };
-const VRT_LABEL = { draft: 'Draft', notified: 'Vendor told — rent stopped', picked: 'On a challan', completed: 'Done', cancelled: 'Cancelled' };
+const VRT_LABEL = { requested: 'Draft — not sent', notified: 'Vendor told — rent stops', partially_picked: 'Part picked up', picked: 'Picked up', completed: 'Vendor has them', cancelled: 'Cancelled' };
+const prettyDate = (ymd) => (ymd ? new Date(`${String(ymd).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—');
 
 export default function VendorReturnsPage() {
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
   const canEdit = ['vendor_return_to_vendor', 'vendor_management'].some((s) => hasPermission(s, 'edit'));
   const canCreate = ['vendor_return_to_vendor', 'vendor_management'].some((s) => hasPermission(s, 'create'));
+  const canRequest = ['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'].some((s) => hasPermission(s, 'create'));
   const canRepair = ['vendor_repair_dc_dispatch', 'vendor_repair_dc'].some((s) => hasPermission(s, 'edit') || hasPermission(s, 'create'));
 
   const [tab, setTab] = useState('send');
@@ -75,6 +77,7 @@ export default function VendorReturnsPage() {
   const pickedVendors = [...new Set(pickedRows.map((r) => r.vendor_id))];
 
   const toggle = (r) => setPicked((p) => {
+    if (r.needs_return_request) return p; // D10: goes back through a return request
     const n = { ...p };
     if (n[r.serial_id]) delete n[r.serial_id]; else n[r.serial_id] = r;
     return n;
@@ -110,7 +113,7 @@ export default function VendorReturnsPage() {
   const columns = useMemo(() => {
     if (tab === 'send') {
       return [
-        { key: 'x', header: '', width: '2.5rem', render: (r) => canCreate && <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} checked={Boolean(picked[r.serial_id])} onChange={() => toggle(r)} onClick={(e) => e.stopPropagation()} /> },
+        { key: 'x', header: '', width: '2.5rem', render: (r) => canCreate && <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} disabled={r.needs_return_request} title={r.needs_return_request ? 'Rented and in good condition — raise a return request' : undefined} checked={Boolean(picked[r.serial_id])} onChange={() => toggle(r)} onClick={(e) => e.stopPropagation()} /> },
         { key: 't', header: 'Asset', render: (r) => <DocNumber value={r.ttspl_id} />, sub: (r) => r.serial_number },
         { key: 'l', header: 'Laptop', render: (r) => [r.brand, r.model].filter(Boolean).join(' ') || '—', sub: (r) => r.po_number },
         { key: 'v', header: 'Vendor', render: (r) => r.vendor_name },
@@ -119,7 +122,9 @@ export default function VendorReturnsPage() {
           header: 'Why it goes back',
           render: (r) => (r.rejected_at_receipt
             ? <span style={{ color: 'var(--alert-crit)' }}>Rejected at the door — {r.receipt_rejection_reason}</span>
-            : r.qc_fail_reason ? <span>QC failed — {r.qc_fail_reason}</span> : <StatusChip status={r.inventory_status} />),
+            : r.qc_fail_reason ? <span>QC failed — {r.qc_fail_reason}</span>
+              : r.needs_return_request ? <span className="text-ink-3">Rented, in good condition — goes back through a <a href="/carret/procure/return-requests/new" onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate('/carret/procure/return-requests/new'); }}>return request</a></span>
+                : <StatusChip status={r.inventory_status} />),
         },
         { key: 'rent', header: 'Rent / month', numeric: true, render: (r) => <Money value={r.rent_monthly_rate} showZero={false} /> },
       ];
@@ -135,10 +140,11 @@ export default function VendorReturnsPage() {
     }
     if (tab === 'tickets') {
       return [
-        { key: 'n', header: 'Return ticket', render: (r) => <DocNumber value={r.ticket_number} /> },
+        { key: 'n', header: 'Return request', render: (r) => <DocNumber value={r.ticket_number} /> },
         { key: 'v', header: 'Vendor', render: (r) => r.vendor_name },
         { key: 'c', header: 'Laptops', numeric: true, render: (r) => r.item_count },
-        { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status === 'completed' ? 'completed' : r.status === 'cancelled' ? 'cancelled' : 'pending'} label={VRT_LABEL[r.status] || r.status} />, sub: (r) => (r.notify_error ? `Email failed: ${r.notify_error}` : null) },
+        { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status === 'completed' ? 'completed' : r.status === 'cancelled' ? 'cancelled' : r.status === 'requested' ? 'draft' : 'pending'} label={VRT_LABEL[r.status] || r.status} />, sub: (r) => (r.notify_error ? `Email failed: ${r.notify_error}` : null) },
+        { key: 'r', header: 'Rent stops from', render: (r) => prettyDate(r.rent_stop_date || (r.vendor_notified_at ? String(r.vendor_notified_at).slice(0, 10) : null)) },
         { key: 'd', header: 'Vendor told', render: (r) => (r.vendor_notified_at ? <DateTime value={r.vendor_notified_at} /> : '—') },
       ];
     }
@@ -170,7 +176,7 @@ export default function VendorReturnsPage() {
 
   const onRow = {
     challans: (r) => navigate(`/carret/procure/returns/${enc(r.dc_number)}`),
-    tickets: (r) => navigate(`/vendor-management/return-ticket/${enc(r.ticket_number)}`),
+    tickets: (r) => navigate(`/carret/procure/return-requests/${enc(r.ticket_number)}`),
     repairs: (r) => navigate(r.item_domain === 'part' ? '/inventory-management/part-vendor-repair' : `/vendor-management/vendor-repair-dc/${enc(r.dc_number)}`),
     debit: () => navigate('/vendor-billing/debit-notes'),
   }[tab];
@@ -185,7 +191,11 @@ export default function VendorReturnsPage() {
             Laptops that failed QC on the floor and ones rejected at the door come here automatically. Pick one vendor’s laptops and make a return challan; the guard scans it out, and each laptop gets a draft debit note.
           </Notice>
         )}
-        {tab === 'tickets' && <Notice tone="info">A rental return tells the vendor to stop the rent, then the laptops go on a challan. Open a ticket to notify the vendor or make its challan (opens the existing screen).</Notice>}
+        {tab === 'tickets' && (
+          <Notice tone="info" action={canRequest && <Button variant="primary" onClick={() => navigate('/carret/procure/return-requests/new')}>New return request</Button>}>
+            Returning a rented laptop: pick the vendor and laptops, the date rent stops and the pickup slot. The vendor gets a mail with a PDF; when they confirm, make the return challan.
+          </Notice>
+        )}
         {tab === 'repairs' && <Notice tone="info">Repairs are raised from the Diagnosis Failed list on the floor. A challan that has not gone out can be cancelled here; open one to sign, dispatch or receive it back (existing screen). Repaired laptops come back to the Floor Manager, not straight to stock.</Notice>}
 
         <Section

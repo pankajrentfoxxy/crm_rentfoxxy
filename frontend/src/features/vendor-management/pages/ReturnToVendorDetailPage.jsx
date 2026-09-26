@@ -13,7 +13,7 @@ import {
   fetchReturnToVendorDc,
   setReturnToVendorItemValues,
 } from '../vendorManagementApi';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from '../components/VrtdcTransportFields';
 import VrtdcEwayPanel from '../components/VrtdcEwayPanel';
 import { vendorRepairDispatchModeLabel } from '../../floor-pipeline/vendorRepairUi';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
@@ -111,7 +111,7 @@ export default function ReturnToVendorDetailPage() {
   };
 
   const handleDispatch = () => {
-    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    const dispatchErr = validateVrtdcTransport(shipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
       return;
@@ -128,6 +128,9 @@ export default function ReturnToVendorDetailPage() {
       vehicle_number: dispatchFields.vehicle_number || undefined,
       vendor_pickup_person: dispatchFields.vendor_pickup_person || undefined,
       vendor_pickup_mobile: dispatchFields.vendor_pickup_mobile || undefined,
+      porter_person_name: dispatchFields.porter_person_name || undefined,
+      porter_person_phone: dispatchFields.porter_person_phone || undefined,
+      delivery_person_phone: dispatchFields.delivery_person_phone || undefined,
       declared_values: declaredValues,
     }));
   };
@@ -352,7 +355,7 @@ export default function ReturnToVendorDetailPage() {
             that total decides whether an E-way Bill is required.
           </p>
           <div className="max-w-xl">
-            <VrdcDispatchFields
+            <VrtdcTransportFields
               shipBy={shipBy}
               onShipByChange={setShipBy}
               fields={dispatchFields}
