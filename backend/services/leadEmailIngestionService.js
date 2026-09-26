@@ -139,6 +139,7 @@ const parseEnquiryBody = (bodyText) => {
         { key: 'email', labels: ['Email', 'Email Address'] },
         { key: 'phone', labels: ['Phone', 'Phone Number', 'Mobile', 'Mobile Number'] },
         { key: 'city', labels: ['City'] },
+        { key: 'company', labels: ['Company', 'Company Name', 'Organisation', 'Organization'] },
         { key: 'product_name', labels: ['Product Name'] },
         { key: 'model', labels: ['Model'] },
         { key: 'ram', labels: ['RAM'] },
@@ -284,7 +285,16 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     const email = truncateText(normalizeText(parsedFields.email)?.toLowerCase(), 255) || null;
     const phone = truncateText(normalizePhone(parsedFields.phone), 50);
     const city = truncateText(sanitizeCity(parsedFields.city), 100);
-    const companyName = truncateText(extractDomain(email), 255);
+    // A Gmail / Yahoo address says nothing about the company (it used to become
+    // "gmail.com"); a work domain is a fair first guess until sales fills it in.
+    const companyName = truncateText(normalizeText(parsedFields.company), 255)
+        || (email && !isPersonalEmail(email) ? truncateText(extractDomain(email), 255) : null);
+    // The laptop asked for goes on the lead itself, not only into the note.
+    const model = truncateText(normalizeText(parsedFields.model || parsedFields.product_name), 100);
+    const processor = truncateText(normalizeText(parsedFields.cpu), 100);
+    const ram = truncateText(normalizeText(parsedFields.ram), 50);
+    const storage = truncateText(normalizeText(parsedFields.storage), 50);
+    const brand = model ? truncateText(normalizeText(model).split(/\s+/)[0], 100) : null;
     // Import details belong in lead_activities only — personal_remarks stays empty for manual sales notes.
     const notes = buildLeadNotes({ parsedFields, subject, fromAddress, sentAt });
     const activityNotes = notes || 'Lead imported from enquiry email';
@@ -303,15 +313,9 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     const safeReceivedAt = Number.isNaN(receivedAt.getTime()) ? new Date() : receivedAt;
 
     const autoAssignee = await getNextAutoAssignee();
-    const assignCols = autoAssignee
-        ? 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
-        : 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at';
-    const assignVals = autoAssignee
-        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6, $7, $6`
-        : `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6`;
-    const assignParams = autoAssignee
-        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee]
-        : [name, companyName, email, phone, city, safeReceivedAt];
+    const assignCols = 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at, model_name, brand, processor, ram, storage';
+    const assignVals = `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6, $7, CASE WHEN $7::int IS NULL THEN NULL ELSE $6 END, $8, $9, $10, $11, $12`;
+    const assignParams = [name, companyName, email, phone, city, safeReceivedAt, autoAssignee || null, model, brand, processor, ram, storage];
 
     const leadResult = await pool.query(
         `INSERT INTO leads (${assignCols}) VALUES (${assignVals}) RETURNING lead_id`,
@@ -319,6 +323,12 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     );
 
     const leadId = leadResult.rows[0].lead_id;
+    if (autoAssignee) {
+        await pool.query(
+            'INSERT INTO lead_assignments (lead_id, assigned_to, assigned_by, assigned_at) VALUES ($1, $2, NULL, NOW())',
+            [leadId, autoAssignee]
+        ).catch((e) => console.error('[lead-email] assignment history:', e.message));
+    }
 
     await pool.query(
         `INSERT INTO lead_activities (lead_id, user_id, action, status_from, status_to, notes, created_at)
@@ -544,6 +554,7 @@ const stopLeadEmailIngestionWorker = async () => {
 };
 
 module.exports = {
+    parseEnquiryBody, // exported for tests
     startLeadEmailIngestionWorker,
     stopLeadEmailIngestionWorker,
     runLeadEmailSync,

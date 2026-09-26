@@ -92,16 +92,17 @@ export const SECTIONS = [
     // Order to delivery is complete in Carret (25 Sep 2026): these open the new
     // screens. The old ones stay under "Old view" until the process is signed
     // off (hard rule 6), then they go.
-    groups: ['Order to delivery', 'Customers & more', 'Old view'],
+    groups: ['Leads', 'Order to delivery', 'Customers & more', 'Old view'],
     items: [
       { group: 'Order to delivery', to: '/carret/sell/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
       { group: 'Order to delivery', to: '/carret/sell/sales-orders', label: 'Sales Orders', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
-      { group: 'Customers & more', to: '/lead-crm/leads', label: 'Leads', section: 'leads', action: 'view' },
-      { group: 'Customers & more', to: '/lead-crm/follow-ups', label: 'Follow-ups', section: 'lead_follow_ups', action: 'view' },
+      { group: 'Leads', to: '/carret/sell/leads', label: 'Leads', section: 'leads', action: 'view' },
+      { group: 'Leads', to: '/carret/sell/follow-ups', label: 'Follow-ups', sections: ['leads', 'lead_follow_ups'], section: 'leads', action: 'view' },
       { group: 'Customers & more', to: '/customer-management/customers', label: 'Customers', section: 'customer_management', action: 'view' },
       { group: 'Customers & more', to: '/carret/sell/customers', label: 'Customers (list)', section: 'customer_management', action: 'view' },
       { group: 'Customers & more', to: '/sales-pipeline/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
       { group: 'Customers & more', to: '/sales-pipeline/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
+      { group: 'Old view', to: '/lead-crm/leads', label: 'Leads (old)', section: 'leads', action: 'view' },
       { group: 'Old view', to: '/sales-pipeline/quotations', label: 'Quotations (old)', section: 'sales_quotations', action: 'view' },
       { group: 'Old view', to: '/sales-pipeline/sales-orders', label: 'Sales Orders (old)', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
     ],

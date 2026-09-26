@@ -748,6 +748,10 @@ exports.updateQuotationStatus = async (req, res) => {
        WHERE quotation_number = $4`,
       [status, req.user?.user_id, updaterName, quotationNumber]
     );
+    if (status === 'accepted' && lines[0]?.source_lead_id) {
+      await require('../services/leadFlowService').advanceLead(pool, lines[0].source_lead_id, 'quote_accepted', { ref: quotationNumber, userId: req.user?.user_id })
+        .catch((e) => console.error('[lead] advance on quote accepted:', e.message));
+    }
 
     res.json({
       success: true,
@@ -1316,6 +1320,18 @@ exports.storeSalesOrder = async (req, res) => {
     });
 
     await client.query('COMMIT');
+
+    // Lead flow (claude/carret-lead.md): a sales order for the lead's customer → Deal.
+    try {
+      const leadFlow = require('../services/leadFlowService');
+      const fromQuote = body.quotation_number
+        ? (await pool.query('SELECT source_lead_id FROM sales_quotations WHERE quotation_number = $1 AND source_lead_id IS NOT NULL LIMIT 1', [body.quotation_number])).rows[0]?.source_lead_id
+        : null;
+      const leadId = fromQuote || await leadFlow.leadForCustomer(pool, customerId);
+      if (leadId) await leadFlow.advanceLead(pool, leadId, 'so_created', { ref: salesOrderNumber, userId: req.user?.user_id });
+    } catch (e) {
+      console.error('[lead] advance on sales order:', e.message);
+    }
 
     try {
       const { notifySoCreatedAsync } = require('../services/salesOrderWhatsApp');

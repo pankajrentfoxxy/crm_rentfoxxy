@@ -8,6 +8,9 @@ import { getSalesDashboard } from '../features/reporting/reportingApi';
 import { getFinanceDashboard } from '../features/finance-overview/financeOverviewApi';
 import MetricCard from '../features/reporting/components/MetricCard';
 
+// The dashboard's lead links open the new lead screens when Carret is on (they read ?status=).
+const LEADS = process.env.REACT_APP_CARRET === '1' ? '/carret/sell/leads' : '/lead-crm/leads';
+
 const ROLE_REDIRECTS = {
   admin: '/reports/manager-dashboard',
   manager: '/reports/manager-dashboard',
@@ -33,8 +36,8 @@ function SalesDashboard() {
   const conv = data?.conversions || {};
 
   const pipelineLinks = [
-    { label: 'Hot Leads', path: '/lead-crm/leads?status=Hot', color: 'bg-red-50 text-red-700 border-red-100' },
-    { label: 'Warm Leads', path: '/lead-crm/leads?status=Warm', color: 'bg-amber-50 text-amber-700 border-amber-100' },
+    { label: 'Hot Leads', path: `${LEADS}?status=Hot`, color: 'bg-red-50 text-red-700 border-red-100' },
+    { label: 'Warm Leads', path: `${LEADS}?status=Warm`, color: 'bg-amber-50 text-amber-700 border-amber-100' },
     { label: 'Follow-ups', path: '/lead-crm/follow-ups', color: 'bg-blue-50 text-blue-700 border-blue-100' },
     { label: 'Quotations', path: '/sales-pipeline/quotations', color: 'bg-purple-50 text-purple-700 border-purple-100' },
   ];
@@ -64,7 +67,7 @@ function SalesDashboard() {
           <ul className="divide-y divide-gray-50">
             {leads.map((lead) => (
               <li key={lead.leadId || lead.lead_id} className="py-2 flex justify-between items-center">
-                <Link to={`/lead-crm/leads/${lead.leadId || lead.lead_id}`} className="text-sm font-medium text-blue-600 hover:underline">
+                <Link to={`${LEADS}/${lead.leadId || lead.lead_id}`} className="text-sm font-medium text-blue-600 hover:underline">
                   {lead.name || lead.company_name}
                 </Link>
                 <span className="text-xs text-gray-500">{lead.status}</span>

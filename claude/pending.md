@@ -15,8 +15,7 @@ under "Old view" until sign-off.
 ## To build — one at a time
 1. **Support rework** — BUILT on QA 26 Sep (A–F, see `claude/carret-support.md`); waiting for the
    user's click-through.
-2. **Lead** — no Carret screens: leads, lead detail, follow-ups, customers, lead
-   email ingestion, lead quotation (hardcodes 18% GST — wrong for inter-state).
+2. **Lead** — BUILT on QA 26 Sep (see `claude/carret-lead.md`); waiting for the click-through.
 3. **Customer returns / rental end** — return challans (Carret list only), return
    pickup, receive, back to stock, NPA.
 4. **Money** — vendor bills (now unblocked by the rent-start fix), credit / debit

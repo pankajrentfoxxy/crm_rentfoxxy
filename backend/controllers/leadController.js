@@ -12,6 +12,7 @@ const {
   getLeadEmailSyncStatus,
 } = require('../services/leadEmailIngestionService');
 const { isRestrictedToAssigned } = require('../services/dataScopeService');
+const leadFlow = require('../services/leadFlowService');
 const {
   validateFinanceSpockContactFields,
   applyFinanceSpockDetails,
@@ -153,7 +154,6 @@ async function attachQuotationMeta(lead) {
 }
 
 const LEAD_STATUSES = ['Pending', 'Cold', 'Warm', 'Hot', 'Gone', 'Hold', 'Rejected', 'Call Back', 'Deal', 'Demo', 'Repeat'];
-const LEAD_SOURCE_OPTIONS = ['Google', 'LinkedIn', 'Team', 'References', 'Apollo'];
 
 const csvEscape = (value) => {
   const s = value == null ? '' : String(value);
@@ -179,12 +179,12 @@ function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
 
   if (source) {
     const sources = normalizeArrayField(source);
+    // Filter by exactly what was picked (the UI offers more sources than the old
+    // 5-item list, so "5 or more picked = all" silently dropped the filter).
     if (sources.length === 1) {
       andConditions.push({ source: sources[0] });
     } else if (sources.length > 1) {
-      if (sources.length < LEAD_SOURCE_OPTIONS.length) {
-        andConditions.push({ source: { in: sources } });
-      }
+      andConditions.push({ source: { in: sources } });
     }
   }
 
@@ -328,109 +328,6 @@ const buildLeadPayload = (row) => {
     city: normalizedCity || city || null,
     source: normalizedSource || source || null
   };
-};
-
-const formatHeadOfficeAddress = (research) => {
-  const chunks = [
-    research?.address,
-    research?.city,
-    research?.state
-  ].map((v) => (v || '').trim()).filter(Boolean);
-  return chunks.join(', ');
-};
-
-const ensureCustomerFromLead = async (leadId) => {
-  const leadRes = await pool.query(
-    `SELECT l.lead_id, l.name, l.brand, l.company_name, l.email, l.phone,
-            COALESCE(r.gst, l.gst_number) AS gst, r.address, r.city, r.state, r.pincode
-     FROM leads l
-     LEFT JOIN lead_company_research r ON r.lead_id = l.lead_id
-     WHERE l.lead_id = $1`,
-    [leadId]
-  );
-  if (!leadRes.rows.length) return null;
-  const lead = leadRes.rows[0];
-  const headOffice = formatHeadOfficeAddress(lead) || null;
-
-  const existingCustomer = await pool.query(
-    'SELECT customer_id FROM customers WHERE source_lead_id = $1 LIMIT 1',
-    [lead.lead_id]
-  );
-
-  let customerId;
-  if (existingCustomer.rows.length) {
-    customerId = existingCustomer.rows[0].customer_id;
-    await pool.query(
-      `UPDATE customers SET
-         name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5, address = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE customer_id = $7`,
-      [
-        lead.name || lead.company_name || 'Lead Customer',
-        lead.company_name || null,
-        lead.email || null,
-        lead.phone || null,
-        lead.gst || null,
-        headOffice,
-        customerId,
-      ]
-    );
-  } else {
-    const inserted = await pool.query(
-      `INSERT INTO customers (name, company_name, source_lead_id, email, phone, gst_no, address, type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-       RETURNING customer_id`,
-      [
-        lead.name || lead.company_name || 'Lead Customer',
-        lead.company_name || null,
-        lead.lead_id,
-        lead.email || null,
-        lead.phone || null,
-        lead.gst || null,
-        headOffice,
-      ]
-    );
-    customerId = inserted.rows[0].customer_id;
-  }
-
-  if (headOffice) {
-    const billingAddr = await pool.query(
-      `SELECT customer_address_id FROM customer_addresses
-       WHERE customer_id = $1 AND is_head_office = true LIMIT 1`,
-      [customerId]
-    );
-    if (billingAddr.rows.length) {
-      await pool.query(
-        `UPDATE customer_addresses SET
-           concern_person = $1, mobile_no = $2, address = $3, pincode = $4,
-           address_type = 'Billing', updated_at = CURRENT_TIMESTAMP
-         WHERE customer_address_id = $5`,
-        [lead.name || null, lead.phone || null, headOffice, lead.pincode || null, billingAddr.rows[0].customer_address_id]
-      );
-    } else {
-      await pool.query(
-        `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, true, 'Billing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-        [customerId, lead.name || null, lead.phone || null, headOffice, lead.pincode || null]
-      );
-    }
-  }
-
-  try {
-    await pool.query(
-      `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, source_lead_address_id, created_at, updated_at)
-       SELECT $1, la.concern_person, la.mobile_no, la.address, la.pincode, false, COALESCE(la.address_type, 'Shipping'), la.address_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-       FROM lead_addresses la
-       WHERE la.lead_id = $2
-         AND NOT EXISTS (
-           SELECT 1 FROM customer_addresses ca WHERE ca.source_lead_address_id = la.address_id
-         )`,
-      [customerId, leadId]
-    );
-  } catch (addrErr) {
-    if (addrErr.code !== '42703') throw addrErr;
-  }
-
-  return customerId;
 };
 
 const shuffle = (arr) => {
@@ -1299,6 +1196,17 @@ exports.updateLeadStatus = async (req, res) => {
 
     const rejectionReasonDb = status === 'Rejected' ? resolvedStage : null;
 
+    // Deal / Demo = convert, one step (user, 26 Sep 2026): the customer is
+    // created with the status by POST /leads/:id/win. A lead already converted
+    // may move between Deal and Demo here.
+    if ((status === 'Deal' || status === 'Demo') && !lead.customerId) {
+      return res.status(409).json({
+        success: false,
+        code: 'CONVERT_REQUIRED',
+        message: `${status} creates the customer — use "Mark as ${status}" (convert) with GST and billing address.`,
+      });
+    }
+
     if (status === 'Deal' || status === 'Demo') {
       const resolvedGst = resolveLeadGstin({
         gst: gstInput,
@@ -1358,10 +1266,6 @@ exports.updateLeadStatus = async (req, res) => {
         notes: notes || null
       }
     });
-
-    if (status === 'Deal' || status === 'Demo') {
-      await ensureCustomerFromLead(lead.leadId);
-    }
 
     res.json({ success: true, lead: updated });
   } catch (error) {
@@ -1847,9 +1751,7 @@ exports.updateLeadBasicDetails = async (req, res) => {
     const leadId = parseInt(id, 10);
     const existing = await prisma.lead.findUnique({ where: { leadId } });
     if (!existing) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, existing)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, existing)) return;
 
     const normalizedCity = city !== undefined ? String(city || '').trim() : undefined;
     const nextCompanyName = (company_name ?? companyName ?? existing.companyName ?? null);
@@ -1937,7 +1839,7 @@ exports.getLeadAddresses = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const rows = await pool.query(
       `SELECT address_id, concern_person, mobile_no, address, pincode, address_type, created_at
        FROM lead_addresses
@@ -1968,7 +1870,7 @@ exports.addLeadAddress = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const inserted = await pool.query(
       `INSERT INTO lead_addresses (lead_id, concern_person, mobile_no, address, pincode, address_type, created_by, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
@@ -1987,7 +1889,7 @@ exports.deleteLeadAddress = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const result = await pool.query(
       `DELETE FROM lead_addresses WHERE lead_id = $1 AND address_id = $2`,
       [id, address_id]
@@ -2009,7 +1911,7 @@ exports.addLeadRemark = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const inserted = await pool.query(
       `INSERT INTO lead_remarks (lead_id, user_id, note, created_at)
        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
@@ -2039,7 +1941,7 @@ exports.deleteLeadRemark = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const result = await pool.query(
       `DELETE FROM lead_remarks WHERE lead_id = $1 AND remark_id = $2`,
       [id, remark_id]
@@ -2061,7 +1963,7 @@ exports.updateLeadRemark = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
     const result = await pool.query(
       `UPDATE lead_remarks
           SET note = $1
@@ -2092,7 +1994,7 @@ exports.getLeadCustomerProfile = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const customerRes = await pool.query(
       `SELECT customer_id, name, company_name, email, phone, gst_no, customer_type
@@ -2269,7 +2171,7 @@ exports.sendLeadQuotation = async (req, res) => {
       include: { research: true }
     });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const body = req.body || {};
     const toEmail = String(body.to_email || lead.email || '')
@@ -2491,9 +2393,7 @@ exports.updateLeadFullProfile = async (req, res) => {
   try {
     const existing = await prisma.lead.findUnique({ where: { leadId } });
     if (!existing) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (!canEditLead(req.user, existing)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, existing)) return;
 
     const body = req.body || {};
     const changes = [];
@@ -2566,8 +2466,11 @@ exports.updateLeadFullProfile = async (req, res) => {
     addField('storage', pick('storage', 'storage'), 'storage', existing.storage);
     addField('source', pick('source', 'source'), 'source', existing.source);
 
-    if (pick('assigned_user_id', 'assignedUserId') !== undefined) {
-      const uid = pick('assigned_user_id', 'assignedUserId');
+    // A null assignee means "no change" unless the caller says unassign: the
+    // create drawer sends null right after auto-assignment and used to wipe it.
+    const uidRaw = pick('assigned_user_id', 'assignedUserId');
+    if (uidRaw !== undefined && (uidRaw || req.body.unassign === true)) {
+      const uid = uidRaw;
       const parsed = uid ? parseInt(uid, 10) : null;
       if (parsed) {
         const eligible = await filterEligibleAssigneeIds([parsed]);
@@ -2580,7 +2483,8 @@ exports.updateLeadFullProfile = async (req, res) => {
 
     if (pick('follow_up_date', 'followUpDate') !== undefined) {
       const fud = pick('follow_up_date', 'followUpDate');
-      addField('follow_up_date', fud ? new Date(fud) : null, 'follow-up date', existing.followUpDate);
+      // Noon IST, as PUT /:id/follow-up stores it (the reminder mail and "today" read it that way).
+      addField('follow_up_date', fud ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(fud)) ? `${fud}T12:00:00+05:30` : fud) : null, 'follow-up date', existing.followUpDate);
     }
 
     if (pick('follow_up_time', 'followUpTime') !== undefined) {
@@ -2637,151 +2541,28 @@ function parseCustomerDetails(value) {
 }
 
 exports.convertToCustomer = async (req, res) => {
-  const { id } = req.params;
-  const leadId = parseInt(id, 10);
-  if (Number.isNaN(leadId)) {
-    return res.status(400).json({ success: false, message: 'Invalid lead id' });
-  }
-
+  // Kept for leads already at Deal / Demo without a customer (before 26 Sep).
+  // Same customer + addresses as "Mark as Deal" (services/leadFlowService.js).
+  const leadId = parseInt(req.params.id, 10);
+  if (Number.isNaN(leadId)) return res.status(400).json({ success: false, message: 'Invalid lead id' });
+  const client = await pool.connect();
   try {
-    const leadRes = await pool.query('SELECT * FROM leads WHERE lead_id = $1', [leadId]);
-    if (!leadRes.rows.length) {
-      return res.status(404).json({ success: false, message: 'Lead not found' });
-    }
-    const lead = leadRes.rows[0];
-
+    const lead = (await client.query('SELECT * FROM leads WHERE lead_id = $1', [leadId])).rows[0];
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
     if (!['Deal', 'Demo'].includes(lead.status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Lead must be in Deal or Demo status to convert'
-      });
+      return res.status(400).json({ success: false, message: 'Lead must be in Deal or Demo status to convert' });
     }
-
     if (await denyUnlessCanEditLead(req, res, lead)) return;
-
-    const body = req.body || {};
-    const billingAddress = body.billing_address || lead.billing_address || null;
-    const billingCity = body.billing_city || body.city || lead.city || null;
-    const billingState = body.billing_state || body.state || lead.state || null;
-    const billingPincode = body.billing_pincode || body.pincode || lead.pincode || null;
-
-    if (!billingAddress || !billingCity || !billingState || !billingPincode) {
-      return res.status(400).json({
-        success: false,
-        message: 'Billing address, city, state, and pincode are required'
-      });
-    }
-
-    const contactValidationErrors = validateFinanceSpockContactFields(body);
-    if (contactValidationErrors.length) {
-      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
-    }
-
-    const shippingSame = body.shipping_same_as_billing !== false && body.shipping_same !== false
-      && lead.shipping_same_as_billing !== false;
-    const shippingAddress = shippingSame
-      ? billingAddress
-      : (body.shipping_address || lead.shipping_address || billingAddress);
-    const shippingCity = shippingSame ? billingCity : (body.shipping_city || lead.city || billingCity);
-    const shippingState = shippingSame ? billingState : (body.shipping_state || lead.state || billingState);
-    const shippingPincode = shippingSame ? billingPincode : (body.shipping_pincode || lead.pincode || billingPincode);
-
-    const customerName = body.customer_name || body.name || lead.name;
-    const companyName = body.company_name || lead.company_name || null;
-    const email = body.email || lead.email || null;
-    const phone = body.phone || lead.phone || null;
-    const gstNo = body.gst_number || body.gst_no || lead.gst_number || null;
-    const panNumber = body.pan_number || lead.pan_number || null;
-
-    const customerDetails = {
-      contact_person_name: customerName,
-      contact_person_number: phone,
-    };
-    applyFinanceSpockDetails(customerDetails, body);
-
-    let customerId = lead.customer_id;
-    let isNew = false;
-
-    const existingByLead = await pool.query(
-      'SELECT customer_id FROM customers WHERE source_lead_id = $1',
-      [leadId]
-    );
-
-    if (existingByLead.rows.length) {
-      customerId = existingByLead.rows[0].customer_id;
-      const existingDetailsRes = await pool.query(
-        'SELECT details FROM customers WHERE customer_id = $1',
-        [customerId]
-      );
-      const mergedDetails = parseCustomerDetails(existingDetailsRes.rows[0]?.details);
-      mergedDetails.contact_person_name = customerName;
-      mergedDetails.contact_person_number = phone;
-      applyFinanceSpockDetails(mergedDetails, body);
-      await pool.query(
-        `UPDATE customers SET
-          name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,
-          pan_number = $6, company_type = $7, company_size = $8, industry = $9,
-          billing_address = $10, billing_city = $11, billing_state = $12, billing_pincode = $13,
-          shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
-          whatsapp_number = $19, designation = $20, source_lead_stage = $21,
-          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), details = $23, updated_at = NOW()
-         WHERE customer_id = $24`,
-        [
-          customerName, companyName, email, phone, gstNo, panNumber,
-          lead.company_type, lead.company_size, lead.industry,
-          billingAddress, billingCity, billingState, billingPincode,
-          shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
-          lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id, JSON.stringify(mergedDetails), customerId
-        ]
-      );
-    } else {
-      const insertRes = await pool.query(
-        `INSERT INTO customers (
-          name, company_name, source_lead_id, email, phone, gst_no, pan_number,
-          company_type, company_size, industry,
-          billing_address, billing_city, billing_state, billing_pincode,
-          shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
-          whatsapp_number, designation, source_lead_stage, onboarded_by, onboarded_at,
-          type, details, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, NOW(), 'Lead', $24, NOW(), NOW()
-        ) RETURNING customer_id`,
-        [
-          customerName, companyName, leadId, email, phone, gstNo, panNumber,
-          lead.company_type, lead.company_size, lead.industry,
-          billingAddress, billingCity, billingState, billingPincode,
-          shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
-          lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id, JSON.stringify(customerDetails)
-        ]
-      );
-      customerId = insertRes.rows[0].customer_id;
-      isNew = true;
-    }
-
-    await pool.query(
-      `UPDATE leads SET
-        customer_id = $1, converted_at = NOW(), converted_by = $2, updated_at = NOW()
-       WHERE lead_id = $3`,
-      [customerId, req.user.user_id, leadId]
-    );
-
-    await prisma.leadActivity.create({
-      data: {
-        leadId,
-        userId: req.user.user_id,
-        action: 'converted_to_customer',
-        notes: `Converted to customer #${customerId}`
-      }
-    });
-
-    res.json({ success: true, customer_id: customerId, is_new: isNew });
+    await client.query('BEGIN');
+    const out = await leadFlow.convertLead(client, lead, req.body || {}, req.user.user_id);
+    await client.query('COMMIT');
+    res.json({ success: true, ...out });
   } catch (error) {
-    console.error('convertToCustomer error:', error);
-    res.status(500).json({ success: false, message: error.message || 'Conversion failed' });
+    await client.query('ROLLBACK').catch(() => {});
+    if (!error.status) console.error('convertToCustomer error:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Conversion failed' });
+  } finally {
+    client.release();
   }
 };
 
@@ -2940,5 +2721,104 @@ exports.triggerEmailSync = async (_req, res) => {
   } catch (error) {
     console.error('triggerEmailSync error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/* ---- Carret lead flow (claude/carret-lead.md; decisions 26 Sep 2026) ---- */
+
+async function loadLeadForEdit(req, res) {
+  const leadId = parseInt(req.params.id, 10);
+  if (Number.isNaN(leadId)) { res.status(400).json({ success: false, message: 'Invalid lead id' }); return null; }
+  const lead = (await pool.query('SELECT * FROM leads WHERE lead_id = $1', [leadId])).rows[0];
+  if (!lead) { res.status(404).json({ success: false, message: 'Lead not found' }); return null; }
+  if (await denyUnlessCanEditLead(req, res, lead)) return null;
+  return lead;
+}
+
+/** POST /leads/:id/win — Deal / Demo and the customer, one step. */
+exports.winLead = async (req, res) => {
+  const lead = await loadLeadForEdit(req, res);
+  if (!lead) return;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await leadFlow.winLead(client, lead.lead_id, req.body || {}, req.user.user_id);
+    await client.query('COMMIT');
+    res.json({ success: true, message: `${out.status} — customer #${out.customer_id} ${out.is_new ? 'created' : 'updated'}`, ...out });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (!e.status) console.error('winLead', e);
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** POST /leads/:id/follow-ups/complete { outcome, notes, next_date, next_time } */
+exports.completeLeadFollowUp = async (req, res) => {
+  const lead = await loadLeadForEdit(req, res);
+  if (!lead) return;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await leadFlow.completeFollowUp(client, lead.lead_id, req.body || {}, req.user.user_id);
+    await client.query('COMMIT');
+    res.json({ success: true, message: out.next ? `Next follow-up ${out.next.date}` : 'Follow-up done', ...out });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (!e.status) console.error('completeLeadFollowUp', e);
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** GET /leads/:id/follow-ups/log — every finished follow-up on a lead. */
+exports.getLeadFollowUpLog = async (req, res) => {
+  const lead = await loadLeadForEdit(req, res);
+  if (!lead) return;
+  const rows = (await pool.query(
+    `SELECT f.id, f.due_at, f.outcome, f.notes, f.next_due_date, f.next_due_time, f.done_at, u.name AS done_by_name
+       FROM lead_follow_up_log f LEFT JOIN users u ON u.user_id = f.done_by
+      WHERE f.lead_id = $1 ORDER BY f.done_at DESC`,
+    [lead.lead_id]
+  )).rows;
+  res.json({ success: true, outcomes: leadFlow.OUTCOMES, log: rows });
+};
+
+/**
+ * GET /leads/follow-ups/board — overdue / today / next 7 days for my leads (or
+ * everyone's, for a manager), with the lead's company, need and owner.
+ */
+exports.getFollowUpBoard = async (req, res) => {
+  try {
+    const assignedOnly = await leadsAssignedOnly(req);
+    const uid = currentUserId(req.user);
+    const owner = req.query.owner && req.query.owner !== 'all' ? parseInt(req.query.owner, 10) : null;
+    const rows = (await pool.query(
+      `SELECT l.lead_id, l.name, l.company_name, l.phone, l.status, l.lead_stage, l.source,
+              l.quantity_required, l.rental_duration, l.brand, l.processor, l.ram,
+              l.follow_up_date, l.follow_up_time, l.assigned_user_id, u.name AS owner_name,
+              ((l.follow_up_date AT TIME ZONE 'Asia/Kolkata')::date - (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS days_from_today,
+              (SELECT f.outcome FROM lead_follow_up_log f WHERE f.lead_id = l.lead_id ORDER BY f.done_at DESC LIMIT 1) AS last_outcome
+         FROM leads l LEFT JOIN users u ON u.user_id = l.assigned_user_id
+        WHERE l.follow_up_date IS NOT NULL AND l.is_duplicate = FALSE
+          AND l.status NOT IN ('Rejected', 'Gone')
+          AND (l.follow_up_date AT TIME ZONE 'Asia/Kolkata')::date <= (NOW() AT TIME ZONE 'Asia/Kolkata')::date + 7
+          AND ($1::boolean = FALSE OR l.assigned_user_id = $2 OR (l.assigned_user_id IS NULL AND l.assigned_by = $2))
+          AND ($3::int IS NULL OR l.assigned_user_id = $3)
+        ORDER BY l.follow_up_date, l.follow_up_time NULLS LAST`,
+      [assignedOnly, uid, owner]
+    )).rows;
+    const pick = (fn) => rows.filter(fn);
+    res.json({
+      success: true,
+      outcomes: leadFlow.OUTCOMES,
+      overdue: pick((r) => r.days_from_today < 0),
+      today: pick((r) => r.days_from_today === 0),
+      upcoming: pick((r) => r.days_from_today > 0),
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 };

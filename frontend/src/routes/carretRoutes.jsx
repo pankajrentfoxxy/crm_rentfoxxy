@@ -56,6 +56,10 @@ const InvoicesListPage = React.lazy(() => import('../features/carret/InvoicesLis
 const InvoiceRecordPage = React.lazy(() => import('../features/carret/InvoiceRecordPage'));
 const AgeingPage = React.lazy(() => import('../features/carret/AgeingPage'));
 const QuotationFormPage = React.lazy(() => import('../features/carret/sell/QuotationFormPage'));
+const LeadsPage = React.lazy(() => import('../features/carret/sell/lead/LeadsPage'));
+const LeadRecordPage = React.lazy(() => import('../features/carret/sell/lead/LeadRecordPage'));
+const NewLeadPage = React.lazy(() => import('../features/carret/sell/lead/NewLeadPage'));
+const LeadFollowUpsPage = React.lazy(() => import('../features/carret/sell/lead/FollowUpsPage'));
 const QuotationRecordPage = React.lazy(() => import('../features/carret/sell/QuotationRecordPage'));
 const SalesOrderFormPage = React.lazy(() => import('../features/carret/sell/SalesOrderFormPage'));
 const SalesOrderRecordPage = React.lazy(() => import('../features/carret/sell/SalesOrderRecordPage'));
@@ -101,6 +105,10 @@ export const carretRoutes = CARRET_ENABLED
 
       // Sell (Part 4.5). The RentFoxxy / Gorefurbo split is a filter INSIDE
       // each list (Decision 1), never two branches of the menu.
+      { path: '/carret/sell/leads', element: guard('leads', 'view', <LeadsPage />) },
+      { path: '/carret/sell/leads/new', element: guard('leads', 'create', <NewLeadPage />) },
+      { path: '/carret/sell/leads/:leadId', element: guard('leads', 'view', <LeadRecordPage />) },
+      { path: '/carret/sell/follow-ups', element: guardAny(['leads', 'lead_follow_ups'], 'view', <LeadFollowUpsPage />) },
       { path: '/carret/sell/quotations', element: guard('sales_quotations', 'view', <SellListPage kind="quotations" />) },
       { path: '/carret/sell/quotations/new', element: guard('sales_quotations', 'create', <QuotationFormPage />) },
       { path: '/carret/sell/quotations/:quotationNumber', element: guard('sales_quotations', 'view', <QuotationRecordPage />) },

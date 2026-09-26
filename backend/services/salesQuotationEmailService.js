@@ -228,6 +228,9 @@ async function sendSalesQuotationEmail({
         WHERE lead_id = $4`,
       [token, quotationNumber, to, lines[0].source_lead_id]
     ).catch(() => {});
+    // Lead flow (claude/carret-lead.md): quote sent → Cold / Proposal Shared.
+    await require('./leadFlowService').advanceLead(pool, lines[0].source_lead_id, 'quote_sent', { ref: quotationNumber, userId: user?.user_id })
+      .catch((e) => console.error('[lead] advance on quote sent:', e.message));
   }
 
   return { sent: true, to, from: fromAddress, acceptUrl };
@@ -310,6 +313,8 @@ async function acceptSalesQuotationByToken(token) {
         WHERE lead_id = $1`,
       [row.source_lead_id]
     ).catch(() => {});
+    await require('./leadFlowService').advanceLead(pool, row.source_lead_id, 'quote_accepted', { ref: row.quotation_number })
+      .catch((e) => console.error('[lead] advance on quote accepted:', e.message));
   }
 
   const toEmail = String(row.customer_email || '').trim().toLowerCase();
