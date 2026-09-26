@@ -78,7 +78,24 @@ first, because several change how the floor works, not just the screens.
 
 ## Build order (after decisions)
 
-0. **Safety fixes** (each with a test): server-side QC gates (Q1, F4), into-stock only by
+0. **Safety fixes** — DONE on QA 26 Sep (3e0e4bd6, a711327f, eec1568c, b348ef2b; 441 tests):
+   A QC gates + one way into stock (QC1/QC2 pass only via the saved checklist or a manager
+   override with a reason, enforced in applyStageMove for every door; QC2 needs a matched
+   server check; inspector ≠ repairer / not a technician; stock only by serial-scan receive;
+   enterStock() without override; floor-failed laptops can't be received; QC Management
+   "passed/repaired" and QC Process no longer put laptops in stock; qcCheckService crash).
+   B parts (no double reservation, no phantom units, fitment check reads the laptop, one unit
+   per request, "received" checks, upgrades name the removed part, direct attach retired,
+   routes guarded). C floor permissions/transactions (bulk move + floor-manager fail need a
+   floor manager, no status from the edit form, chip routes guarded, backwards moves need a
+   reason, chip/body → Diagnosis, only the assignee runs the timer, claim first-come,
+   next-stage and assign in one transaction). D public QC2 link (no expected config before the
+   check, failed is final, 4-hour cap, closed when the laptop leaves QC2, per-link verify
+   limit, token minting needs a permission). **Left for the screens / later:** QC person picks
+   from a checklist in the new QC screen (today: the old page's QC tab); Dispatch QC rework
+   still returns laptops to in_stock (Order-to-delivery flow); parts ledger gaps and cost per
+   laptop (P9–P15, P21, PD15); config truth between tables (Q9–Q11); assignment (PD1, PD9);
+   Hold (PD11); dismantle (PD14). Original list: server-side QC gates (Q1, F4), into-stock only by
    serial receive (Q2, Q3, F3), QC Management / QC Process not into stock (Q4–Q6), state-machine
    overrides removed (Q7), failed units can't be received (Q8), `qcCheckService` crash (Q13),
    part reservation and phantom parts (P1–P4), `markPartReceived` checks (P2), permissions:
