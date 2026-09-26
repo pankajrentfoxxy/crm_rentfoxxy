@@ -40,6 +40,8 @@ const ServeQueuePage = React.lazy(() => import('../features/carret/serve/QueuePa
 const ServeTicketRecordPage = React.lazy(() => import('../features/carret/serve/TicketRecordPage'));
 const ServeNewTicketPage = React.lazy(() => import('../features/carret/serve/NewTicketPage'));
 const ServeInsightsPage = React.lazy(() => import('../features/carret/serve/InsightsPage'));
+const ServeIssueInsightsPage = React.lazy(() => import('../features/carret/serve/IssueInsightsPage'));
+const ServeTechBucketPage = React.lazy(() => import('../features/carret/serve/TechBucketPage'));
 const ServePartsDeskPage = React.lazy(() => import('../features/carret/serve/PartsDeskPage'));
 const SupportChargesToBillPage = React.lazy(() => import('../features/carret/serve/ChargesToBillPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
@@ -135,6 +137,8 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/serve/tickets/new', element: guard('support_tickets', 'create', <ServeNewTicketPage />) },
       { path: '/carret/serve/tickets/:ticketId', element: guard('support_tickets', 'view', <ServeTicketRecordPage />) },
       { path: '/carret/serve/insights', element: guard('support_tickets', 'view', <ServeInsightsPage />) },
+      { path: '/carret/serve/issues', element: guard('support_tickets', 'view', <ServeIssueInsightsPage />) },
+      { path: '/carret/serve/technician-bucket', element: guardAny(['technician_bucket', 'support_tickets'], 'view', <ServeTechBucketPage />) },
       { path: '/carret/money/support-charges', element: guard('customer_billing', 'view', <SupportChargesToBillPage />) },
       { path: '/carret/serve/parts-desk', element: guard('support_part_challan', 'view', <ServePartsDeskPage />) },
       { path: '/carret/serve/my-parts', element: guardAny(['support_part_requests', 'support_tickets'], 'view', <ServeMyPartsPage />) },

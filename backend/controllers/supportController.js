@@ -6464,3 +6464,25 @@ exports.recordIssueFinding = async (req, res) => {
         client.release();
     }
 };
+
+/** GET /support/issue-insights?days=90&type_id= — rework C. */
+exports.getIssueInsights = async (req, res) => {
+    try {
+        const { issueInsights } = require('../services/supportIssueInsightsService');
+        res.json({ success: true, ...(await issueInsights({ days: req.query.days, typeId: req.query.type_id })) });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** GET /support/tech-bucket-board — rework D. Leads see everyone, a technician only themself. */
+exports.getTechBucketBoard = async (req, res) => {
+    try {
+        const { techBucketBoard } = require('../services/supportTechBucketService');
+        const supervisor = isSupportLead(req.user) || ['super_admin', 'admin', 'manager', 'support_lead', 'warehouse'].includes(req.user.role);
+        const technicians = await techBucketBoard(pool, { userId: supervisor ? (req.query.user_id || null) : req.user.user_id });
+        res.json({ success: true, supervisor, technicians });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};

@@ -157,8 +157,14 @@ Existing tickets are not touched; everything below applies to tickets raised fro
   "Missed at refurbishment / QC (floor)") + fix (`support_resolution_codes`, allowed per finish).
   Required by set-outcome, by Service DC (workshop finding on the ticket's Issue panel) and by
   close. No fault found needs neither cause nor fix.
-- C. Issue insights — next. D. Technician bucket. E. Requests / technicians / settings screens.
-  F. UX pass.
+- **C. Issue insights** (done): Serve → Issue insights — by type / issue / model / vendor / days since
+  delivery, root cause, fix; Floor feedback names the stage technician and QC tester/checker (last floor
+  ticket before the complaint) for "Missed at refurbishment" and hardware faults within 30 days.
+  Older tickets show under "Before the issue process", as they are.
+- **D. Technician bucket** (done): Serve → Technician bucket — per technician: laptops in hand, old
+  parts to return, to collect, Service DC / replacement out for delivery, parts held, open visits, each
+  with days held (red after 7). A technician sees only their own.
+- E. Requests / technicians / settings screens — next. F. UX pass.
 
 QA click-through A+B: New ticket → pick type/subtype/issue per laptop → assign → technician My
 work → job → result "Fixed" asks what was wrong / why / fix → OTP. On a repair pickup: ticket →

@@ -85,3 +85,5 @@ export const receivePartReturnDc = (dc) => api.patch(`${sp}/part-return-dcs/${en
 export const fetchIssueCatalog = () => api.get('/support/issue-catalog');
 export const setReportedIssue = (itemId, body) => api.patch(item(itemId, '/reported-issue'), body);
 export const recordFinding = (itemId, body) => api.patch(item(itemId, '/finding'), body);
+export const fetchIssueInsights = (params) => api.get('/support/issue-insights', { params });
+export const fetchTechBucketBoard = (params) => api.get('/support/tech-bucket-board', { params });
