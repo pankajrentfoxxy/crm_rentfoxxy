@@ -391,3 +391,38 @@
 .c-addr{ font-size:var(--d-base); color:var(--ink-2); line-height:1.5 }
 .c-addr b{ color:var(--ink); font-weight:600 }
 .c-actions-bar{ position:sticky; bottom:0; z-index:5; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; padding:12px 16px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--d-radius-lg); box-shadow:var(--shadow-lg) }
+
+/* ---------- floor work forms: one question, its answers ----------
+   The chosen answer carries a glyph and its words (never colour alone):
+   good ✓ green, bad ✕ red, info ● neutral, not fitted – grey.          */
+.c-qsec{ border:1px solid var(--rule); border-radius:var(--d-radius-lg); background:var(--surface); min-width:0 }
+.c-qsec-h{ display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--rule); font-weight:600; font-size:14px; color:var(--ink) }
+.c-qsec-h small{ margin-left:auto; font-weight:500; font-size:12.5px; color:var(--ink-3) }
+.c-qsec-h small.is-bad{ color:var(--alert-crit) }
+.c-qsec-hint{ padding:8px 14px 0; font-size:12.5px; color:var(--ink-3) }
+.c-q{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 16px; align-items:center; padding:10px 14px; border-top:1px solid var(--rule) }
+.c-qsec-hint + .c-q, .c-qsec-h + .c-q{ border-top:0 }
+.c-q-t{ font-size:var(--d-base); color:var(--ink) }
+.c-q-t small{ display:block; font-size:12px; color:var(--ink-3); margin-top:2px }
+.c-q.is-open .c-q-t::before{ content:'•'; color:var(--accent); margin-right:6px }
+.c-ans{ display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end }
+.c-ans button{ font:inherit; font-size:13px; min-height:var(--d-tap); padding:0 12px; border-radius:var(--d-radius); border:1px solid var(--rule-2); background:var(--surface); color:var(--ink-2); cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap }
+.c-ans button:hover{ border-color:var(--ink-3); color:var(--ink) }
+.c-ans button.is-on{ font-weight:600 }
+.c-ans button.is-on.t-good{ background:var(--alert-good); border-color:var(--alert-good); color:var(--ink-inverse) }
+.c-ans button.is-on.t-bad{ background:var(--alert-crit); border-color:var(--alert-crit); color:var(--ink-inverse) }
+.c-ans button.is-on.t-info{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent) }
+.c-ans button.is-on.t-na{ background:var(--rule); border-color:var(--rule-2); color:var(--ink-2) }
+@media (max-width:760px){ .c-q{ grid-template-columns:minmax(0,1fr) } .c-ans{ justify-content:flex-start } }
+.c-choice{ display:grid; gap:8px }
+.c-choice label{ display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--rule); border-radius:var(--d-radius); cursor:pointer; background:var(--surface); color:var(--ink-2) }
+.c-choice label.is-on{ border-color:var(--accent); background:var(--accent-soft); color:var(--ink) }
+.c-choice label.is-off{ opacity:.5; cursor:not-allowed }
+.c-choice input{ margin-top:3px; accent-color:var(--accent) }
+.c-choice small{ display:block; color:var(--ink-3); font-size:12.5px }
+.c-steps-h{ display:flex; align-items:baseline; gap:10px; margin:4px 0 -4px; font-size:13px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-3) }
+.c-steps-h b{ color:var(--accent) }
+.c-tick{ display:flex; gap:10px; align-items:center; padding:10px 14px; border-top:1px solid var(--rule); cursor:pointer; color:var(--ink) }
+.c-qsec-h + .c-tick{ border-top:0 }
+.c-tick input{ width:18px; height:18px; accent-color:var(--alert-good) }
+.c-tick.is-on{ color:var(--ink-2) }

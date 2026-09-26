@@ -7,14 +7,12 @@ import {
 } from '../../../components/carret';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
-import DiagnosisForm from '../../../components/DiagnosisForm';
-import StageTaskPanel from '../../floor-pipeline/components/StageTaskPanel';
-import QcChecklistPanel from '../../floor-pipeline/components/QcChecklistPanel';
-import ChipRepairPanel from '../../floor-pipeline/components/ChipRepairPanel';
-import BodyPaintPanel from '../../floor-pipeline/components/BodyPaintPanel';
-import PartsConfigPanel from '../../floor-pipeline/components/PartsConfigPanel';
-import AssignmentModal from '../../floor-pipeline/components/AssignmentModal';
-import { getTeamMembers, searchParts } from '../../floor-pipeline/floorPipelineApi';
+import { searchParts } from '../../floor-pipeline/floorPipelineApi';
+import DiagnosisWork from './work/DiagnosisWork';
+import StageWork from './work/StageWork';
+import QcWork from './work/QcWork';
+import PartsWork from './work/PartsWork';
+import AssignDrawer from './work/AssignDrawer';
 import {
   FLOW, activeWork, claimTicket, configText, dismantleTicket, endWork, errMsg, fetchTicket, holdTicket, isFloorLead, moveStage,
   releaseTicket, stageLabel, startWork,
@@ -25,8 +23,8 @@ import {
  *
  * The next step leads, by stage: triage assigns a technician; Diagnosis,
  * the repair stages, Assembly / Testing and QC each show their own work form
- * (the same forms the floor already uses); Pending Inventory goes to the
- * receive screen. Around it: claim, the work timer (only the assignee — PD13),
+ * (produce/work/*: numbered steps, questions that say which answer is good,
+ * checked again on the server); Pending Inventory goes to the receive screen. Around it: claim, the work timer (only the assignee — PD13),
  * parts (requests only — PD7), hold / release with a reason (PD11), dismantle
  * for parts (PD14), send back to the vendor, and the history.
  */
@@ -43,10 +41,9 @@ export default function FloorTicketPage() {
   const [work, setWork] = useState(null);
   const [tab, setTab] = useState('work');
   const [busy, setBusy] = useState('');
-  const [drawer, setDrawer] = useState(null); // 'start' | 'hold' | 'release' | 'fail' | 'dismantle' | 'toDismantle' | 'qcPick'
+  const [drawer, setDrawer] = useState(null); // 'start' | 'hold' | 'release' | 'fail' | 'dismantle' | 'toDismantle'
   const [form, setForm] = useState({});
   const [assignOpen, setAssignOpen] = useState(false);
-  const [qcMembers, setQcMembers] = useState([]);
   const [partHits, setPartHits] = useState([]);
 
   const load = useCallback(() => {
@@ -76,11 +73,6 @@ export default function FloorTicketPage() {
     state: closed ? 'done' : (stage === 'Hold' ? (f.key === t.hold_from_stage_name ? 'blocked' : 'todo') : (i < idx ? 'done' : i === idx ? 'current' : 'todo')),
   }));
 
-  const openQcPicker = async () => {
-    try { const r = await getTeamMembers('QC1 Team'); setQcMembers(r.data?.members || r.data?.users || []); } catch { setQcMembers([]); }
-    setDrawer('qcPick');
-  };
-
   // The one thing to do next.
   let next = null;
   if (closed) next = <Notice tone="good" title={t.status === 'completed' ? 'Finished' : 'Closed'}>{t.completed_at ? <>On <DateTime value={t.completed_at} />.</> : null}</Notice>;
@@ -91,15 +83,13 @@ export default function FloorTicketPage() {
   else if (stage === 'Pending Inventory') next = <Notice tone="good" title="Passed QC — waiting to go into stock" action={<Button variant="primary" onClick={() => navigate('/carret/produce/into-stock')}>Receive into a slot</Button>}>The warehouse scans the serial into a carret slot; only then is it in stock.</Notice>;
   else if (!mine && t.assigned_user_id) next = <Notice tone="info" title={`With ${t.assigned_user_name || 'a technician'}`}>{lead ? 'You can reassign it.' : 'Only they work on it and run its timer.'}</Notice>;
 
+  const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
+  const fitted = (data.part_requests || []).filter((r) => r.status === 'attached');
   const workForm = (() => {
     if (closed || stage === 'Hold') return null;
-    if (stage === 'Diagnosis') return <DiagnosisForm api={api} ticket={t} onComplete={done} />;
-    if (stage === 'Chip Level Repair') return <ChipRepairPanel ticketId={t.ticket_id} partRequests={data.part_requests} ticketParts={data.parts} onUpdated={done} />;
-    if (stage === 'Body & Paint') return <BodyPaintPanel ticketId={t.ticket_id} onUpdated={done} />;
-    if (['Assembly & Software', 'Final Testing'].includes(stage)) {
-      return <StageTaskPanel ticket={t} stageName={stage} onSubmitted={(meta) => (meta?.requestAssigneePicker ? openQcPicker() : done())} />;
-    }
-    if (['QC1', 'QC2', 'Dispatch QC'].includes(stage)) return <QcChecklistPanel ticket={t} stageName={stage} onSubmitted={done} />;
+    if (stage === 'Diagnosis') return <DiagnosisWork ticket={t} partRequests={data.part_requests} onDone={done} onOpenParts={() => setTab('parts')} />;
+    if (['Chip Level Repair', 'Body & Paint', 'Assembly & Software', 'Final Testing'].includes(stage)) return <StageWork ticket={t} stage={stage} onDone={done} />;
+    if (QC_STAGES.includes(stage)) return <QcWork ticket={t} stage={stage} user={user} lead={lead} fittedParts={fitted} onDone={done} />;
     if (stage === 'Dismantle') {
       return (
         <Notice tone="warn" title="Being broken for parts" action={lead && <Button variant="primary" onClick={() => { setForm({ parts: [] }); setDrawer('dismantle'); }}>Finish dismantling</Button>}>
@@ -121,6 +111,9 @@ export default function FloorTicketPage() {
   );
 
   const acts = data.activities || [];
+  const cc = data.config_check?.config || {};
+  const cost = data.laptop_cost;
+  const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
   return (
     <DeskShell title={t.ttspl_id || `Ticket #${t.ticket_id}`} breadcrumb="Production / Floor" subtitle={configText(t)}>
@@ -154,26 +147,44 @@ export default function FloorTicketPage() {
         />
         {tab === 'work' && (
           workForm
-            ? <div className="c-card" style={{ padding: '12px' }}>{(mine || lead || ['QC1', 'QC2', 'Dispatch QC'].includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />}</div>
+            ? ((mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
             : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
         )}
         {tab === 'parts' && (
-          <div className="c-card" style={{ padding: '12px' }}>
-            <PartsConfigPanel ticket={t} parts={data.parts} configHistory={[]} partRequests={data.part_requests} onUpdated={done} />
-          </div>
+          <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && (mine || lead)} onChanged={done} />
         )}
         {tab === 'laptop' && (
-          <Section title="The laptop">
-            <KeyValue items={[
-              { label: 'TTSPL', value: t.ttspl_id }, { label: 'Serial', value: t.serial_number },
-              { label: 'Brand / model', value: [t.brand, t.model].filter(Boolean).join(' ') }, { label: 'Processor', value: t.processor },
-              { label: 'RAM', value: t.ram }, { label: 'Storage', value: t.storage },
-              { label: 'Grade', value: t.final_grade }, { label: 'QC failures', value: t.qc_fail_count || 0 },
-              { label: 'Cost so far', value: t.grand_total != null ? `₹${Number(t.grand_total).toLocaleString('en-IN')}` : null },
-            ]}
-            />
-            {t.ttspl_id && <p style={{ marginTop: '8px' }}><Button variant="quiet" onClick={() => navigate(`/carret/stock/assets/${encodeURIComponent(t.ttspl_id)}`)}>Open the laptop's full record</Button></p>}
-          </Section>
+          <div className="c-stack">
+            <Section title="Configuration">
+              <KeyValue items={[
+                { label: 'TTSPL', value: t.ttspl_id }, { label: 'Serial', value: t.serial_number },
+                { label: 'Brand / model', value: [cc.brand || t.brand, cc.model || t.model].filter(Boolean).join(' ') },
+                { label: 'Processor', value: [cc.processor || t.processor, cc.generation].filter(Boolean).join(' · ') },
+                { label: 'RAM', value: cc.ram || t.ram }, { label: 'Drive', value: cc.storage || t.storage },
+                { label: 'Grade', value: t.final_grade }, { label: 'QC failures', value: t.qc_fail_count || 0 },
+                { label: 'Last confirmed', value: data.config_check?.confirmed ? <>{data.config_check.confirmed.source === 'qc2_script' ? 'QC2 check' : data.config_check.confirmed.source === 'part_fit' ? 'Part fitted' : data.config_check.confirmed.source} · <DateTime value={data.config_check.confirmed.at} /></> : 'Not yet' },
+              ]}
+              />
+              {(data.config_check?.disagreements || []).length > 0 && (
+                <Notice tone="warn" title="Records disagree about this laptop" className="mt-3">
+                  {data.config_check.disagreements.map((d) => `${d.field}: ${({ floor: 'floor copy', legacy: 'old inventory', last_confirmed: 'last check' })[d.where] || d.where} says "${d.value}", record says "${d.current}"`).join(' · ')}
+                </Notice>
+              )}
+              {t.ttspl_id && <p style={{ marginTop: '8px' }}><Button variant="quiet" onClick={() => navigate(`/carret/stock/assets/${encodeURIComponent(t.ttspl_id)}`)}>Open the laptop's full record</Button></p>}
+            </Section>
+            {cost && (
+              <Section title="Cost of this laptop">
+                <div className="c-totals">
+                  <div><span>{cost.base.kind === 'monthly_rent' ? `Rented from the vendor (${cost.base.po_number || 'PO'}) — monthly rent, not in the total` : `Bought on ${cost.base.po_number || 'its PO'}`}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
+                  {cost.lines.map((l, i) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    <div key={i}><span>{l.label}{l.ref ? ` · ${l.ref}` : ''}{l.no_cost ? ' (no cost recorded)' : ''}</span><span>{money(l.amount)}</span></div>
+                  ))}
+                  <div className="is-grand"><span>Total so far</span><span>{money(cost.total)}</span></div>
+                </div>
+              </Section>
+            )}
+          </div>
         )}
         {tab === 'history' && (
           <Section title="History">
@@ -191,7 +202,7 @@ export default function FloorTicketPage() {
         )}
       </div>
 
-      <AssignmentModal ticket={t} open={assignOpen} onClose={() => setAssignOpen(false)} onAssigned={() => { setAssignOpen(false); load(); }} />
+      <AssignDrawer ticket={t} open={assignOpen} onClose={() => setAssignOpen(false)} onDone={() => { setAssignOpen(false); load(); }} />
 
       <Drawer open={drawer === 'start'} onClose={() => setDrawer(null)} title="Start work" footer={<Button variant="primary" disabled={busy === 'start'} onClick={() => run('start', () => startWork(t.ticket_id, { verify_ttspl: form.ttspl, verify_serial: form.serial }), 'Timer started')}>Start</Button>}>
         <div className="c-stack">
@@ -201,11 +212,6 @@ export default function FloorTicketPage() {
         </div>
       </Drawer>
 
-      <Drawer open={drawer === 'qcPick'} onClose={() => setDrawer(null)} title="Send to QC1" footer={<Button variant="primary" disabled={busy === 'qc1' || !form.qc} onClick={() => run('qc1', () => moveStage(t.ticket_id, { to_stage_name: 'QC1', assigned_user_id: Number(form.qc) }), 'Sent to QC1')}>Send</Button>}>
-        <Field label="QC1 inspector" required hint="Not you — someone else checks your work">
-          <Select value={form.qc || ''} onChange={setF('qc')} placeholder="Pick an inspector" options={qcMembers.map((m) => ({ value: String(m.user_id), label: m.name }))} />
-        </Field>
-      </Drawer>
 
       {['hold', 'release', 'fail', 'toDismantle'].map((k) => {
         const cfg = {

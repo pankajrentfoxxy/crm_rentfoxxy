@@ -329,10 +329,25 @@ async function applyDispatchQcFailure(client, {
       console.error('dispatch QC fail notification:', wfErr.message);
     }
   }
-  // 4. Asset status — rework stays in QC Process (pending/in_stock); hard fail only when
-  // the ticket is not returning to the floor pipeline.
+  // The laptop is off the order now, so its floor ticket follows the normal
+  // floor route after repair (QC1 -> QC2 -> into stock by serial scan) instead
+  // of the sales-order route back to Dispatch QC for an order it left.
+  if (alloc.qc_ticket_id) {
+    await client.query(
+      `UPDATE tickets SET ticket_type = 'grn_qc', updated_at = NOW()
+        WHERE ticket_id = $1 AND ticket_type = 'sales_order_qc' AND status NOT IN ('completed', 'cancelled')`,
+      [alloc.qc_ticket_id]
+    );
+  }
+
+  // 4. Asset status. Production (Dispatch QC rework status): a laptop whose
+  // ticket goes back to the floor is in_repair while it is fixed — it used to
+  // be set in_stock (sellable mid-repair). It reaches in_stock again only by
+  // the serial-scan receive after QC2, like every other laptop. Without a
+  // floor ticket it is qc_failed.
+  const backOnFloor = !!alloc.qc_ticket_id;
   if (alloc.serial_id) {
-    if (moveTicketToDiagnosis) {
+    if (backOnFloor) {
       // Part 2.2, bypass-register A — and the clearest example in the set.
       //
       // The raw UPDATE used to run BEFORE the transition attempt, setting
@@ -356,15 +371,17 @@ async function applyDispatchQcFailure(client, {
         [alloc.serial_id]
       );
       if (REWORKABLE.includes(String(cur.rows[0]?.inventory_status || ''))) {
+        const fromStatus = String(cur.rows[0]?.inventory_status || '');
         await inventorySM.transitionAsset(client, {
           serialId: alloc.serial_id,
-          toStatus: 'in_stock',
+          toStatus: 'in_repair',
           // Not truncated here. transitionAsset trims what the varchar(255)
           // column needs and the event keeps the full text (I16).
-          reason: `Dispatch QC failed on ${soNumber} — rework`,
+          reason: `Dispatch QC failed on ${soNumber} — back to the floor for repair`,
           actorUserId: actorUserId || null,
           actorName: actorName || null,
-          allowOverride: true,
+          // Every source state has a map edge to in_repair except in_transit.
+          allowOverride: fromStatus === 'in_transit',
           correlationId,
           caller: 'dispatchQcCaptureService.applyDispatchQcFailure(rework)',
         });

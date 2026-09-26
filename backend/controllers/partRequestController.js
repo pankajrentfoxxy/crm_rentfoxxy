@@ -1576,42 +1576,25 @@ exports.getPartCostSummary = async (req, res) => {
       [aliasArr]
     );
 
-    const totals = await pool.query(
-      `SELECT COALESCE(SUM(tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)),0)::numeric AS parts_cost
-         FROM tickets t
-         JOIN ticket_parts tp ON tp.ticket_id = t.ticket_id
-         LEFT JOIN parts p ON p.part_id = tp.part_id
-        WHERE ($1::int IS NOT NULL AND t.vendor_serial_id = $1)
-           OR UPPER(COALESCE(t.ttspl_id, '')) = ANY($2::text[])
-           OR UPPER(COALESCE(t.serial_number, '')) = ANY($2::text[])`,
-      [ctx.serialId, aliasArr]
-    );
-
-    const baseRes = ctx.serialId
-      ? await pool.query(
-        `SELECT COALESCE(MAX(vpd.rate),0)::numeric AS base_cost
-           FROM vendor_serial_numbers vsn
-           LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
-          WHERE vsn.serial_id = $1`,
-        [ctx.serialId]
-      )
-      : await pool.query(
-        `SELECT COALESCE(MAX(vpd.rate),0)::numeric AS base_cost
-           FROM vendor_serial_numbers vsn
-           LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
-          WHERE UPPER(COALESCE(vsn.inventory_asset_code, '')) = ANY($1::text[])`,
-        [aliasArr]
-      );
-
-    const partsCost = parseFloat(totals.rows[0]?.parts_cost || 0);
-    const baseCost = parseFloat(baseRes.rows[0]?.base_cost || 0);
+    // PD15: the one cost calculation (own PO line + fitted parts − collected
+    // old parts), shared with the floor ticket and the TTSPL history.
+    const cost = await require('../services/laptopCostService').getLaptopCost(pool, {
+      serialId: ctx.serialId || null,
+      ttsplId: ctx.serialId ? null : ctx.canonicalTtspl,
+    });
+    const partsCost = cost ? cost.parts : 0;
+    const baseCost = cost && cost.base.kind === 'purchase' ? (cost.base.amount || 0) : 0;
+    const totalExpense = cost ? cost.total : 0;
 
     res.json({
       success: true,
       ttspl_id: ctx.canonicalTtspl,
       base_cost: baseCost,
       parts_cost: partsCost,
-      total_expense: partsCost + baseCost,
+      credits: cost ? cost.credits : 0,
+      total_expense: totalExpense,
+      base_kind: cost ? cost.base.kind : null,
+      monthly_rent: cost && cost.base.kind === 'monthly_rent' ? cost.base.amount : null,
       parts_breakdown: breakdown.rows.map((b) => ({
         prt_id: b.prt_id,
         instance_id: b.instance_id,
@@ -2260,26 +2243,52 @@ exports.listOldPartsToCollect = async (req, res) => {
 
 // POST /api/part-requests/old-parts/:instanceId/collect  body: { location_code?, condition? }
 exports.collectOldPart = async (req, res) => {
+  // One transaction, and a ledger row when the warehouse corrects a "good"
+  // old part to defective (it used to drop parts.quantity with no movement).
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const id = Number(req.params.instanceId);
     const cond = req.body?.condition;
-    const u = await pool.query(
+    const u = await client.query(
       `UPDATE part_instances
           SET collected_at = NOW(), collected_by = $2,
               location_code = COALESCE(NULLIF($3, ''), location_code), updated_at = NOW()
         WHERE instance_id = $1 AND source = 'defective_return' AND collected_at IS NULL
-        RETURNING instance_id, prt_id, part_id, status`,
+        RETURNING instance_id, prt_id, part_id, status, serial_number, removed_from_ttspl_id, removed_from_ticket_id`,
       [id, req.user.user_id, String(req.body?.location_code || '').trim()]
     );
-    if (!u.rows.length) return res.status(409).json({ success: false, message: 'Already collected, or not an old part.' });
-    // The warehouse can correct the condition the technician recorded.
-    if (cond === 'defective' && u.rows[0].status === 'in_stock') {
-      await pool.query(`UPDATE part_instances SET status = 'defective', updated_at = NOW() WHERE instance_id = $1`, [id]);
-      await pool.query('UPDATE parts SET quantity = GREATEST(COALESCE(quantity, 0) - 1, 0), updated_at = NOW() WHERE part_id = $1', [u.rows[0].part_id]);
+    if (!u.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Already collected, or not an old part.' });
     }
-    res.json({ success: true, message: `${u.rows[0].prt_id} collected` });
+    const unit = u.rows[0];
+    // The warehouse can correct the condition the technician recorded.
+    if (cond === 'defective' && unit.status === 'in_stock') {
+      await client.query(`UPDATE part_instances SET status = 'defective', updated_at = NOW() WHERE instance_id = $1`, [id]);
+      await client.query('UPDATE parts SET quantity = GREATEST(COALESCE(quantity, 0) - 1, 0), updated_at = NOW() WHERE part_id = $1', [unit.part_id]);
+      const { recordMovement, MOVEMENT } = require('../services/partMovementService');
+      await recordMovement(client, {
+        type: MOVEMENT.RETURNED_DEFECTIVE,
+        partId: unit.part_id,
+        instanceId: unit.instance_id,
+        prtId: unit.prt_id,
+        serialNumber: unit.serial_number,
+        ticketId: unit.removed_from_ticket_id,
+        ttsplId: unit.removed_from_ttspl_id,
+        condition: 'defective',
+        notes: 'Warehouse collected it and found it defective (the technician had recorded it as good)',
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+      });
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, message: `${unit.prt_id} collected` });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('collectOldPart:', err);
     res.status(500).json({ success: false, message: 'Could not record it' });
+  } finally {
+    client.release();
   }
 };

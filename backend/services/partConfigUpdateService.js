@@ -199,6 +199,27 @@ async function applyConfigFromPartAttach(client, {
     }
   }
 
+  // Production (config truth): the legacy inventory row was never updated on
+  // a part fit, which is most of the RAM / storage drift. Billing does not
+  // read it; old screens do.
+  if (['ram', 'storage', 'processor'].includes(field) && ticket.serial_number) {
+    await client.query(
+      `UPDATE inventory SET ${field} = $1, updated_at = NOW() WHERE LOWER(serial_number) = LOWER($2)`,
+      [nextValue, ticket.serial_number]
+    );
+  }
+  if (ticket.vendor_serial_id) {
+    await require('./laptopConfigService').recordConfirmation(client, {
+      serialId: ticket.vendor_serial_id,
+      ttsplId: ticket.ttspl_id || null,
+      source: 'part_fit',
+      config: { [field === 'display' ? 'screen_size' : field]: nextValue },
+      ticketId: ticket.ticket_id,
+      userId,
+      notes: notes || `${partName || 'Part'} fitted (${prevValue || '—'} → ${nextValue})`,
+    });
+  }
+
   await clearMissingPartFlags(client, { ticket, configField: field, productionAssetId });
 
   return true;

@@ -96,67 +96,53 @@ function buildChecklistSummary(checklistData) {
         .map(([key]) => labelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
 }
 
-// ── QC grading (Part 5.4, finding R4) ─────────────────────────────
+// ── QC grading ────────────────────────────────────────────────────
 //
-// calculateQCResult used to take the checklist and nothing else, so QC2 applied
-// exactly the same seven criteria as QC1. That makes QC2 a second run of QC1
-// rather than a stricter gate, and it is why a unit could pass QC2 with an
-// AVERAGE battery, a cracked body or a dead speaker: QC1 does not care about
-// those, and QC2 was QC1.
-//
-// QC1 is the technician's own check that the machine works. QC2 is the last
-// look before the laptop is declared fit for a customer, so it also refuses
-// what a customer would reject on sight or on the first call.
-//
-// Dispatch QC deliberately keeps the QC1 criteria: it is a pre-dispatch
-// re-check of a unit that has already passed QC2, not a third, stricter grade.
+// The questions, their good/bad answers and which answers fail each stage live
+// in services/floorChecklists.js, which the form also reads — so the browser
+// can no longer predict a pass the server then refuses (it used to check 7
+// rules while the server checked 22 for QC2). QC2 is stricter than QC1;
+// Dispatch QC keeps the QC1 rules.
+const floorChecklists = require('../services/floorChecklists');
 
-const QC_BASE_CRITERIA = [
-    { when: (c) => c.keyboard === 'NOT WORKING',        reason: 'Keyboard not working' },
-    { when: (c) => c.touchpad === 'NOT WORKING',        reason: 'Touchpad not working' },
-    { when: (c) => c.usb_ports === 'NOT WORKING',       reason: 'USB ports not working' },
-    { when: (c) => c.wifi_test === 'NOT WORKING',       reason: 'WiFi not working' },
-    { when: (c) => c.battery_health === 'BAD',          reason: 'Battery health BAD' },
-    { when: (c) => c.ssd_health === 'BAD',              reason: 'SSD health BAD' },
-    { when: (c) => c.screen_resolution === 'FAIL',      reason: 'Screen resolution failed' },
-];
-
-const QC2_ADDITIONAL_CRITERIA = [
-    { when: (c) => c.battery_health === 'AVERAGE',      reason: 'QC2: battery health only AVERAGE — not fit to ship' },
-    { when: (c) => c.ssd_health === 'AVERAGE',          reason: 'QC2: SSD health only AVERAGE — not fit to ship' },
-    { when: (c) => c.physical_damage === 'YES',         reason: 'QC2: physical damage / crack present' },
-    { when: (c) => c.body_hinge === 'NO',               reason: 'QC2: body hinge check failed' },
-    { when: (c) => c.ttspl_id === 'NO',                 reason: 'QC2: TTSPL asset label missing' },
-    { when: (c) => c.speaker === 'NOT WORKING',         reason: 'QC2: speaker not working' },
-    { when: (c) => c.camera_recording === 'NO',         reason: 'QC2: camera / audio recording failed' },
-    { when: (c) => c.bluetooth === 'NOT WORKING',       reason: 'QC2: Bluetooth not working' },
-    { when: (c) => c.power_adapter === 'NOT WORKING',   reason: 'QC2: power adapter not working' },
-    { when: (c) => c.required_drivers === 'NO',         reason: 'QC2: required drivers missing' },
-    { when: (c) => c.ms_office === 'NOT INSTALLED',     reason: 'QC2: MS Office not installed / activated' },
-    { when: (c) => c.vga_hdmi === 'NOT WORKING',        reason: 'QC2: VGA / HDMI not working' },
-    { when: (c) => c.lan_port === 'NOT WORKING',        reason: 'QC2: LAN port not working' },
-    { when: (c) => c.left_click === 'NOT WORKING',      reason: 'QC2: left click not working' },
-    { when: (c) => c.right_click === 'NOT WORKING',     reason: 'QC2: right click not working' },
-];
-
-function criteriaForStage(qcStage) {
-    return String(qcStage) === 'QC2'
-        ? [...QC_BASE_CRITERIA, ...QC2_ADDITIONAL_CRITERIA]
-        : QC_BASE_CRITERIA;
-}
-
-// Calculate QC Result based on checklist AND the stage doing the checking.
 function calculateQCResult(checklistData, qcStage = 'QC1') {
-    const data = checklistData || {};
-    const failureReasons = criteriaForStage(qcStage)
-        .filter((c) => c.when(data))
-        .map((c) => c.reason);
-
-    return {
-        result: failureReasons.length ? 'FAIL' : 'PASS',
-        reasons: failureReasons
-    };
+    return floorChecklists.qcResult(checklistData, qcStage);
 }
+
+// Questions a submission must answer. The old QC form (Old view) predates the
+// BitLocker question, so it is held to the questions it has.
+function requiredQcItems(checklistVersion) {
+    return Number(checklistVersion) >= 2
+        ? floorChecklists.QC_ITEMS
+        : floorChecklists.QC_ITEMS.filter((it) => !it.since);
+}
+
+exports.getFloorChecklists = async (req, res) => {
+    try {
+        const stages = ['Chip Level Repair', 'Body & Paint', 'Assembly & Software', 'Final Testing'];
+        const stageChecklists = {};
+        for (const st of stages) stageChecklists[st] = await floorChecklists.stageChecklistItems(pool, st);
+        res.json({
+            success: true,
+            qc: {
+                sections: floorChecklists.QC_SECTIONS,
+                grades: floorChecklists.QC_GRADES,
+                criteria: {
+                    QC1: floorChecklists.qcCriteria('QC1'),
+                    QC2: floorChecklists.qcCriteria('QC2'),
+                    'Dispatch QC': floorChecklists.qcCriteria('Dispatch QC'),
+                },
+            },
+            diagnosis: { sections: floorChecklists.DIAGNOSIS_SECTIONS, outcomes: floorChecklists.DIAGNOSIS_OUTCOMES },
+            stages: stageChecklists,
+            stageOutcomes: Object.fromEntries(Object.entries(require('./floorBoard.controller').STAGE_OUTCOMES)
+                .map(([st, o]) => [st, Object.entries(o).map(([value, v]) => ({ value, label: v.label, needsReason: !!v.needsReason, to: v.to }))])),
+        });
+    } catch (error) {
+        console.error('Floor checklists error:', error);
+        res.status(500).json({ success: false, message: 'Could not load the checklists' });
+    }
+};
 
 // Get QC data for a ticket
 exports.getQCData = async (req, res) => {
@@ -296,7 +282,11 @@ exports.saveQC = async (req, res) => {
 // Submit QC and route ticket
 exports.submitQC = async (req, res) => {
     const { id } = req.params;
-    const { header, checklist, grading, remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
+    const { remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
+    // A "fail it now" submission may come without a checklist, header or grade.
+    const checklist = req.body.checklist || {};
+    const grading = req.body.grading || { final_grade: null, grade_notes: null };
+    const header = req.body.header || {};
     const userId = req.user.user_id;
 
     const client = await pool.connect();
@@ -345,8 +335,45 @@ exports.submitQC = async (req, res) => {
         const serialNumber = ticketMeta.serial_number || null;
         const machineNumber = ticketMeta.machine_number || null;
 
+        // "Fail it now" — the inspector can fail without the checklist when the
+        // laptop cannot be tested (configuration mismatch, won't start). A
+        // failure is always safe to record; it needs a real reason.
+        const forceFailReason = String(req.body.force_fail_reason || '').trim();
+        if (req.body.force_fail_reason != null && forceFailReason.length < 5) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Say why it fails (at least 5 characters).' });
+        }
+
+        // Every question answered with one of its own answers, and a grade —
+        // checked here, not only in the browser.
+        if (!forceFailReason) {
+            const { missing, invalid } = floorChecklists.checkAnswers(requiredQcItems(req.body.checklist_version), checklist);
+            if (missing.length || invalid.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    code: 'QC_INCOMPLETE',
+                    message: missing.length
+                        ? `Answer every question first — ${missing.length} still open.`
+                        : `Some answers are not valid for their question (${invalid.join(', ')}).`,
+                    missing, invalid,
+                });
+            }
+            if (!floorChecklists.QC_GRADES.some((g) => g.value === grading?.final_grade)) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, code: 'QC_NO_GRADE', message: 'Choose the grade.' });
+            }
+            const bad = floorChecklists.badAnswers(floorChecklists.QC_ITEMS, checklist);
+            if (bad.length && !String(remarks || '').trim()) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, code: 'QC_REMARKS', message: 'Write a remark about the problems you marked.' });
+            }
+        }
+
         // Calculate QC result against the criteria for THIS stage (Part 5.4).
-        const { result, reasons } = calculateQCResult(checklist, qcStage);
+        const { result, reasons } = forceFailReason
+            ? { result: 'FAIL', reasons: [forceFailReason] }
+            : calculateQCResult(checklist, qcStage);
 
         // Production safety A (PD2, PD3). A pass needs an inspector who did not
         // repair it, and a QC2 pass needs the configuration check to have
@@ -418,12 +445,12 @@ exports.submitQC = async (req, res) => {
         }
 
         // Update ticket grade from QC (QC1 and QC2)
-        await client.query(
+        if (grading.final_grade) await client.query(
             `UPDATE tickets SET final_grade = $1 WHERE ticket_id = $2`,
             [grading.final_grade, id]
         );
 
-        if (serialNumber || machineNumber) {
+        if (grading.final_grade && (serialNumber || machineNumber)) {
             await client.query(
                 `UPDATE inventory SET grade = $1 WHERE serial_number = $2 OR machine_number = $3`,
                 [grading.final_grade, serialNumber, machineNumber]
@@ -446,8 +473,12 @@ exports.submitQC = async (req, res) => {
             : null;
 
         let nextStage;
+        // Dispatch QC failure has two routes: fix it for the same order (back to
+        // Assembly, stays on the order) or take it off the order (Diagnosis).
+        const dispatchRemove = failure && qcStage === 'Dispatch QC' && !failure.escalated
+            && req.body.dispatch_fail_mode === 'remove';
         if (failure) {
-            nextStage = failure.toStageName;
+            nextStage = dispatchRemove ? 'Diagnosis' : failure.toStageName;
         } else if (qcStage === 'QC1') {
             // F21: a sales-order laptop goes QC1 -> Dispatch QC, as move-stage
             // already did; this path sent it to QC2.
@@ -517,26 +548,23 @@ exports.submitQC = async (req, res) => {
                 // Going back round the loop needs somebody to go back to. An
                 // escalated ticket goes to the floor manager's queue instead, so
                 // there is nobody to pre-assign.
+                // PD9: naming who fixes it is optional — without a name the
+                // ticket waits in that stage's queue, where its team claims it.
                 const teamLabel = qcStage === 'QC2' ? 'QC1' : 'Hardware & Software';
                 const manualId = assignToUserId != null && assignToUserId !== ''
                     ? parseInt(assignToUserId, 10)
                     : null;
-                if (!manualId || Number.isNaN(manualId)) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        message: `${teamLabel} technician is required when failing from ${qcStage}`,
-                    });
+                if (manualId && !Number.isNaN(manualId)) {
+                    const eligible = await fetchOrderedMemberIds(client, team_id);
+                    if (!eligible.includes(manualId)) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({
+                            success: false,
+                            message: `Selected assignee is not an active ${teamLabel} team member`,
+                        });
+                    }
+                    assignedUserId = manualId;
                 }
-                const eligible = await fetchOrderedMemberIds(client, team_id);
-                if (!eligible.includes(manualId)) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        message: `Selected assignee is not an active ${teamLabel} team member`,
-                    });
-                }
-                assignedUserId = manualId;
             }
 
             // Part 5.3 — the write goes through the one stage mover, which
@@ -563,6 +591,42 @@ exports.submitQC = async (req, res) => {
                     return res.status(moveErr.status).json({ success: false, message: moveErr.message });
                 }
                 throw moveErr;
+            }
+
+            if (failure && qcStage === 'Dispatch QC') {
+                if (dispatchRemove) {
+                    const allocRes = await client.query(
+                        `SELECT allocation_id FROM sales_order_serials
+                          WHERE qc_ticket_id = $1 AND status <> 'removed'
+                          ORDER BY allocation_id DESC LIMIT 1`,
+                        [id]
+                    );
+                    if (allocRes.rows.length) {
+                        const { applyDispatchQcFailure } = require('../services/dispatchQcCaptureService');
+                        const paRes = await client.query(
+                            `SELECT production_asset_id FROM production_assets
+                              WHERE ticket_id = $1 OR (vendor_serial_id IS NOT NULL AND vendor_serial_id = $2)
+                              ORDER BY production_asset_id DESC LIMIT 1`,
+                            [id, ticketMeta.vendor_serial_id || null]
+                        );
+                        await applyDispatchQcFailure(client, {
+                            allocationId: allocRes.rows[0].allocation_id,
+                            pa: paRes.rows[0] || null,
+                            remarks: failure.failReason,
+                            actorUserId: userId,
+                            actorName: req.user.name,
+                            correlationId: req.correlationId || null,
+                            moveTicketToDiagnosis: false,
+                        });
+                    }
+                } else {
+                    // Same as move-stage's rework route: the order sees the failure.
+                    await client.query(
+                        `UPDATE sales_order_serials SET qc_status = 'failed', updated_at = NOW()
+                          WHERE qc_ticket_id = $1 AND status = 'attached'`,
+                        [id]
+                    );
+                }
             }
 
             if (failure) {

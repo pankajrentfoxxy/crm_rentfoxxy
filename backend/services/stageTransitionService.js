@@ -174,6 +174,9 @@ async function applyStageMove(db, {
   assertQcGate({
     from: fromStage?.stage_name || null, to: toStage.stage_name, qcGate, ticketId,
   });
+  await assertStageWorkDone(client, {
+    ticketId, from: fromStage, to: toStage.stage_name, actor, reason,
+  });
 
   const sets = ['current_stage_id = $2', 'assigned_team_id = $3', 'updated_at = NOW()'];
   const params = [ticketId, toStage.stage_id, toStage.team_id];
@@ -258,7 +261,41 @@ function assertQcGate({ from, to, qcGate, ticketId }) {
   }
 }
 
+/**
+ * Production: Assembly and Final Testing are finished through their checklist.
+ * Moving forward out of them (to Final Testing / QC1) needs that stage's
+ * checklist completed since the laptop last entered the stage — the "tick
+ * every item" rule used to live only in the browser, so move-stage skipped it.
+ * A floor manager can still move it with a written reason (logged on the event).
+ */
+const CHECKLIST_EXITS = new Set(['Assembly & Software→Final Testing', 'Final Testing→QC1']);
+async function assertStageWorkDone(db, { ticketId, from, to, actor, reason }) {
+  if (!from || !CHECKLIST_EXITS.has(`${from.stage_name}→${to}`)) return;
+  const { isManager } = require('./qcGateService');
+  if (actor && isManager(actor) && String(reason || '').trim().length >= 10) return;
+  const { rows } = await db.query(
+    `SELECT 1 FROM ticket_checklist_progress p
+      WHERE p.ticket_id = $1 AND p.stage_id = $2 AND p.completed_at IS NOT NULL
+        AND p.completed_at >= COALESCE((
+              SELECT MAX(e.occurred_at) FROM events e
+               WHERE e.entity_type = 'ticket' AND e.entity_id = $1::text
+                 AND e.event_type = 'ticket_stage_changed' AND e.to_state = $3), 'epoch'::timestamptz)
+      LIMIT 1`,
+    [ticketId, from.stage_id, from.stage_name]
+  );
+  if (!rows.length) {
+    const err = new StageTransitionRefused({
+      from: from.stage_name, to, ticketId,
+      reason: `Finish the ${from.stage_name} checklist first (Work tab). A floor manager can move it with a reason.`,
+    });
+    err.status = 409;
+    err.code = 'STAGE_CHECKLIST';
+    throw err;
+  }
+}
+
 module.exports = {
+  assertStageWorkDone,
   assertQcGate,
   QC_PASS_MOVES,
   StageTransitionRefused,

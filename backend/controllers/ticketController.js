@@ -778,7 +778,32 @@ exports.getTicketById = async (req, res) => {
     }
     displayTicket.vendor_serial_extra = ticket.vsn_extra || null;
 
+    // PD15: the laptop's cost from its own PO line + fitted parts − collected
+    // old parts. Additive; grand_total stays as it was for the older screens.
+    let laptopCost = null;
+    try {
+      if (ticket.vendor_serial_id || ticket.ttspl_id) {
+        laptopCost = await require('../services/laptopCostService').getLaptopCost(pool, {
+          serialId: ticket.vendor_serial_id || null,
+          ttsplId: ticket.vendor_serial_id ? null : ticket.ttspl_id,
+        });
+      }
+    } catch (costErr) {
+      console.error('laptop cost:', costErr.message);
+    }
+
+    let configCheck = null;
+    try {
+      if (ticket.vendor_serial_id) {
+        configCheck = await require('../services/laptopConfigService').getCurrentConfig(pool, { serialId: ticket.vendor_serial_id });
+      }
+    } catch (cfgErr) {
+      console.error('config check:', cfgErr.message);
+    }
+
     res.json({
+      laptop_cost: laptopCost,
+      config_check: configCheck,
       success: true,
       ticket: {
         ...displayTicket,
@@ -1126,6 +1151,16 @@ async function assignTicketInner(req, res, db) {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
     const currentTicket = ticketRes.rows[0];
+    // PD1 / PD9: triage and reassigning are a floor manager's job. Anyone may
+    // take a ticket for themselves (claim does that with a team check); giving
+    // it to someone else, or to a team, needs a floor manager or manager.
+    // Sales-order laptops at Dispatch QC are assigned from the order screens
+    // (Order to delivery), which this rule does not cover.
+    const toSelf = user_id && Number(user_id) === Number(req.user.user_id) && !team_id;
+    const floorWork = currentTicket.ticket_type !== 'sales_order_qc' && currentTicket.stage_name !== 'Dispatch QC';
+    if (floorWork && !toSelf && !require('../services/qcGateService').isManager(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only a floor manager assigns a laptop to someone else. Claim it to take it yourself.' });
+    }
     const preserveDispatchQcStage =
       currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
     const preserveQcStageReassign =

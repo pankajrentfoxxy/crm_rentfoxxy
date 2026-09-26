@@ -123,6 +123,18 @@ first, because several change how the floor works, not just the screens.
    the record; part cost per laptop (PD15, P21) and parts ledger gaps (P9–P15); config truth
    between tables (Q9–Q11); Dispatch QC rework status.
 7. Menu (Production opens the new screens; old under "Old view"), verify on QA end to end.
+8. **Stage forms + the open items** — DONE on QA 26 Sep (migrations 339–341; tests 459 pass):
+   one server definition of every floor checklist (`services/floorChecklists.js`); new forms in
+   `frontend/src/features/carret/produce/work/` (Diagnosis, stage work, QC1/QC2/Dispatch QC with
+   the QC2 configuration check, Parts, Assign); Diagnosis keeps its answers and checks the
+   outcome; chip / body / assembly / testing finish through `POST /tickets/:id/stage-work`
+   (checklist checked on the server; Body & Paint can leave); QC checked on the server (all
+   answered, grade, remarks), "fail now", Dispatch QC fix-for-order / take-off-order;
+   Dispatch QC rework → in_repair (not in_stock); cost per laptop (PD15,
+   `services/laptopCostService.js`); parts-ledger gaps (collect writes a ledger row, unrecorded
+   remove retired); config truth (`laptop_config_confirmations`, `laptopConfigService`,
+   `scripts/config-drift.js`). **Promotion to live: `claude/production-promotion-checklist.md`**
+   (QA click-through list, then the live runbook). Waiting on the user's QA click-through.
 
 ## Full findings
 

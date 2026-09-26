@@ -800,41 +800,22 @@ async function computeCostSummary(ctx) {
   const { aliases, serialId, canonicalTtspl } = ctx;
   const aliasArr = aliases.length ? aliases : [canonicalTtspl];
 
-  const [partsRes, baseRes] = await Promise.all([
-    pool.query(
-      `SELECT COALESCE(SUM(tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)), 0)::numeric AS parts_cost
-       FROM tickets t
-       JOIN ticket_parts tp ON tp.ticket_id = t.ticket_id
-       LEFT JOIN parts p ON p.part_id = tp.part_id
-       WHERE ($1::int IS NOT NULL AND t.vendor_serial_id = $1)
-          OR UPPER(COALESCE(t.ttspl_id, '')) = ANY($2::text[])
-          OR UPPER(COALESCE(t.serial_number, '')) = ANY($2::text[])`,
-      [serialId, aliasArr]
-    ),
-    serialId
-      ? pool.query(
-        `SELECT COALESCE(MAX(vpd.rate), 0)::numeric AS base_cost
-         FROM vendor_serial_numbers vsn
-         LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
-         WHERE vsn.serial_id = $1`,
-        [serialId]
-      )
-      : pool.query(
-        `SELECT COALESCE(MAX(vpd.rate), 0)::numeric AS base_cost
-         FROM vendor_serial_numbers vsn
-         LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
-         WHERE UPPER(COALESCE(vsn.inventory_asset_code, '')) = ANY($1::text[])`,
-        [aliasArr]
-      )
-  ]);
-
-  const partsCost = parseFloat(partsRes.rows[0]?.parts_cost) || 0;
-  const baseCost = parseFloat(baseRes.rows[0]?.base_cost) || 0;
-
+  // PD15: one calculation for a laptop's cost (services/laptopCostService):
+  // its own PO line, not the priciest line on the PO; parts from the ledger.
+  // Same response shape as before, plus the breakdown.
+  const { getLaptopCost } = require('./laptopCostService');
+  const cost = await getLaptopCost(pool, { serialId: serialId || null, ttsplId: serialId ? null : (canonicalTtspl || aliasArr[0]) });
+  if (!cost) return { parts_cost: 0, base_cost: 0, total_cost: 0 };
+  const baseCost = cost.base.kind === 'purchase' ? (cost.base.amount || 0) : 0;
   return {
-    parts_cost: partsCost,
+    parts_cost: cost.parts,
     base_cost: baseCost,
-    total_cost: partsCost + baseCost
+    credits: cost.credits,
+    total_cost: cost.total,
+    base_kind: cost.base.kind,
+    monthly_rent: cost.base.kind === 'monthly_rent' ? cost.base.amount : null,
+    base_source: cost.base.source,
+    lines: cost.lines,
   };
 }
 

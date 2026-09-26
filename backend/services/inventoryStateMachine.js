@@ -53,7 +53,10 @@ const STATUS = Object.freeze({
 // corrections still flow through here so they are audited).
 const ALLOWED = {
   in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor'],
-  reserved:        ['dispatch_ready', 'in_transit', 'in_stock'],
+  // reserved / dispatch_ready -> in_repair: a laptop taken off its order after
+  // failing Dispatch QC goes back to the floor for repair — not into stock,
+  // where it could be sold while it is still being fixed.
+  reserved:        ['dispatch_ready', 'in_transit', 'in_stock', 'in_repair'],
   // I6: dispatch_ready -> qc_failed. A unit on a challan that fails Dispatch QC
   // happens every week and the map did not permit it, so the code went round
   // the map instead (bypass-register A, dispatchQcCaptureService).
@@ -61,7 +64,7 @@ const ALLOWED = {
   // departure, so there is no dispatch_ready -> at_gate staging step. at_gate
   // is inward custody only. Adding the outward two-step later is one entry
   // here plus a screen change, so nothing is foreclosed.
-  dispatch_ready:  ['in_transit', 'in_stock', 'qc_failed'],
+  dispatch_ready:  ['in_transit', 'in_stock', 'qc_failed', 'in_repair'],
   // I6: in_transit -> returned. Support warehouse receive takes a unit straight
   // from in_transit to returned, which the map forbade — which is exactly why
   // supportController:3048 writes the column raw (bypass-register B).

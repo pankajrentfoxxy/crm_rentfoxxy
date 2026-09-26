@@ -3,6 +3,7 @@ const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService'
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
+const floorChecklists = require('../services/floorChecklists');
 
 /** What each diagnosis outcome means to stage_transition_rules. */
 const DIAGNOSIS_CONDITIONS = {
@@ -201,6 +202,24 @@ exports.saveDiagnosis = async (req, res) => {
         if (!ticket) {
             return res.status(404).json({ success: false, message: 'Ticket not found' });
         }
+
+        // The new floor form saves its answers as a draft. Nothing moves, so the
+        // TTSPL / serial scan is asked once, at submit.
+        if (data.answers && typeof data.answers === 'object' && !Array.isArray(data.answers)) {
+            const upd = await pool.query(
+                `UPDATE diagnosis_results SET answers = $2, remarks = $3, updated_at = CURRENT_TIMESTAMP
+                  WHERE ticket_id = $1 RETURNING diagnosis_id`,
+                [id, JSON.stringify(data.answers), data.remarks || null]
+            );
+            if (!upd.rows.length) {
+                await pool.query(
+                    `INSERT INTO diagnosis_results (ticket_id, diagnosed_by, answers, remarks)
+                     SELECT $1, $2, $3, $4 WHERE NOT EXISTS (SELECT 1 FROM diagnosis_results WHERE ticket_id = $1)`,
+                    [id, userId, JSON.stringify(data.answers), data.remarks || null]
+                );
+            }
+            return res.json({ success: true, message: 'Saved' });
+        }
         const { assertTtsplAndSerial } = require('../utils/machineIdentityVerify');
         const { requiresSerialIdentity } = require('../constants/laptopConditions');
         try {
@@ -233,13 +252,13 @@ exports.saveDiagnosis = async (req, res) => {
 
         if (existing.rows.length > 0) {
             // Update
-            const setClause = checkboxFields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+            const setClause = checkboxFields.map((f, i) => `${f} = $${i + 1}, `).join('');
             checkboxValues.push(data.remarks || null);
             checkboxValues.push(existing.rows[0].diagnosis_id);
 
             await pool.query(`
                 UPDATE diagnosis_results 
-                SET ${setClause}, remarks = $${checkboxFields.length + 1}, updated_at = CURRENT_TIMESTAMP
+                SET ${setClause}remarks = $${checkboxFields.length + 1}, updated_at = CURRENT_TIMESTAMP
                 WHERE diagnosis_id = $${checkboxFields.length + 2}
             `, checkboxValues);
 
@@ -262,6 +281,118 @@ exports.saveDiagnosis = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to save' });
     }
 };
+
+
+// ── The new floor form (Production) ───────────────────────────────────────
+//
+// Every question answered (OK / fault / not fitted), then the technician picks
+// the outcome. The server checks the outcome fits the answers, keeps every
+// answer (submit used to throw them all away), and moves the ticket in the
+// same transaction. Parts are asked for through part requests (PD7), not a
+// second list here; the request holds the laptop in Assembly until fitted.
+async function submitDiagnosisV2(client, req, res, ticketBefore) {
+    const fail = async (status, message, extra = {}) => {
+        await client.query('ROLLBACK');
+        return res.status(status).json({ success: false, message, ...extra });
+    };
+    const id = Number(req.params.id);
+    const user = req.user;
+    if (!ticketBefore) return fail(404, 'Ticket not found');
+    if (ticketBefore.stage_name !== 'Diagnosis') {
+        return fail(409, `This laptop is at ${ticketBefore.stage_name || 'another stage'}, not Diagnosis.`);
+    }
+    const { isManager } = require('../services/qcGateService');
+    if (Number(ticketBefore.assigned_user_id) !== Number(user.user_id) && !isManager(user)) {
+        return fail(403, 'Only the technician it is assigned to (or a floor manager) submits its diagnosis.');
+    }
+
+    const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+    const { missing, invalid } = floorChecklists.checkAnswers(floorChecklists.DIAGNOSIS_ITEMS, answers);
+    if (missing.length || invalid.length) {
+        return fail(400, missing.length
+            ? `Answer every question first — ${missing.length} still open.`
+            : 'Some answers are not valid for their question.', { missing, invalid });
+    }
+    const outcome = floorChecklists.DIAGNOSIS_OUTCOMES.find((o) => o.value === req.body.outcome);
+    if (!outcome) return fail(400, 'Choose what happens next.');
+    const faults = floorChecklists.badAnswers(floorChecklists.DIAGNOSIS_ITEMS, answers);
+    const note = String(req.body.remarks || '').trim();
+    if (outcome.value === 'assembly' && faults.length) {
+        return fail(400, `You marked ${faults.length} fault(s) — choose what the laptop needs instead of "No faults".`);
+    }
+    if ((faults.length || outcome.value === 'floor_manager') && note.length < 5) {
+        return fail(400, 'Write a short note on what is wrong, for the next person.');
+    }
+    if (outcome.value === 'parts') {
+        const open = await client.query(
+            `SELECT COUNT(*)::int AS n FROM part_requests
+              WHERE ticket_id = $1 AND status = ANY($2::text[])`,
+            [id, ['pending', 'escalated', 'ordered', 'received', 'approved']]
+        );
+        if (!open.rows[0].n) return fail(400, 'Ask for the parts first (Parts tab), then choose "Needs parts".');
+    }
+
+    // Keep the answers: the jsonb holds all of them; the boolean columns that
+    // exist are filled too (OK = true, fault = false, not fitted = NULL).
+    const cols = floorChecklists.DIAGNOSIS_ITEMS.filter((it) => !it.answersOnly).map((it) => it.key);
+    const colVals = cols.map((k) => (answers[k] === 'good' ? true : answers[k] === 'fault' ? false : null));
+    const existing = await client.query('SELECT diagnosis_id FROM diagnosis_results WHERE ticket_id = $1', [id]);
+    const base = ['status', 'next_team', 'total_failures', 'remarks', 'answers', 'outcome', 'diagnosed_at'];
+    const baseVals = ['Completed', outcome.stage, faults.length, note || null, JSON.stringify(answers), outcome.value];
+    if (existing.rows.length) {
+        const sets = [...base.slice(0, 6), ...cols].map((c, i) => `${c} = $${i + 2}`);
+        await client.query(
+            `UPDATE diagnosis_results SET ${sets.join(', ')}, diagnosed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+              WHERE diagnosis_id = $1`,
+            [existing.rows[0].diagnosis_id, ...baseVals, ...colVals]
+        );
+    } else {
+        const names = ['ticket_id', 'diagnosed_by', ...base.slice(0, 6), ...cols];
+        await client.query(
+            `INSERT INTO diagnosis_results (${names.join(', ')}) VALUES (${names.map((_, i) => `$${i + 1}`).join(', ')})`,
+            [id, user.user_id, ...baseVals, ...colVals]
+        );
+    }
+
+    const keep = ['assembly', 'parts'].includes(outcome.value);
+    const faultText = faults.map((f) => f.q.replace(/\?$/, '')).join('; ');
+    const reason = [note, faultText && `Faults: ${faultText}`].filter(Boolean).join(' — ') || null;
+    let moved;
+    try {
+        moved = await applyStageMove(client, {
+            ticket: { ticket_id: id },
+            toStageName: outcome.stage,
+            conditionHint: outcome.condition,
+            assignedUserId: keep ? 'keep' : null,
+            extraSets: outcome.value === 'floor_manager' ? [`priority = 'high'`] : [],
+            source: 'diagnosisController.submitDiagnosisV2',
+            actor: user,
+            correlationId: req.correlationId || null,
+            reason,
+        });
+        await syncWorkLogForTicketState(client, moved.ticket);
+    } catch (moveErr) {
+        return fail(moveErr.status || 500, moveErr.message || 'Could not move the laptop out of Diagnosis');
+    }
+
+    const logNotes = `Diagnosis done — ${outcome.label}. Faults: ${faults.length}${faultText ? ` (${faultText})` : ''}${note ? ` | ${note}` : ''}`.slice(0, 2000);
+    await client.query(
+        `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes) VALUES ($1, $2, $3, 'diagnosis_completed', $4)`,
+        [id, moved.toStage.stage_id, user.user_id, logNotes]
+    );
+    await logProductionHistory(client, {
+        ticketBefore,
+        ticketAfter: moved.ticket,
+        beforeStageName: 'Diagnosis',
+        afterStageName: outcome.stage,
+        source: 'submitDiagnosis',
+        remarks: logNotes,
+        actor: user,
+        metadata: { outcome: outcome.value, total_failures: faults.length },
+    });
+    await client.query('COMMIT');
+    return res.json({ success: true, next_team: outcome.stage, outcome: outcome.value });
+}
 
 // Submit Diagnosis and Trigger Routing
 exports.submitDiagnosis = async (req, res) => {
@@ -354,12 +485,20 @@ exports.submitDiagnosis = async (req, res) => {
               );
             }
 
-            try {
-                await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
-            } catch (blockErr) {
-                await client.query('ROLLBACK');
-                return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+            if (!req.body.outcome) {
+                try {
+                    await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
+                } catch (blockErr) {
+                    await client.query('ROLLBACK');
+                    return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+                }
             }
+        }
+
+        // The new floor form sends `answers` + `outcome`; the Old view's form
+        // sends `diagnosisData` booleans and is routed as before.
+        if (req.body.outcome) {
+            return await submitDiagnosisV2(client, req, res, ticketBefore);
         }
 
         // 1. Calculate Failures & Flags — every checklist field must be explicitly true/false
@@ -485,6 +624,8 @@ exports.submitDiagnosis = async (req, res) => {
             extraSets.push('security_hold_reason = $1');
             extraParams.push(String(remarks || '').trim() || 'Security hold raised at diagnosis');
             extraSets.push('highlighted = TRUE');
+            // PD11: a hold remembers where it came from, so Release returns it here.
+            extraSets.push(`hold_from_stage_name = 'Diagnosis'`, 'held_at = NOW()', 'hold_reason = $1');
         }
 
         try {

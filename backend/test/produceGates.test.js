@@ -329,9 +329,11 @@ describe('5.4 — QC2 has its own checklist', () => {
   // the criteria tables it exposes for this purpose.
   const src = require('fs').readFileSync(`${__dirname}/../controllers/qcController.js`, 'utf8');
 
+  const fc = require('../services/floorChecklists');
+  const allGood = Object.fromEntries(fc.QC_ITEMS.map((it) => [it.key, it.options[0].value]));
+
   it('QC1 and QC2 no longer share one criteria list', () => {
-    assert.match(src, /QC2_ADDITIONAL_CRITERIA/);
-    assert.match(src, /function criteriaForStage\(qcStage\)/);
+    assert.ok(fc.qcCriteria('QC2').length > fc.qcCriteria('QC1').length);
     assert.match(src, /calculateQCResult\(checklistData, qcStage = 'QC1'\)/);
   });
 
@@ -340,8 +342,10 @@ describe('5.4 — QC2 has its own checklist', () => {
   });
 
   it('QC2 refuses an AVERAGE battery that QC1 lets through', () => {
-    assert.match(src, /battery_health === 'AVERAGE'/);
-    assert.match(src, /physical_damage === 'YES'/);
+    const c = { ...allGood, battery_health: 'AVERAGE' };
+    assert.equal(fc.qcResult(c, 'QC1').result, 'PASS');
+    assert.equal(fc.qcResult(c, 'QC2').result, 'FAIL');
+    assert.equal(fc.qcResult({ ...allGood, physical_damage: 'YES' }, 'QC2').result, 'FAIL');
   });
 
   it('exports still resolve', () => {

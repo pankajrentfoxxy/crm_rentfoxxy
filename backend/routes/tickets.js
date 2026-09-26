@@ -129,6 +129,7 @@ router.post('/bulk-move', ftEdit, requireFloorLead, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', floorAnyView, qcController.getQC2Assignees);
+router.get('/floor-checklists', floorAnyView, qcController.getFloorChecklists);
 
 // Phase 2 — floor pipeline (must be before /:id)
 router.get('/floor-counts', floorAnyView, getFloorNavCounts);
@@ -141,6 +142,8 @@ router.get('/floor-board', floorAnyView, floorBoard.board);
 router.post('/:id/hold', ftEdit, requireFloorLead, floorBoard.hold);
 router.post('/:id/release', ftEdit, requireFloorLead, floorBoard.release);
 router.post('/:id/dismantle', ftEdit, requireFloorLead, floorBoard.dismantle);
+// The chip team holds chip_level_repair rather than floor_tickets.
+router.post('/:id/stage-work', checkAnySectionPermission(['floor_tickets', 'floor_pipeline', 'chip_level_repair'], 'edit'), floorBoard.completeStageWork);
 router.get(
   '/floor-manager-queue',
   floorQueueView,
@@ -216,7 +219,14 @@ router.post(
   ftEdit,
   retiredPartIssue
 );
-router.delete('/:id/parts/:ticketPartId', ftEdit, removePartFromTicket);
+// Production (parts ledger): removing an old direct-attached part put stock
+// back with no ledger row and erased its ticket_parts history. A fitted part
+// now comes off through the parts desk (detach), which records the movement.
+router.delete('/:id/parts/:ticketPartId', ftEdit, (req, res) => res.status(410).json({
+  success: false,
+  code: 'PART_REMOVE_RETIRED',
+  message: 'Take a fitted part off through the parts desk, so the stock ledger records it.',
+}));
 router.post('/:id/log-note', floorAnyEdit, logNote);
 
 // Cost & Parts System

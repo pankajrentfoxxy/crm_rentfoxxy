@@ -5,8 +5,9 @@ import DeskShell from '../../../shells/DeskShell';
 import {
   Button, DataTable, DocNumber, EmptyState, Input, Panel, Segmented, StatusChip, Tabs,
 } from '../../../components/carret';
+import { useAuth } from '../../../context/AuthContext';
 import {
-  claimTicket, configText, errMsg, fetchBoard, stageLabel,
+  claimTicket, configText, errMsg, fetchBoard, isFloorLead, stageLabel,
 } from './produceShared';
 
 /**
@@ -27,8 +28,10 @@ const VIEWS = [
 
 export default function FloorBoardPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [stage, setStage] = useState('');
-  const [view, setView] = useState('queue');
+  // A technician opens on their own work; a floor manager on the whole floor.
+  const [view, setView] = useState(isFloorLead(user) ? 'queue' : 'mine');
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [data, setData] = useState(null);

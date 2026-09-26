@@ -443,6 +443,16 @@ async function verifyQc2Configuration(tokenId, actual, ip) {
           }),
         ]
       );
+      // Production (config truth): keep what the laptop itself reported.
+      await require('./laptopConfigService').recordConfirmation(client, {
+        serialId: pa.vendor_serial_id,
+        ttsplId: pa.ttspl_id || null,
+        source: 'qc2_script',
+        config: actual,
+        ticketId: row.ticket_id || pa.ticket_id || null,
+        tokenId,
+        notes: 'QC2 configuration check matched',
+      });
       await client.query('COMMIT');
       return {
         ok: true,
