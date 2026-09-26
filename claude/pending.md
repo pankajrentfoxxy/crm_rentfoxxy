@@ -13,18 +13,8 @@ under "Old view" until sign-off.
   new ticket, SLA & feedback, my work / job / my parts, support parts desk, charges.
 
 ## To build — one at a time
-1. **Support rework** (user: flow and UI/UX not good)
-   - Issue type → subtype → issue: the 3-level catalog exists (7 / 41 / 158 in
-     `support_issue_catalog`) but nothing uses it; tickets use a flat list of 7.
-     2,656 laptops have no issue, 795 carry raw ERP ids like `["10"]`.
-   - Technician records what was actually wrong + root cause + fix at close.
-   - Issue insights: top issues by model / vendor / days since dispatch, and which
-     floor technician / QC prepared the laptop → feedback to the floor.
-   - Technician bucket for the lead: per technician — open jobs, laptops held,
-     parts held, pickups not yet at the warehouse. Today only "Old view →
-     Technician Bucket", parts only.
-   - Customer requests (QR / portal), technicians, support settings: still old.
-   - Walk the whole flow for UX (lead desk and technician phone).
+1. **Support rework** — BUILT on QA 26 Sep (A–F, see `claude/carret-support.md`); waiting for the
+   user's click-through.
 2. **Lead** — no Carret screens: leads, lead detail, follow-ups, customers, lead
    email ingestion, lead quotation (hardcodes 18% GST — wrong for inter-state).
 3. **Customer returns / rental end** — return challans (Carret list only), return
