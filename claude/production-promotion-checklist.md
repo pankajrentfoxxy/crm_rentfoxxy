@@ -217,7 +217,8 @@ Keep every reviewed CSV in `claude/reports/` with the date — it is the record 
   customer rent start, first delivery/dispatch (2025-01-04 … 2026-02-07); old value kept in
   `extra.rental_start_date_imported`, backup JSON written. Correct for every vendor-bill month from Mar 2026;
   do NOT generate CRM vendor bills for months already settled outside the CRM. QA report:
-  `claude/reports/rental-start-QA-2026-09-26.csv`. Not yet applied on QA (session not allowed — run by hand).
+  `claude/reports/rental-start-QA-2026-09-26.csv`. Applied on QA 26 Sep (1,026; backup
+  `backend/backups/rental-start-2026-09-26T20-43-52-503Z.json`). Live still to do.
 ☐ **Vendor rates (per-line rule)** — verified against the ERP API 26 Sep: new rate = ERP rate on 979 of 1,006
   laptops (old line-1 rule matched 248). Accounts to fill `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv`
   (27 disagree with the ERP, 40 have no rate and are not billed). Full comparison:
