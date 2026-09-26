@@ -601,6 +601,16 @@ export default function CustomerDetailPage() {
               </Link>
               .
             </p>
+            <p className="text-xs text-gray-500 mt-2">
+              Delivery charges are collected separately from the rental invoice.{' '}
+              <Link
+                to={`/customer-billing/delivery-charges?customer_id=${customer.customer_id}`}
+                className="text-blue-600 hover:underline"
+              >
+                View delivery charges by month
+              </Link>
+              .
+            </p>
           </div>
         </div>
       )}

@@ -25,6 +25,16 @@ export const exportInvoiceSerialsExcel = (p) => api.get(`${base}/invoices/export
   responseType: 'blob',
   timeout: 5 * 60 * 1000,
 });
+export const getDeliveryCharges = (p) => api.get(`${base}/delivery-charges`, { params: p });
+export const exportDeliveryChargesExcel = (p) => api.get(`${base}/delivery-charges/export.xlsx`, {
+  params: p,
+  responseType: 'blob',
+});
+export const downloadDeliveryChargesStatement = (p) => api.get(`${base}/delivery-charges/statement.pdf`, {
+  params: p,
+  responseType: 'blob',
+  timeout: 2 * 60 * 1000,
+});
 export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: p });
 export const getCreditNote = (id) => api.get(`${base}/credit-notes/${id}`);
 export const listCreditNoteLaptops = (p) => api.get(`${base}/credit-notes/laptops`, { params: p });

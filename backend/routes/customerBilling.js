@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/customerBillingController');
+const deliveryCharges = require('../controllers/deliveryChargesController');
 
 // RBAC is driven by the role_permissions matrix (section + action).
 const cp = checkSectionPermission;
@@ -37,6 +38,11 @@ router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid
 router.patch('/invoices/:id/cancel', cp('customer_billing', 'delete'), ctrl.cancelInvoice);
 // BL11: the timeline the audit rows exist for.
 router.get('/invoices/:invoiceId/timeline', cp('customer_billing', 'view'), ctrl.getInvoiceTimeline);
+
+// Delivery charges are collected separately from the rental invoice.
+router.get('/delivery-charges', cp('customer_billing', 'view'), deliveryCharges.getDeliveryCharges);
+router.get('/delivery-charges/export.xlsx', cp('customer_billing', 'view'), deliveryCharges.exportDeliveryChargesExcel);
+router.get('/delivery-charges/statement.pdf', cp('customer_billing', 'view'), deliveryCharges.downloadDeliveryChargesStatement);
 
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
 router.get('/credit-notes/laptops', cp('credit_notes', 'view'), ctrl.listCreditNoteLaptops);
