@@ -136,15 +136,14 @@ credit-note views…` and `5737ea1c Delivery Charges…`. A `reset --hard` / for
   migrations.
 ☐ `cd backend && npm test` — must be all pass (QA: 459 pass, 0 fail).
 
-### B2. The Carret build flag — required
-The live deploy (`.github/workflows/deploy.yml`) runs a plain `npm run build`. Without
-`REACT_APP_CARRET=1` **every new screen is silently left out** (the site works, the redesign
-is missing). Choose one before pushing:
-☐ add `REACT_APP_CARRET=1` to `frontend/.env.production` (CRA reads it at build time), **or**
-☐ put it on the build line in `deploy.yml` for the live job:
-  `REACT_APP_CARRET=1 GENERATE_SOURCEMAP=false CI=false NODE_OPTIONS=--max-old-space-size=3072 npm run build`
+### B2. The Carret build flag — DONE (26 Sep)
+`REACT_APP_CARRET=1` is in `frontend/.env.production` (tracked in git), so the live deploy's
+plain `npm run build` includes the new screens once the merge lands. Without it **every new
+screen is silently left out** (the site works, the redesign is missing).
+☐ After the live deploy, check the Carret menu entries (Procure, Production) are there.
 ☐ The live VPS has the same memory limits as QA: a plain build can be killed for memory
-  (that took QA down once). Use the options above.
+  (that took QA down once). If the live job fails there, change its frontend build line in
+  `deploy.yml` to `GENERATE_SOURCEMAP=false CI=false NODE_OPTIONS=--max-old-space-size=3072 npm run build`.
 
 ### B3. Database migrations (in this order, by name)
 Command for each group — dry run first, then the same with `--commit`:
