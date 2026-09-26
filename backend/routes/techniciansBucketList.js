@@ -16,7 +16,15 @@ router.use(async (req, res, next) => {
     if (req.user.role === 'super_admin') return next();
 
     req.permissionCache = req.permissionCache || {};
-    for (const section of ['technicians_bucket_list', 'technician_bucket']) {
+    // technician_bucket is a technician's OWN work; it opens this all-technicians
+    // list only for supervising roles (support lead, dispatch). A field technician
+    // seeing every colleague's bucket is what migration 257 closed
+    // (claude/carret-support.md safety fixes).
+    const FIELD_ROLES = new Set(['support_tech', 'technician', 'delivery']);
+    const sections = FIELD_ROLES.has(String(req.user.role || '').toLowerCase())
+      ? ['technicians_bucket_list']
+      : ['technicians_bucket_list', 'technician_bucket'];
+    for (const section of sections) {
       const allowed = await hasPermission(
         req.user.user_id,
         req.user.role,

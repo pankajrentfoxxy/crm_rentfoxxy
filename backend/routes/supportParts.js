@@ -71,6 +71,9 @@ const requireSupportOrWarehouse = (req, res, next) => {
     if (!challan && !requests) {
       return res.status(403).json({ success: false, message: 'Not authorised' });
     }
+    // Support safety (claude/carret-support.md): without the warehouse section a
+    // user acts on their OWN parts and challans only.
+    req.supportPartsScope = challan ? 'all' : 'own';
     return next();
   })().catch((err) => {
     console.error('requireSupportOrWarehouse:', err);
@@ -109,7 +112,10 @@ router.get('/history',                             requireWarehouse, ctrl.getPar
 // Authenticated was treated as authorised, and the handler had no ownership
 // check either, so any logged-in user could read any challan: customer name,
 // ticket, the parts on it and the e-sign names.
-router.get('/challans/:challanId',                 requireWarehouse, ctrl.getChallan);
+// A technician may open a challan issued to them (was warehouse-only: technicians
+// hold support_part_requests, not support_part_challan, so they were refused
+// their own challans). Ownership is checked in the controller.
+router.get('/challans/:challanId',                 requireSupportOrWarehouse, ctrl.getChallan);
 router.post('/challans/:challanId/sign-and-issue', requireSupportOrWarehouse, ctrl.signAndIssueChallan);
 
 // Bucket
@@ -118,7 +124,8 @@ router.post('/challans/:challanId/sign-and-issue', requireSupportOrWarehouse, ct
 // including ones with no support rights at all, saw every technician's held
 // parts. The guard is here; the handler now also filters by assignment for
 // anyone who is not a supervisor (see getTechnicianBucket).
-router.get('/bucket',                              requireWarehouse, ctrl.getTechnicianBucket);
+// Same: a technician's own bucket (the controller narrows non-supervisors to their own).
+router.get('/bucket',                              requireSupportOrWarehouse, ctrl.getTechnicianBucket);
 
 // Warehouse queue
 router.get('/warehouse-queue',                     requireWarehouse, ctrl.getWarehouseQueue);

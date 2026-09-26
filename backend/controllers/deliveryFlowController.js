@@ -472,6 +472,19 @@ exports.markTechReached = async (req, res) => {
       return res.json({ success: true, otp_generated: false });
     }
     const { latitude, longitude } = req.body || {};
+    // V5: only the person the DC is out with (or a supervisor) marks it reached.
+    const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'dispatch', 'support_lead', 'warehouse']);
+    if (!SUPERVISORS.has(String(req.user?.role || '').toLowerCase())) {
+      const techId = await resolveTechnicianId(req.user.user_id);
+      const own = await pool.query(
+        `SELECT 1 FROM delivery_challan_lines
+          WHERE dc_number = $1 AND (delivery_person_id = $2 OR delivery_person_id = $3) LIMIT 1`,
+        [dcNumber, techId || -1, req.user.user_id]
+      );
+      if (!own.rows.length) {
+        return res.status(403).json({ success: false, message: 'This delivery is assigned to someone else' });
+      }
+    }
     const upd = await pool.query(
       `UPDATE delivery_challan_lines
           SET status = 'reached', reached_at = NOW(),

@@ -1047,6 +1047,10 @@ exports.signAndIssueChallan = async (req, res) => {
 
     if (!['draft', 'challan_generated'].includes(challan.status))
       throw new Error(`Challan is already ${challan.status}`);
+    // Only the technician it is issued to (or the warehouse) signs for it.
+    if (req.supportPartsScope === 'own' && Number(challan.issued_to) !== Number(req.user.user_id)) {
+      throw Object.assign(new Error('This challan is issued to another technician — they sign for it'), { status: 403 });
+    }
 
     const esignUrl = saveEsignFile(esign_data, `challan_${challan.challan_number}`);
 
@@ -1469,6 +1473,9 @@ exports.getChallan = async (req, res) => {
     );
     if (!challanRes.rows.length)
       return res.status(404).json({ success: false, message: 'Challan not found' });
+    if (req.supportPartsScope === 'own' && Number(challanRes.rows[0].issued_to) !== Number(req.user.user_id)) {
+      return res.status(403).json({ success: false, message: 'This challan was issued to another technician' });
+    }
 
     const items = await pool.query(
       'SELECT * FROM support_challan_items WHERE challan_id = $1 ORDER BY id', [challanId]

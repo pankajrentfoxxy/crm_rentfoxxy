@@ -174,11 +174,18 @@ const buildTicketListWhere = ({
     priority = '',
     assignee = '',
     dateFrom = '',
-    dateTo = ''
+    dateTo = '',
+    allowedCustomerTypes = null
 }) => {
     const params = [];
     let where = 'WHERE 1=1';
     where += applyViewFilter(view, params, user, overdueHours, { assignedOnly });
+    // Customer Access scope (all / sales / rental) — the list ignored it.
+    const { isRestricted } = require('./customerAccessScope');
+    if (isRestricted(allowedCustomerTypes)) {
+        params.push(allowedCustomerTypes);
+        where += ` AND EXISTS (SELECT 1 FROM customers cs WHERE cs.customer_id = t.customer_id AND cs.customer_type = ANY($${params.length}::text[]))`;
+    }
 
     if (statusTab === 'open') {
         where += ` AND ${ACTIVE_TICKET_STATUSES} AND t.status <> 'in_progress'`;
@@ -279,10 +286,12 @@ const listTicketsEnriched = async ({
     priority = '',
     assignee = '',
     dateFrom = '',
-    dateTo = ''
+    dateTo = '',
+    allowedCustomerTypes = null
 }) => {
     const settings = await getSettings();
     const { where, params } = buildTicketListWhere({
+        allowedCustomerTypes,
         user,
         view,
         search,

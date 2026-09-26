@@ -26,7 +26,12 @@ describe('6.3 U21 — a parts challan is not readable by anyone with a login', (
   it('the challan read now carries a permission guard', () => {
     const line = routeLine(src, 'get', '/challans/:challanId');
     assert.ok(line, 'the route must still exist');
-    assert.match(line, /requireWarehouse/, 'it had no guard at all before');
+    // Support safety (26 Sep 2026): requireWarehouse locked technicians out of
+    // their own challans; they now pass the support guard and the controller
+    // lets them read only a challan issued to them.
+    assert.match(line, /requireSupportOrWarehouse|requireWarehouse/, 'it had no guard at all before');
+    const ctrl = read('controllers/supportPartsController.js');
+    assert.match(ctrl, /supportPartsScope === 'own' && Number\(challanRes\.rows\[0\]\.issued_to\)/);
   });
 
   it('the guard resolves through the permission matrix, not a bare role check', () => {
@@ -41,7 +46,8 @@ describe('6.3 U22 — a technician bucket shows your own parts', () => {
   it('the bucket route carries a permission guard', () => {
     const line = routeLine(routes, 'get', '/bucket');
     assert.ok(line);
-    assert.match(line, /requireWarehouse/);
+    // A technician reaches their own bucket; non-supervisors are narrowed in the controller.
+    assert.match(line, /requireSupportOrWarehouse|requireWarehouse/);
   });
 
   it('no longer widens to everyone whenever the role is not exactly support_tech', () => {

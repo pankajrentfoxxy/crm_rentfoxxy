@@ -44,7 +44,7 @@ const supportServiceDcService = require('../services/supportServiceDcService');
 const supportWa = require('../services/supportWhatsApp');
 const { regenerateServiceDcPdfByNumber, regenerateServiceDcDocumentPdf } = require('../services/serviceDcPdfService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
-const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
+const { appendCustomerTypeCondition, isCustomerTypeAllowed, isRestricted } = require('../services/customerAccessScope');
 const { syncPartRequestsTechForItem } = require('./supportPartsController');
 const { secureOtp } = require('../utils/secureRandom');
 
@@ -60,7 +60,6 @@ function normalizeSupportPhoneFields(body) {
     return { ok: true, value: out };
 }
 
-const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
 const TICKET_IN_PROGRESS = 'in_progress';
 const TICKET_CLOSED = 'closed';
@@ -896,7 +895,17 @@ const recomputeTicketStatus = async (client, ticketId, manualCloseUserId = null)
         return;
     }
 
-    const allResolved = statuses.every((s) => s === 'resolved' || s === 'closed' || s === 'inventory_updated');
+    // U3: removed / cancelled laptops no longer hold a ticket open, and a ticket
+    // whose every laptop was cancelled is cancelled (it used to stay in progress).
+    const live = statuses.filter((s) => s !== 'cancelled' && s !== 'removed');
+    if (!live.length) {
+        await client.query(
+            `UPDATE support_tickets SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status <> $2`,
+            [ticketId, TICKET_CANCELLED]
+        );
+        return;
+    }
+    const allResolved = live.every((s) => s === 'resolved' || s === 'closed' || s === 'inventory_updated');
     if (allResolved) {
         await client.query(
             `UPDATE support_tickets
@@ -908,8 +917,8 @@ const recomputeTicketStatus = async (client, ticketId, manualCloseUserId = null)
         return;
     }
 
-    const anyActive = statuses.some((s) => ITEM_OPEN_STATUSES.has(s) || s === 'open');
-    const next = anyActive ? TICKET_IN_PROGRESS : TICKET_IN_PROGRESS;
+    // Nothing started on any laptop yet → open; otherwise in progress.
+    const next = live.every((s) => s === 'open') ? TICKET_OPEN : TICKET_IN_PROGRESS;
     await client.query(
         `UPDATE support_tickets SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
         [ticketId, next]
@@ -1351,6 +1360,7 @@ exports.listTickets = async (req, res) => {
             assignee,
             dateFrom,
             dateTo,
+            allowedCustomerTypes: req.allowedCustomerTypes,
         });
         res.json({ success: true, ...data });
     } catch (e) {
@@ -1385,6 +1395,7 @@ exports.countTickets = async (req, res) => {
             assignee,
             dateFrom,
             dateTo,
+            allowedCustomerTypes: req.allowedCustomerTypes,
         });
         res.json({ success: true, counts });
     } catch (e) {
@@ -1573,6 +1584,16 @@ exports.getTicket = async (req, res) => {
         const data = await getTicketWithItems(ticketId, req.user);
         if (!data) {
             return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        // Customer Access scope (all / sales / rental) applies to a single ticket too.
+        if (isRestricted(req.allowedCustomerTypes)) {
+            const ct = (await pool.query(
+                `SELECT c.customer_type FROM support_tickets t LEFT JOIN customers c ON c.customer_id = t.customer_id WHERE t.id = $1`,
+                [ticketId]
+            )).rows[0]?.customer_type;
+            if (!isCustomerTypeAllowed(req.allowedCustomerTypes, ct)) {
+                return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+            }
         }
         res.json({ success: true, ...data });
     } catch (e) {
@@ -2320,7 +2341,8 @@ exports.getSettings = async (req, res) => {
 };
 
 exports.updateSettings = async (req, res) => {
-    if (req.user.role !== 'admin') {
+    // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
+    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const { auto_close_enabled, overdue_threshold_hours, msr91_enabled } = req.body || {};
@@ -2361,7 +2383,8 @@ exports.updateSettings = async (req, res) => {
 };
 
 exports.upsertCategory = async (req, res) => {
-    if (req.user.role !== 'admin') {
+    // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
+    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const { id, name, sort_order, active } = req.body || {};
@@ -2388,7 +2411,8 @@ exports.upsertCategory = async (req, res) => {
 };
 
 exports.deleteCategory = async (req, res) => {
-    if (req.user.role !== 'admin') {
+    // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
+    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const categoryId = parseInt(req.params.categoryId, 10);
@@ -4137,7 +4161,10 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
 // Technician laptop bucket: active pickup items dispatched in-house. Techs see
 // only their own; leads/managers see all, grouped by technician.
 exports.getTechnicianLaptopBucket = async (req, res) => {
-    const isTech = req.user.role === 'support_tech';
+    // U22 pattern: only an exact 'support_tech' was narrowed; any other role saw
+    // every technician's laptops. Now: your own unless you supervise.
+    const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'support_lead', 'warehouse']);
+    const isTech = !SUPERVISORS.has(req.user.role);
     const params = [];
     let techFilter = '';
     if (isTech) {
@@ -5575,6 +5602,12 @@ exports.updateReplacementOrder = async (req, res) => {
     }
     const orderId = parseInt(req.params.orderId, 10);
     const { status } = req.body || {};
+    // U2: the status came straight from the body into the order AND the laptop
+    // row. Only order statuses a person may set, each mapped to the laptop's own.
+    const ITEM_FOR_ORDER = { dispatched: 'in_transit', delivered: 'delivered', cancelled: 'cancelled' };
+    if (!Object.prototype.hasOwnProperty.call(ITEM_FOR_ORDER, status)) {
+        return res.status(400).json({ success: false, message: `Status must be one of: ${Object.keys(ITEM_FOR_ORDER).join(', ')}` });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -5587,7 +5620,7 @@ exports.updateReplacementOrder = async (req, res) => {
         sql += ' WHERE id = $1 RETURNING ticket_id, item_id';
         const { rows } = await client.query(sql, params);
         if (!rows.length) throw new Error('Order not found');
-        await client.query('UPDATE support_ticket_items SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [rows[0].item_id, status]);
+        await client.query('UPDATE support_ticket_items SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [rows[0].item_id, ITEM_FOR_ORDER[status]]);
         await logAudit(client, {
             itemId: rows[0].item_id,
             ticketId: rows[0].ticket_id,
