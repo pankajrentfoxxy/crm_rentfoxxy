@@ -97,6 +97,35 @@ async function resolveOldUnitPrice(client, {
   return 0;
 }
 
+/**
+ * The sale line this customer bought the old laptop on, when their latest order
+ * for it was a sale (gorefurbo). A sold laptop's replacement is a warranty swap,
+ * not a new sale: it goes out on this same line at no charge, so reports keep
+ * one order and the original warranty. TTSPL6191 (SO/25-26/3019) was replaced
+ * on a second SO at Rs 1 and TTSPL3059 was then marked rented at Rs 20,000.
+ */
+async function findSaleLineForOldUnit(client, oldSerialId, customerId) {
+  if (!oldSerialId || !customerId) return null;
+  const r = await client.query(
+    `SELECT sol.id AS line_id, sol.sales_order_number, sol.quotation_type
+       FROM sales_order_serials sos
+       JOIN sales_order_lines sol ON sol.id = sos.line_id
+      WHERE sos.serial_id = $1
+        AND sol.customer_id = $2
+        AND LOWER(COALESCE(sol.status, '')) <> 'cancelled'
+      ORDER BY sos.allocation_id DESC
+      LIMIT 1`,
+    [oldSerialId, customerId]
+  );
+  const row = r.rows[0];
+  if (!row || !isSaleType(row.quotation_type)) return null;
+  return { line_id: row.line_id, sales_order_number: row.sales_order_number };
+}
+
+function isSaleType(quotationType) {
+  return ['sale', 'sales'].includes(String(quotationType || '').toLowerCase());
+}
+
 /** Build replacement laptop config from complaint item + deployed serial. */
 async function resolveConfigFromComplaint(client, src, customerId) {
   const code = src.ttspl_id || src.unique_serial_number || src.serial_number || '';
@@ -104,7 +133,8 @@ async function resolveConfigFromComplaint(client, src, customerId) {
   const oldSerial = await loadOldDeployedSerial(client, src, customerId)
     || await loadSerialByAssetCode(client, code);
   const extra = parseExtra(oldSerial?.extra);
-  const monthlyRate = await resolveOldUnitPrice(client, {
+  const saleLine = await findSaleLineForOldUnit(client, oldSerial?.serial_id, customerId);
+  const monthlyRate = saleLine ? 0 : await resolveOldUnitPrice(client, {
     serialRate: oldSerial?.rent_monthly_rate,
     code,
     serialNumber: oldSerial?.serial_number || src.serial_number,
@@ -122,6 +152,7 @@ async function resolveConfigFromComplaint(client, src, customerId) {
     gpu: src.gpu || extra.gpu || src.inv_gpu || '',
     screen_size: src.screen_size || extra.screen_size || src.inv_screen_size || '',
     monthly_rate: monthlyRate,
+    sale_line: saleLine,
     old_serial_id: oldSerial?.serial_id || null,
     old_machine_serial: code,
     old_customer_inventory_id: src.customer_inventory_id || null,
@@ -373,6 +404,122 @@ async function appendConfigSalesOrderLines(client, {
   return { salesOrderNumber: so, lineIds, token };
 }
 
+/**
+ * Where the replacement lines live. A rented laptop's replacement gets its own
+ * rental SO (new, or appended to the ticket's open one). A sold laptop's goes
+ * back onto the sale line it was bought on: the old unit's allocation is set
+ * aside so that line has a slot to attach the replacement to, and nothing new
+ * is sold. Sold and rented laptops, or laptops from two different sale orders,
+ * cannot share one replacement.
+ */
+async function placeReplacementLines(client, { lineConfigs, appendToSalesOrderNumber = null, orderArgs }) {
+  const saleCfgs = lineConfigs.filter((c) => c.sale_line);
+  if (!saleCfgs.length) {
+    return appendToSalesOrderNumber
+      ? appendConfigSalesOrderLines(client, { ...orderArgs, salesOrderNumber: appendToSalesOrderNumber, lineConfigs })
+      : createConfigSalesOrder(client, { ...orderArgs, lineConfigs });
+  }
+  if (saleCfgs.length !== lineConfigs.length) {
+    throw Object.assign(
+      new Error('Sold and rented laptops cannot share a replacement. Replace the sold laptops separately.'),
+      { status: 400 }
+    );
+  }
+  const soNumbers = [...new Set(saleCfgs.map((c) => c.sale_line.sales_order_number))];
+  if (soNumbers.length > 1) {
+    throw Object.assign(
+      new Error(`These laptops were sold on different orders (${soNumbers.join(', ')}). Replace them one order at a time.`),
+      { status: 400 }
+    );
+  }
+  const salesOrderNumber = soNumbers[0];
+  if (appendToSalesOrderNumber && appendToSalesOrderNumber !== salesOrderNumber) {
+    throw Object.assign(
+      new Error(`This ticket's open replacement is on ${appendToSalesOrderNumber}; a laptop sold on ${salesOrderNumber} must be replaced separately.`),
+      { status: 400 }
+    );
+  }
+
+  for (const cfg of saleCfgs) {
+    if (!cfg.old_serial_id) continue;
+    await client.query(
+      `UPDATE sales_order_serials
+          SET status = 'removed', updated_at = NOW()
+        WHERE line_id = $1 AND serial_id = $2 AND status IN ('attached', 'dispatched')`,
+      [cfg.sale_line.line_id, cfg.old_serial_id]
+    );
+  }
+  return { salesOrderNumber, lineIds: saleCfgs.map((c) => c.sale_line.line_id), token: null };
+}
+
+/**
+ * Undo placeReplacementLines for a ticket's undelivered sale replacements
+ * before they are cancelled: a laptop already attached for the swap goes back to
+ * stock, and the old laptop goes back on its sale line if the customer still
+ * has it. Must run while the replacement orders are still open. Returns the sale
+ * SO numbers touched, which callers must not cancel.
+ */
+async function releaseSaleReplacementSlots(client, ticketId, actor = {}) {
+  const r = await client.query(
+    `SELECT ro.id, ro.sales_order_line_id, ro.old_serial_id, sol.sales_order_number, sol.customer_id
+       FROM support_replacement_orders ro
+       JOIN sales_order_lines sol ON sol.id = ro.sales_order_line_id
+      WHERE ro.ticket_id = $1
+        AND ro.status NOT IN ('completed', 'cancelled')
+        AND ro.delivery_completed_at IS NULL
+        AND LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')`,
+    [ticketId]
+  );
+  const soNumbers = new Set();
+  for (const ro of r.rows) {
+    soNumbers.add(ro.sales_order_number);
+    const attached = await client.query(
+      `UPDATE sales_order_serials
+          SET status = 'removed', updated_at = NOW()
+        WHERE line_id = $1 AND status = 'attached'
+        RETURNING serial_id, qc_ticket_id`,
+      [ro.sales_order_line_id]
+    );
+    for (const a of attached.rows) {
+      if (a.serial_id) {
+        try {
+          await inventorySM.backToStock(client, a.serial_id, {
+            reason: `Sale replacement on ${ro.sales_order_number} cancelled`,
+            actorUserId: actor.user_id,
+            actorName: actor.name,
+          });
+        } catch (_) { /* tolerate, as cancelReplacementSalesOrder does */ }
+      }
+      if (a.qc_ticket_id) {
+        await client.query(
+          `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
+            WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
+          [a.qc_ticket_id]
+        );
+      }
+    }
+    if (ro.old_serial_id) {
+      await client.query(
+        `UPDATE sales_order_serials sos
+            SET status = 'dispatched', updated_at = NOW()
+          WHERE sos.allocation_id = (
+                  SELECT allocation_id FROM sales_order_serials
+                   WHERE line_id = $1 AND serial_id = $2 AND status = 'removed'
+                   ORDER BY allocation_id DESC LIMIT 1
+                )
+            AND EXISTS (
+                  SELECT 1 FROM vendor_serial_numbers vsn
+                   WHERE vsn.serial_id = $2
+                     AND vsn.current_customer_id = $3
+                     AND vsn.inventory_status = 'sold'
+                )`,
+        [ro.sales_order_line_id, ro.old_serial_id, ro.customer_id]
+      );
+    }
+  }
+  return [...soNumbers];
+}
+
 function formatConfigLabel(cfg) {
   return [cfg.brand, cfg.model, cfg.processor, cfg.generation, cfg.ram, cfg.storage]
     .filter(Boolean)
@@ -536,23 +683,39 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
       'SELECT dispatched_at FROM vendor_serial_numbers WHERE serial_id = $1',
       [serialId]
     );
+    const lineRes = await client.query(
+      'SELECT quotation_type FROM sales_order_lines WHERE id = $1',
+      [order.sales_order_line_id]
+    );
+    const isSale = isSaleType(lineRes.rows[0]?.quotation_type);
 
     // The replacement's rent starts by the same dispatch rule as any rental
     // (computeRentStart: in-house/porter = dispatch day, courier = delivery or
     // dispatch + 3, whichever is first). Passing 'inhouse' with no dispatch time
-    // made it the moment someone confirmed delivery.
+    // made it the moment someone confirmed delivery. A sold laptop's replacement
+    // is sold too, and carries no rent.
     await inventorySM.markDelivered(client, serialId, {
-      quotationType: 'rental',
+      quotationType: isSale ? 'sale' : 'rental',
       dcNumber,
       customerId: ticketRes.rows[0]?.customer_id,
-      entityCode: 'rentfoxxy',
+      entityCode: isSale ? 'gorefurbo' : 'rentfoxxy',
       dispatchMode: row.dispatch_mode || 'inhouse',
       dispatchedAt: dispatchedRes.rows[0]?.dispatched_at || row.dispatched_at || null,
       deliveredAt: new Date(),
-      rentMonthlyRate: order.old_rent_monthly_rate != null ? Number(order.old_rent_monthly_rate) : null,
+      rentMonthlyRate: !isSale && order.old_rent_monthly_rate != null ? Number(order.old_rent_monthly_rate) : null,
       actorUserId: actor.user_id,
       actorName: actor.name,
     });
+
+    // The swap is done: the old laptop leaves the sale line for good (normally
+    // already set aside when the replacement was created).
+    if (isSale && order.old_serial_id) {
+      await client.query(
+        `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW()
+          WHERE line_id = $1 AND serial_id = $2 AND status <> 'removed'`,
+        [order.sales_order_line_id, order.old_serial_id]
+      );
+    }
 
     await client.query(
       `UPDATE support_replacement_orders
@@ -584,7 +747,7 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
     if (sm.deriveSalesOrderListStatus(fulfillment) === 'delivered') {
       await client.query(
         `UPDATE sales_order_lines SET status = 'delivered', updated_at = NOW()
-          WHERE sales_order_number = $1 AND LOWER(COALESCE(status, 'pending')) != 'cancelled'`,
+          WHERE sales_order_number = $1 AND LOWER(COALESCE(status, 'pending')) NOT IN ('cancelled', 'completed')`,
         [row.sales_order_number]
       );
     }
@@ -666,6 +829,24 @@ async function tagReplacementOutboundDc(client, dcNumber, salesOrderNumber) {
       WHERE dc_number = $1 AND movement_type = 'outbound'`,
     [dcNumber, r.rows[0].ticket_id, r.rows[0].id]
   );
+
+  // A sold laptop's replacement ships on its sale order at no charge; say so on
+  // the DC, since the original sale line's remark describes the first delivery.
+  const sale = await client.query(
+    `SELECT string_agg(DISTINCT ro.old_machine_serial, ', ') AS old_units
+       FROM support_replacement_orders ro
+       JOIN sales_order_lines sol ON sol.id = ro.sales_order_line_id
+      WHERE ro.sales_order_number = $1 AND ro.status NOT IN ('completed','cancelled')
+        AND LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')`,
+    [salesOrderNumber]
+  );
+  if (sale.rows[0]?.old_units) {
+    await client.query(
+      `UPDATE delivery_challan_lines SET remarks = $2
+        WHERE dc_number = $1 AND movement_type = 'outbound'`,
+      [dcNumber, `Warranty replacement against ${sale.rows[0].old_units} (sold on ${salesOrderNumber}). No charge.`]
+    );
+  }
 }
 
 /**
@@ -717,7 +898,9 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
   // The unit is back in the warehouse from this customer, so its asset row is
   // no longer tied to them; the rate still comes from what they paid for it.
   // A unit parked mid-repair keeps its rate on the row, so that still counts.
-  let monthlyRate = await resolveOldUnitPrice(client, {
+  // A sold unit has no rent: its replacement rides on the original sale line.
+  const saleLine = await findSaleLineForOldUnit(client, serial?.serial_id, customerId);
+  let monthlyRate = saleLine ? 0 : await resolveOldUnitPrice(client, {
     serialRate: serial?.rent_monthly_rate,
     code,
     serialNumber: serial?.serial_number || pickupItem.serial_number,
@@ -725,7 +908,7 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
     serialId: serial?.serial_id || null,
     serialCustomerId: serial?.current_customer_id ?? customerId,
   });
-  if (!monthlyRate && pickupItem.customer_inventory_id) {
+  if (!saleLine && !monthlyRate && pickupItem.customer_inventory_id) {
     const ci = await client.query(
       'SELECT rate FROM customer_inventory WHERE id = $1',
       [pickupItem.customer_inventory_id]
@@ -743,6 +926,7 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
     gpu: src.gpu || extra.gpu || src.inv_gpu || '',
     screen_size: src.screen_size || extra.screen_size || src.inv_screen_size || '',
     monthly_rate: monthlyRate,
+    sale_line: saleLine,
     old_serial_id: serial?.serial_id || null,
     old_machine_serial: code || '',
     old_customer_inventory_id: pickupItem.customer_inventory_id || null,
@@ -852,6 +1036,7 @@ async function buildReturnRedeliveryContext(db, ticketId) {
       ram: cfg.ram,
       storage: cfg.storage,
       rent_monthly_rate: cfg.monthly_rate,
+      sold_on_sales_order: cfg.sale_line?.sales_order_number || null,
       return_dc_number: pickup.return_dc_number || ticket.return_dc_number,
       warehouse_received_at: pickup.warehouse_received_at,
     });
@@ -871,8 +1056,10 @@ async function buildReturnRedeliveryContext(db, ticketId) {
       ? null
       : 'No warehouse-received pickup found, or a replacement delivery is still in progress.',
     next_steps: eligible.length ? [
-      'Creates a new replacement sales order (does not reuse the old SO)',
-      'Attach a QC-passed laptop on the new SO',
+      eligible.some((e) => e.sold_on_sales_order)
+        ? `Sold laptop: the replacement goes on its sale order ${eligible.find((e) => e.sold_on_sales_order).sold_on_sales_order} at no charge (no new SO)`
+        : 'Creates a new replacement sales order (does not reuse the old SO)',
+      'Attach a QC-passed laptop on the SO',
       'Complete Dispatch QC and create delivery DC',
       'No new Return DC — faulty unit is already in the warehouse',
     ] : [],
@@ -945,17 +1132,19 @@ async function initiateReturnRedelivery(client, {
     lineConfigs.push(await resolveConfigFromRepairPickup(client, pickup, complaint, ticket.customer_id));
   }
 
-  const { salesOrderNumber, lineIds } = await createConfigSalesOrder(client, {
-    customerId: ticket.customer_id,
-    customerName,
-    customerEmail: ticket.ticket_email || cust.email,
-    customerMobile: shippingAddress.phone || cust.phone,
-    shippingAddress,
-    billingAddress,
-    gstNumber: cust.gst_no,
-    supplyState: cust.billing_state,
+  const { salesOrderNumber, lineIds } = await placeReplacementLines(client, {
     lineConfigs,
-    userId,
+    orderArgs: {
+      customerId: ticket.customer_id,
+      customerName,
+      customerEmail: ticket.ticket_email || cust.email,
+      customerMobile: shippingAddress.phone || cust.phone,
+      shippingAddress,
+      billingAddress,
+      gstNumber: cust.gst_no,
+      supplyState: cust.billing_state,
+      userId,
+    },
   });
 
   const replacementOrderIds = [];
@@ -1066,7 +1255,7 @@ async function initiateReturnRedelivery(client, {
     unit_count: pickups.length,
     replacement_order_ids: replacementOrderIds,
     pickup_item_ids: pickups.map((p) => p.id),
-    next_steps: 'Attach a QC-passed laptop on the new sales order, complete Dispatch QC, then create the delivery DC.',
+    next_steps: `Attach a QC-passed laptop on sales order ${salesOrderNumber}, complete Dispatch QC, then create the delivery DC.`,
   };
 }
 
@@ -1115,6 +1304,7 @@ async function buildRepairSwapContext(db, ticketId) {
       ram: cfg.ram,
       storage: cfg.storage,
       rent_monthly_rate: cfg.monthly_rate,
+      sold_on_sales_order: cfg.sale_line?.sales_order_number || null,
       return_dc_number: pickup.return_dc_number || ticket.return_dc_number,
       warehouse_received_at: pickup.warehouse_received_at,
     });
@@ -1202,17 +1392,19 @@ async function initiateSwapFromRepairPickup(client, {
     lineConfigs.push(await resolveConfigFromRepairPickup(client, pickup, complaint, ticket.customer_id));
   }
 
-  const { salesOrderNumber, lineIds } = await createConfigSalesOrder(client, {
-    customerId: ticket.customer_id,
-    customerName,
-    customerEmail: ticket.ticket_email || cust.email,
-    customerMobile: shippingAddress.phone || cust.phone,
-    shippingAddress,
-    billingAddress,
-    gstNumber: cust.gst_no,
-    supplyState: cust.billing_state,
+  const { salesOrderNumber, lineIds } = await placeReplacementLines(client, {
     lineConfigs,
-    userId,
+    orderArgs: {
+      customerId: ticket.customer_id,
+      customerName,
+      customerEmail: ticket.ticket_email || cust.email,
+      customerMobile: shippingAddress.phone || cust.phone,
+      shippingAddress,
+      billingAddress,
+      gstNumber: cust.gst_no,
+      supplyState: cust.billing_state,
+      userId,
+    },
   });
 
   const replacementOrderIds = [];
@@ -1697,6 +1889,8 @@ module.exports = {
   initiateSwapFromRepairPickup,
   createConfigSalesOrder,
   appendConfigSalesOrderLines,
+  placeReplacementLines,
+  releaseSaleReplacementSlots,
   formatConfigLabel,
   buildReplacementSoLineRemark,
   effectiveReplacementLineRemark,
