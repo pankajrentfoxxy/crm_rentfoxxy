@@ -192,8 +192,9 @@ async function resetPasswordWithOtp(rawEmail, rawOtp, rawPassword) {
     await client.query('BEGIN');
     // Self-service reset: the user chose this password. Keeping a cleartext copy
     // makes a password only they should know readable by any admin or DB reader.
+    // Ends every live session too, so a stolen token dies with the old password.
     await client.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      'UPDATE users SET password_hash = $1, token_version = token_version + 1, updated_at = NOW() WHERE user_id = $2',
       [passwordHash, user.user_id]
     );
     try {

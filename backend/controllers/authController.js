@@ -23,14 +23,6 @@ const MANAGEABLE_ROLES = [
   'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc', 'guard',
 ];
 
-/** Canonical users.role CHECK — must include every CRM + portal role. */
-const USERS_ROLE_CHECK = [
-  'super_admin', 'admin', 'manager', 'team_member', 'team_lead', 'sales',
-  'floor_manager', 'procurement', 'qc', 'dispatch', 'warehouse', 'accounts',
-  'support_lead', 'support_tech', 'dispatch_qc', 'customer', 'vendor',
-  'technician', 'guard',
-];
-
 function checkConstraintMessage(error) {
   if (error?.code !== '23514') return null;
   const name = String(error.constraint || '');
@@ -44,21 +36,69 @@ function checkConstraintMessage(error) {
   return error.detail || 'This value is not allowed.';
 }
 
-async function ensureUsersRoleCheck() {
-  const list = USERS_ROLE_CHECK.map((r) => `'${r}'`).join(', ');
-  await pool.query('ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_role_check');
-  await pool.query(`ALTER TABLE public.users ADD CONSTRAINT users_role_check CHECK (role IN (${list}))`);
+// users_role_check is now built from the roles table + existing users
+// (services/userRoleCheck), so support_agent / support_manager and roles
+// created in the Roles screen can be assigned.
+const { ensureUsersRoleCheck } = require('../services/userRoleCheck');
+const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+const { canManageUser, canAssignRole, assignableRoles } = require('../services/rbacGuard');
+const { logPermissionAudit } = require('../services/permissionAuditService');
+
+/*
+ * User management access (decision CT1): the roles that always had it OR the
+ * matching grant on the `users` section. The escalation guard (rbacGuard)
+ * applies on top: only super_admin touches admin / super_admin users, only an
+ * admin touches a manager, nobody changes their own role / status / access.
+ */
+const USER_ACCESS_ROLES = {
+  view: ['admin', 'manager', 'floor_manager'],
+  create: ['admin', 'manager'],
+  edit: ['admin', 'manager'],
+  delete: ['admin', 'manager'],
+};
+// Listing users is also open to user_permissions viewers: the User permissions
+// screen has to pick a user.
+const USER_ACCESS_SECTIONS = { view: ['users', 'user_permissions'] };
+async function canUsers(req, action) {
+  if (!req.permissionCache) req.permissionCache = {};
+  return userHasRoleOrSection(
+    req.user,
+    USER_ACCESS_ROLES[action],
+    USER_ACCESS_SECTIONS[action] || 'users',
+    action,
+    req.permissionCache
+  );
 }
+async function roleOr(req, roles, section, action) {
+  if (!req.permissionCache) req.permissionCache = {};
+  return userHasRoleOrSection(req.user, roles, section, action, req.permissionCache);
+}
+
+/** Roles that may be assigned: the built-in CRM list plus every role in the roles table. */
+async function knownAssignableRoleNames() {
+  const names = new Set(MANAGEABLE_ROLES);
+  try {
+    const r = await pool.query('SELECT name FROM roles');
+    r.rows.forEach((row) => names.add(row.name));
+  } catch { /* roles table missing: built-ins only */ }
+  return [...names];
+}
+
+/**
+ * Legacy JWT permissions[] strings, derived from the role. Written at create
+ * AND on every role change (they used to go stale after a role change).
+ */
+function legacyPermissionsForRole(role) {
+  if (role === 'procurement') return ['procurement_access'];
+  if (role === 'qc' || role === 'dispatch_qc') return ['qc_access'];
+  if (role === 'dispatch') return ['dispatch_access'];
+  if (role === 'support_lead') return ['support_access'];
+  if (role === 'support_tech') return ['support_access', 'customer_inventory_access'];
+  return [];
+}
+
 const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
-const hasUserMgmtAccess = (user) => ['admin', 'manager', 'super_admin'].includes(user?.role);
-const canViewUsers = (user) => ['admin', 'manager', 'super_admin', 'floor_manager'].includes(user?.role);
-const canManageTargetUser = (actor, target) => {
-  if (!actor || !target) return false;
-  if (['super_admin', 'admin'].includes(actor.role)) return true;
-  if (actor.role === 'manager') return !['admin', 'manager', 'super_admin'].includes(target.role);
-  return false;
-};
 
 const ROLE_DISPLAY_NAMES = {
   super_admin: 'Super Admin',
@@ -85,13 +125,13 @@ const csvEscape = (value) => {
   return s;
 };
 
-function buildUserListFilter(req) {
+function buildUserListFilter(req, { canSeeInactive = false } = {}) {
+  const teamFilter = parseInt(req.query.team_id, 10);
   const roleFilter = String(req.query.role || '').trim().toLowerCase();
   const statusFilter = String(req.query.status || '').trim().toLowerCase();
   const departmentFilter = String(req.query.department || '').trim();
   const search = String(req.query.search || '').trim();
-  const includeInactive = req.query.include_inactive === 'true'
-    && ['admin', 'super_admin'].includes(req.user.role);
+  const includeInactive = req.query.include_inactive === 'true' && canSeeInactive;
 
   const conditions = [`u.role NOT IN ('vendor', 'customer')`];
   const params = [];
@@ -120,6 +160,12 @@ function buildUserListFilter(req) {
     conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
   }
 
+  if (Number.isInteger(teamFilter) && teamFilter > 0) {
+    params.push(teamFilter);
+    conditions.push(`(u.team_id = $${params.length}
+      OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $${params.length}))`);
+  }
+
   return {
     whereClause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
     params,
@@ -143,33 +189,24 @@ exports.register = async (req, res) => {
   } = req.body;
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'create'))) {
       return res.status(403).json({ success: false, message: 'Only manager/admin can create users' });
     }
 
     const normalizedRole = String(role || 'team_member').trim().toLowerCase();
-    if (!MANAGEABLE_ROLES.includes(normalizedRole)) {
-      return res.status(400).json({ success: false, message: 'Invalid role selected' });
-    }
-
-    if (req.user.role === 'manager' && ['manager', 'admin', 'super_admin'].includes(normalizedRole)) {
-      return res.status(403).json({ success: false, message: 'Manager can only create non-admin users' });
+    const assign = canAssignRole(req.user, normalizedRole, await knownAssignableRoleNames());
+    if (!assign.ok) {
+      const unknown = /^Unknown role/.test(assign.reason);
+      return res.status(unknown ? 400 : 403).json({
+        success: false,
+        message: unknown ? 'Invalid role selected' : assign.reason,
+      });
     }
 
     // For procurement/qc/dispatch roles: auto-set permissions (standalone like Sales, no team)
-    let permissions = [];
+    const permissions = legacyPermissionsForRole(normalizedRole);
     let resolvedTeamIds = [];
-    if (normalizedRole === 'procurement') {
-      permissions = ['procurement_access'];
-    } else if (normalizedRole === 'qc' || normalizedRole === 'dispatch_qc') {
-      permissions = ['qc_access'];
-    } else if (normalizedRole === 'dispatch') {
-      permissions = ['dispatch_access'];
-    } else if (normalizedRole === 'support_lead') {
-      permissions = ['support_access'];
-    } else if (normalizedRole === 'support_tech') {
-      permissions = ['support_access', 'customer_inventory_access'];
-    } else {
+    if (!permissions.length) {
       // team_member, team_lead, floor_manager: support multiple teams
       if (Array.isArray(team_ids) && team_ids.length > 0) {
         resolvedTeamIds = await normalizeTeamIds(team_ids);
@@ -251,6 +288,14 @@ exports.register = async (req, res) => {
       console.warn('auth_credentials sync (create user):', syncErr.message);
     }
 
+    await logPermissionAudit({
+      actorUserId: req.user.user_id,
+      targetType: 'user',
+      targetId: user.user_id,
+      action: 'user_created',
+      payload: { email: user.email, role: user.role, team_ids: resolvedTeamIds },
+    });
+
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
@@ -273,12 +318,17 @@ exports.register = async (req, res) => {
 };
 
 exports.ensureUserSchema = async () => {
+  // 028, 029 and 207 are no longer replayed here (27 Sep 2026). All three are
+  // applied on every database, and each ends by re-adding users_role_check with
+  // a HARDCODED role list: once any user holds a role outside that list
+  // (support_agent, support_manager, a role made in the Roles screen) the
+  // replay fails at boot, and before that it silently removed those roles from
+  // the constraint so they could not be assigned. 207 also re-wrote the
+  // guard_gate_checking grants of seven roles on every restart
+  // (ON CONFLICT DO UPDATE), undoing edits made in Roles & Permissions.
   const migrationFiles = [
-    '028_support_user_roles.sql',
-    '029_rbac_system.sql',
     '040_rbac_roles_module.sql',
     '041_application_sections.sql',
-    '207_guard_gate_checking.sql',
   ];
   for (const file of migrationFiles) {
     const sqlPath = path.join(__dirname, '../migrations', file);
@@ -286,11 +336,32 @@ exports.ensureUserSchema = async () => {
     const sql = fs.readFileSync(sqlPath, 'utf8');
     await pool.query(sql);
   }
-  // 028/029 recreate users_role_check without newer roles; restore the full list last.
+  // Built from roles ∪ existing users.role; only rebuilt when the list changes.
   await ensureUsersRoleCheck();
 };
 
-const hasRbacUserMgmtAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
+/** GET /api/auth/assignable-roles — the roles this actor may give a user. */
+exports.getAssignableRoles = async (req, res) => {
+  try {
+    if (!(await canUsers(req, 'create')) && !(await canUsers(req, 'edit'))) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    const known = await knownAssignableRoleNames();
+    const names = assignableRoles(req.user, known);
+    let display = {};
+    try {
+      const r = await pool.query('SELECT name, display_name FROM roles WHERE name = ANY($1::text[])', [names]);
+      display = Object.fromEntries(r.rows.map((row) => [row.name, row.display_name]));
+    } catch { /* roles table missing */ }
+    const roles = names
+      .map((name) => ({ name, display_name: display[name] || ROLE_DISPLAY_NAMES[name] || name }))
+      .sort((a, b) => a.display_name.localeCompare(b.display_name));
+    res.json({ success: true, roles });
+  } catch (error) {
+    console.error('getAssignableRoles error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching roles' });
+  }
+};
 
 const upsertUserPermissionRows = async (userId, permissions, grantedBy) =>
   upsertUserPermissionsService(userId, permissions, grantedBy);
@@ -471,7 +542,7 @@ exports.updateMobile = async (req, res) => {
   const { mobile_no } = req.body;
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'edit'))) {
       return res.status(403).json({ success: false, message: 'Only manager/admin can update mobile' });
     }
 
@@ -482,8 +553,9 @@ exports.updateMobile = async (req, res) => {
     if (targetResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     const target = targetResult.rows[0];
-    if (!canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot modify this user' });
+    const guard = canManageUser(req.user, target, { allowSelf: true });
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'You cannot modify this user' });
     }
 
     const mobileParsed = resolveMobileNo(mobile_no);
@@ -511,7 +583,7 @@ exports.updateBarcode = async (req, res) => {
   const { barcode } = req.body;
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'edit'))) {
       return res.status(403).json({ success: false, message: 'Only manager/admin can update barcode' });
     }
 
@@ -522,8 +594,9 @@ exports.updateBarcode = async (req, res) => {
     if (targetResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     const target = targetResult.rows[0];
-    if (!canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot modify this user' });
+    const guard = canManageUser(req.user, target, { allowSelf: true });
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'You cannot modify this user' });
     }
 
     const result = await pool.query(
@@ -556,14 +629,14 @@ exports.getTeams = async (req, res) => {
 // Get All Users (for Managers/Admins to assign tasks)
 exports.getAllUsers = async (req, res) => {
   try {
-    if (!canViewUsers(req.user)) {
+    if (!(await canUsers(req, 'view'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const offset = (page - 1) * limit;
-    const { whereClause, params } = buildUserListFilter(req);
+    const { whereClause, params } = buildUserListFilter(req, { canSeeInactive: await canUsers(req, 'edit') });
 
     const statsResult = await pool.query(
       `SELECT
@@ -635,13 +708,13 @@ exports.getAllUsers = async (req, res) => {
 
 exports.exportUsersCsv = async (req, res) => {
   try {
-    if (!canViewUsers(req.user)) {
+    if (!(await roleOr(req, USER_ACCESS_ROLES.view, 'users', 'view'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
     // No password column, and no backfill sweep. The old export ran a dictionary
     // attack over every user's hash and wrote the matches back as cleartext.
-    const { whereClause, params } = buildUserListFilter(req);
+    const { whereClause, params } = buildUserListFilter(req, { canSeeInactive: await canUsers(req, 'edit') });
 
     const result = await pool.query(
       `SELECT u.name, u.email, u.mobile_no, u.role,
@@ -683,11 +756,11 @@ exports.exportUsersCsv = async (req, res) => {
 
 exports.exportUsersExcel = async (req, res) => {
   try {
-    if (!['admin', 'super_admin'].includes(req.user.role)) {
+    if (!(await roleOr(req, ['admin'], 'users', 'view'))) {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
 
-    const { whereClause, params } = buildUserListFilter(req);
+    const { whereClause, params } = buildUserListFilter(req, { canSeeInactive: await canUsers(req, 'edit') });
 
     const result = await pool.query(
       `SELECT u.name, u.email, u.mobile_no, u.role,
@@ -736,7 +809,7 @@ exports.updateUser = async (req, res) => {
   const { id } = req.params;
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'edit'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -744,22 +817,30 @@ exports.updateUser = async (req, res) => {
     if (!target.rows.length) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (!canManageTargetUser(req.user, target.rows[0])) {
-      return res.status(403).json({ success: false, message: 'Cannot edit this user' });
-    }
 
     const {
       name, email, mobile_no, role, team_id, team_ids,
       designation, department, employee_id, joining_date, notes,
     } = req.body;
 
-    if (role) {
-      const normalizedRole = String(role).trim().toLowerCase();
-      if (!MANAGEABLE_ROLES.includes(normalizedRole)) {
-        return res.status(400).json({ success: false, message: 'Invalid role' });
-      }
-      if (req.user.role === 'manager' && ['manager', 'admin', 'super_admin'].includes(normalizedRole)) {
-        return res.status(403).json({ success: false, message: 'Cannot assign admin/manager role' });
+    const previousRole = target.rows[0].role;
+    const requestedRole = role ? String(role).trim().toLowerCase() : null;
+    const roleChanged = !!requestedRole && requestedRole !== previousRole;
+
+    // Profile edits on yourself are fine; changing your own role is not.
+    const guard = canManageUser(req.user, target.rows[0], { allowSelf: !roleChanged });
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'Cannot edit this user' });
+    }
+
+    if (roleChanged) {
+      const assign = canAssignRole(req.user, requestedRole, await knownAssignableRoleNames());
+      if (!assign.ok) {
+        const unknown = /^Unknown role/.test(assign.reason);
+        return res.status(unknown ? 400 : 403).json({
+          success: false,
+          message: unknown ? 'Invalid role' : assign.reason,
+        });
       }
     }
 
@@ -784,20 +865,34 @@ exports.updateUser = async (req, res) => {
          employee_id = COALESCE($8, employee_id),
          joining_date = COALESCE($9::date, joining_date),
          notes = COALESCE($10, notes),
+         -- A role change ends the user's sessions (the JWT carries the role
+         -- for 30 days) and re-derives the legacy permissions[] strings,
+         -- which were only ever written at create and went stale.
+         token_version = CASE WHEN $12::boolean THEN token_version + 1 ELSE token_version END,
+         permissions = CASE WHEN $12::boolean THEN $13::text[] ELSE permissions END,
          updated_at = NOW()
        WHERE user_id = $11`,
       [
         name || null, email || null, normalizedMobile,
-        role ? String(role).trim().toLowerCase() : null,
+        roleChanged ? requestedRole : null,
         team_id != null ? team_id : null,
         designation || null, department || null, employee_id || null,
         joining_date || null, notes || null, id,
+        roleChanged, legacyPermissionsForRole(requestedRole || previousRole),
       ]
     );
 
-    const effectiveRole = role
-      ? String(role).trim().toLowerCase()
-      : target.rows[0].role;
+    if (roleChanged) {
+      await logPermissionAudit({
+        actorUserId: req.user.user_id,
+        targetType: 'user',
+        targetId: id,
+        action: 'user_role_changed',
+        payload: { email: target.rows[0].email, from: previousRole, to: requestedRole },
+      });
+    }
+
+    const effectiveRole = roleChanged ? requestedRole : previousRole;
 
     if (Array.isArray(team_ids) && FLOOR_ROLES.includes(effectiveRole)) {
       const validTeamIds = await normalizeTeamIds(team_ids);
@@ -810,7 +905,7 @@ exports.updateUser = async (req, res) => {
       }
       const primaryTeamId = validTeamIds[0] || null;
       await pool.query('UPDATE users SET team_id = $1 WHERE user_id = $2', [primaryTeamId, id]);
-    } else if (role && !FLOOR_ROLES.includes(effectiveRole)) {
+    } else if (roleChanged && !FLOOR_ROLES.includes(effectiveRole)) {
       await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
       await pool.query('UPDATE users SET team_id = NULL WHERE user_id = $1', [id]);
     }
@@ -822,7 +917,12 @@ exports.updateUser = async (req, res) => {
       [id]
     );
 
-    res.json({ success: true, message: 'User updated', user: updated.rows[0] });
+    res.json({
+      success: true,
+      message: roleChanged ? 'User updated. They must sign in again.' : 'User updated',
+      user: updated.rows[0],
+      sessions_ended: roleChanged,
+    });
   } catch (error) {
     console.error('Update user error:', error);
     if (error.code === '23505') {
@@ -841,7 +941,7 @@ exports.updateUserStatus = async (req, res) => {
   const VALID = ['active', 'inactive', 'blocked'];
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'edit'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     if (!VALID.includes(status)) {
@@ -852,14 +952,16 @@ exports.updateUserStatus = async (req, res) => {
     if (!target.rows.length) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (!canManageTargetUser(req.user, target.rows[0])) {
-      return res.status(403).json({ success: false, message: 'Cannot modify this user' });
-    }
-    if (req.user.role === 'manager' && status === 'blocked') {
-      return res.status(403).json({ success: false, message: 'Only admin can block users' });
-    }
     if (parseInt(target.rows[0].user_id, 10) === parseInt(req.user.user_id, 10)) {
       return res.status(400).json({ success: false, message: 'You cannot change your own status' });
+    }
+    const guard = canManageUser(req.user, target.rows[0]);
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'Cannot modify this user' });
+    }
+    // Blocking stays with admins (or a `users` delete grant); managers never could.
+    if (status === 'blocked' && !(await roleOr(req, ['admin'], 'users', 'delete'))) {
+      return res.status(403).json({ success: false, message: 'Only admin can block users' });
     }
 
     const userId = parseInt(req.params.id, 10);
@@ -887,6 +989,19 @@ exports.updateUserStatus = async (req, res) => {
         userId,
       ]
     );
+
+    await logPermissionAudit({
+      actorUserId: actorId,
+      targetType: 'user',
+      targetId: userId,
+      action: 'user_status_changed',
+      payload: {
+        email: target.rows[0].email,
+        from: target.rows[0].status || (target.rows[0].active ? 'active' : 'inactive'),
+        to: status,
+        reason: reason || null,
+      },
+    });
 
     res.json({ success: true, status });
   } catch (error) {
@@ -987,16 +1102,20 @@ exports.loginAsUser = async (req, res) => {
 
 exports.resetUserPassword = async (req, res) => {
   try {
-    if (!['admin', 'super_admin'].includes(req.user.role)) {
+    if (!(await roleOr(req, ['admin'], 'users', 'edit'))) {
       return res.status(403).json({ success: false, message: 'Admin only' });
     }
 
-    const target = await pool.query('SELECT user_id, role FROM users WHERE user_id = $1', [req.params.id]);
+    const target = await pool.query('SELECT user_id, role, email FROM users WHERE user_id = $1', [req.params.id]);
     if (!target.rows.length) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     if (CRM_EXCLUDED_ROLES.includes(target.rows[0].role)) {
       return res.status(400).json({ success: false, message: 'Cannot reset password for portal users' });
+    }
+    const guard = canManageUser(req.user, target.rows[0], { allowSelf: true });
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason });
     }
 
     const { new_password } = req.body;
@@ -1005,10 +1124,20 @@ exports.resetUserPassword = async (req, res) => {
 
     // Store the hash only. `plain` is still returned once below so the admin can
     // pass it to the user; it is never persisted.
+    // A reset also ends every live session (token_version), so whoever held
+    // the old password is signed out now, not in up to 30 days.
     await pool.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      'UPDATE users SET password_hash = $1, token_version = token_version + 1, updated_at = NOW() WHERE user_id = $2',
       [hash, req.params.id]
     );
+
+    await logPermissionAudit({
+      actorUserId: req.user.user_id,
+      targetType: 'user',
+      targetId: req.params.id,
+      action: 'user_password_reset',
+      payload: { email: target.rows[0].email },
+    });
 
     try {
       const emailRow = await pool.query('SELECT email, active FROM users WHERE user_id = $1', [req.params.id]);
@@ -1053,7 +1182,7 @@ exports.updateUserTeams = async (req, res) => {
   }
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'edit'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1065,8 +1194,9 @@ exports.updateUserTeams = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     const target = targetResult.rows[0];
-    if (!canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot modify this user' });
+    const guard = canManageUser(req.user, target, { allowSelf: true });
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'You cannot modify this user' });
     }
 
     const validTeamIds = await normalizeTeamIds(team_ids);
@@ -1103,26 +1233,25 @@ exports.updateUserPermissions = async (req, res) => {
   }
 
   try {
-    if (!hasRbacUserMgmtAccess(req.user)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-
-    const targetResult = await pool.query(
-      `SELECT user_id, role, email FROM users WHERE user_id = $1`,
-      [id]
-    );
-    if (targetResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
-    const target = targetResult.rows[0];
-
-    if (req.user.role !== 'super_admin' && !canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot update access for this user' });
-    }
+    // Same gate as PUT /api/user-permissions/:userId: admin OR user_permissions
+    // edit, escalation guard, known sections only.
+    const { checkUserOverrideWrite } = require('./rbacController');
+    const target = await checkUserOverrideWrite(req, res, parseInt(id, 10), permissions);
+    if (!target) return;
 
     const updatedPermissions = await upsertUserPermissionRows(
       parseInt(id, 10),
       permissions,
       req.user.user_id
     );
+
+    await logPermissionAudit({
+      actorUserId: req.user.user_id,
+      targetType: 'user_permissions',
+      targetId: id,
+      action: 'user_permissions_updated',
+      payload: { count: updatedPermissions.length, sections: updatedPermissions.map((r) => r.section).slice(0, 200) },
+    });
 
     res.json({ success: true, message: 'Permissions updated', permissions: updatedPermissions });
   } catch (error) {
@@ -1217,8 +1346,22 @@ exports.registerTechnician = async (req, res) => {
   const { name, email, password, mobile_no, permissions } = req.body;
 
   try {
-    if (!['admin', 'super_admin'].includes(req.user?.role)) {
+    if (!(await roleOr(req, ['admin'], 'users', 'create'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    const hasOverrides = Array.isArray(permissions) && permissions.length > 0;
+    if (hasOverrides) {
+      // Granting access on create needs the user_permissions grant too, and
+      // only known sections.
+      if (!(await roleOr(req, ['admin'], 'user_permissions', 'edit'))) {
+        return res.status(403).json({ success: false, message: 'You cannot grant permissions' });
+      }
+      const { getKnownSectionSet } = require('../services/permissionService');
+      const { findUnknownSections } = require('../services/rbacGuard');
+      const unknown = findUnknownSections(permissions, await getKnownSectionSet());
+      if (unknown.length) {
+        return res.status(400).json({ success: false, message: `Unknown sections: ${unknown.join(', ')}` });
+      }
     }
 
     if (!name || !email || !password) {
@@ -1246,7 +1389,7 @@ exports.registerTechnician = async (req, res) => {
 
     const user = result.rows[0];
 
-    if (Array.isArray(permissions) && permissions.length > 0) {
+    if (hasOverrides) {
       await upsertUserPermissionRows(user.user_id, permissions, req.user.user_id);
     }
 
@@ -1308,7 +1451,7 @@ exports.approveVendor = async (req, res) => {
 // List pending vendor registrations (admin/super_admin)
 exports.getPendingVendors = async (req, res) => {
   try {
-    if (!['admin', 'super_admin'].includes(req.user?.role)) {
+    if (!(await roleOr(req, ['admin'], 'vendor_management', 'view'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1330,7 +1473,7 @@ exports.getPendingVendors = async (req, res) => {
 exports.deleteUser = async (req, res) => {
   const { id } = req.params;
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!(await canUsers(req, 'delete'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1344,8 +1487,9 @@ exports.deleteUser = async (req, res) => {
     if (parseInt(target.user_id, 10) === parseInt(req.user.user_id, 10)) {
       return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
     }
-    if (!canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot delete this user' });
+    const guard = canManageUser(req.user, target);
+    if (!guard.ok) {
+      return res.status(403).json({ success: false, message: guard.reason || 'You cannot delete this user' });
     }
 
     await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
@@ -1360,6 +1504,14 @@ exports.deleteUser = async (req, res) => {
        WHERE user_id = $1`,
       [id]
     );
+
+    await logPermissionAudit({
+      actorUserId: req.user.user_id,
+      targetType: 'user',
+      targetId: id,
+      action: 'user_deleted',
+      payload: { email: target.email, role: target.role },
+    });
 
     res.json({ success: true, message: 'User deleted successfully' });
   } catch (error) {

@@ -46,25 +46,8 @@ const SO_STANDARD_VIEW_SECTIONS = [
 const DATA_SCOPE_ALL = 'all';
 const DATA_SCOPE_ASSIGNED = 'assigned';
 
-const SECTION_ALIASES = {
-  reports_access: ['reports_access', 'reports'],
-  reports: ['reports', 'reports_access'],
-  follow_ups: ['follow_ups', 'lead_follow_ups'],
-  lead_follow_ups: ['follow_ups', 'lead_follow_ups'],
-  sales_orders: ['sales_orders', 'sales_orders_doc'],
-  sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
-  sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
-  sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
-  floor_pipeline: ['floor_pipeline', 'floor_tickets', 'tickets'],
-  floor_tickets: ['floor_tickets', 'floor_pipeline', 'tickets'],
-  tickets: ['tickets', 'floor_pipeline', 'floor_tickets'],
-  // Include floor_tickets so a user override of All Data on Floor Tickets
-  // is visible when resolving chip/floor list scope (not only floor_pipeline/tickets).
-  chip_level_repair: ['chip_level_repair', 'floor_pipeline', 'floor_tickets', 'tickets'],
-  qc_management: ['qc_management', 'tickets'],
-  dispatch: ['dispatch', 'delivery_challans'],
-  delivery_challans: ['delivery_challans', 'dispatch'],
-};
+// Single source: constants/permissionCatalog (data-scope family of the aliases).
+const { DATA_SCOPE_SECTION_ALIASES: SECTION_ALIASES } = require('../constants/permissionCatalog');
 
 /** Map sales list entity_scope query to RBAC section for data_scope checks. */
 function salesOrderScopeSection(entityScope) {

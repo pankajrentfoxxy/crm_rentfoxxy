@@ -173,58 +173,114 @@ const ROLE_ROW_DEFAULTS = {
   ],
 };
 
-function rowToPerm(section, create, edit, del) {
-  return { section, can_view: true, can_create: create, can_edit: edit, can_delete: del };
+/**
+ * Default rows for a role, one per section. Duplicate sections in the table
+ * above (manager listed a few twice, which made "Apply defaults" fail with a
+ * unique-constraint 500) are merged: a flag is on if any copy has it on.
+ */
+function defaultRowsFor(role) {
+  const rows = ROLE_ROW_DEFAULTS[role];
+  if (!rows) return null;
+  const merged = new Map();
+  for (const [section, create, edit, del] of rows) {
+    const prev = merged.get(section);
+    merged.set(section, prev
+      ? [section, prev[1] || create, prev[2] || edit, prev[3] || del]
+      : [section, !!create, !!edit, !!del]);
+  }
+  return [...merged.values()];
 }
 
+/** super_admin and admin are derived from the catalogue; others need a table entry. */
+function hasRoleDefaults(role) {
+  return role === 'super_admin' || role === 'admin' || !!ROLE_ROW_DEFAULTS[role];
+}
+
+function noDefaultsError(role) {
+  const err = new Error(`No default permissions are defined for role "${role}". Nothing was changed.`);
+  err.code = 'NO_ROLE_DEFAULTS';
+  err.status = 400;
+  return err;
+}
+
+/**
+ * Reset a role to its defaults inside the caller's transaction.
+ *
+ * Order matters: the defaults are written first (upsert), and only then are the
+ * role's rows outside the default set removed — so a failed insert can never
+ * leave the role with nothing (the old version DELETEd first and silently
+ * wiped every role other than super_admin / admin / manager). Roles without
+ * defaults are refused. Scope columns (data_scope, customer_access,
+ * inventory_tag_access) on rows that already exist are kept.
+ */
 async function seedRoleDefaults(client, role) {
-  await client.query('DELETE FROM role_permissions WHERE role = $1', [role]);
+  if (!hasRoleDefaults(role)) throw noDefaultsError(role);
 
-  if (role === 'super_admin') {
+  if (role === 'super_admin' || role === 'admin') {
+    const isAdmin = role === 'admin';
     await client.query(
       `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
-       SELECT $1, section, true, true, true, true FROM permission_sections`,
-      [role]
+       SELECT $1, ps.section, true, true, true,
+              CASE WHEN $2::boolean AND ps.section = ANY($3::text[]) THEN false ELSE true END
+         FROM permission_sections ps
+        WHERE NOT ($2::boolean AND ps.section = ANY($4::text[]))
+       ON CONFLICT (role, section) DO UPDATE SET
+         can_view = EXCLUDED.can_view,
+         can_create = EXCLUDED.can_create,
+         can_edit = EXCLUDED.can_edit,
+         can_delete = EXCLUDED.can_delete`,
+      [role, isAdmin, FINANCIAL_NO_DELETE, ADMIN_EXCLUDED_SECTIONS]
+    );
+    await client.query(
+      `DELETE FROM role_permissions rp
+        WHERE rp.role = $1
+          AND (NOT EXISTS (SELECT 1 FROM permission_sections ps WHERE ps.section = rp.section)
+               OR ($2::boolean AND rp.section = ANY($3::text[])))`,
+      [role, isAdmin, ADMIN_EXCLUDED_SECTIONS]
     );
     return;
   }
 
-  if (role === 'admin') {
-    await client.query(
-      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
-       SELECT $1, section, true, true, true,
-         CASE WHEN section = ANY($2::text[]) THEN false ELSE true END
-       FROM permission_sections
-       WHERE section <> ALL($3::text[])`,
-      [role, FINANCIAL_NO_DELETE, ADMIN_EXCLUDED_SECTIONS]
-    );
-    return;
-  }
-
-  const rows = ROLE_ROW_DEFAULTS[role];
-  if (!rows) return;
-
+  const rows = defaultRowsFor(role);
+  if (!rows || !rows.length) throw noDefaultsError(role);
   for (const [section, create, edit, del] of rows) {
+    // eslint-disable-next-line no-await-in-loop
     await client.query(
       `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
-       VALUES ($1, $2, true, $3, $4, $5)`,
+       VALUES ($1, $2, true, $3, $4, $5)
+       ON CONFLICT (role, section) DO UPDATE SET
+         can_view = EXCLUDED.can_view,
+         can_create = EXCLUDED.can_create,
+         can_edit = EXCLUDED.can_edit,
+         can_delete = EXCLUDED.can_delete`,
       [role, section, create, edit, del]
     );
   }
+  await client.query(
+    'DELETE FROM role_permissions WHERE role = $1 AND NOT (section = ANY($2::text[]))',
+    [role, rows.map((r) => r[0])]
+  );
 }
 
 async function applyRoleDefaults(role) {
+  if (!hasRoleDefaults(role)) throw noDefaultsError(role);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await seedRoleDefaults(client, role);
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
   }
 }
 
-module.exports = { applyRoleDefaults, seedRoleDefaults, ROLE_ROW_DEFAULTS };
+module.exports = {
+  applyRoleDefaults,
+  seedRoleDefaults,
+  hasRoleDefaults,
+  defaultRowsFor,
+  ROLE_ROW_DEFAULTS,
+};

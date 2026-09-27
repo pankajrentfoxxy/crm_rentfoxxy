@@ -5,9 +5,11 @@ const {
   getUserPermissions,
   updateUserPermissionsById,
   resetUserPermissionsById,
+  saveUserOverrides,
 } = require('../controllers/rbacController');
 
 router.get('/:userId', authMiddleware, getUserPermissions);
+router.put('/:userId/overrides', authMiddleware, saveUserOverrides);
 router.put('/:userId', authMiddleware, updateUserPermissionsById);
 router.delete('/:userId/reset', authMiddleware, resetUserPermissionsById);
 
