@@ -706,8 +706,7 @@ async function loadOutboundForLines(client, customerId, lines) {
  * The first bill of a rental uses it, because vendor_serial_numbers
  * .rent_monthly_rate outlives the rental and a re-rented laptop could arrive
  * still carrying its previous customer's rate (Sept 2026: 31 units billed at
- * the last renter's price). A replacement takes the returned laptop's rate
- * from its replacement order, not its (hand-editable) SO line.
+ * the last renter's price).
  */
 async function loadCurrentDcContractRates(client, customerId, serialIds) {
   const ids = normalizeSerialIds(serialIds);
@@ -716,7 +715,7 @@ async function loadCurrentDcContractRates(client, customerId, serialIds) {
   const { rows } = await client.query(
     `SELECT DISTINCT ON (vsn.serial_id)
             vsn.serial_id,
-            COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate)::numeric AS rate,
+            sol.rate::numeric AS rate,
             sol.sales_order_number,
             EXISTS (
               SELECT 1 FROM customer_asset_activity a
@@ -735,8 +734,6 @@ async function loadCurrentDcContractRates(client, customerId, serialIds) {
         AND sol.customer_id = $1
         AND COALESCE(sol.quotation_type, 'rental') = 'rental'
         AND COALESCE(sol.rate, 0) > 1
-       LEFT JOIN support_replacement_orders ro
-         ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
       WHERE vsn.serial_id = ANY($2::int[])
       ORDER BY vsn.serial_id, sos.allocation_id DESC`,
     [customerId, ids]
@@ -1060,11 +1057,9 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
                  LIMIT 1
               ),
               (
-                SELECT COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate)
+                SELECT sol.rate
                   FROM sales_order_serials sos
                   JOIN sales_order_lines sol ON sol.id = sos.line_id
-                  LEFT JOIN support_replacement_orders ro
-                    ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
                  WHERE sos.serial_id = vsn.serial_id
                    AND sos.dc_number = vsn.current_dc_number
                    AND sos.status <> 'removed'
