@@ -179,7 +179,7 @@ export default function PartsDeskPage() {
 
   const d = drawer;
   return (
-    <DeskShell title="Support parts desk" breadcrumb="Serve" subtitle="Parts the technicians asked for: pick the unit, hand it over or send it, and take unused ones back.">
+    <DeskShell title="Support parts desk" breadcrumb="Support" subtitle="Parts the technicians asked for: pick the unit, hand it over or send it, and take unused ones back.">
       <div className="c-stack">
         <Tabs tabs={tabs} value={tab} onChange={setTab} />
         {q === null ? <EmptyState title="Loading…" /> : (

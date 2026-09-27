@@ -183,7 +183,7 @@ export default function PurchaseOrderRecordPage() {
   const gst = po ? Number(po.total_amount || 0) - Number(po.sub_total_amount || 0) : 0;
 
   return (
-    <DeskShell title={po?.purchase_order_number || 'Purchase order'} breadcrumb="Procure / Purchase orders" subtitle={po?.vendor_display_name}>
+    <DeskShell title={po?.purchase_order_number || 'Purchase order'} breadcrumb="Procurement / Purchase orders" subtitle={po?.vendor_display_name}>
       {state.loading && <EmptyState title="Loading…" />}
       {state.error && <EmptyState title="Could not load this purchase order" body={state.error} action={<Button onClick={() => navigate('/carret/procure/purchase-orders')}>Back to purchase orders</Button>} />}
       {po && (

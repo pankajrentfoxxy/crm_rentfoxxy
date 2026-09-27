@@ -184,7 +184,7 @@ export default function VendorRecordPage() {
   const open = (pos || []).filter((p) => !['completed', 'cancelled', 'closed', 'rejected'].includes(String(p.status))).length;
 
   return (
-    <DeskShell title={v ? vendorName(v) : 'Vendor'} breadcrumb="Procure / Vendors" subtitle={v?.city || undefined}>
+    <DeskShell title={v ? vendorName(v) : 'Vendor'} breadcrumb="Procurement / Vendors" subtitle={v?.city || undefined}>
       {state.loading && <EmptyState title="Loading…" />}
       {state.error && <EmptyState title="Could not load this vendor" body={state.error} action={<Button onClick={() => navigate('/carret/procure/vendors')}>Back to vendors</Button>} />}
       {v && (

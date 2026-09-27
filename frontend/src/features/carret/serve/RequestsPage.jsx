@@ -133,7 +133,7 @@ export default function RequestsPage() {
   return (
     <DeskShell
       title="Customer requests"
-      breadcrumb="Serve"
+      breadcrumb="Support"
       subtitle="Requests from the QR page and the customer portal — check, then turn into a ticket."
       actions={<Button variant="quiet" onClick={showQr}>QR code for customers</Button>}
     >

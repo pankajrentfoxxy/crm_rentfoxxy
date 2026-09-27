@@ -82,7 +82,7 @@ export default function VendorsListPage() {
   return (
     <DeskShell
       title="Vendors"
-      breadcrumb="Procure"
+      breadcrumb="Procurement"
       subtitle="Who we buy and rent laptops and parts from."
       actions={canCreate && <Button variant="primary" onClick={() => navigate('/carret/procure/vendors/new')}>Add vendor</Button>}
     >

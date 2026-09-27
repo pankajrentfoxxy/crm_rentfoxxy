@@ -182,7 +182,7 @@ export default function VendorReturnsPage() {
   }[tab];
 
   return (
-    <DeskShell title="Vendor returns" breadcrumb="Procure" subtitle="Laptops going back to vendors — for good, for repair, or when rent stops.">
+    <DeskShell title="Vendor returns" breadcrumb="Procurement" subtitle="Laptops going back to vendors — for good, for repair, or when rent stops.">
       <div className="c-stack">
         <Tabs tabs={TABS} value={tab} onChange={setTab} />
 

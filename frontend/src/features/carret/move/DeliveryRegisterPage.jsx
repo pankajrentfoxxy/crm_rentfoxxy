@@ -60,7 +60,7 @@ export default function DeliveryRegisterPage() {
   ], []);
 
   return (
-    <DeskShell title="Delivery register" breadcrumb="Move" subtitle="Everything that has left the gate, until it is delivered or back in stock.">
+    <DeskShell title="Delivery register" breadcrumb="Movement" subtitle="Everything that has left the gate, until it is delivered or back in stock.">
       <Panel
         toolbar={(
           <>

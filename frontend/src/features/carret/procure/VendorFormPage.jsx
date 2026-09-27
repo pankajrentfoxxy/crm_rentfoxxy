@@ -117,7 +117,7 @@ export default function VendorFormPage() {
   const back = () => navigate(isEdit ? `/carret/procure/vendors/${vendorId}` : '/carret/procure/vendors');
 
   return (
-    <DeskShell title={title} breadcrumb="Procure / Vendors">
+    <DeskShell title={title} breadcrumb="Procurement / Vendors">
       {loading && <EmptyState title="Loading…" />}
       {loadError && <EmptyState title="Could not load this vendor" body={loadError} action={<Button onClick={() => navigate('/carret/procure/vendors')}>Back to vendors</Button>} />}
       {!loading && !loadError && (

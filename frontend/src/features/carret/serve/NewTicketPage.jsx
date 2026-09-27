@@ -110,7 +110,7 @@ export default function NewTicketPage() {
   ];
 
   return (
-    <DeskShell title="New support ticket" breadcrumb="Serve / Queue">
+    <DeskShell title="New support ticket" breadcrumb="Support / Queue">
       <div className="c-stack">
         <Section title="1 · Customer">
           {customer ? (

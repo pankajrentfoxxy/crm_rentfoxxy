@@ -66,7 +66,7 @@ export default function QueuePage() {
   return (
     <DeskShell
       title="Support queue"
-      breadcrumb="Serve"
+      breadcrumb="Support"
       subtitle="Every open ticket, by who acts next — the latest first to go late at the top."
       actions={hasPermission('support_tickets', 'create') && <Button variant="primary" onClick={() => navigate('/carret/serve/tickets/new')}>New ticket</Button>}
     >

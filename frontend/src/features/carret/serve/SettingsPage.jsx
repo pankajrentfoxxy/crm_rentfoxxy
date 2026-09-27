@@ -79,7 +79,7 @@ export default function SettingsPage() {
   );
 
   return (
-    <DeskShell title="Support settings" breadcrumb="Serve" subtitle="The issue list every new ticket uses, and the ticket rules.">
+    <DeskShell title="Support settings" breadcrumb="Support" subtitle="The issue list every new ticket uses, and the ticket rules.">
       <div className="c-stack">
         {cat && !canEdit && <Notice tone="info">Only admin or the support lead can change these.</Notice>}
         <Section title="Issue list — Type › Subtype › Issue">

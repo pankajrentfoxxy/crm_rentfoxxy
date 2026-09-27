@@ -98,7 +98,7 @@ export default function CourierTrackingPage() {
   return (
     <DeskShell
       title="Courier & tracking"
-      breadcrumb="Move"
+      breadcrumb="Movement"
       subtitle="Every AWB on a challan. Delivered courier challans close themselves from tracking every 20 minutes."
       actions={canSync && <Button variant="primary" onClick={sync} disabled={busy === 'sync' || configured === false}>{busy === 'sync' ? 'Syncing…' : 'Sync now'}</Button>}
     >

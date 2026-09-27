@@ -8,7 +8,8 @@
  * rather than leaving it visible with a 403 behind it (finding X6).
  *
  * Eight sections, from Decision 7: Procure · Production · Stock · Sell · Move ·
- * Serve · Money · Control. Decision 7 wrote this one as the verb "Produce" to
+ * Support · Finance · Control (renamed 27 Sep 2026: Procure → Procurement, Move → Movement,
+ * Serve → Support, Money → Finance; keys and URLs unchanged). Decision 7 wrote this one as the verb "Produce" to
  * match Procure/Sell/Move/Serve; the floor calls it Production, and the menu
  * uses the word the people reading it use. The key stays `produce` so no route,
  * permission or test moves with the label. The RentFoxxy / Gorefurbo split is a filter INSIDE
@@ -23,7 +24,7 @@ const SO_SECTIONS = ['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rent
 export const SECTIONS = [
   {
     key: 'procure',
-    label: 'Procure',
+    label: 'Procurement',
     // Procure to stock is complete in Carret (26 Sep 2026): these open the new
     // screens, in the order the process runs. The old ones stay under "Old
     // view" until the process is signed off (hard rule 6). Three old links
@@ -114,7 +115,7 @@ export const SECTIONS = [
   },
   {
     key: 'move',
-    label: 'Move',
+    label: 'Movement',
     // Every challan in the system, grouped by DIRECTION rather than by which
     // module happens to own the document. A challan is a challan: the question
     // on the floor is always "is this going out or coming in", never "which
@@ -159,7 +160,7 @@ export const SECTIONS = [
   },
   {
     key: 'serve',
-    label: 'Serve',
+    label: 'Support',
     // Support in Carret (claude/carret-support.md, 26 Sep 2026): the lead's desk
     // and the technician's phone open the new screens. The v1 pages stay under
     // "Old view" (pickup / replacement / Service DC / parts still run there)
@@ -189,7 +190,7 @@ export const SECTIONS = [
   },
   {
     key: 'money',
-    label: 'Money',
+    label: 'Finance',
     items: [
       { to: '/finance/invoices', label: 'Customer Invoices', section: 'customer_billing', action: 'view' },
       { to: '/finance/credit-notes', label: 'Credit Notes', section: 'credit_notes', action: 'view' },

@@ -3192,7 +3192,7 @@ exports.warehouseReceivedPickup = async (req, res) => {
                     // this was a raw write. I6 added in_transit -> returned in
                     // Part 2.1, so the legitimate move is now legal and the
                     // bypass is no longer needed to make warehouse receive work.
-                    await transitionAsset(client, {
+                    await inventorySM.transitionAsset(client, {
                         serialId: vsn.serial_id,
                         toStatus: 'returned',
                         reason: 'Permanent return received at warehouse',
@@ -3811,13 +3811,14 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
                 });
                 // Part 2.2, bypass-register B, finding U12 — the sibling of
                 // the raw write above, on the conditional-detach path.
-                await transitionAsset(client, {
+                // inventorySM.transitionAsset: a bare transitionAsset was never
+                // imported here, and this helper has no `req` — every return
+                // receipt threw a ReferenceError (since 2541cb35, 21 Sep).
+                await inventorySM.transitionAsset(client, {
                     serialId: vsn.serial_id,
                     toStatus: 'returned',
                     reason: 'Return received at warehouse',
-                    actorUserId: req.user?.user_id || null,
-                    actorName: req.user?.name || null,
-                    correlationId: req.correlationId,
+                    actorUserId: userId || null,
                     caller: 'supportController.warehouseReceive(conditional detach)',
                 });
 

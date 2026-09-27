@@ -100,7 +100,7 @@ export default function InvoiceRecordPage() {
   return (
     <DeskShell
       title={`Invoice #${invoiceId}`}
-      breadcrumb="Money / Customer Invoices"
+      breadcrumb="Finance / Customer Invoices"
       subtitle="Payments received against this invoice, its history, and corrections."
     >
       <div style={{ display: 'grid', gap: '16px' }}>

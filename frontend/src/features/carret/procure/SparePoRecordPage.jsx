@@ -113,7 +113,7 @@ export default function SparePoRecordPage() {
   ].map((s) => (st === 'cancelled' ? { ...s, state: 'blocked' } : s));
 
   return (
-    <DeskShell title={po?.purchase_order_number || 'Spare-parts order'} breadcrumb="Procure / Spare-parts orders" subtitle={po?.vendor_display_name}>
+    <DeskShell title={po?.purchase_order_number || 'Spare-parts order'} breadcrumb="Procurement / Spare-parts orders" subtitle={po?.vendor_display_name}>
       {state.loading && <EmptyState title="Loading…" />}
       {state.error && <EmptyState title="Could not load this order" body={state.error} action={<Button onClick={() => navigate('/carret/procure/spare-parts-orders')}>Back</Button>} />}
       {po && (

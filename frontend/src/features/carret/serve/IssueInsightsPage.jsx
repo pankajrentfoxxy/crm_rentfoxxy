@@ -83,7 +83,7 @@ export default function IssueInsightsPage() {
   return (
     <DeskShell
       title="Issue insights"
-      breadcrumb="Serve"
+      breadcrumb="Support"
       subtitle="Which problems we get, on which laptops, why — and what the floor should fix."
       actions={(
         <div className="flex" style={{ gap: '8px' }}>

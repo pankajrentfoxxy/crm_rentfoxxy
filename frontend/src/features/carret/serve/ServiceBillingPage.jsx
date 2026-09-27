@@ -100,7 +100,7 @@ export default function ServiceBillingPage() {
   ];
 
   return (
-    <DeskShell title="Service billing (gorefurbo)" breadcrumb="Money">
+    <DeskShell title="Service billing (gorefurbo)" breadcrumb="Finance">
       <div className="c-stack">
         <Notice tone="info">
           Sold laptops out of warranty get paid repair only. Support adds the service charge and the charged parts on the ticket;

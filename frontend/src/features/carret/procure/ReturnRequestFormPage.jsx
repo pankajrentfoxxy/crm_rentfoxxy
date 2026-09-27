@@ -97,7 +97,7 @@ export default function ReturnRequestFormPage() {
   };
 
   return (
-    <DeskShell title="New return request" breadcrumb="Procure / Vendor returns" subtitle="Tell a vendor we are returning rented laptops, and from when rent stops.">
+    <DeskShell title="New return request" breadcrumb="Procurement / Vendor returns" subtitle="Tell a vendor we are returning rented laptops, and from when rent stops.">
       <div className="c-stack">
         <Section title="1 · Vendor">
           {vendors === null ? <EmptyState title="Loading…" /> : (

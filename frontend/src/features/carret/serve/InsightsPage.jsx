@@ -26,7 +26,7 @@ export default function InsightsPage() {
   }, []);
 
   return (
-    <DeskShell title="SLA & feedback" breadcrumb="Serve">
+    <DeskShell title="SLA & feedback" breadcrumb="Support">
       <div className="c-stack">
         <div className="c-form-grid" style={{ '--c-cols': 4 }}>
           <StatTile label="Late" value={board?.counts?.breached ?? '…'} />

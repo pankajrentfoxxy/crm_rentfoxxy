@@ -47,7 +47,7 @@ export default function ChargesToBillPage() {
   };
 
   return (
-    <DeskShell title="Support charges to bill" breadcrumb="Money">
+    <DeskShell title="Support charges to bill" breadcrumb="Finance">
       <div className="c-stack">
         <Notice tone="info">Parts are free unless Support marked them chargeable; the warehouse set each price. Adding them puts them on the customer’s draft invoice with 18% GST.</Notice>
         {rows === null ? <EmptyState title="Loading…" /> : byCustomer.length === 0 ? <EmptyState title="Nothing to bill" /> : byCustomer.map((g) => (

@@ -175,7 +175,7 @@ export default function ToBuyPage() {
     : [];
 
   return (
-    <DeskShell title="To buy" breadcrumb="Procure" subtitle="Laptops orders are waiting for, and parts the floor asked procurement to buy.">
+    <DeskShell title="To buy" breadcrumb="Procurement" subtitle="Laptops orders are waiting for, and parts the floor asked procurement to buy.">
       <div className="c-stack">
         <div className="c-form-grid" style={{ '--c-cols': 4 }}>
           <StatTile label="Orders waiting" value={state.loading ? null : L.length} />

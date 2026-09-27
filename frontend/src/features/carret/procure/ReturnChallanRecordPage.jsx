@@ -65,8 +65,8 @@ export default function ReturnChallanRecordPage() {
     try { await fn(); if (ok) toast.success(ok); load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(''); }
   };
 
-  if (error) return <DeskShell title={dcNumber} breadcrumb="Procure / Vendor returns"><EmptyState title="Could not load this challan" body={error} action={<Button onClick={() => navigate('/carret/procure/returns')}>Back</Button>} /></DeskShell>;
-  if (!dc) return <DeskShell title={dcNumber} breadcrumb="Procure / Vendor returns"><EmptyState title="Loading…" /></DeskShell>;
+  if (error) return <DeskShell title={dcNumber} breadcrumb="Procurement / Vendor returns"><EmptyState title="Could not load this challan" body={error} action={<Button onClick={() => navigate('/carret/procure/returns')}>Back</Button>} /></DeskShell>;
+  if (!dc) return <DeskShell title={dcNumber} breadcrumb="Procurement / Vendor returns"><EmptyState title="Loading…" /></DeskShell>;
 
   const st = dc.status;
   const items = dc.items || [];
@@ -142,7 +142,7 @@ export default function ReturnChallanRecordPage() {
   ];
 
   return (
-    <DeskShell title={dcNumber} breadcrumb="Procure / Vendor returns" subtitle={dc.vendor_name}>
+    <DeskShell title={dcNumber} breadcrumb="Procurement / Vendor returns" subtitle={dc.vendor_name}>
       <div className="c-stack">
         <DocumentHeader
           docNumber={dcNumber}

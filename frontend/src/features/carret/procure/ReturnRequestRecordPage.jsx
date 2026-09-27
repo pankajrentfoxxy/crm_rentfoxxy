@@ -68,8 +68,8 @@ export default function ReturnRequestRecordPage() {
     try { const r = await fn(); if (ok) toast.success(ok); load(); return r; } catch (e) { toast.error(errMsg(e)); return null; } finally { setBusy(''); }
   };
 
-  if (error) return <DeskShell title={ticketNumber} breadcrumb="Procure / Vendor returns"><EmptyState title="Could not load this request" body={error} action={<Button onClick={() => navigate('/carret/procure/returns')}>Back</Button>} /></DeskShell>;
-  if (!t) return <DeskShell title={ticketNumber} breadcrumb="Procure / Vendor returns"><EmptyState title="Loading…" /></DeskShell>;
+  if (error) return <DeskShell title={ticketNumber} breadcrumb="Procurement / Vendor returns"><EmptyState title="Could not load this request" body={error} action={<Button onClick={() => navigate('/carret/procure/returns')}>Back</Button>} /></DeskShell>;
+  if (!t) return <DeskShell title={ticketNumber} breadcrumb="Procurement / Vendor returns"><EmptyState title="Loading…" /></DeskShell>;
 
   const st = t.status;
   const items = t.items || [];
@@ -182,7 +182,7 @@ export default function ReturnRequestRecordPage() {
   const pickedIds = Object.keys(picked).map(Number).filter((id) => cancellable.some((i) => i.serial_id === id));
 
   return (
-    <DeskShell title={ticketNumber} breadcrumb="Procure / Vendor returns" subtitle={t.vendor_name}>
+    <DeskShell title={ticketNumber} breadcrumb="Procurement / Vendor returns" subtitle={t.vendor_name}>
       <div className="c-stack">
         <DocumentHeader
           docNumber={ticketNumber}

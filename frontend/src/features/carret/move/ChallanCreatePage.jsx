@@ -156,7 +156,7 @@ export default function ChallanCreatePage() {
   return (
     <DeskShell
       title="New delivery challan"
-      breadcrumb="Move / Delivery challans"
+      breadcrumb="Movement / Delivery challans"
       subtitle={meta ? `For ${so} · ${meta.customer_name}${meta.dc_number ? ` · next number about ${meta.dc_number}` : ''}` : so}
     >
       {error && <EmptyState title="Could not load this order" body={error} action={<Button onClick={() => setParams({})}>Choose another order</Button>} />}
@@ -348,7 +348,7 @@ function PickOrder({ onPick }) {
     { key: 'a', header: 'Waiting', render: (r) => `${r.attached_count} attached of ${r.laptop_qty}` },
   ], []);
   return (
-    <DeskShell title="New delivery challan" breadcrumb="Move / Delivery challans" subtitle="Choose the sales order the laptops belong to.">
+    <DeskShell title="New delivery challan" breadcrumb="Movement / Delivery challans" subtitle="Choose the sales order the laptops belong to.">
       <div className="c-card">
         <div className="c-toolbar">
           <label className="c-search"><Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SO number or customer" autoFocus /></label>

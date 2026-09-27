@@ -75,7 +75,7 @@ export default function AgeingPage() {
   return (
     <DeskShell
       title="Ageing & Outstanding"
-      breadcrumb="Money"
+      breadcrumb="Finance"
       subtitle="What each customer owes, bucketed by how long it has been due."
       actions={(
         <Button variant="secondary" onClick={onSweep} disabled={sweeping}>

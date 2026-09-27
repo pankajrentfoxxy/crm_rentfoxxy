@@ -105,7 +105,7 @@ export default function InvoicesListPage() {
   return (
     <DeskShell
       title="Customer Invoices"
-      breadcrumb="Money"
+      breadcrumb="Finance"
       subtitle="GST invoices with the CGST/SGST or IGST split, due dates and live outstanding."
     >
       <div style={{ display: 'grid', gap: '16px' }}>

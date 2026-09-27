@@ -123,7 +123,7 @@ export default function ChallanRecordPage() {
   const totals = d?.totals || {};
 
   return (
-    <DeskShell title={dc} breadcrumb="Move / Delivery challans" subtitle={head.customer_name}>
+    <DeskShell title={dc} breadcrumb="Movement / Delivery challans" subtitle={head.customer_name}>
       {state.loading && <EmptyState title="Loading…" />}
       {state.error && <EmptyState title="Could not load this challan" body={state.error} action={<Button onClick={() => navigate('/carret/move/challans')}>Back to challans</Button>} />}
       {d && (

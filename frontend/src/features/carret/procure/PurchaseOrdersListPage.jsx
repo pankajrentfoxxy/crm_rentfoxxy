@@ -94,7 +94,7 @@ export default function PurchaseOrdersListPage({ kind = 'laptop' }) {
   return (
     <DeskShell
       title={spare ? 'Spare-parts orders' : 'Purchase orders'}
-      breadcrumb="Procure"
+      breadcrumb="Procurement"
       subtitle={spare ? 'Parts we buy for the floor and for support, from draft to received.' : 'Laptops we buy or rent from vendors, from draft to received.'}
       actions={canCreate && (
         <Button variant="primary" onClick={() => (spare ? setNewSpare(true) : navigate('/carret/procure/purchase-orders/new'))}>

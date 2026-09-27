@@ -75,8 +75,8 @@ export default function TicketRecordPage() {
     try { await fn(); if (ok) toast.success(ok); load(); return true; } catch (e) { toast.error(errMsg(e)); return false; } finally { setBusy(false); }
   };
 
-  if (error) return <DeskShell title={`#${ticketId}`} breadcrumb="Serve / Queue"><EmptyState title="Could not load" body={error} action={<Button onClick={() => navigate('/carret/serve/queue')}>Back</Button>} /></DeskShell>;
-  if (!t) return <DeskShell title={`#${ticketId}`} breadcrumb="Serve / Queue"><EmptyState title="Loading…" /></DeskShell>;
+  if (error) return <DeskShell title={`#${ticketId}`} breadcrumb="Support / Queue"><EmptyState title="Could not load" body={error} action={<Button onClick={() => navigate('/carret/serve/queue')}>Back</Button>} /></DeskShell>;
+  if (!t) return <DeskShell title={`#${ticketId}`} breadcrumb="Support / Queue"><EmptyState title="Loading…" /></DeskShell>;
 
   const tk = t.ticket;
   const items = (t.items || []).filter((i) => !['removed'].includes(i.status));
@@ -132,7 +132,7 @@ export default function TicketRecordPage() {
   const history = (t.audit || []).slice(0, 25);
 
   return (
-    <DeskShell title={`Ticket #${tk.id}`} breadcrumb="Serve / Queue" subtitle={tk.customer_name}>
+    <DeskShell title={`Ticket #${tk.id}`} breadcrumb="Support / Queue" subtitle={tk.customer_name}>
       <div className="c-stack">
         <DocumentHeader
           docNumber={`#${tk.id}`}

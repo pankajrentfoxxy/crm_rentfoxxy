@@ -90,7 +90,7 @@ export default function ChallansPage({ movement = 'outbound' }) {
   return (
     <DeskShell
       title={isReturn ? 'Return Challans' : 'Delivery Challans'}
-      breadcrumb="Move"
+      breadcrumb="Movement"
       subtitle={isReturn ? 'Units coming back in from customers, one challan at a time.' : 'Challans leaving the warehouse — what is ready for the gate, what is on the way, what came back.'}
       actions={!isReturn && hasPermission('delivery_challans', 'create') && (
         <Button variant="primary" onClick={() => navigate('/carret/move/challans/new')}><Plus size={16} aria-hidden="true" /> New challan</Button>

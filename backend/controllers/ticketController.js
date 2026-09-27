@@ -339,6 +339,9 @@ exports.getTickets = async (req, res) => {
 
     // View filter: completed tab shows status=completed OR tickets user moved; in_progress shows status!=completed
     if (view === 'completed') {
+      // Was an undefined name here (defined only in another handler), so the
+      // Completed tab threw for every user.
+      const privilegedRoles = ['admin', 'floor_manager', 'manager'];
       if (!privilegedRoles.includes(req.user.role)) {
         query += ` AND (t.status = 'completed' OR EXISTS (
           SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}

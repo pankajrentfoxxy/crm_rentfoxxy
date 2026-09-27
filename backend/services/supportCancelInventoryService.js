@@ -106,7 +106,7 @@ async function restoreSerialToCustomer(client, {
     // transitionAsset writes both trails plus the event, so the hand-rolled
     // INSERT below is deleted rather than kept — keeping it would double the
     // transitions row.
-    await transitionAsset(client, {
+    await inventorySM.transitionAsset(client, {
         serialId: serial.serial_id,
         toStatus: targetStatus,
         reason,

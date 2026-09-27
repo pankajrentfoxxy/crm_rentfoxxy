@@ -108,7 +108,7 @@ export default function VendorRentalsPage() {
   ];
 
   return (
-    <DeskShell title="Vendor rentals" breadcrumb="Procure" subtitle="What we rent from each vendor, and where every laptop is today.">
+    <DeskShell title="Vendor rentals" breadcrumb="Procurement" subtitle="What we rent from each vendor, and where every laptop is today.">
       <div className="c-stack">
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
           <Select

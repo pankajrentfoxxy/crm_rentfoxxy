@@ -106,7 +106,7 @@ export default function VendorArrivalsPage() {
   return (
     <DeskShell
       title="Vendor arrivals"
-      breadcrumb="Procure"
+      breadcrumb="Procurement"
       subtitle="Every vendor delivery is logged at the gate, then received by the warehouse."
       actions={canLog && <Button variant="primary" onClick={() => setLogOpen(true)}>Log a delivery</Button>}
     >

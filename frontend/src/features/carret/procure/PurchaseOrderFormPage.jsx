@@ -206,7 +206,7 @@ export default function PurchaseOrderFormPage() {
   const title = isEdit ? `Edit ${po?.purchase_order_number || 'purchase order'}` : 'New purchase order';
 
   return (
-    <DeskShell title={title} breadcrumb="Procure / Purchase orders">
+    <DeskShell title={title} breadcrumb="Procurement / Purchase orders">
       {loading && <EmptyState title="Loading…" />}
       {loadError && <EmptyState title="Could not load" body={loadError} action={<Button onClick={() => navigate('/carret/procure/purchase-orders')}>Back</Button>} />}
       {!loading && !loadError && locked && (

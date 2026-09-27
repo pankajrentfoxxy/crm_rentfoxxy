@@ -76,7 +76,7 @@ export default function TechBucketPage() {
   const laptopCol = { key: 'l', header: 'Laptop', render: (x) => <span className="font-mono">{x.ttspl || '—'}</span>, sub: (x) => x.model || x.customer };
 
   return (
-    <DeskShell title="Technician bucket" breadcrumb="Serve" subtitle="What each technician is holding or owes — oldest and in-hand first.">
+    <DeskShell title="Technician bucket" breadcrumb="Support" subtitle="What each technician is holding or owes — oldest and in-hand first.">
       <div className="c-stack">
         <div className="c-form-grid" style={{ '--c-cols': 6 }}>
           {COLS.map((c) => <StatTile key={c.key} label={c.label} value={data ? total(c.key) : '…'} />)}

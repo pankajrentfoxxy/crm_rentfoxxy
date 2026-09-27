@@ -364,11 +364,11 @@ async function notifySupportServiceDelivered({ dcNumber, phone, deliveredOn } = 
 }
 
 async function notifySupportOtp({ itemId, otp, phone } = {}) {
+  let ticketId = null; // declared outside try so the catch can log it
   try {
     if (!itemId && !otp) return { ok: false, skipped: true, error: 'missing itemId or otp' };
     let code = otp ? String(otp).trim() : '';
     let resolvedPhone = phone;
-    let ticketId = null;
     if (itemId) {
       const itemRes = await pool.query(
         `SELECT i.id, i.ticket_id, i.item_type, i.pickup_method,

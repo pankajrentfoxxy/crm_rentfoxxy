@@ -70,7 +70,7 @@ export default function ReplacementApprovalsPage() {
   ];
 
   return (
-    <DeskShell title="Replacement approvals" breadcrumb="Procure" subtitle="Vendor replacements that differ from the laptop we sent for repair.">
+    <DeskShell title="Replacement approvals" breadcrumb="Procurement" subtitle="Vendor replacements that differ from the laptop we sent for repair.">
       <div className="c-stack">
         <Notice tone="info">
           {canDecide

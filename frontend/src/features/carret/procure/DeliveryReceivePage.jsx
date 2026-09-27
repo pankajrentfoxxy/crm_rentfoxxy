@@ -171,8 +171,8 @@ export default function DeliveryReceivePage() {
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(''); }
   };
 
-  if (loadError) return <DeskShell title="Delivery" breadcrumb="Procure / Vendor arrivals"><EmptyState title="Could not load this delivery" body={loadError} action={<Button onClick={() => navigate('/carret/procure/arrivals')}>Back</Button>} /></DeskShell>;
-  if (!d) return <DeskShell title="Delivery" breadcrumb="Procure / Vendor arrivals"><EmptyState title="Loading…" /></DeskShell>;
+  if (loadError) return <DeskShell title="Delivery" breadcrumb="Procurement / Vendor arrivals"><EmptyState title="Could not load this delivery" body={loadError} action={<Button onClick={() => navigate('/carret/procure/arrivals')}>Back</Button>} /></DeskShell>;
+  if (!d) return <DeskShell title="Delivery" breadcrumb="Procurement / Vendor arrivals"><EmptyState title="Loading…" /></DeskShell>;
 
   const units = d.units || [];
   const unitCols = [
@@ -207,7 +207,7 @@ export default function DeliveryReceivePage() {
   ];
 
   return (
-    <DeskShell title={d.delivery_number} breadcrumb="Procure / Vendor arrivals" subtitle={d.vendor_name}>
+    <DeskShell title={d.delivery_number} breadcrumb="Procurement / Vendor arrivals" subtitle={d.vendor_name}>
       <div className="c-stack">
         <DocumentHeader
           docNumber={d.delivery_number}
