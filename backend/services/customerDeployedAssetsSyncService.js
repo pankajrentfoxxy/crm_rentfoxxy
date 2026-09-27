@@ -7,6 +7,7 @@ const { serialIdFromToken } = require('../utils/dcSerialToken');
 const pool = require('../config/db');
 const inventorySM = require('./inventoryStateMachine');
 const { rentStartForSerial } = require('./deliveryDateService');
+const { resolveSerialRentRate } = require('./serialRentRateService');
 
 const DC_SERIAL_ELEMENTS_SQL = `
   CROSS JOIN LATERAL jsonb_array_elements_text(
@@ -187,7 +188,11 @@ async function syncDeployedAssets(db, { customerId = null, actorName = 'deployed
       }
 
       const needsOverride = row.inventory_status === 'returned';
+      const rentMonthlyRate = String(row.quotation_type || 'rental').toLowerCase() === 'rental'
+        ? await resolveSerialRentRate(client, row.serial_id, row.dc_number)
+        : null;
       const result = await inventorySM.markDelivered(client, row.serial_id, {
+        rentMonthlyRate,
         quotationType: row.quotation_type,
         dcNumber: row.dc_number,
         customerId: row.customer_id,

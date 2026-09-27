@@ -528,6 +528,9 @@ async function markDeliveryRejectedByCustomer(client, {
   // its in_transit state and its current_customer_id is left untouched. It only moves
   // once the warehouse physically receives it back.
   await releaseSoAllocationOnReject(client, dcNumber);
+  // Undo anything gate dispatch billed for goods the customer never took.
+  const { reverseBillingForRejectedDc } = require('./billingSchedulerService');
+  await reverseBillingForRejectedDc(client, { dcNumber, actorUserId });
 
   const units = await listRefusedReturnUnits(client, dcNumber);
   return {

@@ -11,6 +11,20 @@ const RETURN_DC_WAREHOUSE_ROLES = new Set([
   'warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin',
 ]);
 
+/** Expected config the hardware script is checked against (asset master, else the pickup row). */
+function unitConfig(item) {
+  const e = item?.return_capture?.expected_config || {};
+  const gen = e.generation || item?.generation;
+  const ram = e.ram || item?.ram;
+  const ssd = e.ssd || e.storage || item?.storage;
+  return [
+    e.processor || item?.processor,
+    gen ? (/gen/i.test(String(gen)) ? gen : `${gen} Gen`) : null,
+    ram ? (/gb/i.test(String(ram)) ? ram : `${ram} GB RAM`) : null,
+    ssd ? (/ssd|gb|tb/i.test(String(ssd)) ? ssd : `${ssd} GB SSD`) : null,
+  ].filter(Boolean).join(' · ');
+}
+
 function assetUrl(p) {
   if (!p) return null;
   if (p.startsWith('http')) return p;
@@ -260,14 +274,19 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">Units</h3>
                 <div className="border rounded-xl divide-y">
-                  {(detail.units || []).map((u, i) => (
-                    <div key={u.ttspl || i} className="px-4 py-3 text-sm">
-                      <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
-                      <p className="text-xs text-gray-500 font-mono mt-0.5">
-                        {u.ttspl || '—'} · SN {u.serial || '—'}
-                      </p>
-                    </div>
-                  ))}
+                  {(detail.units || []).map((u, i) => {
+                    const item = (detail.pickup_items || []).find((p) => p.ttspl_id && p.ttspl_id === u.ttspl);
+                    const config = unitConfig({ ...u, ...(item || {}) });
+                    return (
+                      <div key={u.ttspl || i} className="px-4 py-3 text-sm">
+                        <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                        {config ? <p className="text-xs text-gray-700 mt-0.5">{config}</p> : null}
+                        <p className="text-xs text-gray-500 font-mono mt-0.5">
+                          {u.ttspl || '—'} · SN {u.serial || '—'}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -327,6 +346,26 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                           ) : null}
                           {item.return_captured_serial ? (
                             <p className="text-xs text-gray-500 mt-0.5">Serial {item.return_captured_serial}</p>
+                          ) : null}
+                          {failed && item.return_config_result?.checks?.length ? (
+                            <table className="mt-2 w-full text-xs">
+                              <thead>
+                                <tr className="text-left text-gray-500">
+                                  <th className="font-medium pr-2">Check</th>
+                                  <th className="font-medium pr-2">Expected</th>
+                                  <th className="font-medium">Laptop</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {item.return_config_result.checks.map((c) => (
+                                  <tr key={c.field} className={c.matched ? 'text-gray-600' : 'text-red-700 font-semibold'}>
+                                    <td className="pr-2 py-0.5">{c.label}{c.matched ? '' : c.required === false ? ' (info)' : ' ✗'}</td>
+                                    <td className="pr-2 py-0.5">{c.expected ?? '—'}</td>
+                                    <td className="py-0.5 break-words">{c.actual ?? '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           ) : null}
                           {!matched && canWarehouseSign ? (
                             <button

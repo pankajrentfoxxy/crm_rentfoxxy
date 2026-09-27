@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Building2, Copy, X, MapPin } from 'lucide-react';
 import { formatItemId, formatRelative, formatAddress, initials } from '../utils';
 
+const OTP_DONE = new Set(['resolved', 'closed', 'cancelled']);
+
 export default function DetailSidebar({
   ticket,
   items,
@@ -13,8 +15,12 @@ export default function DetailSidebar({
 }) {
   const [prio, setPrio] = useState(ticket.priority || 'normal');
 
-  const customerOtpItem = useMemo(
-    () => items.find((i) => i.item_type === 'complaint' && i.otp_code),
+  // One OTP per laptop — a multi-laptop ticket used to show only the first one
+  // (often an already-resolved unit). Open laptops first.
+  const customerOtpItems = useMemo(
+    () => items
+      .filter((i) => i.item_type === 'complaint' && i.otp_code)
+      .sort((a, b) => Number(OTP_DONE.has(a.status)) - Number(OTP_DONE.has(b.status))),
     [items]
   );
 
@@ -56,18 +62,29 @@ export default function DetailSidebar({
         <p style={{ color: 'var(--color-text-secondary, #475569)' }}>{formatAddress(ticket.ticket_address)}</p>
       </section>
 
-      {showLeadOtp && customerOtpItem && (
-        <section className="support-v3-otp-card">
-          <div className="flex items-start justify-between gap-2">
-            <p className="support-v3-section-label text-amber-900">Customer OTP — {formatItemId(customerOtpItem.id)}</p>
-            <button type="button" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center" onClick={() => copyOtp(customerOtpItem.otp_code)} aria-label="Copy OTP">
-              <Copy className="w-4 h-4 text-amber-900" />
-            </button>
-          </div>
-          <p className="font-mono text-2xl tracking-widest text-amber-950">{customerOtpItem.otp_code}</p>
-          <p className="text-xs text-amber-900 mt-2">Share verbally · {otpNote}</p>
-        </section>
-      )}
+      {showLeadOtp && customerOtpItems.map((it) => {
+        const done = OTP_DONE.has(it.status);
+        return (
+          <section key={it.id} className={`support-v3-otp-card${done ? ' opacity-60' : ''}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="support-v3-section-label text-amber-900">
+                  Customer OTP — {formatItemId(it.id)}{done ? ' · Resolved' : ''}
+                </p>
+                <p className="text-xs text-amber-900 truncate">
+                  <span className="font-mono">{it.ttspl_id || it.unique_serial_number || it.serial_number || '—'}</span>
+                  {[it.brand, it.model].filter(Boolean).length ? ` · ${[it.brand, it.model].filter(Boolean).join(' ')}` : ''}
+                </p>
+              </div>
+              <button type="button" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center" onClick={() => copyOtp(it.otp_code)} aria-label={`Copy OTP for ${it.ttspl_id || formatItemId(it.id)}`}>
+                <Copy className="w-4 h-4 text-amber-900" />
+              </button>
+            </div>
+            <p className="font-mono text-2xl tracking-widest text-amber-950">{it.otp_code}</p>
+            <p className="text-xs text-amber-900 mt-2">Share verbally · {otpNote}</p>
+          </section>
+        );
+      })}
 
       {showLeadOtp && warehouseOtpItems.map((it) => (
         <section key={it.id} className="support-v3-otp-card support-v3-otp-warehouse">

@@ -5911,11 +5911,16 @@ exports.updateDcDispatch = async (req, res) => {
         // makes a unit unavailable and starts the rent clock — and it was the
         // one most worth refusing, because forcing in_transit on a unit the map
         // says cannot ship is how a laptop ends up rented to two customers.
+        // Carry this DC's SO rate so the unit can't leave with its previous
+        // customer's rate still on the row.
+        const { resolveSerialRentRate } = require('../services/serialRentRateService');
+        const rentMonthlyRate = await resolveSerialRentRate(client, serialId, dcNumber);
         await inventorySM.markDispatched(client, serialId, {
           dcNumber,
           customerId: ctx.customer_id || null,
           entityCode: ctx.entity_code || null,
           dispatchMode,
+          rentMonthlyRate,
           actorUserId: req.user.user_id,
           actorName: req.user.name,
           correlationId: req.correlationId,
