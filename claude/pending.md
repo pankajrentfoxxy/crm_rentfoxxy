@@ -51,7 +51,9 @@ the new interface with its own menu; "Old UI" in the new header goes back.
 
 ## D. Promotion to live (after sign-off) — `claude/production-promotion-checklist.md`
 18. Run on live, in order, with backups: migrations 327–352 (350–352 = lock-in / warranty,
-    then `scripts/backfill-lockin-warranty.js` dry-run → --commit) (Support v2 301–326 is a
+    then `scripts/backfill-lockin-warranty.js` dry-run → --commit; 353–354 + stock clean-up
+    (`stock-cleanup-report.js --tag LIVE-…` → review → `apply-stock-cleanup.js`),
+    `merge-asset-config-duplicates.js`, `laptop-brand-cleanup.js --tag LIVE-…`) (Support v2 301–326 is a
     separate decision; 323 stays back), `sync-po-receive-status.js`, floor-ticket clean-up,
     config-drift fix, `fix-rental-start-dates.js` (~1,025 laptops start 2027-02-07 on live).
 19. Merge new_stagging_crm into live (merge, never overwrite); `REACT_APP_CARRET=1` is in
