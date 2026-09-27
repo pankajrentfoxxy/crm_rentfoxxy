@@ -14,6 +14,7 @@ import { usePermission } from '../../../hooks/usePermission';
 import TicketActions from './TicketActions';
 import IssuePanel from './IssuePanel';
 import TicketPartsPanel from './TicketPartsPanel';
+import ServiceChargesPanel from './ServiceChargesPanel';
 import TicketNextStep from './TicketNextStep';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
@@ -38,6 +39,9 @@ function Clock({ label, c }) {
     </div>
   );
 }
+
+// Sold laptops: warranty as it was when the ticket was raised (claude/carret-lockin-warranty.md).
+const WARRANTY_NOTE = { in: 'sold, in warranty', battery_only: 'sold, battery warranty only', out: 'sold, OUT of warranty — chargeable' };
 
 export default function TicketRecordPage() {
   const { ticketId } = useParams();
@@ -83,7 +87,12 @@ export default function TicketRecordPage() {
   const suggested = byLoad[0]?.user_id;
 
   const itemCols = [
-    { key: 't', header: 'Laptop', render: (i) => <DocNumber value={i.ttspl_id || i.unique_serial_number || i.serial_number || '—'} />, sub: (i) => [i.brand, i.model].filter(Boolean).join(' ') },
+    {
+      key: 't',
+      header: 'Laptop',
+      render: (i) => <DocNumber value={i.ttspl_id || i.unique_serial_number || i.serial_number || '—'} />,
+      sub: (i) => [[i.brand, i.model].filter(Boolean).join(' '), WARRANTY_NOTE[i.warranty_status]].filter(Boolean).join(' · '),
+    },
     { key: 'k', header: 'Type', render: (i) => ({ complaint: 'Visit', pickup: i.pickup_type === 'repair' ? 'Repair pickup' : 'Return pickup', replacement: 'Replacement' }[i.item_type] || i.item_type), sub: (i) => i.issue_category_label || null },
     { key: 's', header: 'Where it is', render: (i) => STEP_LABEL[i.effective_current_step] || STEP_LABEL[i.current_step] || STEP_LABEL[i.status] || String(i.status).replace(/_/g, ' '), sub: (i) => (i.repair_ready_at ? 'Repaired — ready to send back' : (i.remarks || null)) },
     {
@@ -168,6 +177,7 @@ export default function TicketRecordPage() {
         </Section>
         <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
         <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
+        <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
         {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
         <Section title="Contact and address">
           <KeyValue cols={2} items={[

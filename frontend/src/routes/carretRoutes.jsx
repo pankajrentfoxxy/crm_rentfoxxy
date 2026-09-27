@@ -47,6 +47,8 @@ const ServeRequestsPage = React.lazy(() => import('../features/carret/serve/Requ
 const ServeSettingsPage = React.lazy(() => import('../features/carret/serve/SettingsPage'));
 const ServePartsDeskPage = React.lazy(() => import('../features/carret/serve/PartsDeskPage'));
 const SupportChargesToBillPage = React.lazy(() => import('../features/carret/serve/ChargesToBillPage'));
+const EarlyReturnsPage = React.lazy(() => import('../features/carret/serve/EarlyReturnsPage'));
+const ServiceBillingPage = React.lazy(() => import('../features/carret/serve/ServiceBillingPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
 const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
 const FloorTicketPage = React.lazy(() => import('../features/carret/produce/FloorTicketPage'));
@@ -155,6 +157,10 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/serve/settings', element: guardAny(['support_settings', 'support_tickets'], 'view', <ServeSettingsPage />) },
       { path: '/carret/serve/technician-bucket', element: guardAny(['technician_bucket', 'support_tickets'], 'view', <ServeTechBucketPage />) },
       { path: '/carret/money/support-charges', element: guard('customer_billing', 'view', <SupportChargesToBillPage />) },
+      // Lock-in early return (Support raises, Sales proposes, Accounts decide) and
+      // gorefurbo out-of-warranty service billing (claude/carret-lockin-warranty.md).
+      { path: '/carret/sell/early-returns', element: guardAny(['support_tickets', 'customer_billing', ...SO_SECTIONS], 'view', <EarlyReturnsPage />) },
+      { path: '/carret/money/service-billing', element: guard('customer_billing', 'view', <ServiceBillingPage />) },
       { path: '/carret/serve/parts-desk', element: guard('support_part_challan', 'view', <ServePartsDeskPage />) },
       { path: '/carret/serve/my-parts', element: guardAny(['support_part_requests', 'support_tickets'], 'view', <ServeMyPartsPage />) },
       { path: '/carret/procure/replacement-approvals', element: guardAny(['vendor_repair_dc', 'vendor_management', 'vendor_billing_mgmt'], 'view', <ReplacementApprovalsPage />) },

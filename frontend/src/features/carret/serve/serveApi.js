@@ -101,3 +101,25 @@ export const saveSupportSettings = (body) => api.put('/support/settings', body);
 export const fetchIssueCatalogAdmin = () => api.get('/support/issue-catalog/admin');
 export const addIssueEntry = (body) => api.post('/support/issue-catalog', body);
 export const updateIssueEntry = (id, body) => api.patch(`/support/issue-catalog/${id}`, body);
+
+/* ---- Lock-in early return + gorefurbo service billing (claude/carret-lockin-warranty.md) ---- */
+export const fetchEarlyReturns = (params) => api.get('/early-returns', { params });
+export const createEarlyReturn = (body) => api.post('/early-returns', body);
+export const proposeEarlyReturn = (id, body) => api.post(`/early-returns/${id}/propose`, body);
+export const decideEarlyReturn = (id, body) => api.post(`/early-returns/${id}/decide`, body);
+export const cancelEarlyReturn = (id, note) => api.post(`/early-returns/${id}/cancel`, { note });
+export const fetchTicketServiceCharges = (ticketId) => api.get(`/service-billing/tickets/${ticketId}/charges`);
+export const addTicketServiceCharge = (ticketId, body) => api.post(`/service-billing/tickets/${ticketId}/charges`, body);
+export const removeServiceCharge = (id) => api.delete(`/service-billing/charges/${id}`);
+export const fetchServiceCharges = (params) => api.get('/service-billing/charges', { params });
+export const decideServiceCharge = (id, body) => api.post(`/service-billing/charges/${id}/decide`, body);
+export const fetchServiceOrders = (params) => api.get('/service-billing/orders', { params });
+export const raiseServiceOrder = (customerId, chargeIds) => api.post('/service-billing/orders', { customer_id: customerId, charge_ids: chargeIds });
+export const cancelServiceOrder = (id) => api.post(`/service-billing/orders/${id}/cancel`, {});
+export const attachServiceOrderInvoice = (id, invoiceNumber, file) => {
+  const fd = new FormData();
+  fd.append('invoice_number', invoiceNumber);
+  if (file) fd.append('invoice_pdf', file);
+  return api.post(`/service-billing/orders/${id}/invoice`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+export const serviceOrderInvoiceUrl = (id) => `/service-billing/orders/${id}/invoice`;

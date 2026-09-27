@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, Checkbox, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Notice, Section, Select, Textarea,
+  Button, Checkbox, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Section, Select, Textarea,
 } from '../../../components/carret';
 import { fileUrl } from '../procure/procureShared';
 import DispatchFields, { dispatchBody, dispatchError, emptyDispatch } from './DispatchFields';
@@ -9,9 +9,10 @@ import {
   assignPickup, cancelPickup, changePickupAssignment, changeServiceDcTechnician, createPickup, createServiceDc,
   fetchCustomerLaptops, fetchPickupContext, fetchRedeliveryContext, fetchReplacementContext, fetchResendContext,
   fetchServiceDcEligibility, fetchSwapContext, moveToReplacement, regenerateServiceDcPdf, resendLaptop, setCourierDetails,
-  startRedelivery, startReplacement, startSwap,
+  startRedelivery, startReplacement, startSwap, createEarlyReturn, fetchEarlyReturns, cancelEarlyReturn,
 } from './serveApi';
 import { errMsg } from './serveShared';
+import TermsBadge, { fmtDay, termsText } from './TermsBadge';
 
 /**
  * Serve → ticket → pickup, replacement and Service DC (claude/carret-support.md).
@@ -20,6 +21,10 @@ import { errMsg } from './serveShared';
  * ServiceDcPanel), so nothing behaves differently — only where it is done.
  */
 const CLOSED = ['resolved', 'closed', 'inventory_updated', 'cancelled'];
+const EARLY_RETURN_LABEL = {
+  pending_sales: 'Waiting for Sales', pending_accounts: 'Waiting for Accounts', approved: 'Approved — schedule the pickup',
+  rejected: 'Rejected', cancelled: 'Withdrawn', used: 'Pickup made',
+};
 const forItem = (o, i) => [o.item_id, o.complaint_item_id, o.source_item_id].map(Number).includes(Number(i.id));
 const code = (i) => i.ttspl_id || i.unique_serial_number || i.serial_number;
 const addrFrom = (d = {}) => ({
@@ -62,14 +67,20 @@ export default function TicketActions({ data, techs, reload }) {
     const fromTicket = complaints.filter((i) => !CLOSED.includes(i.status) || i.status === 'resolved')
       .map((i) => ({ key: `i${i.id}`, source_item_id: i.id, ttspl_id: code(i), serial_number: i.serial_number, unique_serial_number: i.unique_serial_number, brand: i.brand, model: i.model, ram: i.ram, storage: i.storage, generation: i.generation }));
     let laptops = fromTicket;
+    // The customer's laptops carry lock-in / warranty (claude/carret-lockin-warranty.md).
+    let assets = [];
+    try {
+      const { data: d } = await fetchCustomerLaptops(tk.customer_id);
+      assets = d.assets || [];
+    } catch (e) { toast.error(errMsg(e)); }
+    const byCode = new Map(assets.flatMap((a) => [a.unique_serial_number, a.serial_number].filter(Boolean).map((c) => [String(c).toUpperCase(), a])));
+    const termsOf = (l) => byCode.get(String(l.ttspl_id || '').toUpperCase()) || byCode.get(String(l.serial_number || '').toUpperCase()) || null;
+    laptops = laptops.map((l) => ({ ...l, terms: termsOf(l) }));
     if (!laptops.length) {
-      try {
-        const { data: d } = await fetchCustomerLaptops(tk.customer_id);
-        laptops = (d.assets || []).map((a) => {
-          const [brand, ...rest] = String(a.model_name || '').split(' ');
-          return { key: `a${a.id}`, ttspl_id: a.unique_serial_number, unique_serial_number: a.unique_serial_number, serial_number: a.serial_number, brand, model: rest.join(' '), ram: a.ram, storage: a.storage, generation: a.generation, is_wfh: a.is_wfh };
-        });
-      } catch (e) { toast.error(errMsg(e)); }
+      laptops = assets.map((a) => {
+        const [brand, ...rest] = String(a.model_name || '').split(' ');
+        return { key: `a${a.id}`, ttspl_id: a.unique_serial_number, unique_serial_number: a.unique_serial_number, serial_number: a.serial_number, brand, model: rest.join(' '), ram: a.ram, storage: a.storage, generation: a.generation, is_wfh: a.is_wfh, terms: a };
+      });
     }
     const selected = sourceItem ? { [`i${sourceItem.id}`]: true } : (laptops.length === 1 ? { [laptops[0].key]: true } : {});
     const first = laptops.find((l) => selected[l.key]) || laptops[0];
@@ -89,11 +100,15 @@ export default function TicketActions({ data, techs, reload }) {
     if (!chosen.length) { toast.error('Pick the laptop(s) to collect'); return; }
     const err = dispatchError(pk.dispatch);
     if (err) { toast.error(err); return; }
+    if (pk.pickup_type === 'return') {
+      const locked = chosen.filter((l) => l.terms?.lock_in_active && l.terms?.early_return?.status !== 'approved');
+      if (locked.length) { toast.error(`In lock-in: ${locked.map((l) => l.ttspl_id).join(', ')} — ask for an early return first`); return; }
+    }
     run(() => createPickup(tk.id, {
       pickup_type: pk.pickup_type,
       ...dispatchBody(pk.dispatch),
       pickup_address: pk.dispatch.address,
-      machines: chosen.map(({ key, is_wfh, ...m }) => m),
+      machines: chosen.map(({ key, is_wfh, terms, ...m }) => m),
       source_item_id: chosen.length === 1 && chosen[0].source_item_id ? chosen[0].source_item_id : undefined,
     }), 'Pickup created with its Return DC');
   };
@@ -129,6 +144,40 @@ export default function TicketActions({ data, techs, reload }) {
   };
   const [courier, setCourier] = useState({ courier_name: '', awb_number: '' });
   const [cancelReason, setCancelReason] = useState('');
+
+  /* ---------------- early return (lock-in) ---------------- */
+  const [earlyReturns, setEarlyReturns] = useState([]);
+  const loadEarlyReturns = React.useCallback(() => {
+    fetchEarlyReturns({ customer_id: tk.customer_id })
+      .then(({ data: d }) => setEarlyReturns((d.data || []).filter((r) => Number(r.support_ticket_id) === Number(tk.id))))
+      .catch(() => setEarlyReturns([]));
+  }, [tk.customer_id, tk.id]);
+  useEffect(() => { loadEarlyReturns(); }, [loadEarlyReturns]);
+  const [er, setEr] = useState(null);
+  const openEarlyReturn = (laptops) => {
+    setEr({ laptops, planned: new Date().toISOString().slice(0, 10), reason: '' });
+    setOpen('earlyReturn');
+  };
+  const submitEarlyReturn = async () => {
+    if (er.reason.trim().length < 3) { toast.error('Why does the customer want to return early?'); return; }
+    setBusy(true);
+    try {
+      for (const l of er.laptops) {
+        await createEarlyReturn({ serial_id: l.terms.id, ticket_id: tk.id, planned_return_date: er.planned, reason: er.reason.trim() });
+      }
+      toast.success('Early return sent to Sales — the pickup can be made once Accounts approve');
+      setOpen(null);
+      loadEarlyReturns();
+      if (pk) setPk(null);
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+  const withdrawEarlyReturn = async (r) => {
+    if (!window.confirm(`Withdraw the early-return request for ${r.asset_code}? The customer keeps the laptop.`)) return;
+    try { await cancelEarlyReturn(r.id, 'Withdrawn by Support'); toast.success('Withdrawn'); loadEarlyReturns(); } catch (e) { toast.error(errMsg(e)); }
+  };
+  const lockedInPickup = pk && pk.pickup_type === 'return'
+    ? pk.laptops.filter((l) => pk.selected[l.key] && l.terms?.lock_in_active && l.terms?.early_return?.status !== 'approved')
+    : [];
 
   /* ---------------- replacement ---------------- */
   const [rep, setRep] = useState(null);
@@ -233,6 +282,18 @@ export default function TicketActions({ data, techs, reload }) {
         {tk.return_dc_number ? (
           <p>Return DC <DocNumber value={tk.return_dc_number} /> · {onRdc.length} laptop(s) · {onRdc.map((i) => i.pickup_method || 'not dispatched').filter((v, x, a) => a.indexOf(v) === x).join(', ')}</p>
         ) : <p className="text-ink-3">No pickup on this ticket.</p>}
+        {earlyReturns.length > 0 && (
+          <DataTable
+            columns={[
+              { key: 'l', header: 'Early return', render: (r) => <DocNumber value={r.asset_code} />, sub: (r) => `Lock-in till ${fmtDay(r.lock_in_end_date)} · ${r.remaining_days} days` },
+              { key: 's', header: 'Status', render: (r) => EARLY_RETURN_LABEL[r.status] || r.status, sub: (r) => r.sales_note || r.accounts_note || r.reason },
+              { key: 'a', header: 'Charge', numeric: true, render: (r) => (r.approved_amount != null ? <Money value={r.approved_amount} /> : (r.proposed_amount != null ? <Money value={r.proposed_amount} /> : <Money value={r.full_amount} />)), sub: (r) => (r.approved_amount != null ? 'approved' : r.proposed_amount != null ? 'proposed' : 'full') },
+              { key: 'x', header: '', render: (r) => (['pending_sales', 'pending_accounts', 'approved'].includes(r.status) ? <Button variant="quiet" onClick={() => withdrawEarlyReturn(r)}>Withdraw</Button> : null) },
+            ]}
+            rows={earlyReturns}
+            rowKey={(r) => r.id}
+          />
+        )}
       </Section>
 
       {/* Replacement */}
@@ -312,10 +373,39 @@ export default function TicketActions({ data, techs, reload }) {
             <div>
               <div className="c-label">Laptops</div>
               {pk.laptops.length === 0 ? <p className="text-ink-3">No laptops found for this customer.</p> : pk.laptops.map((l) => (
-                <Checkbox key={l.key} label={`${l.ttspl_id || l.serial_number} — ${[l.brand, l.model].filter(Boolean).join(' ')}${l.is_wfh ? ' · work from home' : ''}`} checked={Boolean(pk.selected[l.key])} onChange={(e) => setPk({ ...pk, selected: { ...pk.selected, [l.key]: e.target.checked } })} />
+                <div key={l.key}>
+                  <Checkbox label={`${l.ttspl_id || l.serial_number} — ${[l.brand, l.model].filter(Boolean).join(' ')}${l.is_wfh ? ' · work from home' : ''}`} checked={Boolean(pk.selected[l.key])} onChange={(e) => setPk({ ...pk, selected: { ...pk.selected, [l.key]: e.target.checked } })} />
+                  {termsText(l.terms) && <div style={{ marginLeft: '1.6rem', fontSize: '12px' }}><TermsBadge laptop={l.terms} /></div>}
+                </div>
               ))}
             </div>
+            {lockedInPickup.length > 0 && (
+              <Notice
+                tone="warn"
+                title="Lock-in not complete"
+                action={lockedInPickup.every((l) => !l.terms.early_return) && <Button onClick={() => openEarlyReturn(lockedInPickup)}>Ask for early return</Button>}
+              >
+                {lockedInPickup.map((l) => `${l.ttspl_id} (till ${fmtDay(l.terms.lock_in_end_date)})`).join(', ')} cannot be returned yet.
+                {lockedInPickup.some((l) => l.terms.early_return)
+                  ? ' An early-return request is already with Sales / Accounts — the pickup can be made once it is approved.'
+                  : ' Raise an early return: Sales agrees the charge with the customer, Accounts approve it, then schedule the pickup.'}
+              </Notice>
+            )}
             <DispatchFields value={pk.dispatch} onChange={(d) => setPk({ ...pk, dispatch: d })} technicians={techs} addressLabel="Pickup address" />
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer open={open === 'earlyReturn'} onClose={() => setOpen(null)} title="Ask for early return" footer={<Button variant="primary" disabled={busy} onClick={submitEarlyReturn}>Send to Sales</Button>}>
+        {er && (
+          <div className="c-stack">
+            <p>
+              {er.laptops.map((l) => `${l.ttspl_id} (lock-in till ${fmtDay(l.terms.lock_in_end_date)}, ₹${Number(l.terms.monthly_rate || 0).toLocaleString('en-IN')}/month)`).join(', ')}.
+              Sales will agree the charge with the customer — full remaining rent, a negotiated amount, or waive — and Accounts approve it.
+              The approved amount goes on the customer&apos;s next invoice.
+            </p>
+            <Field label="Planned return date" required><Input type="date" value={er.planned} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setEr({ ...er, planned: e.target.value })} /></Field>
+            <Field label="Why the customer wants to return early" required><Textarea rows={3} value={er.reason} onChange={(e) => setEr({ ...er, reason: e.target.value })} /></Field>
           </div>
         )}
       </Drawer>

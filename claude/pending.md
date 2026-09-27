@@ -22,6 +22,10 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    quotes / SO.
 6. **Live merges of 27 Sep** — billing (no double day, first order only on delivery,
    security kept, SO rate per customer), OTP in ticket sidebar, Return DC config view.
+6a. **Lock-in + early return, gorefurbo warranty** — built 27 Sep (`claude/carret-lockin-warranty.md`):
+   replacement keeps the original lock-in end; return pickup blocked in lock-in; early return
+   Support → Sales → Accounts → "Lock-in break" charge; sold laptop out of warranty = paid repair,
+   service charges → SVO service order + Zoho invoice.
 
 ## B. Still to build in the new UI — one at a time
 7. **Customer returns / rental end** — return challans, return pickup, receive, back to
@@ -43,7 +47,8 @@ the new interface with its own menu; "Old UI" in the new header goes back.
 17. Rented-from-vendor laptops: show a purchase-equivalent cost, or monthly rent only?
 
 ## D. Promotion to live (after sign-off) — `claude/production-promotion-checklist.md`
-18. Run on live, in order, with backups: migrations 327–349 (Support v2 301–326 is a
+18. Run on live, in order, with backups: migrations 327–352 (350–352 = lock-in / warranty,
+    then `scripts/backfill-lockin-warranty.js` dry-run → --commit) (Support v2 301–326 is a
     separate decision; 323 stays back), `sync-po-receive-status.js`, floor-ticket clean-up,
     config-drift fix, `fix-rental-start-dates.js` (~1,025 laptops start 2027-02-07 on live).
 19. Merge new_stagging_crm into live (merge, never overwrite); `REACT_APP_CARRET=1` is in

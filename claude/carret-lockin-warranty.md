@@ -75,3 +75,29 @@
 3. Warranty: stamping, asset API, forced chargeable parts, replacement refusal.
 4. Service charges + service SO + sale-invoice queue.
 5. Screens, build, QA click-through list.
+
+## Status 27 Sep 2026 — built on QA
+- Migrations 350–352 applied to QA; backfill committed (3,040 rented + 287 sold stamped; 403
+  rented in lock-in today, 98 replacements traced to the original laptop; 100 rented laptops
+  have no rent start, so no lock-in).
+- Backend: `lockInWarrantyService`, `lockInBreakService` (/api/early-returns),
+  `supportServiceBillingService` (/api/service-billing). Tests: `test/lockInWarranty.test.js`.
+- Screens: New ticket (lock-in / warranty column + notices), ticket record (pickup blocks a
+  locked return and offers "Ask for early return"; early returns listed; warranty per laptop;
+  Service charges panel), Sell / Serve / Money → Early Returns, Money → Service Billing.
+
+### QA click-through
+1. New ticket for a customer with a laptop in lock-in (e.g. customer 263, TTSPL4317) → the
+   column shows "Lock-in till 21 Feb 2027".
+2. Ticket → Schedule pickup → Return → the lock-in notice → Ask for early return.
+3. Sell → Early Returns → Propose (negotiated) → Money → Early Returns → Decide → Approve.
+4. Money → Support charges to bill shows the "Lock-in break" line; the ticket's pickup now goes through.
+5. Sold laptop out of warranty (e.g. customer 279, TTSPL1025): ticket shows "OUT of warranty";
+   Start replacement is refused; a part request is charged automatically; add a service charge.
+6. Money → Service Billing → approve → Raise service order → Attach invoice.
+7. A replacement delivered for a rented laptop keeps the old lock-in end (Asset record / API).
+
+### Not done / later
+- Customer portal: a return request is accepted as before; the lock-in stops it at conversion
+  (Support then raises the early return). The portal does not show lock-in yet.
+- The old ticket screens show the server's lock-in / warranty message but no new buttons.

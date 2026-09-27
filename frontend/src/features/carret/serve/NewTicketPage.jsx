@@ -8,6 +8,7 @@ import {
 import { createTicket, fetchCustomerLaptops, searchCustomers } from './serveApi';
 import { IssuePicker, emptyIssue, issueComplete, useIssueCatalog } from './IssueFields';
 import { errMsg } from './serveShared';
+import TermsBadge from './TermsBadge';
 
 /**
  * Serve → New ticket (support lead, claude/carret-support.md step 4).
@@ -104,6 +105,7 @@ export default function NewTicketPage() {
     { key: 'x', header: '', width: '2.5rem', render: (a) => <input type="checkbox" aria-label={`Pick ${a.unique_serial_number}`} checked={Boolean(picked[a.id])} onChange={() => toggle(a)} onClick={(e) => e.stopPropagation()} /> },
     { key: 't', header: 'Laptop', render: (a) => <DocNumber value={a.unique_serial_number || a.serial_number} />, sub: (a) => a.model_name },
     { key: 's', header: 'Specs', render: (a) => [a.processor, a.ram, a.storage].filter(Boolean).join(' · ') || '—' },
+    { key: 'l', header: 'Lock-in / warranty', render: (a) => <TermsBadge laptop={a} /> },
     { key: 'w', header: '', render: (a) => (a.is_wfh ? <span style={{ color: 'var(--alert-warn)', fontWeight: 600 }}>Work from home</span> : null) },
   ];
 
@@ -137,6 +139,19 @@ export default function NewTicketPage() {
           <Section title={`2 · Which laptop(s)${chosen.length ? ` · ${chosen.length} picked` : ''}`}>
             {laptops === null ? <EmptyState title="Loading…" /> : (
               <DataTable columns={cols} rows={laptops} rowKey={(a) => a.id} onRowClick={toggle} empty={<EmptyState title="No laptops with this customer" />} />
+            )}
+            {chosen.some((a) => a.lock_in_active) && (
+              <Notice tone="warn" title="In lock-in">
+                {chosen.filter((a) => a.lock_in_active).map((a) => a.unique_serial_number).join(', ')} cannot be returned before the lock-in ends
+                unless Sales and Accounts approve an early return (raise it from the ticket). Repair and replacement are not affected —
+                a replacement keeps the same lock-in end date.
+              </Notice>
+            )}
+            {chosen.some((a) => a.deal === 'sale' && a.warranty_status !== 'in') && (
+              <Notice tone="crit" title="Out of warranty — chargeable">
+                {chosen.filter((a) => a.deal === 'sale' && a.warranty_status !== 'in').map((a) => a.unique_serial_number).join(', ')}:
+                paid repair only. Parts are charged and a service charge can be added; no free replacement.
+              </Notice>
             )}
             {wfhChosen.length > 0 && (
               <Notice tone="warn" title="Work from home">
