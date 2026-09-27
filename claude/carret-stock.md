@@ -50,3 +50,19 @@
 6. **Clean-up CSVs** (ST-D4) in `claude/reports/stock-cleanup-*.csv` + apply script (after review).
 7. **After review**: `asset_available` = QC-passed only (today 286 un-QC'd laptops are
    attachable; D5 had left qc_status out because it was unreliable — the clean-up fixes that).
+
+## Status 27 Sep 2026 — built on QA
+- Backend d55df2f4, screens e0d92859 (pushed). Migration 353 applied to QA.
+- Clean-up (ST-D4): `claude/reports/stock-cleanup-{1..6}-*-QA-2026-09-27.csv` + README (git-ignored,
+  on the box). `scripts/stock-cleanup-report.js` regenerates them (`--tag LIVE-<date>` at promotion);
+  `scripts/apply-stock-cleanup.js` dry-run = 374 high-confidence rows, 0 stale / 0 failed; `--commit`
+  only after the user's review. Biggest: 92 of 96 "rented, no customer" were really SOLD.
+- Still after review: `asset_available` = QC-passed only (build step 7).
+
+### QA click-through
+1. Stock → Assets: search a TTSPL / PO / customer; views and filters; open a laptop → Stock panel.
+2. Stock → Ready stock: 8 untagged / no slot first; tag one, put it in a slot, send one to QC.
+3. A laptop in repair → Scrap… → someone else approves on Stock → Scrap → To hand over → enter
+   buyer price → raise the scrap challan → dispatch it on the challan page.
+4. Stock → Not earning: 30 / 60 / 90 days; reasons; costs.
+5. Old Asset Movements: moving to Dead / Missing / Ready is refused with the reason.
