@@ -32,8 +32,9 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    stock, NPA.
 8. **Money** — vendor bills, credit / debit notes, security deposits, payments, DC / sale /
    e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
-9. **Stock** — ready to rent / sell, asset movements, scrap, master data, customer
-   inventory, asset configuration.
+9. **Stock** — BUILT on QA 27 Sep (`claude/carret-stock.md`): assets, ready stock (tag + slot),
+   not earning, scrap (request → approve → challan). Waiting: click-through + review of the
+   clean-up CSVs (`claude/reports/stock-cleanup-*`), then apply + asset_available = QC-passed.
 10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
     technicians, dispatch QC link.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
