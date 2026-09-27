@@ -6731,6 +6731,34 @@ exports.updateSoLineRate = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
     }
 
+    // A replacement bills at the returned laptop's rate, so its SO line is not
+    // priced by hand: SO/26-27/1342 was edited from 1300 to 1999 and the
+    // replacement would have billed 1999. Only a super admin may correct it, and
+    // that correction becomes the replacement order's carried rate too.
+    const replacementRes = await client.query(
+      `SELECT id, old_machine_serial, old_rent_monthly_rate
+         FROM support_replacement_orders
+        WHERE sales_order_line_id = $1 AND status <> 'cancelled'`,
+      [lineId]
+    );
+    if (replacementRes.rows.length) {
+      const ro = replacementRes.rows[0];
+      const oldRate = Number(ro.old_rent_monthly_rate || 0);
+      if (oldRate > 0 && roundedRate !== oldRate && req.user?.role !== 'super_admin') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `This is a replacement for ${ro.old_machine_serial || 'the returned laptop'}, `
+            + `so its rate stays at that laptop's ₹${oldRate}. Ask a super admin if that rate is wrong.`,
+        });
+      }
+      await client.query(
+        `UPDATE support_replacement_orders SET old_rent_monthly_rate = $1
+          WHERE sales_order_line_id = $2 AND status <> 'cancelled'`,
+        [roundedRate, lineId]
+      );
+    }
+
     const upd = await client.query(
       `UPDATE sales_order_lines SET rate = $1, updated_at = NOW()
         WHERE id = $2
