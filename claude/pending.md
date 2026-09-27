@@ -33,8 +33,10 @@ the new interface with its own menu; "Old UI" in the new header goes back.
 8. **Money** — vendor bills, credit / debit notes, security deposits, payments, DC / sale /
    e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
 9. **Stock** — BUILT on QA 27 Sep (`claude/carret-stock.md`): assets, ready stock (tag + slot),
-   not earning, scrap (request → approve → challan). Waiting: click-through + review of the
-   clean-up CSVs (`claude/reports/stock-cleanup-*`), then apply + asset_available = QC-passed.
+   not earning, scrap (request → approve → challan). asset_available = QC-passed (354, done).
+   Waiting: the user runs `node scripts/apply-stock-cleanup.js --include-medium --commit`
+   (398 rows; the agent's run was refused by the permission check) + 13 REVIEW rows checked
+   physically + 5 asset-config duplicates merged by hand.
 10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
     technicians, dispatch QC link.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
