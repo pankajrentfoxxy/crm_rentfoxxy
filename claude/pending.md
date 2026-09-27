@@ -34,9 +34,9 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
 9. **Stock** — BUILT on QA 27 Sep (`claude/carret-stock.md`): assets, ready stock (tag + slot),
    not earning, scrap (request → approve → challan). asset_available = QC-passed (354, done).
-   Waiting: the user runs `node scripts/apply-stock-cleanup.js --include-medium --commit`
-   (398 rows; the agent's run was refused by the permission check) + 13 REVIEW rows checked
-   physically + 5 asset-config duplicates merged by hand.
+   Clean-up applied on QA 27 Sep by the user (398 rows, backup
+   backend/backups/stock-cleanup-2026-09-27T22-03-38-587Z.json). Waiting: click-through, the 13
+   REVIEW rows checked physically, 5 asset-config duplicates merged by hand.
 10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
     technicians, dispatch QC link.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
