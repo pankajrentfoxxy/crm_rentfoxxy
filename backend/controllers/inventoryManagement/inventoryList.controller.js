@@ -57,7 +57,8 @@ const listValidators = [
   query('screen_size').optional().isString().trim(),
   query('gpu').optional().isString().trim(),
   query('cursor').optional().isString().trim(),
-  query('ticket_stage_filter').optional().isIn(['all', 'qc1_qc2']),
+  // dispatch_qc is handled by inventoryListQuery; the validator refused it (QC Process → Dispatch QC gave 400).
+  query('ticket_stage_filter').optional().isIn(['all', 'qc1_qc2', 'dispatch_qc']),
 ];
 
 async function listInventory(req, res) {
@@ -260,7 +261,9 @@ async function exportInventoryExcel(req, res) {
       if (segment === 'passed') {
         return {
           ...base,
-          'Tagged As': r.inventory_tag || '',
+          // 'sales' is the legacy spelling of 'sale'.
+          'Tagged As': ({ rental: 'Rent', sale: 'Sell', sales: 'Sell', both: 'Rent or sell' })[String(r.inventory_tag || '').toLowerCase()] || r.inventory_tag || '',
+          Location: r.warehouse_location || (r.warehouse_carret ? `Carret ${r.warehouse_carret} / Slot ${r.warehouse_carret_slot}` : ''),
           'SO Attached': r.so_attachment?.sales_order_number || '',
           'SO Customer': r.so_attachment?.customer_name || '',
         };
@@ -1027,9 +1030,14 @@ async function updateWarehouseLocation(req, res) {
     });
   } catch (e) {
     await client.query('ROLLBACK');
+    // Two people picking the same slot at once: the unique index wins — say so
+    // instead of a 500 with the raw database message.
+    if (e.code === '23505') {
+      return res.status(409).json({ success: false, message: 'That slot was just taken — choose another' });
+    }
     const status = e.status || 500;
-    console.error('updateWarehouseLocation', e);
-    res.status(status).json({ success: false, message: e.message || 'Failed to update location' });
+    if (status >= 500) console.error('updateWarehouseLocation', e);
+    return res.status(status).json({ success: false, message: e.message || 'Failed to update location' });
   } finally {
     client.release();
   }

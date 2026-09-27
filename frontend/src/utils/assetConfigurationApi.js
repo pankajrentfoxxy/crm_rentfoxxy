@@ -108,11 +108,6 @@ export const bulkAddBrandProcessors = (brandId, processorIds) =>
   api.post(`${base}/mappings/laptop-spec/processors/bulk-add`, { brand_id: brandId, processor_ids: processorIds });
 export const bulkAddBrandGenerations = (brandId, generationIds) =>
   api.post(`${base}/mappings/laptop-spec/generations/bulk-add`, { brand_id: brandId, generation_ids: generationIds });
-export const bulkAddBrandProcessorGenerations = (brandId, processorId, generationIds) =>
-  api.post(`${base}/mappings/laptop-spec/generations/bulk-add`, {
-    brand_id: brandId,
-    generation_ids: generationIds,
-  });
 export const bulkDeleteBrandModels = (ids) =>
   api.post(`${base}/mappings/laptop-spec/models/bulk-delete`, { ids });
 export const bulkDeleteBrandProcessors = (ids) =>

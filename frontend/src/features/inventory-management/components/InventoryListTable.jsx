@@ -20,14 +20,12 @@ import {
   moveQcPendingToQcProcess,
   moveDeadToQcProcess,
   tagInventorySerial,
-  updateInventorySerialRemark,
-  updateReadyToRentSaleAction
+  updateInventorySerialRemark
 } from '../inventoryManagementApi';
 import {
   INVENTORY_API_SEGMENT_BY_ROUTE,
   INVENTORY_PAGE_META,
-  OUT_FOR_REPAIR_INVENTORY_ACTIONS,
-  READY_TO_RENT_SALE_ACTIONS
+  OUT_FOR_REPAIR_INVENTORY_ACTIONS
 } from '../inventoryStatusConfig';
 import { invalidateInventoryManagement } from '../inventoryCountsEvents';
 import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
@@ -645,52 +643,6 @@ function CreateProductionTicketButton({ row, onUpdated, returnState }) {
   );
 }
 
-function ReadyToRentActionSelect({ row, onUpdated }) {
-  const [saving, setSaving] = useState(false);
-  const current = READY_TO_RENT_SALE_ACTIONS.some((o) => o.value === row.status2) ? row.status2 : '';
-
-  const handleChange = async (e) => {
-    const selected = e.target.value;
-    if (!selected || saving) return;
-    setSaving(true);
-    try {
-      const { data } = await updateReadyToRentSaleAction({
-        serial_number_id: row.serial_id,
-        serial_number: row.serial_number,
-        selected_value: selected
-      });
-      if (data.success) {
-        toast.success(data.message || 'Action taken successfully!');
-        onUpdated?.();
-      } else {
-        toast.error(data.message || 'Failed to update');
-        e.target.value = current;
-      }
-    } catch (err) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to update');
-      e.target.value = current;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <select
-      key={`${row.serial_id}-${current}`}
-      defaultValue={current}
-      onChange={handleChange}
-      disabled={saving}
-      className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs min-w-[10rem] disabled:opacity-60"
-    >
-      <option value="">Take Action</option>
-      {READY_TO_RENT_SALE_ACTIONS.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
-  );
-}
 
 function SparePartRow({ row }) {
   return (
@@ -1218,7 +1170,9 @@ export default function InventoryListTable({ routeKey }) {
                   {showReadyToRentAction ? (
                     <td className="px-3 py-3">
                       <div className="flex flex-col gap-2 min-w-[11rem]">
-                        <ReadyToRentActionSelect row={row} onUpdated={load} />
+                        {/* "Take Action" (normal / clearance / rent sale) removed: it wrote
+                            extra.status2, which nothing reads (claude/carret-stock.md, ST-D3).
+                            Use the rent / sell tag instead. */}
                         {canEditInventory ? (
                           <MoveToQcProcessButton row={row} onUpdated={load} />
                         ) : null}

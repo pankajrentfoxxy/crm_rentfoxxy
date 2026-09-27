@@ -70,6 +70,7 @@ export const APPLICATION_SECTIONS = [
   'support_part_challan',
   'support_part_requests',
   'customer_inventory',
+  'customer_assets',
   'ttspl_history',
   'warehouse',
   'dispatch',
@@ -187,6 +188,9 @@ export const SECTION_LABELS = {
   support_part_challan: 'Support Part Queue',
   support_part_requests: 'Technician Parts Bucket',
   customer_inventory: 'Customer Inventory',
+  // Enforced by the backend (customer laptops / edit asset / exports) but was missing here,
+  // so the Roles & Permissions screen could not manage it.
+  customer_assets: 'Customer Assets (edit rate / export)',
   dispatch_workflow: 'Dispatch Workflow',
   dispatch_pending_orders: 'Dispatch Pending Orders',
   ttspl_history: 'TTSPL History',
@@ -246,7 +250,7 @@ export const SECTION_GROUPS = {
   Inventory: [
     'inventory', 'inventory_management', 'inventory_asset_movement', 'qc_add_laptop', 'qc_move_to_ticket', 'qc_create_production_ticket',
     'ready_to_rent_location',
-    'customer_inventory', 'ttspl_history',
+    'customer_inventory', 'customer_assets', 'ttspl_history',
   ],
   'Part Management': [
     'parts_dashboard',

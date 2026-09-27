@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import ConfigEntityPanel from './components/ConfigEntityPanel';
 import LaptopMappingPanel from './components/LaptopMappingPanel';
 import BluedartDeclaredValuePanel from './components/BluedartDeclaredValuePanel';
@@ -170,9 +170,6 @@ export default function LaptopConfigurationPage() {
         <LaptopMappingPanel />
       )}
 
-      <p className="text-xs text-gray-400 mt-6">
-        Legacy settings URL: <Link to="/settings/asset-configuration" className="text-blue-600 hover:underline">/settings/asset-configuration</Link> redirects here.
-      </p>
     </div>
   );
 }

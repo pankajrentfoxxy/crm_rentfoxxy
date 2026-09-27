@@ -115,8 +115,11 @@ function offShelfInventoryFilterSql(alias = 's') {
  * Keep in sync with buildListWhere('passed', …).
  */
 function readyToRentOrSellMatchSql(alias = 's') {
+  // QC-passed, like buildListWhere('passed'): without it a qc_pending / pending
+  // unit could be given a carret slot (claude/carret-stock.md, ST-D3).
   return `(
     ${alias}.po_id IS NOT NULL
+    AND LOWER(COALESCE(${alias}.qc_status, ${alias}.extra->>'status', '')) = 'passed'
     AND EXISTS (
       SELECT 1 FROM vendor_purchase_orders p
        WHERE p.po_id = ${alias}.po_id AND p.deleted_at IS NULL

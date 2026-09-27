@@ -30,7 +30,7 @@ const PAGE_SIZE = 25;
 
 const STATUS_OPTIONS = [
   'in_stock', 'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
-  'returned', 'in_repair', 'qc_failed', 'scrapped',
+  'returned', 'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor',
 ];
 
 const LOCATION_OPTIONS = [

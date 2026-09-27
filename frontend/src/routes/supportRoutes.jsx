@@ -9,9 +9,12 @@ import SupportPartsApp from '../features/support/SupportPartsApp';
 export const supportRoutes = [
   {
     // DEPRECATED: customer_inventory is no longer a source of truth.
-    // "Assets with Customer" is now a tab on the customer detail page.
+    // The fleet with customers is Deployed Fleet (guarded by the same
+    // customer_inventory section the menu uses); per customer it is the
+    // Assets tab on the customer page. It sent users to the customer list,
+    // which needs a different section.
     path: '/customer-inventory',
-    element: <Navigate to="/lead-crm/customers" replace />,
+    element: <Navigate to="/inventory-management/customer-assets" replace />,
   },
   {
     path: '/support/*',

@@ -1926,6 +1926,19 @@ exports.updatePartInstance = async (req, res) => {
     }
     const inst = instRes.rows[0];
 
+    // On a scrap challan the unit belongs to that challan: changing its status
+    // or cost here made the dispatch fail ("no longer discarded") and left the
+    // challan's value out of date. Cancel the draft challan first.
+    if (inst.scrap_challan_number
+      && ((status !== undefined && status !== null && status !== inst.status)
+        || (unit_cost !== undefined && unit_cost !== null && Number(unit_cost) !== Number(inst.unit_cost)))) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `This unit is on scrap challan ${inst.scrap_challan_number} — cancel that challan before changing its status or cost`,
+      });
+    }
+
     let nextStatus = inst.status;
     if (status !== undefined && status !== null && status !== inst.status) {
       if (!EDITABLE_INSTANCE_STATUSES.includes(status)) {

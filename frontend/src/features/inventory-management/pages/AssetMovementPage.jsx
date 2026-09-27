@@ -16,6 +16,15 @@ export const BUCKET_OPTIONS = [
   { value: 'missing', label: 'Missing Laptop' }
 ];
 
+/**
+ * Where a laptop may be moved TO (claude/carret-stock.md): back to QC Pending or
+ * into QC Process. Into Ready happens only by scanning into a carret slot on
+ * Production → Into stock; scrapping is a request a manager approves (Stock →
+ * Scrap); "missing" is not a status. Dead / missing stay as buckets to show.
+ */
+const MOVE_TO_VALUES = ['qc_pending', 'qc_process'];
+const MOVE_FROM_VALUES = ['qc_pending', 'qc_process', 'passed'];
+
 const MAX_BATCH = 100;
 
 function parseTerms(input) {
@@ -172,13 +181,13 @@ export default function AssetMovementPage() {
 
   useEffect(() => {
     if (moveTo === moveFrom) {
-      const fallback = BUCKET_OPTIONS.find((o) => o.value !== moveFrom);
+      const fallback = BUCKET_OPTIONS.find((o) => MOVE_TO_VALUES.includes(o.value) && o.value !== moveFrom);
       if (fallback) setMoveTo(fallback.value);
     }
   }, [moveFrom, moveTo]);
 
   const moveToOptions = useMemo(
-    () => BUCKET_OPTIONS.filter((o) => o.value !== moveFrom),
+    () => BUCKET_OPTIONS.filter((o) => MOVE_TO_VALUES.includes(o.value) && o.value !== moveFrom),
     [moveFrom]
   );
 
@@ -321,7 +330,7 @@ export default function AssetMovementPage() {
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => setMoveFrom(opt.value)}
+                    onClick={() => (MOVE_FROM_VALUES.includes(opt.value) ? setMoveFrom(opt.value) : toast.error(`${opt.label} laptops cannot be moved here`))}
                     className={`rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors ${
                       moveFrom === opt.value
                         ? 'bg-teal-700 text-white border-teal-700'
@@ -351,7 +360,7 @@ export default function AssetMovementPage() {
             >
               <option value="">Select current category…</option>
               {BUCKET_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value} disabled={!(bucketCounts.counts[opt.value] > 0)}>
+                <option key={opt.value} value={opt.value} disabled={!MOVE_FROM_VALUES.includes(opt.value) || !(bucketCounts.counts[opt.value] > 0)}>
                   {opt.label} ({bucketCounts.counts[opt.value] || 0})
                 </option>
               ))}

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchParentOptions } from '../../../../utils/assetConfigurationApi';
+import { usePermission } from '../../../../hooks/usePermission';
 
 export default function ConfigEntityPanel({
   label,
@@ -14,6 +15,11 @@ export default function ConfigEntityPanel({
   deleteFn,
   setStatusFn,
 }) {
+  // The backend refuses these without the grant; hide what the user cannot do.
+  const { hasPermission } = usePermission();
+  const canCreate = hasPermission('asset_configuration', 'create');
+  const canEdit = hasPermission('asset_configuration', 'edit');
+  const canDelete = hasPermission('asset_configuration', 'delete');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -122,10 +128,12 @@ export default function ConfigEntityPanel({
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <p className="text-sm text-gray-500">Manage {label.toLowerCase()} values for asset details forms.</p>
-        <button type="button" onClick={openCreate}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
-          <Plus className="w-4 h-4" /> Add {label}
-        </button>
+        {canCreate && (
+          <button type="button" onClick={openCreate}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+            <Plus className="w-4 h-4" /> Add {label}
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
@@ -173,7 +181,7 @@ export default function ConfigEntityPanel({
                       </td>
                     )}
                     <td className="px-4 py-3">
-                      <button type="button" onClick={() => toggleStatus(row)}
+                      <button type="button" onClick={() => toggleStatus(row)} disabled={!canEdit}
                         className={`text-xs px-2 py-0.5 rounded-full ${row.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                         {row.status === 'active' ? 'Active' : 'Inactive'}
                       </button>
@@ -183,12 +191,16 @@ export default function ConfigEntityPanel({
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-2">
-                        <button type="button" onClick={() => openEdit(row)} className="p-1.5 text-gray-600 hover:bg-gray-100 rounded" title="Edit">
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button type="button" onClick={() => remove(row)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {canEdit && (
+                          <button type="button" onClick={() => openEdit(row)} className="p-1.5 text-gray-600 hover:bg-gray-100 rounded" title="Edit">
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button type="button" onClick={() => remove(row)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

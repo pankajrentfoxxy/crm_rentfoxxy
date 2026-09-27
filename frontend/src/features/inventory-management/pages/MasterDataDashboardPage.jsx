@@ -40,7 +40,7 @@ const TABS = [
 
 const STATUS_OPTIONS = [
   'in_stock', 'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
-  'returned', 'in_repair', 'qc_failed', 'scrapped', 'dispatch_ready', 'out_stock',
+  'returned', 'in_repair', 'qc_failed', 'scrapped', 'dispatch_ready', 'returned_to_vendor',
 ];
 
 function sameStatusSet(selected, expected) {
