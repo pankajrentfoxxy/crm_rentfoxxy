@@ -233,7 +233,7 @@ async function listChargesToBill({ customerId } = {}) {
   const params = [];
   // Spare parts, plus the lock-in break charge an approved early return raises.
   let where = `WHERE l.status = 'APPROVED' AND l.billed_in_invoice_id IS NULL
-                 AND (l.source_part_request_id IS NOT NULL OR l.charge_type = 'lock_in_break')`;
+                 AND (l.source_part_request_id IS NOT NULL OR l.charge_type IN ('lock_in_break', 'damage'))`;
   if (customerId) { params.push(Number(customerId)); where += ` AND l.customer_id = $${params.length}`; }
   const { rows } = await pool.query(
     `SELECT l.extra_line_id, l.customer_id, COALESCE(c.company_name, c.name) AS customer_name, l.description, l.charge_type,
@@ -298,8 +298,8 @@ async function addChargesToDraftInvoice(client, { invoiceId, extraLineIds, user 
       `INSERT INTO customer_invoice_lines (invoice_id, brand, model, period_label, amount, line_type)
        VALUES ($1, $4, $2, $5, $3, 'part')`,
       [invoiceId, String(a.description).slice(0, 120), a.amount,
-        a.charge_type === 'lock_in_break' ? 'Lock-in break' : 'Spare part',
-        a.charge_type === 'lock_in_break' ? 'Lock-in' : 'Part']
+        ({ lock_in_break: 'Lock-in break', damage: 'Damage charges' })[a.charge_type] || 'Spare part',
+        ({ lock_in_break: 'Lock-in', damage: 'Damage' })[a.charge_type] || 'Part']
     );
   }
   await client.query(

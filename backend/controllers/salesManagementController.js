@@ -546,7 +546,7 @@ exports.storeQuotation = async (req, res) => {
     const quoteCustomerId = toNullableInt(body.customer_id);
     if (quoteCustomerId) {
       const custRes = await pool.query(
-        `SELECT customer_id, customer_type, status FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type, customer_type_source, status FROM customers WHERE customer_id = $1 LIMIT 1`,
         [quoteCustomerId]
       );
       if (!custRes.rows.length) {
@@ -561,7 +561,7 @@ exports.storeQuotation = async (req, res) => {
           message: 'This customer is inactive and cannot be used on a quotation. Activate the customer first.',
         });
       }
-      if (!isCustomerEligibleForQuotation(custRes.rows[0].customer_type, quotationType)) {
+      if (!isCustomerEligibleForQuotation(custRes.rows[0].customer_type, quotationType, custRes.rows[0].customer_type_source)) {
         return res.status(400).json({
           success: false,
           message: customerTypeMismatchMessage(custRes.rows[0].customer_type, quotationType),
@@ -1175,7 +1175,7 @@ exports.storeSalesOrder = async (req, res) => {
 
     if (customerId) {
       const customerExists = await pool.query(
-        `SELECT customer_id, customer_type, status FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type, customer_type_source, status FROM customers WHERE customer_id = $1 LIMIT 1`,
         [customerId]
       );
       if (!customerExists.rows.length) {
@@ -1191,7 +1191,7 @@ exports.storeSalesOrder = async (req, res) => {
         });
       }
       const soQuotationType = body.quotation_type || 'rental';
-      if (!isCustomerEligibleForQuotation(customerExists.rows[0].customer_type, soQuotationType)) {
+      if (!isCustomerEligibleForQuotation(customerExists.rows[0].customer_type, soQuotationType, customerExists.rows[0].customer_type_source)) {
         return res.status(400).json({
           success: false,
           message: customerTypeMismatchMessage(customerExists.rows[0].customer_type, soQuotationType),

@@ -205,7 +205,7 @@ export default function SalesOrderFormPage() {
     const e = {};
     if (!customerId) e.customer = 'Choose the customer';
     const c = (meta?.customers || []).find((x) => String(x.customer_id) === String(customerId));
-    if (c && !isCustomerEligibleForQuotation(c.customer_type, type)) e.customer = customerTypeMismatchMessage(c.customer_type, type);
+    if (c && !isCustomerEligibleForQuotation(c.customer_type, type, c.customer_type_source)) e.customer = customerTypeMismatchMessage(c.customer_type, type);
     const miss = firstMissing(lines, REQUIRED);
     if (miss) e.line = miss;
     if (!inPlace) {

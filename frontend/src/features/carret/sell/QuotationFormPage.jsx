@@ -106,7 +106,7 @@ export default function QuotationFormPage() {
   const onType = (t) => {
     setType(t);
     const c = (meta?.customers || []).find((x) => String(x.customer_id) === String(party.customer_id));
-    if (c && !isCustomerEligibleForQuotation(c.customer_type, t)) {
+    if (c && !isCustomerEligibleForQuotation(c.customer_type, t, c.customer_type_source)) {
       toast(customerTypeMismatchMessage(c.customer_type, t));
       setParty(blankParty);
     }

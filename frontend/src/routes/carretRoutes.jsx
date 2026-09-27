@@ -18,6 +18,11 @@ const NewUiHomePage = React.lazy(() => import('../features/carret/NewUiHomePage'
 const ReadyStockPage = React.lazy(() => import('../features/carret/stock/ReadyStockPage'));
 const NotEarningPage = React.lazy(() => import('../features/carret/stock/NotEarningPage'));
 const ScrapPage = React.lazy(() => import('../features/carret/stock/ScrapPage'));
+const CustomersListPage = React.lazy(() => import('../features/carret/sell/customers/CustomersListPage'));
+const CustomerRecordPage = React.lazy(() => import('../features/carret/sell/customers/CustomerRecordPage'));
+const ReturnChallansPage = React.lazy(() => import('../features/carret/move/ReturnChallansPage'));
+const CustomerReturnChallanPage = React.lazy(() => import('../features/carret/move/ReturnChallanRecordPage'));
+const DamageChargesPage = React.lazy(() => import('../features/carret/serve/DamageChargesPage'));
 const OperationsOverviewPage = React.lazy(() => import('../features/carret/OperationsOverviewPage'));
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
@@ -113,7 +118,10 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/move/deliveries', element: guardAny(['delivery_register_management', 'technician_bucket'], 'view', <DeliveryRegisterPage />) },
       { path: '/carret/move/my-deliveries', element: guardAny(['technician_bucket', 'delivery_my_deliveries'], 'view', <MyDeliveriesPage />) },
       { path: '/carret/move/tracking', element: guard('bluedart_awb_tracking', 'view', <CourierTrackingPage />) },
-      { path: '/carret/move/return-challans', element: guard('return_dc', 'view', <ChallansPage movement="return" />) },
+      // Customer returns (claude/carret-customers-returns-control.md, step 2).
+      { path: '/carret/move/return-challans', element: guard('return_dc', 'view', <ReturnChallansPage />) },
+      { path: '/carret/move/return-challans/:rdcNumber', element: guard('return_dc', 'view', <CustomerReturnChallanPage />) },
+      { path: '/carret/serve/damage', element: guardAny(['damage_charges', 'customer_billing', 'support_tickets', 'return_dc'], 'view', <DamageChargesPage />) },
 
       // Sell (Part 4.5). The RentFoxxy / Gorefurbo split is a filter INSIDE
       // each list (Decision 1), never two branches of the menu.
@@ -130,7 +138,10 @@ export const carretRoutes = CARRET_ENABLED
       // segment and the pages decode the param.
       { path: '/carret/sell/sales-orders/:soNumber', element: guardAny(SO_SECTIONS, 'view', <SalesOrderRecordPage />) },
       { path: '/carret/sell/sales-orders/:soNumber/edit', element: guardAny(SO_SECTIONS, 'edit', <SalesOrderFormPage />) },
-      { path: '/carret/sell/customers', element: guard('customer_management', 'view', <SellListPage kind="customers" />) },
+      // Customers (claude/carret-customers-returns-control.md): list + record with rented /
+      // returned / purchased laptops. Guarded like the backend (customers view).
+      { path: '/carret/sell/customers', element: guardAny(['customers', 'customer_management'], 'view', <CustomersListPage />) },
+      { path: '/carret/sell/customers/:customerId', element: guardAny(['customers', 'customer_management'], 'view', <CustomerRecordPage />) },
 
       // Procure & Produce (Part 5.7). Five procurement lists are one component,
       // like Sell, because they are the same shape.

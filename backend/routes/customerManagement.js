@@ -21,6 +21,15 @@ const upload = multer({
 router.use(authMiddleware);
 router.use(customerScope); // resolves req.allowedCustomerTypes (Customer Access role permission)
 
+// New UI customer list / record (claude/carret-customers-returns-control.md).
+const overview = require('../controllers/customerOverviewController');
+router.get('/overview/customers', cp('customers', 'view'), overview.list);
+router.get('/overview/customers/:customerId', cp('customers', 'view'), overview.get);
+router.get('/overview/customers/:customerId/orders', cp('customers', 'view'), overview.orders);
+// Account closure (SD1): the deposit is refunded only when the account closes — Accounts.
+router.get('/overview/customers/:customerId/closure', cp('customers', 'view'), overview.closureCheck);
+router.post('/overview/customers/:customerId/close', cp('customer_billing', 'edit'), overview.closeAccount);
+
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
 router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);
 router.get('/customers/assets/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomerAssetsExcel);

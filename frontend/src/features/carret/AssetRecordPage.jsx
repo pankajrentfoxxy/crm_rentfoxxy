@@ -129,7 +129,7 @@ export default function AssetRecordPage() {
                   { label: 'Ready', value: stock.is_ready ? 'Yes' : 'No' },
                   { label: 'Use for', value: stock.tag_label || (stock.is_ready ? 'Not tagged' : '—') },
                   { label: 'Carret slot', value: stock.location || (stock.is_ready ? 'No slot' : '—') },
-                  { label: 'Customer', value: stock.customer_name ? <Link to={`/lead-crm/customers/${stock.current_customer_id}`}>{stock.customer_name}</Link> : '—' },
+                  { label: 'Customer', value: stock.customer_name ? <Link to={`/carret/sell/customers/${stock.current_customer_id}`}>{stock.customer_name}</Link> : '—' },
                   { label: 'Purchase order', value: stock.purchase_order_number || '—' },
                   { label: 'Vendor', value: stock.vendor_name || '—' },
                   { label: 'Lock-in till', value: stock.lock_in_end_date ? <DateTime value={stock.lock_in_end_date} /> : '—' },

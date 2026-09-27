@@ -12,6 +12,7 @@ import {
   verifyVisitOtp, workDone,
 } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
+import DamageReportDrawer from './DamageReportDrawer';
 import { FindingFields, emptyFinding, findingBody, findingError, useIssueCatalog } from './IssueFields';
 
 /**
@@ -64,6 +65,7 @@ export default function JobPage() {
   const [chargerOk, setChargerOk] = useState(false);
   const catalog = useIssueCatalog();
   const [finding, setFinding] = useState(null);
+  const [damageOpen, setDamageOpen] = useState(false);
 
   const load = useCallback(() => {
     fetchMyWork()
@@ -244,6 +246,19 @@ export default function JobPage() {
             Hand the laptop in at the gate with Return DC <strong className="font-mono">{job.return_dc_number || '—'}</strong>. The guard scans it in and the job leaves your list.
           </Notice>
         )}
+
+        {/* DM1: damage found at the visit / pickup — part, issue and photo; the warehouse prices it. */}
+        <Button variant="quiet" onClick={() => setDamageOpen(true)} style={{ width: '100%', marginTop: '12px' }}>Report damage on this laptop</Button>
+        <DamageReportDrawer
+          open={damageOpen}
+          onClose={() => setDamageOpen(false)}
+          onDone={() => setDamageOpen(false)}
+          laptop={{ asset_code: job.laptop?.ttspl || job.laptop?.serial }}
+          source={job.kind === 'visit' ? 'technician_visit' : (job.pickup_type === 'repair' ? 'repair_pickup' : 'return_pickup')}
+          ticketId={job.ticket_id}
+          ticketItemId={job.item_id}
+          returnDcNumber={job.return_dc_number || undefined}
+        />
       </div>
     </FieldShell>
   );

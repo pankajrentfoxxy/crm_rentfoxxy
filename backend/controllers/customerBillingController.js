@@ -1873,8 +1873,20 @@ exports.refundSecurityDeposit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Deposit not found' });
     }
     const dep = existing.rows[0];
-    const refund = parseFloat(refund_amount || dep.amount);
-    const totalRefunded = parseFloat(dep.refund_amount || 0) + refund;
+    const already = parseFloat(dep.refund_amount || 0);
+    const remaining = +(parseFloat(dep.amount) - already).toFixed(2);
+    if (remaining <= 0 || dep.status === 'refunded') {
+      return res.status(409).json({ success: false, message: 'This deposit is already fully refunded' });
+    }
+    // With no amount given, refund what is LEFT — not the full deposit again
+    // (a partly refunded deposit was being over-refunded).
+    const refund = refund_amount === undefined || refund_amount === null || refund_amount === ''
+      ? remaining
+      : parseFloat(refund_amount);
+    if (!(refund > 0) || refund > remaining + 0.001) {
+      return res.status(400).json({ success: false, message: `Refund must be more than 0 and at most the Rs ${remaining} still held` });
+    }
+    const totalRefunded = +(already + refund).toFixed(2);
     const newStatus = totalRefunded >= parseFloat(dep.amount) ? 'refunded' : 'partially_refunded';
     const result = await pool.query(
       `UPDATE customer_security_deposits

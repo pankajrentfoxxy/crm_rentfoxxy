@@ -154,10 +154,13 @@ async function processReturnedSerials(db, {
     const warehouseReceivedAt = pickupItem?.warehouse_received_at
       ? new Date(pickupItem.warehouse_received_at)
       : null;
-    const returnDate = warehouseReceivedAt || new Date();
+    // RT1 (claude/carret-customers-returns-control.md): rent stops on the day
+    // the WAREHOUSE receives the laptop, not at pickup. Warehouse receive stamps
+    // rent_end_date (supportController); until then billing keeps the laptop on
+    // rent (billingSchedulerService: open return pickup → no end date).
     await inventorySM.markReturned(db, serialId, {
       reason: dcNumber ? `Picked up via Return DC ${dcNumber}` : 'Picked up (customer return)',
-      rentEndDate: returnDate, actorUserId, actorName,
+      rentEndDate: warehouseReceivedAt, actorUserId, actorName,
     });
 
     // Re-enter QC so it appears in "QC Process Laptops" (qc_status <> 'passed').

@@ -329,7 +329,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       return;
     }
     const selectedCustomer = customers.find((c) => String(c.customer_id) === String(form.customer_id));
-    if (selectedCustomer && !isCustomerEligibleForQuotation(selectedCustomer.customer_type, form.quotation_type)) {
+    if (selectedCustomer && !isCustomerEligibleForQuotation(selectedCustomer.customer_type, form.quotation_type, selectedCustomer.customer_type_source)) {
       toast.error(customerTypeMismatchMessage(selectedCustomer.customer_type, form.quotation_type));
       return;
     }
@@ -459,7 +459,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
                   setForm((f) => {
                     const stillOk = !f.customer_id || isCustomerEligibleForQuotation(
                       customers.find((c) => String(c.customer_id) === String(f.customer_id))?.customer_type,
-                      nextType
+                      nextType,
+                      customers.find((c) => String(c.customer_id) === String(f.customer_id))?.customer_type_source
                     );
                     if (!stillOk) {
                       toast.error(customerTypeMismatchMessage(

@@ -824,6 +824,10 @@ async function buildCustomerInvoiceLines(client, {
               WHEN last_pickup.ptype = 'repair'
                    AND vsn.inventory_status IN ('returned', 'in_stock', 'in_repair')
                 THEN vsn.rent_end_date
+              -- RT1: picked up but not yet received at the warehouse — rent runs
+              -- until the warehouse receives it (receive stamps rent_end_date).
+              WHEN vsn.inventory_status = 'returned' AND vsn.rent_end_date IS NULL AND open_return.pending
+                THEN NULL
               WHEN vsn.inventory_status = 'returned'
                 THEN COALESCE(vsn.rent_end_date, vsn.returned_at::date)
               ELSE vsn.rent_end_date
@@ -856,6 +860,21 @@ async function buildCustomerInvoiceLines(client, {
           ORDER BY sti.warehouse_received_at DESC
           LIMIT 1
        ) last_pickup ON TRUE
+       -- A permanent return picked up from this customer and not yet received.
+       LEFT JOIN LATERAL (
+         SELECT TRUE AS pending
+           FROM support_ticket_items sti
+          WHERE sti.item_type = 'pickup'
+            AND sti.warehouse_received_at IS NULL
+            AND COALESCE(sti.status, '') NOT IN ('cancelled', 'removed')
+            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END, 'return') = 'return'
+            AND (
+              sti.ttspl_id = vsn.inventory_asset_code
+              OR sti.unique_serial_number = vsn.inventory_asset_code
+              OR sti.serial_number = vsn.serial_number
+            )
+          LIMIT 1
+       ) open_return ON TRUE
       WHERE vsn.current_customer_id = $1
         AND vsn.deleted_at IS NULL
         -- in_transit: first bill can start at DC generate (dispatch), before POD.

@@ -15,6 +15,7 @@ import TicketActions from './TicketActions';
 import IssuePanel from './IssuePanel';
 import TicketPartsPanel from './TicketPartsPanel';
 import ServiceChargesPanel from './ServiceChargesPanel';
+import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
@@ -48,6 +49,7 @@ export default function TicketRecordPage() {
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
   const [t, setT] = useState(null);
+  const [damageFor, setDamageFor] = useState(null);
   const [sla, setSla] = useState(null);
   const [wfh, setWfh] = useState({});
   const [techs, setTechs] = useState([]);
@@ -83,6 +85,7 @@ export default function TicketRecordPage() {
   const onHold = (sla?.holds || []).find((h) => !h.to_at);
   const closed = ['closed', 'cancelled'].includes(tk.status);
   const canLead = hasPermission('support_tickets', 'edit');
+  const canDamage = ['damage_charges', 'support_tickets', 'return_dc'].some((sec) => hasPermission(sec, 'create'));
   const byLoad = [...techs].filter((x) => x.assignee_kind === 'technician').sort((a, b) => (a.open_item_count - b.open_item_count) || String(a.name).localeCompare(b.name));
   const suggested = byLoad[0]?.user_id;
 
@@ -126,6 +129,11 @@ export default function TicketRecordPage() {
           )}
         </div>
       ),
+    },
+    {
+      key: 'dmg',
+      header: '',
+      render: (i) => (canDamage && (i.ttspl_id || i.serial_number) ? <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setDamageFor(i); }}>Record damage</Button> : null),
     },
   ];
 
@@ -178,6 +186,16 @@ export default function TicketRecordPage() {
         <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
         <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
         <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
+        <DamageReportDrawer
+          open={Boolean(damageFor)}
+          onClose={() => setDamageFor(null)}
+          onDone={() => setDamageFor(null)}
+          laptop={damageFor ? { asset_code: damageFor.ttspl_id || damageFor.unique_serial_number || damageFor.serial_number } : null}
+          source={damageFor?.item_type === 'pickup' ? ((damageFor.pickup_type || (damageFor.source_item_id ? 'repair' : 'return')) === 'repair' ? 'repair_pickup' : 'return_pickup') : 'technician_visit'}
+          ticketId={tk.id}
+          ticketItemId={damageFor?.id}
+          customerId={tk.customer_id}
+        />
         {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
         <Section title="Contact and address">
           <KeyValue cols={2} items={[

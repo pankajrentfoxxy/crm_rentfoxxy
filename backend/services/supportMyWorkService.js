@@ -57,6 +57,7 @@ async function myWork(userId) {
       item_id: r.id,
       ticket_id: r.ticket_id,
       kind: r.item_type === 'pickup' ? 'pickup' : 'visit',
+      pickup_type: r.item_type === 'pickup' ? (r.pickup_type || (r.source_item_id ? 'repair' : 'return')) : null,
       step,
       next,
       customer: r.customer_name,

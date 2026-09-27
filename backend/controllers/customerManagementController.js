@@ -1440,10 +1440,23 @@ exports.updateCustomer = async (req, res) => {
             message: 'Only Admin / Super Admin can update Customer Type',
           });
         }
-      } else {
+      } else if (String(body.customer_type).trim().toLowerCase() === 'auto') {
+        // Back to automatic: the tag follows orders / laptops again (migration 355).
         await pool.query(
-          `UPDATE customers SET customer_type = $1, updated_at = NOW() WHERE customer_id = $2`,
-          [normalizeCustomerType(body.customer_type), customerId]
+          `UPDATE customers SET customer_type_source = 'auto', customer_type_reason = NULL,
+                  customer_type_set_by = $2, customer_type_set_at = NOW(), updated_at = NOW()
+            WHERE customer_id = $1`,
+          [customerId, req.user?.user_id || null]
+        );
+        await pool.query('SELECT refresh_customer_type($1)', [customerId]);
+      } else if (normalizeCustomerType(body.customer_type) !== normalizeCustomerType(row.customer_type)) {
+        // An admin fixing the tag by hand: automatic refreshes leave it alone.
+        await pool.query(
+          `UPDATE customers SET customer_type = $1, customer_type_source = 'manual', customer_type_reason = $3,
+                  customer_type_set_by = $4, customer_type_set_at = NOW(), updated_at = NOW()
+            WHERE customer_id = $2`,
+          [normalizeCustomerType(body.customer_type), customerId,
+            String(body.customer_type_reason || '').trim() || null, req.user?.user_id || null]
         );
       }
     }
@@ -1571,7 +1584,7 @@ exports.bulkUpdateCustomerType = async (req, res) => {
 
     const result = await pool.query(
       `UPDATE customers
-          SET customer_type = $1, updated_at = NOW()
+          SET customer_type = $1, customer_type_source = 'manual', customer_type_set_at = NOW(), updated_at = NOW()
         WHERE customer_id = ANY($2::int[])
           AND COALESCE(status, 1) = 1
         RETURNING customer_id, name, company_name, customer_type`,

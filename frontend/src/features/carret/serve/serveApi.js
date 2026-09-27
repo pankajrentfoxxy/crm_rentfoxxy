@@ -123,3 +123,18 @@ export const attachServiceOrderInvoice = (id, invoiceNumber, file) => {
   return api.post(`/service-billing/orders/${id}/invoice`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 export const serviceOrderInvoiceUrl = (id) => `/service-billing/orders/${id}/invoice`;
+
+/* ---- Damage charges (claude/carret-customers-returns-control.md, DM1) ---- */
+export const fetchDamageCatalog = () => api.get('/damage-charges/catalog');
+export const uploadDamagePhotos = (files) => {
+  const fd = new FormData();
+  [...files].forEach((f) => fd.append('photos', f));
+  return api.post('/damage-charges/photos', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+export const damagePhotoBlob = (p) => api.get('/damage-charges/photo', { params: { path: p }, responseType: 'blob' });
+export const fetchDamageCases = (params) => api.get('/damage-charges', { params });
+export const createDamageCase = (body) => api.post('/damage-charges', body);
+export const priceDamageCase = (id, lines) => api.post(`/damage-charges/${id}/price`, { lines });
+export const proposeDamageCase = (id, body) => api.post(`/damage-charges/${id}/propose`, body);
+export const decideDamageCase = (id, body) => api.post(`/damage-charges/${id}/decide`, body);
+export const cancelDamageCase = (id, note) => api.post(`/damage-charges/${id}/cancel`, { note });

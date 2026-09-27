@@ -21,7 +21,13 @@ function customerTypeFilterForQuotation(quotationType) {
   return 'rental'; // rental + demo
 }
 
-function isCustomerEligibleForQuotation(customerType, quotationType) {
+/**
+ * The tag follows activity (migration 355, CU1), so an automatic tag never
+ * blocks an order — the order itself updates the tag. Only a tag an admin fixed
+ * by hand (source 'manual') limits what can be quoted.
+ */
+function isCustomerEligibleForQuotation(customerType, quotationType, source = 'auto') {
+  if (String(source || 'auto') !== 'manual') return true;
   const ct = normalizeCustomerType(customerType);
   if (ct === 'both') return true;
   const filter = customerTypeFilterForQuotation(quotationType);

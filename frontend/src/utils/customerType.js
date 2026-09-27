@@ -25,7 +25,9 @@ export function customerTypeBadgeClass(value) {
   return 'bg-slate-100 text-slate-700';
 }
 
-export function isCustomerEligibleForQuotation(customerType, quotationType) {
+/** An automatic tag (follows activity) never blocks; only an admin-fixed one does (migration 355). */
+export function isCustomerEligibleForQuotation(customerType, quotationType, source = 'auto') {
+  if (String(source || 'auto') !== 'manual') return true;
   const ct = normalizeCustomerType(customerType);
   if (ct === 'both') return true;
   const qt = String(quotationType || 'rental').trim().toLowerCase();

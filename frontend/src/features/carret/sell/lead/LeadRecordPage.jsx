@@ -73,7 +73,7 @@ export default function LeadRecordPage() {
   } else if (won && !lead.customerId) {
     next = { tone: 'warn', text: `${lead.status} but no customer yet (from before the new flow).`, btn: 'Create the customer', act: () => { setWinAs(lead.status === 'Demo' ? 'Demo' : 'Deal'); setDrawer('win'); } };
   } else if (won && lead.customerId) {
-    next = { tone: 'good', text: 'Won — raise the sales order from the quotation or the customer.', btn: 'Open the customer', act: () => navigate(`/lead-crm/customers/${lead.customerId}`) };
+    next = { tone: 'good', text: 'Won — raise the sales order from the quotation or the customer.', btn: 'Open the customer', act: () => navigate(`/carret/sell/customers/${lead.customerId}`) };
   }
 
   function sendQuote() {
@@ -165,7 +165,7 @@ export default function LeadRecordPage() {
             { label: 'Owner', value: <button type="button" className="c-link" onClick={() => canEdit && setDrawer('owner')} style={{ background: 'none', border: 0, padding: 0, cursor: canEdit ? 'pointer' : 'default', textDecoration: canEdit ? 'underline dotted' : 'none' }}>{lead.assignedUser?.name || 'Unassigned'}</button> },
             { label: 'Next follow-up', value: fuDate ? <span style={{ color: overdue ? 'var(--alert-bad, #b91c1c)' : undefined, fontWeight: overdue ? 600 : 400 }}>{fuDate}{lead.followUpTime ? ` ${String(lead.followUpTime).slice(0, 5)}` : ''}{overdue ? ' (overdue)' : ''}</span> : '—' },
             { label: 'Came in', value: <DateTime value={lead.createdAt} /> },
-            { label: 'Customer', value: lead.customerId ? <button type="button" onClick={() => navigate(`/lead-crm/customers/${lead.customerId}`)} style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>#{lead.customerId}</button> : '—' },
+            { label: 'Customer', value: lead.customerId ? <button type="button" onClick={() => navigate(`/carret/sell/customers/${lead.customerId}`)} style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>#{lead.customerId}</button> : '—' },
           ]}
         />
         {next && (

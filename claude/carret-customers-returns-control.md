@@ -53,3 +53,30 @@
    scope / customer access / ready-stock access at role level), User overrides (differences
    only, saved in one go), audit log; backend fixes above; CT1 across the hardcoded gates.
 5. **Account closure + deposit refund** (SD1), with the refund over-refund fix.
+
+## Status 27 Sep 2026 (built on QA)
+- Migrations 355 (automatic tag + trigger + backfill: 299 rental / 31 both / 11 sales), 356 (damage
+  cases + `damage_charges` section), 357 (account closure) applied to QA.
+- Customers: Sell → Customers list (tag, on rent, rent/month, bought, returns, security, outstanding;
+  filters) and record (On rent / Rental returns / Purchased with export, Orders, Tickets, Account;
+  admin tag override with reason / back to automatic; Close account with deposit refund).
+  An automatic tag never blocks a quotation / SO; only an admin-fixed one does.
+- Returns: rent stops at warehouse receive (returnCompletionService no longer stamps the pickup date;
+  billing keeps a picked-up-but-not-received laptop on rent). Movement → Return challans (Open /
+  Awaiting warehouse / Received / Cancelled) and the RDC record (per-laptop OTP, gate, config
+  check, warehouse; receive with signature; record damage). 34 returned laptops given return QC
+  tickets (scripts/returned-without-floor-ticket.js).
+- Damage charges: Support → Damage charges (to price / to propose / to approve); record damage from
+  the technician's job, the ticket record and the RDC record; approved → "Damage charges" invoice
+  line (sold laptop → service order). Customer email via the guarded mailer (off on QA).
+- Deposit refund can no longer exceed what is held.
+- Control: being built separately (worktree), to be merged.
+
+### QA click-through
+1. Sell → Customers: tags, filters; open a customer → tabs; Tag… (admin); Close account… (blocked
+   while laptops are out).
+2. Movement → Return challans → an RDC awaiting warehouse → Receive at warehouse (signature);
+   Record damage on a laptop.
+3. Support → Damage charges: price (warehouse) → propose (sales / accounts) → approve (accounts) →
+   Finance → Support charges to bill shows "Damage charges".
+4. Technician: My work → a job → Report damage on this laptop.
