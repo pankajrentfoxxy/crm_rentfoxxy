@@ -7,6 +7,7 @@ const {
   effectiveReplacementLineRemark,
 } = require('../utils/replacementRemarkUtils');
 const inventorySM = require('./inventoryStateMachine');
+const lockInWarranty = require('./lockInWarrantyService');
 
 /** Lazy load — avoids circular dep with salesManagementService at module init. */
 function salesManagementService() {
@@ -419,6 +420,11 @@ async function appendConfigSalesOrderLines(client, {
  * cannot share one replacement.
  */
 async function placeReplacementLines(client, { lineConfigs, appendToSalesOrderNumber = null, orderArgs }) {
+  // W1: a sold laptop out of warranty gets paid repair, not a free replacement.
+  await require('./supportServiceBillingService').assertFreeReplacementAllowed(
+    client,
+    lineConfigs.map((c) => [c.old_machine_serial])
+  );
   const saleCfgs = lineConfigs.filter((c) => c.sale_line);
   if (!saleCfgs.length) {
     return appendToSalesOrderNumber
@@ -657,6 +663,22 @@ async function collectSerialIdsFromDc(client, dcNumber) {
   return [...ids];
 }
 
+/**
+ * The old laptop's lock-in / warranty end dates, captured on the replacement
+ * order when it was raised (migration 351); read off the old laptop if the order
+ * predates that.
+ */
+async function carriedTermsForOrder(client, order) {
+  if (order.old_lock_in_end_date || order.old_warranty_end_date || order.old_battery_warranty_end_date) {
+    return {
+      lockInEndDate: lockInWarranty.toDateStr(order.old_lock_in_end_date),
+      warrantyEndDate: lockInWarranty.toDateStr(order.old_warranty_end_date),
+      batteryWarrantyEndDate: lockInWarranty.toDateStr(order.old_battery_warranty_end_date),
+    };
+  }
+  return lockInWarranty.snapshotForReplacement(client, order.old_serial_id);
+}
+
 /** Outbound DC delivered — one unit per SO line. */
 async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
   const meta = await client.query(
@@ -711,6 +733,8 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
       dispatchedAt: dispatchedRes.rows[0]?.dispatched_at || row.dispatched_at || null,
       deliveredAt: new Date(),
       rentMonthlyRate: !isSale && order.old_rent_monthly_rate != null ? Number(order.old_rent_monthly_rate) : null,
+      // L1: the replacement runs out the old laptop's lock-in / warranty, not a new one.
+      carriedTerms: await carriedTermsForOrder(client, order),
       actorUserId: actor.user_id,
       actorName: actor.name,
     });

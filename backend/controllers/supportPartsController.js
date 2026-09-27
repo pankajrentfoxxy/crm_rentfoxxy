@@ -103,11 +103,11 @@ exports.raiseSupportPartRequest = async (req, res) => {
   }
 
   const mode = fulfillment_mode === 'courier_to_customer' ? 'courier_to_customer' : 'warehouse_handover';
-  const billing = billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty';
+  let billing = billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty';
   // Parts are free unless Support marks them chargeable (with a reason); the
   // WAREHOUSE sets the price — a price typed here is ignored (claude/carret-support.md).
   const charge = 0;
-  const chargeReason = billing === 'charge_customer' ? String(req.body.charge_reason || '').trim() : '';
+  let chargeReason = billing === 'charge_customer' ? String(req.body.charge_reason || '').trim() : '';
   if (billing === 'charge_customer' && chargeReason.length < 3) {
     return res.status(400).json({ success: false, message: 'Say why the customer is charged for this part' });
   }
@@ -146,6 +146,16 @@ exports.raiseSupportPartRequest = async (req, res) => {
     if (!partRes.rows.length)
       throw Object.assign(new Error('Part not found'), { status: 404 });
     const part = partRes.rows[0];
+
+    // W1: a sold laptop out of warranty — every part is chargeable.
+    const serviceBilling = require('../services/supportServiceBillingService');
+    const outOfWarranty = serviceBilling.partOutOfWarranty(
+      await serviceBilling.laptopForCode(client, [ttspl_id, serial_number]), part
+    );
+    if (outOfWarranty) {
+      billing = 'charge_customer';
+      if (chargeReason.length < 3) chargeReason = outOfWarranty;
+    }
 
     const assignedTechId = await resolveAssignedTechForItem(
       client, support_item_id || null, support_ticket_id, req.user.user_id

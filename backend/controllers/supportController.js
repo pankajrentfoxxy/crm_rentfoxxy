@@ -244,6 +244,19 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         ticketCategory: 'pickup',
     });
 
+    // L2: a return is refused while lock-in runs, unless Sales + Accounts approved
+    // an early return. Repair pickups and a replacement's swap are not returns.
+    let lockInApprovals = [];
+    if (String(pickup_type || '') === 'return' && String(dc_purpose || '') !== 'replacement') {
+        const lockInBreak = require('../services/lockInBreakService');
+        const serialIds = await lockInBreak.serialIdsForReturn(
+            client,
+            ticket.customer_id,
+            machines.flatMap((m) => [m.ttspl_id, m.unique_serial_number, m.serial_number])
+        );
+        lockInApprovals = await lockInBreak.assertReturnAllowed(client, serialIds);
+    }
+
     await assertNoActivePickup(client, ticketId, null);
     await assertNoLivePickupForSources(
         client,
@@ -441,6 +454,9 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         }
     });
     await bumpTicketActivity(client, ticketId);
+    if (lockInApprovals.length) {
+        await require('../services/lockInBreakService').markUsed(client, lockInApprovals, rdc);
+    }
 
     return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc, customerOtp, machines };
 };
@@ -1331,6 +1347,9 @@ exports.getCustomerAssets = async (req, res) => {
             [customerId, SUPPORT_TICKET_ELIGIBLE_STATUSES]
         );
         const assets = rows;
+        // Lock-in (rental) and warranty (sale) so Support sees them before choosing
+        // a pickup or replacement (claude/carret-lockin-warranty.md).
+        await require('../services/lockInBreakService').decorateAssets(pool, assets);
         // WFH (work from home): shown when raising the ticket, because a return
         // pickup or a replacement delivery to that laptop is chargeable.
         const codes = [...new Set((assets || []).flatMap((a) => [a.ttspl_id, a.unique_serial_number, a.serial_number])
@@ -1604,6 +1623,8 @@ exports.createTicket = async (req, res) => {
             if (Number.isNaN(slot.getTime())) throw Object.assign(new Error('Visit slot is not a valid date/time'), { status: 400 });
             await client.query('UPDATE support_ticket_items SET visit_scheduled_at = $2 WHERE ticket_id = $1', [ticket.id, slot]);
         }
+        // Sold laptops: record in / out of warranty as Support saw it (W1).
+        await require('../services/supportServiceBillingService').stampTicketWarranty(client, ticket.id);
 
         await client.query('COMMIT');
         fireSupportWa(() => supportWa.notifySupportTicketCreatedAsync({ ticketId: ticket.id }));
@@ -3313,8 +3334,10 @@ exports.createPickupWithReturnDc = async (req, res) => {
         });
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error('createPickupWithReturnDc:', e);
-        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to create pickup' });
+        if (!e.code || e.code !== 'LOCK_IN_ACTIVE') console.error('createPickupWithReturnDc:', e);
+        res.status(e.status || 500).json({
+            success: false, message: e.message || 'Failed to create pickup', code: e.code, laptops: e.laptops,
+        });
     } finally {
         client.release();
     }
@@ -3428,8 +3451,10 @@ exports.createPickupTicket = async (req, res) => {
         });
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error('createPickupTicket:', e);
-        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to create pickup ticket' });
+        if (!e.code || e.code !== 'LOCK_IN_ACTIVE') console.error('createPickupTicket:', e);
+        res.status(e.status || 500).json({
+            success: false, message: e.message || 'Failed to create pickup ticket', code: e.code, laptops: e.laptops,
+        });
     } finally {
         client.release();
     }

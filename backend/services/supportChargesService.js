@@ -133,6 +133,13 @@ async function markPartChargeable(client, { requestId, chargeable, reason, user 
   )).rows[0];
   if (billed && billed.status === 'BILLED') throw fail('Already billed on an invoice — it can no longer change', 409);
   if (chargeable && String(reason || '').trim().length < 3) throw fail('Say why the customer is charged for this part');
+  if (!chargeable) {
+    // W1: out of warranty on a sold laptop, a part cannot be made free.
+    const serviceBilling = require('./supportServiceBillingService');
+    const part = r.part_id ? (await client.query('SELECT * FROM parts WHERE part_id = $1', [r.part_id])).rows[0] : null;
+    const why = serviceBilling.partOutOfWarranty(await serviceBilling.laptopForCode(client, [r.ttspl_id, r.serial_number]), part);
+    if (why) throw fail(`${why} — all service on this laptop is chargeable`, 409);
+  }
   await client.query(
     `UPDATE support_part_requests
         SET billing_type = $2::text, charge_reason = $3::text, charge_marked_by = $4, charge_marked_at = NOW(),
@@ -168,6 +175,10 @@ async function setPartPrice(client, { requestId, amount, user }) {
  * delivered → APPROVED line; not chargeable any more → WAIVED; BILLED is final.
  */
 async function syncPartCharge(client, requestId, user = null) {
+  // A sold (gorefurbo) laptop has no rental invoice: its charges go to the
+  // service-billing list and a service order instead (W2).
+  const sale = await require('./supportServiceBillingService').syncSalePartCharge(client, requestId);
+  if (sale) return sale;
   const r = (await client.query(
     `SELECT spr.*, p.part_name, st.customer_id, st.id AS support_ticket_id
        FROM support_part_requests spr
@@ -220,10 +231,12 @@ async function syncPartCharge(client, requestId, user = null) {
 /** Approved charges not yet on an invoice (Accounts' list). */
 async function listChargesToBill({ customerId } = {}) {
   const params = [];
-  let where = `WHERE l.status = 'APPROVED' AND l.billed_in_invoice_id IS NULL AND l.source_part_request_id IS NOT NULL`;
+  // Spare parts, plus the lock-in break charge an approved early return raises.
+  let where = `WHERE l.status = 'APPROVED' AND l.billed_in_invoice_id IS NULL
+                 AND (l.source_part_request_id IS NOT NULL OR l.charge_type = 'lock_in_break')`;
   if (customerId) { params.push(Number(customerId)); where += ` AND l.customer_id = $${params.length}`; }
   const { rows } = await pool.query(
-    `SELECT l.extra_line_id, l.customer_id, COALESCE(c.company_name, c.name) AS customer_name, l.description,
+    `SELECT l.extra_line_id, l.customer_id, COALESCE(c.company_name, c.name) AS customer_name, l.description, l.charge_type,
             l.amount, l.gst_rate, l.hsn_code, l.raised_at, l.source_part_request_id,
             (SELECT ci.invoice_id FROM customer_invoices ci
               WHERE ci.customer_id = l.customer_id AND LOWER(ci.status) = 'draft'
@@ -266,6 +279,7 @@ async function addChargesToDraftInvoice(client, { invoiceId, extraLineIds, user 
     description: l.description,
     amount: Number(l.amount),
     hsn_code: l.hsn_code || PART_HSN,
+    charge_type: l.charge_type,
     quantity: Number(l.quantity || 1),
     unit_price: Number(l.unit_price || l.amount),
   }));
@@ -282,8 +296,10 @@ async function addChargesToDraftInvoice(client, { invoiceId, extraLineIds, user 
     await client.query(
       // period_label is varchar(10); the description goes in model (varchar 120).
       `INSERT INTO customer_invoice_lines (invoice_id, brand, model, period_label, amount, line_type)
-       VALUES ($1, 'Spare part', $2, 'Part', $3, 'part')`,
-      [invoiceId, String(a.description).slice(0, 120), a.amount]
+       VALUES ($1, $4, $2, $5, $3, 'part')`,
+      [invoiceId, String(a.description).slice(0, 120), a.amount,
+        a.charge_type === 'lock_in_break' ? 'Lock-in break' : 'Spare part',
+        a.charge_type === 'lock_in_break' ? 'Lock-in' : 'Part']
     );
   }
   await client.query(

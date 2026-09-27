@@ -24,6 +24,8 @@
 const pool = require('../config/db');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { recordAssetEvent } = require('./eventService');
+// Lazy: lockInWarrantyService only needs the pool, but keep the state machine's load order untouched.
+const lockInWarranty = () => require('./lockInWarrantyService');
 
 const STATUS = Object.freeze({
   IN_STOCK: 'in_stock',
@@ -434,7 +436,7 @@ function deliveredStatusForType(quotationType) {
 
 const markDelivered = async (db, serialId, {
   quotationType, dcNumber, customerId, entityCode, dispatchMode, dispatchedAt, deliveredAt,
-  rentMonthlyRate, actorUserId, actorName, confirmedOnDc = false,
+  rentMonthlyRate, actorUserId, actorName, confirmedOnDc = false, carriedTerms = null,
 }) => {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
@@ -495,7 +497,7 @@ const markDelivered = async (db, serialId, {
       ? `Sold on ${dcNumber} (corrected from rented)`
       : `Delivered on ${dcNumber}`;
 
-  return transitionAsset(client, {
+  const result = await transitionAsset(client, {
     serialId,
     toStatus,
     dcNumber,
@@ -510,6 +512,12 @@ const markDelivered = async (db, serialId, {
     actorName,
     allowOverride: Boolean(deliveryCorrection),
   });
+  // Lock-in (rental) / warranty (sale) dates from the SO line, or the replaced
+  // laptop's dates when this is a replacement (carriedTerms).
+  await lockInWarranty().stampOnDelivery(client, serialId, {
+    status: toStatus, dcNumber, carried: carriedTerms,
+  });
+  return result;
 };
 
 /** Demo "keep" decision: on_demo -> rented, with the agreed billing start + rate. */
@@ -531,11 +539,11 @@ const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorNam
  * customer holding context is retained so the unit stays in their bucket as Sold
  * (see DEPLOYED_WITH_CUSTOMER_STATUSES).
  */
-const markSoldInPlace = (db, serialId, {
+const markSoldInPlace = async (db, serialId, {
   salesOrderNumber, customerId, entityCode = null, reason = 'lost',
   rentEndDate = null, deliveredAt = null, actorUserId = null, actorName = null,
-}) =>
-  transitionAsset(db, {
+}) => {
+  const result = await transitionAsset(db, {
     serialId,
     toStatus: STATUS.SOLD,
     customerId,
@@ -548,6 +556,12 @@ const markSoldInPlace = (db, serialId, {
     actorUserId,
     actorName,
   });
+  // Warranty runs from the day of sale, not the original rental delivery.
+  await lockInWarranty().stampOnDelivery(db || pool, serialId, {
+    status: STATUS.SOLD, salesOrderNumber, saleDate: new Date(),
+  });
+  return result;
+};
 
 /**
  * Part 3.1 — the guard has taken custody of an arriving unit.
@@ -611,6 +625,8 @@ async function bridgeSupportReplacement(db, {
 }) {
   const result = { returned: null, replaced: null };
   const oldRow = await findSerialByCode(db, oldCode);
+  // L1: read before the old unit is returned; the replacement runs these out.
+  const carriedTerms = oldRow ? await lockInWarranty().snapshotForReplacement(db, oldRow.serial_id) : null;
   if (oldRow) {
     await markReturned(db, oldRow.serial_id, {
       reason: 'Returned via support replacement', actorUserId, actorName,
@@ -640,6 +656,7 @@ async function bridgeSupportReplacement(db, {
       dispatchedAt: new Date(),
       deliveredAt: new Date(),
       rentMonthlyRate: oldRow?.rent_monthly_rate ?? null,
+      carriedTerms,
       actorUserId,
       actorName,
     });

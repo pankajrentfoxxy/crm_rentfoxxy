@@ -369,6 +369,8 @@ const FY_DOC_TYPES = {
   part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_return_dc: { docType: 'part_rpdc_rentfoxxy', prefix: 'RPDC', table: 'delivery_challan_lines', column: 'dc_number' },
   vendor_return_ticket: { docType: 'vendor_return_ticket', prefix: 'VRT', table: 'vendor_return_tickets', column: 'ticket_number' },
+  // Out-of-warranty service on a sold laptop (migration 352).
+  service_order: { docType: 'service_order', prefix: 'SVO', table: 'support_service_orders', column: 'order_number' },
 };
 const FY_SEQ_PAD = 4;
 

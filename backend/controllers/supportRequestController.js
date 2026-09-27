@@ -1235,6 +1235,7 @@ exports.convertToTicket = async (req, res) => {
         WHERE id = $1`,
       [id, ticketId, customerId, req.user?.user_id || null]
     );
+    await require('../services/supportServiceBillingService').stampTicketWarranty(client, ticketId);
 
     await client.query('COMMIT');
     try {
@@ -1249,8 +1250,8 @@ exports.convertToTicket = async (req, res) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('convertToTicket:', err);
-    res.status(err.status || 500).json({ success: false, message: err.message });
+    if (err.code !== 'LOCK_IN_ACTIVE') console.error('convertToTicket:', err);
+    res.status(err.status || 500).json({ success: false, message: err.message, code: err.code, laptops: err.laptops });
   } finally {
     client.release();
   }
