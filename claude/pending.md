@@ -1,37 +1,50 @@
-# What is still pending (26 Sep 2026)
+# What is still pending — final list (27 Sep 2026)
 
-Checked against the Carret menu (`frontend/src/config/navigation.js`) and the live
-data on QA. "Built" = new screens on QA over the existing APIs; old screens stay
-under "Old view" until sign-off.
+We go through this one item at a time, top to bottom. An item is closed only when the
+user has clicked it through on qa.rentfoxxy.com and said it is fine.
 
-## Built, waiting for the user's QA click-through
-- Order to delivery — quotation → SO → laptops → DC → dispatch QC → gate → delivered.
-- Procure to stock — to-buy, POs, spare POs, arrivals/GRN, vendor returns + return
-  request, vendor repair (VRDC) + rent pause, vendor rentals, replacement approvals.
-- Production — floor, parts desk, into stock, parts stock.
-- Support steps 0–6 — queue, ticket record (pickup / replacement / Service DC),
-  new ticket, SLA & feedback, my work / job / my parts, support parts desk, charges.
+New UI: the old sidebar now has ONE entry, "New UI → Open New UI" (/carret/home). It opens
+the new interface with its own menu; "Old UI" in the new header goes back.
 
-## To build — one at a time
-1. **Support rework** — BUILT on QA 26 Sep (A–F, see `claude/carret-support.md`); waiting for the
-   user's click-through.
-2. **Lead** — BUILT on QA 26 Sep (see `claude/carret-lead.md`); waiting for the click-through.
-3. **Customer returns / rental end** — return challans (Carret list only), return
-   pickup, receive, back to stock, NPA.
-4. **Money** — vendor bills (now unblocked by the rent-start fix), credit / debit
-   notes, security deposits, payments, DC / sale / e-invoice queues, e-way bills.
-   Carret has invoices, ageing and support charges only.
-5. **Stock** — ready to rent/sell, asset movements, scrap, master data, customer
-   inventory, asset configuration: all old screens.
-6. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
-   technicians, dispatch QC link: old screens.
-7. **Daily dashboard + snapshot** — the day's counts, rentals, sales (after the
-   processes above).
+## A. Built — check on QA, fix what is wrong, sign off
+1. **Order to delivery** — quotation → SO → attach laptops → DC → dispatch QC → gate →
+   delivered (OTP / POD / courier). Challan create, gate confirm and delivery were never
+   clicked through (they move real QA stock).
+2. **Procure to stock** — to buy, POs, spare-parts POs, vendor arrivals / GRN, vendor
+   returns + return request, vendor repair (VRDC) + rent pause, vendor rentals,
+   replacement approvals.
+3. **Production** — floor, stage forms, QC / QC2, Hold, parts desk, into stock, parts stock.
+4. **Support** — queue, ticket record (pickup / replacement / Service DC), new ticket
+   (Type > Subtype > Issue), SLA & feedback, my work / job / my parts, support parts desk,
+   issue insights, technician bucket, requests, settings, support charges to bill.
+   Includes live's sold-laptop replacement (original sale order, Rs 0) merged 27 Sep.
+5. **Lead** — board, lead record, follow-ups with outcome, Deal = convert, auto-move from
+   quotes / SO.
+6. **Live merges of 27 Sep** — billing (no double day, first order only on delivery,
+   security kept, SO rate per customer), OTP in ticket sidebar, Return DC config view.
 
-## Waiting on the user / Accounts
-- First month the CRM makes vendor bills (earlier months settled outside).
-- Accounts: `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
-- Interakt template `support_feedback` approved → set `INTERAKT_TPL_SUPPORT_FEEDBACK`.
-- Map of the ERP issue ids (`["10"]` …) to names, if old tickets should count in
-  the issue insights.
-- Promotion to live: `claude/production-promotion-checklist.md`.
+## B. Still to build in the new UI — one at a time
+7. **Customer returns / rental end** — return challans, return pickup, receive, back to
+   stock, NPA.
+8. **Money** — vendor bills, credit / debit notes, security deposits, payments, DC / sale /
+   e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
+9. **Stock** — ready to rent / sell, asset movements, scrap, master data, customer
+   inventory, asset configuration.
+10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
+    technicians, dispatch QC link.
+11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
+12. **Hide the old screens** of each process after its sign-off (the "Old view" links).
+
+## C. Waiting on the user / Accounts
+13. First month the CRM makes vendor bills (earlier months settled outside).
+14. Accounts to confirm `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
+15. Interakt template `support_feedback` approved → set `INTERAKT_TPL_SUPPORT_FEEDBACK`.
+16. ERP issue ids (`["10"]` …) → names, if old tickets should count in issue insights.
+17. Rented-from-vendor laptops: show a purchase-equivalent cost, or monthly rent only?
+
+## D. Promotion to live (after sign-off) — `claude/production-promotion-checklist.md`
+18. Run on live, in order, with backups: migrations 327–349 (Support v2 301–326 is a
+    separate decision; 323 stays back), `sync-po-receive-status.js`, floor-ticket clean-up,
+    config-drift fix, `fix-rental-start-dates.js` (~1,025 laptops start 2027-02-07 on live).
+19. Merge new_stagging_crm into live (merge, never overwrite); `REACT_APP_CARRET=1` is in
+    `frontend/.env.production`.

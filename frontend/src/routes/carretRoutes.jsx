@@ -14,6 +14,7 @@ import ProtectedRoute from '../router/ProtectedRoute';
  */
 const AssetRecordPage = React.lazy(() => import('../features/carret/AssetRecordPage'));
 const AssetsListPage = React.lazy(() => import('../features/carret/AssetsListPage'));
+const NewUiHomePage = React.lazy(() => import('../features/carret/NewUiHomePage'));
 const OperationsOverviewPage = React.lazy(() => import('../features/carret/OperationsOverviewPage'));
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
@@ -89,6 +90,8 @@ const guard = (section, action, node) => (
 export const carretRoutes = CARRET_ENABLED
   ? [
       { path: '/carret', element: guard('dashboard', 'view', <OperationsOverviewPage />) },
+      // The old sidebar's one "New UI" entry; sends each user to a screen they can open.
+      { path: '/carret/home', element: <React.Suspense fallback={null}><NewUiHomePage /></React.Suspense> },
       { path: '/carret/stock/assets', element: guard('inventory_management', 'view', <AssetsListPage />) },
       { path: '/carret/stock/assets/:ttspl', element: guard('inventory_management', 'view', <AssetRecordPage />) },
 

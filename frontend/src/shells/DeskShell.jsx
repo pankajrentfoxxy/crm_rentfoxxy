@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   ShoppingCart, Factory, Package, Tag, Truck, Headphones, Wallet, ShieldCheck,
-  ChevronRight, Menu, LayoutGrid,
+  ChevronRight, Menu, LayoutGrid, ArrowLeftRight,
 } from 'lucide-react';
 import DensityProvider from './DensityProvider';
 import ThemeToggle from './ThemeToggle';
@@ -184,6 +184,10 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
               <Menu size={18} aria-hidden="true" />
             </button>
             <div className="ml-auto flex items-center" style={{ gap: '8px' }}>
+              {/* The old CRM stays available until each process is signed off. */}
+              <Link to={hasPermission('dashboard', 'view') ? '/dashboard' : '/'} className="c-btn" title="Back to the old interface">
+                <ArrowLeftRight size={16} aria-hidden="true" /> Old UI
+              </Link>
               <ThemeToggle />
             </div>
           </header>

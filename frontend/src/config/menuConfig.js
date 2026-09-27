@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
   Wrench,
   LayoutDashboard,
+  Sparkles,
   FileText,
   CreditCard,
   Shield,
@@ -29,6 +30,7 @@ import {
   ScanLine,
   Laptop,
 } from 'lucide-react';
+import { SECTIONS as CARRET_NAV_SECTIONS } from './navigation';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
  *  GRN / receiving happens inside the Purchase Orders page, so there is no
@@ -193,47 +195,27 @@ export const operationAccordionChildren = salesPipelineAccordionChildren;
  * Sidebar menu configuration — visibility driven by hasPermission(section, 'view')
  */
 /**
- * Carret (the redesign) entry points, behind REACT_APP_CARRET.
- *
- * The Carret screens have their own eight-section menu in config/navigation.js,
- * rendered by DeskShell — but that shell only exists INSIDE a Carret page, so
- * until now the only way to reach one was to type the URL. That made the whole
- * redesign invisible from the running CRM. These links are the way in; nothing
- * is replaced and nothing is deleted (hard rule 6).
+ * Carret (the redesign) is reached through ONE entry, behind REACT_APP_CARRET.
+ * The Carret screens have their own eight-section menu (config/navigation.js,
+ * rendered by DeskShell); listing each of them here as well made two menus for
+ * the same pages. /carret/home opens the first screen the user may see.
  */
 const CARRET_ON = process.env.REACT_APP_CARRET === '1';
 
+const CARRET_SECTIONS = [...new Set(
+  CARRET_NAV_SECTIONS
+    .flatMap((s) => s.items)
+    .filter((i) => i.to.startsWith('/carret'))
+    .flatMap((i) => i.sections || [i.section])
+)];
+
 const carretMenuItems = [
-  { icon: LayoutDashboard, label: 'Operations Overview', path: '/carret', section: 'dashboard' },
-  { icon: Laptop, label: 'Assets', path: '/carret/stock/assets', section: 'inventory_management' },
-  { icon: Truck, label: 'Challans', path: '/carret/move/challans', section: 'delivery_challans' },
-  { icon: Shield, label: 'Guard Gate', path: '/carret/move/gate', section: 'guard_gate_checking' },
-  { icon: Wrench, label: 'Floor', path: '/carret/produce/floor', section: 'floor_pipeline' },
-  { icon: Boxes, label: 'Parts desk', path: '/carret/produce/parts-desk', section: 'parts_approval' },
-  { icon: Boxes, label: 'Into stock', path: '/carret/produce/into-stock', section: 'pending_inventory' },
-  { icon: Boxes, label: 'Parts', path: '/carret/produce/parts', section: 'parts_inventory' },
-  { icon: FileText, label: 'Quotations', path: '/carret/sell/quotations', section: 'sales_quotations' },
-  { icon: ShoppingCart, label: 'Sales Orders', path: '/carret/sell/sales-orders', section: 'sales_orders_doc' },
-  { icon: Truck, label: 'Delivery Register', path: '/carret/move/deliveries', section: 'delivery_register_management' },
-  { icon: Store, label: 'Purchase Orders', path: '/carret/procure/purchase-orders', section: 'vendor_management' },
-  { icon: ShoppingCart, label: 'To buy', path: '/carret/procure/to-buy', section: 'vendor_management' },
-  { icon: Truck, label: 'Vendor arrivals', path: '/carret/procure/arrivals', section: 'vendor_management' },
-  { icon: Store, label: 'Vendors', path: '/carret/procure/vendors', section: 'vendor_management' },
-  { icon: Truck, label: 'Vendor returns', path: '/carret/procure/returns', section: 'vendor_return_to_vendor' },
-  { icon: Store, label: 'Vendor rentals', path: '/carret/procure/vendor-rentals', section: 'vendor_management' },
-  { icon: Truck, label: 'Replacement approvals', path: '/carret/procure/replacement-approvals', section: 'vendor_repair_dc' },
-  { icon: Boxes, label: 'Spare-parts orders', path: '/carret/procure/spare-parts-orders', section: 'vendor_management' },
-  { icon: Wrench, label: 'Support queue', path: '/carret/serve/queue', section: 'support_tickets' },
-  { icon: Wrench, label: 'Support parts desk', path: '/carret/serve/parts-desk', section: 'support_part_challan' },
-  { icon: Wrench, label: 'My work (technician)', path: '/carret/serve/my-work', section: 'support_tickets' },
-  { icon: FileText, label: 'Customer Invoices', path: '/carret/money/invoices', section: 'customer_billing' },
-  { icon: DollarSign, label: 'Support charges to bill', path: '/carret/money/support-charges', section: 'customer_billing' },
-  { icon: DollarSign, label: 'Ageing & Outstanding', path: '/carret/money/ageing', section: 'customer_billing' },
+  { icon: Sparkles, label: 'Open New UI', path: '/carret/home', anySection: true, sections: ['dashboard', ...CARRET_SECTIONS] },
 ];
 
 export const MENU_GROUPS = [
   ...(CARRET_ON
-    ? [{ key: 'carret', label: 'Carret (new UI)', items: carretMenuItems }]
+    ? [{ key: 'carret', label: 'New UI', items: carretMenuItems }]
     : []),
   {
     key: 'reports',
@@ -484,6 +466,7 @@ export function isMenuItemVisible(item, canView) {
     return item.section ? canView(item.section) : false;
   }
 
+  if (item.anySection) return item.sections.some((section) => canView(section));
   if (item.section) return canView(item.section);
   return true;
 }
