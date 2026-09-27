@@ -28,8 +28,10 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    service charges → SVO service order + Zoho invoice.
 
 ## B. Still to build in the new UI — one at a time
-7. **Customer returns / rental end** — return challans, return pickup, receive, back to
-   stock, NPA.
+7. **Customer returns / rental end** — BUILT 27 Sep (`claude/carret-customers-returns-control.md`):
+   return challans + RDC record with warehouse receive (rent stops there), damage charges,
+   account closure + deposit refund; also Sell → Customers (auto tag, record with rented /
+   returned / purchased). Control (roles & permissions) in progress. Waiting: click-through.
 8. **Money** — vendor bills, credit / debit notes, security deposits, payments, DC / sale /
    e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
 9. **Stock** — BUILT on QA 27 Sep (`claude/carret-stock.md`): assets, ready stock (tag + slot),
