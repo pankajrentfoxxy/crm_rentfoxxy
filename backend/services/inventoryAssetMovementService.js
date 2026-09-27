@@ -9,13 +9,28 @@ const {
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
 const { transitionAsset } = require('./inventoryStateMachine');
+const { vacateWarehouseLocation } = require('./warehouseLocationService');
 
 const MOVEMENT_TARGETS = {
   qc_pending: { qcStatus: 'qc_pending', inventoryStatus: 'in_stock', createTicket: false },
-  qc_process: { qcStatus: 'pending', inventoryStatus: 'in_stock', createTicket: true },
-  passed: { qcStatus: 'passed', inventoryStatus: 'in_stock', createTicket: false },
-  dead: { qcStatus: 'dead', inventoryStatus: 'scrapped', createTicket: false },
-  missing: { qcStatus: 'missing', inventoryStatus: 'missing', createTicket: false }
+  // Q6: QC Process waits for QC on the floor — in_repair, as the Ready screen's
+  // own "Move to QC Process" does. (It was in_stock here, so the unit still
+  // counted as stock.)
+  qc_process: { qcStatus: 'pending', inventoryStatus: 'in_repair', createTicket: true },
+};
+
+/**
+ * Buckets a unit may be moved FROM. `passed` (ready) can be sent back to QC;
+ * nothing is moved INTO passed here — a laptop enters stock only by being
+ * scanned into a carret slot on Into Stock (PD5), and `dead` / `missing` are
+ * gone: scrapping is a request a manager approves (claude/carret-stock.md
+ * ST-D2), and `missing` was never a status the lifecycle allows.
+ */
+const MOVEMENT_SOURCES = new Set(['qc_pending', 'qc_process', 'passed']);
+const RETIRED_TARGETS = {
+  passed: 'A laptop goes into stock only through Production → Into stock (scan into a carret slot).',
+  dead: 'Scrapping needs a manager\'s approval — raise a scrap request from the laptop instead.',
+  missing: 'Missing is not a laptop status — raise it with the warehouse manager.',
 };
 
 /** Deployed / allocated — not movable via this tool. Returned units ARE movable (post-pickup floor/QC). */
@@ -34,6 +49,11 @@ const RETURNED_LEGACY_QC_AS_PROCESS = new Set(['out_stock', 'qc_failed_return_ve
 function normalizeTarget(input) {
   const key = String(input || '').trim().toLowerCase();
   return MOVEMENT_TARGETS[key] ? key : null;
+}
+
+function normalizeSource(input) {
+  const key = String(input || '').trim().toLowerCase();
+  return MOVEMENT_SOURCES.has(key) ? key : null;
 }
 
 function targetLabel(target) {
@@ -78,9 +98,12 @@ function qcMatchesBucket(actualQc, inventoryStatus, bucketKey) {
   return false;
 }
 
+// What each bucket means in qc_status, for matching and display (targets are a
+// narrower set — see MOVEMENT_TARGETS).
+const BUCKET_QC_STATUS = { qc_pending: 'qc_pending', qc_process: 'pending', passed: 'passed', dead: 'dead', missing: 'missing' };
+
 function qcStatusForBucket(bucketKey) {
-  const cfg = MOVEMENT_TARGETS[bucketKey];
-  return cfg ? cfg.qcStatus : null;
+  return BUCKET_QC_STATUS[bucketKey] || null;
 }
 
 /** Split pasted serial/TTSPL lists (comma, newline, semicolon, tab). */
@@ -278,6 +301,17 @@ async function applyMovementTarget(db, row, targetKey, actorUserId, correlationI
       { serialId: row.serial_id, serialNumber: row.serial_number },
       actorUserId
     );
+    if (result.ok && prevInv !== 'in_repair') {
+      await transitionAsset(db, {
+        serialId: row.serial_id,
+        toStatus: 'in_repair',
+        reason: 'Asset movement to QC Process (from QC Pending)',
+        actorUserId,
+        allowOverride: true,
+        correlationId,
+        caller: 'inventoryAssetMovementService.applyMovementTarget',
+      });
+    }
     return {
       ok: result.ok,
       status: result.status,
@@ -300,15 +334,6 @@ async function applyMovementTarget(db, row, targetKey, actorUserId, correlationI
   };
   if (targetKey === 'qc_process' && !ex.came_from) {
     exDelta.came_from = 'Asset movement to QC Process';
-  }
-  if (targetKey === 'dead') {
-    exDelta.dead_marked_at = new Date().toISOString();
-  }
-  if (targetKey === 'missing') {
-    exDelta.missing_marked_at = new Date().toISOString();
-  }
-  if (targetKey === 'passed' && !ex.passed_via) {
-    exDelta.passed_via = 'asset_movement';
   }
   if (prevInv === 'returned') {
     exDelta.returned_floor_cleared_at = new Date().toISOString();
@@ -335,6 +360,9 @@ async function applyMovementTarget(db, row, targetKey, actorUserId, correlationI
       caller: 'inventoryAssetMovementService.applyMovementTarget',
     });
   }
+
+  // Leaving Ready frees its carret slot for the next laptop (ST-D3).
+  await vacateWarehouseLocation(db, row.serial_id);
 
   // qc_status is still written directly: Part 1 defines no canonical list for
   // that column and decision D2 defers it out of Part 2.3, so there is nothing
@@ -376,7 +404,9 @@ async function applyMovementTarget(db, row, targetKey, actorUserId, correlationI
       eventType: 'asset_movement',
       description: `Moved to ${targetLabel(targetKey)}`,
       metadata: { target: targetKey, from_qc_status: prevQc, ticket_id: ticketId },
-      actorUserId
+      actorUserId,
+      // Same connection: the caller holds this row's lock in its transaction.
+      db,
     });
   }
 
@@ -391,14 +421,18 @@ async function applyMovementTarget(db, row, targetKey, actorUserId, correlationI
  * Move multiple serials to a target bucket.
  */
 async function bulkMoveAssets(db, { serialIds, target, fromTarget, remark }, actorUserId) {
+  const rawTarget = String(target || '').trim().toLowerCase();
+  if (RETIRED_TARGETS[rawTarget]) {
+    return { ok: false, status: 400, message: RETIRED_TARGETS[rawTarget] };
+  }
   const targetKey = normalizeTarget(target);
   if (!targetKey) {
-    return { ok: false, status: 400, message: 'Invalid target. Use qc_pending, qc_process, passed, dead, or missing.' };
+    return { ok: false, status: 400, message: 'Invalid target. Use qc_pending or qc_process.' };
   }
 
-  const fromKey = normalizeTarget(fromTarget);
+  const fromKey = normalizeSource(fromTarget);
   if (!fromKey) {
-    return { ok: false, status: 400, message: 'Move From category is required.' };
+    return { ok: false, status: 400, message: 'Move From must be QC Pending, QC Process or Ready.' };
   }
   if (fromKey === targetKey) {
     return { ok: false, status: 400, message: 'Move From and Move To must be different categories.' };
@@ -464,15 +498,20 @@ async function bulkMoveAssets(db, { serialIds, target, fromTarget, remark }, act
       continue;
     }
 
-    if (remark != null && String(remark).trim()) {
-      await db.query(
-        `UPDATE vendor_serial_numbers SET remark = $1, updated_at = NOW() WHERE serial_id = $2`,
-        [String(remark).trim(), row.serial_id]
-      );
-    }
-
+    // One transaction per laptop: the status, qc_status, slot, ticket and remark
+    // land together or not at all (the remark used to stick on a failed move).
+    const client = await db.connect();
     try {
-      const applied = await applyMovementTarget(db, row, targetKey, actorUserId);
+      await client.query('BEGIN');
+      await client.query('SELECT 1 FROM vendor_serial_numbers WHERE serial_id = $1 FOR UPDATE', [row.serial_id]);
+      const applied = await applyMovementTarget(client, row, targetKey, actorUserId);
+      if (applied.ok && remark != null && String(remark).trim()) {
+        await client.query(
+          `UPDATE vendor_serial_numbers SET remark = $1, updated_at = NOW() WHERE serial_id = $2`,
+          [String(remark).trim(), row.serial_id]
+        );
+      }
+      await client.query(applied.ok ? 'COMMIT' : 'ROLLBACK');
       if (!applied.ok) {
         results.push({
           serial_id: row.serial_id,
@@ -492,12 +531,15 @@ async function bulkMoveAssets(db, { serialIds, target, fromTarget, remark }, act
         ticket_id: applied.ticket_id || null
       });
     } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
       results.push({
         serial_id: row.serial_id,
         serial_number: row.serial_number,
         ok: false,
         message: e.message || 'Move failed'
       });
+    } finally {
+      client.release();
     }
   }
 

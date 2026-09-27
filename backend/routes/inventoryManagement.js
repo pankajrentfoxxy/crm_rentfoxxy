@@ -117,7 +117,14 @@ router.post(
   qcProcess.createProductionTicket
 );
 
-router.get('/asset-movement/search', assetMovementAccess, assetMovement.searchValidators, assetMovement.searchAssets);
+// Searching only reads: view is enough (the page itself needs only view, so
+// view-only users got a page whose search always said 403). Moving needs edit.
+router.get(
+  '/asset-movement/search',
+  [authMiddleware, checkSectionPermission('inventory_asset_movement', 'view')],
+  assetMovement.searchValidators,
+  assetMovement.searchAssets
+);
 router.post(
   '/asset-movement/bulk-move',
   assetMovementAccess,
@@ -138,7 +145,8 @@ router.get('/master-data/export.xlsx', masterDataView, masterData.exportMasterDa
 router.get('/master-data/laptops/column-values', masterDataView, masterData.getLaptopColumnValues);
 router.patch(
   '/master-data/vendors/:vendorId/exclude-from-vendor-po',
-  masterDataView,
+  // A write: edit, not view (accounts / manager with view could change it).
+  [authMiddleware, checkSectionPermission('inventory_master_data', 'edit')],
   masterData.setVendorExcludeValidators,
   masterData.setVendorExcludeFromVendorPo
 );
@@ -160,7 +168,8 @@ router.post(
 );
 router.post(
   '/ready-to-rent-action',
-  invView,
+  // A write (it can move a repaired unit into stock): edit, not view.
+  invEdit,
   inventoryList.readyToRentActionValidators,
   inventoryList.updateReadyToRentAction
 );

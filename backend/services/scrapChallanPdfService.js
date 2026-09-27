@@ -38,7 +38,10 @@ async function loadScrapChallanPdfData(challanNumber) {
   const head = headRes.rows[0];
   if (!head) return null;
   const itemsRes = await pool.query(
-    `SELECT * FROM scrap_challan_items WHERE challan_number = $1 ORDER BY id ASC`,
+    `SELECT i.*, COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id') AS ttspl_id
+       FROM scrap_challan_items i
+       LEFT JOIN vendor_serial_numbers v ON v.serial_id = i.serial_id
+      WHERE i.challan_number = $1 ORDER BY i.id ASC`,
     [challanNumber]
   );
   return { ...head, items: itemsRes.rows };
@@ -49,14 +52,14 @@ function writeScrapItemsTable(doc, y, items) {
   const R = 555;
   const W = R - L;
 
-  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text('Scrapped Parts', L, y);
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text((items || []).some((i) => i.item_kind === 'laptop') ? 'Scrapped Laptops and Parts' : 'Scrapped Parts', L, y);
   y += 14;
 
   const cols = [
-    { label: 'PRT-ID', w: 90 },
-    { label: 'Part Name', w: 160 },
+    { label: 'PRT / TTSPL', w: 90 },
+    { label: 'Item', w: 160 },
     { label: 'Serial', w: 90 },
-    { label: 'Unit Cost', w: 70 },
+    { label: 'Value', w: 70 },
     { label: 'Remarks', w: W - 410 },
   ];
 
@@ -85,13 +88,15 @@ function writeScrapItemsTable(doc, y, items) {
       doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke();
       cx += c.w;
     }
-    const cost = item.unit_cost != null && Number.isFinite(Number(item.unit_cost))
-      ? `Rs ${Number(item.unit_cost).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+    // What the buyer pays when agreed; else the part's cost (declared value).
+    const valueOf = item.sale_value != null ? item.sale_value : item.unit_cost;
+    const cost = valueOf != null && Number.isFinite(Number(valueOf))
+      ? `Rs ${Number(valueOf).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
       : '—';
 
     let x = L;
     doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink)
-      .text(item.prt_id || '—', x + 4, y + 12, { width: cols[0].w - 8 });
+      .text(item.prt_id || item.ttspl_id || '—', x + 4, y + 12, { width: cols[0].w - 8 });
     x += cols[0].w;
     doc.font('Helvetica').fontSize(8).fillColor(C.ink)
       .text(item.part_name || '—', x + 4, y + 12, { width: cols[1].w - 8 });
@@ -155,7 +160,8 @@ async function generateScrapChallanPdf(challanNumber) {
   const dir = path.join(__dirname, '../uploads/scrap-challans');
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(challanNumber).replace(/[^\w-]+/g, '_');
-  const rel = `scrap-challans/SCRAP_${safe}.pdf`;
+  // The number already starts with SCRAP (SCRAP/26-27/0001 → SCRAP_26-27_0001.pdf).
+  const rel = `scrap-challans/${safe}.pdf`;
   const abs = path.join(__dirname, '../uploads', rel);
 
   // Adapt dispatchTagsForDc shape (expects VRDC-ish fields — scrap_challans has same ship columns)
@@ -209,13 +215,13 @@ async function generateScrapChallanPdf(challanNumber) {
     y = writeScrapItemsTable(doc, y, challan.items);
 
     const total = (challan.items || []).reduce((sum, it) => {
-      const n = Number(it.unit_cost);
+      const n = Number(it.sale_value != null ? it.sale_value : it.unit_cost);
       return sum + (Number.isFinite(n) ? n : 0);
     }, 0);
     if (total > 0) {
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
         .text(
-          `Total declared value: Rs ${total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
+          `${challan.sale_total != null ? 'Total sale value' : 'Total declared value'}: Rs ${total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
           40,
           y,
           { width: 515, align: 'right' }

@@ -319,6 +319,14 @@ async function transitionAsset(db, {
       // preservedRate). A re-rental overwrites it at dispatch_ready instead.
       add('returned_at', null);
       break;
+    case STATUS.SCRAPPED:
+      // Scrapped is terminal: it belongs to no customer, no challan and no
+      // shelf. (9 scrapped laptops on QA still pointed at a customer / DC.)
+      add('current_customer_id', null);
+      add('current_dc_number', null);
+      add('warehouse_carret', null);
+      add('warehouse_carret_slot', null);
+      break;
     default:
       break;
   }

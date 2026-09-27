@@ -172,6 +172,7 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/early-returns', require('./routes/earlyReturns'));
 app.use('/api/service-billing', require('./routes/serviceBilling'));
+app.use('/api/stock', require('./routes/stock'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/vendor-portal', require('./routes/vendorPortal'));
 app.use('/api/customer-portal', require('./routes/customerPortal'));

@@ -11,6 +11,7 @@ const {
   dispatchPayloadFromBody,
 } = require('./vendorRepairDcShared');
 const { recordMovement, MOVEMENT } = require('./partMovementService');
+const { logTtsplEvent } = require('./ttsplAuditService');
 
 const WAREHOUSE_ROLES = new Set([
   'warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead', 'procurement',
@@ -23,6 +24,9 @@ function mapById(map, id) {
 
 async function nextScrapChallanNumber(client) {
   const fy = currentFinancialYearLabel();
+  // Two creates at once both read the same MAX and the second hit the UNIQUE
+  // constraint; the lock makes them take turns (released at COMMIT).
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext('scrap_challan_number'))`);
   const r = await client.query(
     `SELECT COALESCE(MAX((regexp_match(challan_number, '/([0-9]+)$'))[1]::int), 0) + 1 AS n
        FROM scrap_challans
@@ -35,6 +39,8 @@ async function nextScrapChallanNumber(client) {
 
 async function createScrapChallan(client, {
   instanceIds,
+  serialIds = [],
+  saleValues = {},
   recipientVendorId,
   recipientName,
   recipientAddress,
@@ -45,12 +51,17 @@ async function createScrapChallan(client, {
   itemRemarks = {},
   actorUserId,
 }) {
-  if (!Array.isArray(instanceIds) || !instanceIds.length) {
-    throw new Error('Select at least one discarded part');
-  }
-
-  const ids = instanceIds.map((id) => Number(id)).filter((n) => Number.isFinite(n));
-  if (!ids.length) throw new Error('Select at least one discarded part');
+  const ids = (Array.isArray(instanceIds) ? instanceIds : []).map((id) => Number(id)).filter((n) => Number.isFinite(n));
+  const laptopIds = [...new Set((Array.isArray(serialIds) ? serialIds : []).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length && !laptopIds.length) throw new Error('Select at least one discarded part or scrapped laptop');
+  // What the buyer pays per line, keyed `part:<instance_id>` / `laptop:<serial_id>`.
+  const saleValueOf = (kind, id) => {
+    const v = saleValues[`${kind}:${id}`];
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) throw new Error('Sale value must be a number (0 or more)');
+    return Math.round(n * 100) / 100;
+  };
 
   const name = String(recipientName || '').trim();
   const address = String(recipientAddress || '').trim();
@@ -65,6 +76,21 @@ async function createScrapChallan(client, {
       FOR UPDATE OF pi`,
     [ids]
   );
+  // Laptops: approved scrap only (scrapped, not on a challan yet).
+  const lapRes = await client.query(
+    `SELECT v.serial_id, v.serial_number, v.inventory_status, v.scrap_challan_number,
+            COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id') AS ttspl_id,
+            NULLIF(TRIM(CONCAT(COALESCE(v.extra->>'brand', ''), ' ', COALESCE(v.extra->>'model', v.extra->>'model_name', ''))), '') AS model_name
+       FROM vendor_serial_numbers v
+      WHERE v.serial_id = ANY($1::int[]) AND v.deleted_at IS NULL
+      FOR UPDATE`,
+    [laptopIds]
+  );
+  if (lapRes.rows.length !== laptopIds.length) throw new Error('One or more laptops were not found');
+  for (const l of lapRes.rows) {
+    if (l.inventory_status !== 'scrapped') throw new Error(`${l.ttspl_id || l.serial_number} is not scrapped (current: ${l.inventory_status}) — its scrap must be approved first`);
+    if (l.scrap_challan_number) throw new Error(`${l.ttspl_id || l.serial_number} is already on scrap challan ${l.scrap_challan_number}`);
+  }
   if (instRes.rows.length !== ids.length) {
     throw new Error('One or more part instances were not found');
   }
@@ -105,6 +131,21 @@ async function createScrapChallan(client, {
     ]
   );
 
+  for (const l of lapRes.rows) {
+    const itemRemark = mapById(itemRemarks, `laptop:${l.serial_id}`) ?? null;
+    await client.query(
+      `INSERT INTO scrap_challan_items (
+          challan_number, item_kind, serial_id, part_name, serial_number, sale_value, item_remarks
+       ) VALUES ($1,'laptop',$2,$3,$4,$5,$6)`,
+      [challanNumber, l.serial_id, `Laptop ${l.ttspl_id || ''} ${l.model_name || ''}`.replace(/\s+/g, ' ').trim(),
+        l.serial_number, saleValueOf('laptop', l.serial_id), itemRemark ? String(itemRemark).trim() || null : null]
+    );
+    await client.query(
+      'UPDATE vendor_serial_numbers SET scrap_challan_number = $2, updated_at = NOW() WHERE serial_id = $1',
+      [l.serial_id, challanNumber]
+    );
+  }
+
   for (const inst of instRes.rows) {
     const itemRemark = mapById(itemRemarks, inst.instance_id)
       ?? mapById(itemRemarks, inst.prt_id)
@@ -112,8 +153,8 @@ async function createScrapChallan(client, {
       ?? null;
     await client.query(
       `INSERT INTO scrap_challan_items (
-          challan_number, instance_id, prt_id, part_id, part_name, serial_number, unit_cost, item_remarks
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          challan_number, instance_id, prt_id, part_id, part_name, serial_number, unit_cost, item_remarks, sale_value
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         challanNumber,
         inst.instance_id,
@@ -123,6 +164,7 @@ async function createScrapChallan(client, {
         inst.serial_number,
         inst.unit_cost,
         itemRemark ? String(itemRemark).trim() || null : null,
+        saleValueOf('part', inst.instance_id),
       ]
     );
     await client.query(
@@ -134,7 +176,13 @@ async function createScrapChallan(client, {
     );
   }
 
-  return { challan_number: challanNumber, item_count: instRes.rows.length };
+  await client.query(
+    `UPDATE scrap_challans
+        SET sale_total = (SELECT SUM(sale_value) FROM scrap_challan_items WHERE challan_number = $1)
+      WHERE challan_number = $1`,
+    [challanNumber]
+  );
+  return { challan_number: challanNumber, item_count: instRes.rows.length + lapRes.rows.length };
 }
 
 async function dispatchScrapChallan(client, {
@@ -189,7 +237,7 @@ async function dispatchScrapChallan(client, {
   const recipientSignerName = (body.recipient_signer_name || body.recipientSignerName || '').trim() || null;
 
   const valueRes = await client.query(
-    `SELECT COALESCE(SUM(unit_cost), 0)::float AS total
+    `SELECT COALESCE(SUM(COALESCE(sale_value, unit_cost)), 0)::float AS total
        FROM scrap_challan_items WHERE challan_number = $1`,
     [challanNumber]
   );
@@ -244,6 +292,33 @@ async function dispatchScrapChallan(client, {
     ]
   );
 
+  // Laptops leave the building: they were scrapped at approval; record the
+  // hand-over on the laptop and in its history.
+  const lapItems = await client.query(
+    `SELECT i.serial_id, i.serial_number, v.inventory_status,
+            COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id', v.serial_number) AS ttspl_id
+       FROM scrap_challan_items i
+       JOIN vendor_serial_numbers v ON v.serial_id = i.serial_id
+      WHERE i.challan_number = $1 AND i.item_kind = 'laptop'
+      FOR UPDATE OF v`,
+    [challanNumber]
+  );
+  for (const l of lapItems.rows) {
+    if (l.inventory_status !== 'scrapped') throw new Error(`${l.ttspl_id} is no longer scrapped (current: ${l.inventory_status})`);
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET extra = COALESCE(extra, '{}'::jsonb) || jsonb_build_object('scrap_disposed_at', NOW(), 'scrap_disposed_on', $2::text),
+              updated_at = NOW()
+        WHERE serial_id = $1`,
+      [l.serial_id, challanNumber]
+    );
+    await logTtsplEvent({
+      ttsplId: l.ttspl_id, vendorSerialId: l.serial_id, eventType: 'scrap_disposed',
+      description: `Handed to ${head.recipient_name} on scrap challan ${challanNumber}`,
+      metadata: { challan_number: challanNumber }, actorUserId, db: client,
+    });
+  }
+
   const itemsRes = await client.query(
     `SELECT i.*, pi.status AS instance_status, p.category
        FROM scrap_challan_items i
@@ -283,10 +358,10 @@ async function dispatchScrapChallan(client, {
     });
   }
 
-  return { challan_number: challanNumber, status: 'dispatched', item_count: itemsRes.rows.length };
+  return { challan_number: challanNumber, status: 'dispatched', item_count: itemsRes.rows.length + lapItems.rows.length };
 }
 
-async function cancelDraftScrapChallan(client, { challanNumber }) {
+async function cancelDraftScrapChallan(client, { challanNumber, reason = null, actorUserId = null }) {
   const headRes = await client.query(
     `SELECT * FROM scrap_challans WHERE challan_number = $1 FOR UPDATE`,
     [challanNumber]
@@ -304,8 +379,18 @@ async function cancelDraftScrapChallan(client, { challanNumber }) {
       WHERE scrap_challan_number = $1`,
     [challanNumber]
   );
-  // Hard delete — scrap_challans has no deleted_at (same as VRDC part items cleanup style)
-  await client.query(`DELETE FROM scrap_challans WHERE challan_number = $1`, [challanNumber]);
+  await client.query(
+    `UPDATE vendor_serial_numbers SET scrap_challan_number = NULL, updated_at = NOW() WHERE scrap_challan_number = $1`,
+    [challanNumber]
+  );
+  // Kept, marked cancelled: a hard delete left no trace and let the number be
+  // reused by the next challan.
+  await client.query(
+    `UPDATE scrap_challans
+        SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, cancel_reason = $3, updated_at = NOW()
+      WHERE challan_number = $1`,
+    [challanNumber, actorUserId, reason ? String(reason).trim() : null]
+  );
 
   return { challan_number: challanNumber, cancelled: true };
 }
@@ -323,9 +408,11 @@ async function getScrapChallan(challanNumber) {
   const items = await pool.query(
     `SELECT i.*,
             pi.status AS instance_status,
-            p.category
+            p.category,
+            COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id') AS ttspl_id
        FROM scrap_challan_items i
        LEFT JOIN part_instances pi ON pi.instance_id = i.instance_id
+       LEFT JOIN vendor_serial_numbers v ON v.serial_id = i.serial_id
        LEFT JOIN parts p ON p.part_id = COALESCE(i.part_id, pi.part_id)
       WHERE i.challan_number = $1
       ORDER BY i.id ASC`,
@@ -355,7 +442,7 @@ async function listScrapChallans({
       OR EXISTS (
         SELECT 1 FROM scrap_challan_items i
          WHERE i.challan_number = d.challan_number
-           AND (i.prt_id ILIKE $${i} OR COALESCE(i.serial_number,'') ILIKE $${i} OR COALESCE(i.part_name,'') ILIKE $${i})
+           AND (COALESCE(i.prt_id,'') ILIKE $${i} OR COALESCE(i.serial_number,'') ILIKE $${i} OR COALESCE(i.part_name,'') ILIKE $${i})
       )
     )`);
   }

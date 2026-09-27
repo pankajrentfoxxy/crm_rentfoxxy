@@ -425,27 +425,39 @@ async function hardwareQcCheck(req, res) {
       // is scrapped, which is terminal and which the map already understands.
       // Writing the QC word into inventory_status is what made 'scrapped'
       // unenforceable, because half the scrapped fleet was not spelled that way.
-      await transitionAsset(pool, {
-        serialId,
-        toStatus: 'scrapped',
-        reason: `Harvested for parts${req.body.remark ? ` — ${req.body.remark}` : ''}`,
-        actorUserId: req.user?.user_id || null,
-        actorName: req.user?.name || null,
-        correlationId: req.correlationId,
-        caller: 'qcManagement/orders.controller.hardwareAction(require_for_parts)',
-      });
+      // One transaction: the status and the QC fields change together or not at
+      // all (they were two separate writes, so a failure left them disagreeing).
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await transitionAsset(client, {
+          serialId,
+          toStatus: 'scrapped',
+          reason: `Harvested for parts${req.body.remark ? ` — ${req.body.remark}` : ''}`,
+          actorUserId: req.user?.user_id || null,
+          actorName: req.user?.name || null,
+          correlationId: req.correlationId,
+          caller: 'qcManagement/orders.controller.hardwareAction(require_for_parts)',
+        });
 
-      // qc_status keeps the QC vocabulary — it is that column's own word for
-      // this outcome, and decision D2 leaves qc_status alone until its writer
-      // is rewritten in Part 5.
-      await pool.query(
-        `UPDATE vendor_serial_numbers
-         SET qc_status = 'require_for_parts',
-             extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
-             updated_at = NOW()
-         WHERE serial_id = $2`,
-        [JSON.stringify(extra), serialId]
-      );
+        // qc_status keeps the QC vocabulary — it is that column's own word for
+        // this outcome, and decision D2 leaves qc_status alone until its writer
+        // is rewritten in Part 5.
+        await client.query(
+          `UPDATE vendor_serial_numbers
+           SET qc_status = 'require_for_parts',
+               extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
+               updated_at = NOW()
+           WHERE serial_id = $2`,
+          [JSON.stringify(extra), serialId]
+        );
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw txErr;
+      } finally {
+        client.release();
+      }
     } else {
       // 'ready', 'not_ready', 'pending' and anything else recorded the same
       // way: the two branches were byte-identical, so they are one branch now.

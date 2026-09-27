@@ -1,9 +1,17 @@
 const pool = require('../config/db');
 const svc = require('../services/scrapChallanService');
 
+/**
+ * The warehouse roles as before, OR anyone granted scrap_challans edit in the
+ * permission matrix (a custom role given the grant could not act before).
+ */
 function requireWarehouse(req, res, next) {
   if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
-  return res.status(403).json({ success: false, message: 'Warehouse, procurement, or admin access required' });
+  const { hasPermission } = require('../services/permissionService');
+  if (!req.permissionCache) req.permissionCache = {};
+  return hasPermission(req.user.user_id, req.user.role, 'scrap_challans', 'can_edit', req.permissionCache)
+    .then((ok) => (ok ? next() : res.status(403).json({ success: false, message: 'Warehouse, procurement, or admin access required' })))
+    .catch(next);
 }
 
 function actor(req) {
@@ -52,6 +60,8 @@ exports.createScrapChallan = async (req, res) => {
     await client.query('BEGIN');
     const result = await svc.createScrapChallan(client, {
       instanceIds: req.body.instance_ids || req.body.instanceIds || [],
+      serialIds: req.body.serial_ids || req.body.serialIds || [],
+      saleValues: req.body.sale_values || req.body.saleValues || {},
       recipientVendorId: req.body.recipient_vendor_id || req.body.recipientVendorId,
       recipientName: req.body.recipient_name || req.body.recipientName,
       recipientAddress: req.body.recipient_address || req.body.recipientAddress,
@@ -100,6 +110,7 @@ exports.cancelDraftScrapChallan = async (req, res) => {
     const result = await svc.cancelDraftScrapChallan(client, {
       challanNumber: challanParam(req),
       actorUserId: actor(req).actorUserId,
+      reason: req.body?.reason || null,
     });
     await client.query('COMMIT');
     res.json({ success: true, ...result });
