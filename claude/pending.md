@@ -36,7 +36,7 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    not earning, scrap (request → approve → challan). asset_available = QC-passed (354, done).
    Clean-up applied on QA 27 Sep by the user (398 rows, backup
    backend/backups/stock-cleanup-2026-09-27T22-03-38-587Z.json). Waiting: click-through, the 13
-   REVIEW rows checked physically, 5 asset-config duplicates merged by hand.
+   REVIEW rows checked physically. (Asset-config duplicates merged 27 Sep: scripts/merge-asset-config-duplicates.js — run on live at promotion.)
 10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
     technicians, dispatch QC link.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
