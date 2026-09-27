@@ -158,7 +158,7 @@ async function attachDcLineRates(lines, dcNumber) {
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
 async function resolveDcUnitRows(lines, dcNumber) {
-  const { getDcSerialRateLookup, lookupSerialRate, lookupSerialRemark, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec, getSalesOrderTermsFallback } = require('./salesManagementService');
+  const { getDcSerialRateLookup, lookupSerialRate, lookupSerialRemark, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec, getSalesOrderTermsFallback, isSaleWarrantyReplacementDc } = require('./salesManagementService');
   const head = lines[0] || {};
   const son = head.sales_order_number;
   const dcNum = dcNumber || head.dc_number;
@@ -223,6 +223,9 @@ async function resolveDcUnitRows(lines, dcNumber) {
           || '',
       });
     }
+  }
+  if (isSaleWarrantyReplacementDc(head)) {
+    for (const row of rows) row.rate = 0;
   }
   return rows;
 }

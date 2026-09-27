@@ -3149,9 +3149,36 @@ async function loadSerialInventorySpec({ serialId, serialNumber, ttspl } = {}) {
 }
 
 /** Billing rows grouped by SO line for DC detail UI / totals. */
+/**
+ * A sold laptop's warranty replacement ships on its original sale order, but
+ * nothing is sold again: the DC carries the laptop at Rs 0, not the sale price.
+ * `head` is a getDeliveryChallanLines row (order_type comes from its SO).
+ */
+function isSaleWarrantyReplacementDc(head = {}) {
+  if (String(head.dc_purpose || '').toLowerCase() !== 'replacement') return false;
+  return ['sale', 'sales'].includes(String(head.order_type || '').toLowerCase())
+    || String(head.entity_code || '').toLowerCase() === 'gorefurbo';
+}
+
 async function resolveDcBilling(dcNumber, lines) {
   const head = lines[0] || {};
   const son = head.sales_order_number;
+
+  if (isSaleWarrantyReplacementDc(head)) {
+    const billingLines = lines.map((line) => {
+      line.rate = 0;
+      line.amount = 0;
+      return {
+        brand: line.brand,
+        model_name: line.model_name,
+        rate: 0,
+        quantity: Number(line.quantity || line.main_qty || 1) || 1,
+        amount: 0,
+      };
+    });
+    return { billingLines, subtotal: 0 };
+  }
+
   if (dcNumber && son) {
     const billingLines = await getDcBillingLines(dcNumber, son);
     if (billingLines.length) {
@@ -3218,6 +3245,7 @@ module.exports = {
   loadSerialInventorySpec,
   getDcBillingLines,
   resolveDcBilling,
+  isSaleWarrantyReplacementDc,
   entityForQuotationType,
   entityDocType,
   salesOrderScopeWhere,

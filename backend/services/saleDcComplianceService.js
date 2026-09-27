@@ -207,6 +207,9 @@ function requiresInvoiceCompliance(entityCode, quotationType, isFirstDc = false,
   // e-invoice for a laptop nobody was selling. The e-way bill is unaffected —
   // requiresOutboundEway() still applies it above the value threshold.
   if (isServiceReturnDc(dcPurpose)) return false;
+  // Nor is a warranty replacement: a sold laptop's replacement ships at Rs 0 on
+  // the original sale order, which was invoiced when it was sold.
+  if (String(dcPurpose || '').toLowerCase() === 'replacement') return false;
   return isSaleDc(entityCode, quotationType) || Boolean(isFirstDc);
 }
 

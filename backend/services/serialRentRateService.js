@@ -1,7 +1,13 @@
 const pool = require('../config/db');
 
+function isSaleLine(quotationType) {
+  return ['sale', 'sales'].includes(String(quotationType || '').toLowerCase());
+}
+
 /**
  * Monthly rent for a serial from its sales-order allocation (authoritative for DC billing).
+ * A sale line's rate is a price, not rent: TTSPL3059 went out on a sale order and
+ * was left 'rented' at the Rs 20,000 sale price. Sale lines give no rent.
  */
 async function resolveSerialRentRate(db, serialId, dcNumber = null) {
   if (!serialId) return null;
@@ -13,7 +19,7 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
     dcClause = `AND sos.dc_number = $${params.length}`;
   }
   const bySerial = await client.query(
-    `SELECT sol.rate
+    `SELECT sol.rate, sol.quotation_type
        FROM sales_order_serials sos
        JOIN sales_order_lines sol ON sol.id = sos.line_id
       WHERE sos.serial_id = $1
@@ -23,12 +29,13 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
       LIMIT 1`,
     params
   );
+  if (bySerial.rows.length && isSaleLine(bySerial.rows[0].quotation_type)) return null;
   const serialRate = parseFloat(bySerial.rows[0]?.rate || 0);
   if (serialRate > 0) return serialRate;
 
   if (!dcNumber) return null;
   const byDc = await client.query(
-    `SELECT sol.rate
+    `SELECT sol.rate, sol.quotation_type
        FROM delivery_challan_lines dcl
        JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
       WHERE dcl.dc_number = $1
@@ -36,6 +43,7 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
       LIMIT 1`,
     [dcNumber]
   );
+  if (byDc.rows.length && isSaleLine(byDc.rows[0].quotation_type)) return null;
   const dcRate = parseFloat(byDc.rows[0]?.rate || 0);
   return dcRate > 0 ? dcRate : null;
 }

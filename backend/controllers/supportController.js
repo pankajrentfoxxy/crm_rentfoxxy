@@ -1818,6 +1818,7 @@ exports.cancelTicket = async (req, res) => {
                 [ticketId]
             );
         }
+        await replacementFlow.releaseSaleReplacementSlots(client, ticketId, req.user);
         try {
             await client.query(
                 `UPDATE support_replacement_orders
@@ -4631,12 +4632,25 @@ exports.initiateReplacement = async (req, res) => {
             }
         }
         if (isAppend) {
+            // On a sale replacement the order is the original sale, whose own delivery
+            // DC is not the replacement's; only a replacement DC means it has shipped.
             const outboundDc = await client.query(
-                `SELECT dc_number FROM delivery_challan_lines
-                  WHERE sales_order_number = $1 AND movement_type = 'outbound'
-                    AND COALESCE(status, '') NOT IN ('cancelled')
+                `SELECT dcl.dc_number FROM delivery_challan_lines dcl
+                  WHERE dcl.sales_order_number = $1 AND dcl.movement_type = 'outbound'
+                    AND COALESCE(dcl.status, '') NOT IN ('cancelled')
+                    AND (
+                      dcl.support_replacement_order_id IN (
+                        SELECT id FROM support_replacement_orders
+                         WHERE ticket_id = $2 AND status NOT IN ('completed', 'cancelled')
+                      )
+                      OR NOT EXISTS (
+                        SELECT 1 FROM sales_order_lines sol
+                         WHERE sol.sales_order_number = dcl.sales_order_number
+                           AND LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
+                      )
+                    )
                   LIMIT 1`,
-                [ticket.sales_order_number]
+                [ticket.sales_order_number, ticketId]
             );
             if (outboundDc.rows.length) {
                 throw Object.assign(
@@ -4726,9 +4740,12 @@ exports.initiateReplacement = async (req, res) => {
             lineConfigs.push(await replacementFlow.resolveConfigFromComplaint(client, src, ticket.customer_id));
         }
 
-        const { salesOrderNumber, lineIds } = isAppend
-            ? await replacementFlow.appendConfigSalesOrderLines(client, {
-                salesOrderNumber: ticket.sales_order_number,
+        // A sold laptop's replacement goes back on its sale line; a rented one's on a
+        // (new or appended) replacement rental SO.
+        const { salesOrderNumber, lineIds } = await replacementFlow.placeReplacementLines(client, {
+            lineConfigs,
+            appendToSalesOrderNumber: isAppend ? ticket.sales_order_number : null,
+            orderArgs: {
                 customerId: ticket.customer_id,
                 customerName,
                 customerEmail: ticket.ticket_email || cust.email,
@@ -4737,21 +4754,9 @@ exports.initiateReplacement = async (req, res) => {
                 billingAddress,
                 gstNumber: cust.gst_no,
                 supplyState: cust.billing_state,
-                lineConfigs,
                 userId: req.user.user_id,
-            })
-            : await replacementFlow.createConfigSalesOrder(client, {
-                customerId: ticket.customer_id,
-                customerName,
-                customerEmail: ticket.ticket_email || cust.email,
-                customerMobile: shippingAddress.phone || cust.phone,
-                shippingAddress,
-                billingAddress,
-                gstNumber: cust.gst_no,
-                supplyState: cust.billing_state,
-                lineConfigs,
-                userId: req.user.user_id,
-            });
+            },
+        });
 
         const replacementOrderIds = [];
         for (let i = 0; i < sourceItems.length; i += 1) {
@@ -5369,6 +5374,9 @@ exports.cancelReturnPickup = async (req, res) => {
 
         let soCancelled = null;
         if (cancelReplacementOrder) {
+            // A sold laptop's replacement sits on the customer's original sale order:
+            // put that order back as it was instead of cancelling it.
+            const saleSoNumbers = await replacementFlow.releaseSaleReplacementSlots(client, ticketId, req.user);
             try {
                 await client.query(
                     `UPDATE support_replacement_orders
@@ -5389,7 +5397,7 @@ exports.cancelReturnPickup = async (req, res) => {
             );
 
             const soNumber = ticket.sales_order_number || null;
-            if (soNumber) {
+            if (soNumber && !saleSoNumbers.includes(soNumber)) {
                 soCancelled = await cancelReplacementSalesOrder(client, soNumber, req.user);
             }
 
