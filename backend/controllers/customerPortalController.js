@@ -166,6 +166,43 @@ exports.me = async (req, res) => {
   }
 };
 
+/**
+ * Lock-in (rented) and warranty (sold) for the laptops the customer holds
+ * (claude/carret-lockin-warranty.md), so they see before asking for a return
+ * that one inside lock-in needs approval and is chargeable. Own laptops only.
+ */
+async function withLockInAndWarranty(customerId, laptops) {
+  const { toDateStr, daysUntil, lockInActive, warrantyStatus } = require('../services/lockInWarrantyService');
+  const codes = [...new Set(laptops.flatMap((l) => [l.ttspl_id, l.serial_number])
+    .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
+  if (!codes.length) return laptops;
+  const { rows } = await pool.query(
+    `SELECT UPPER(COALESCE(inventory_asset_code, extra->>'ttspl_id', '')) AS code, UPPER(COALESCE(serial_number, '')) AS sn,
+            inventory_status, lock_in_end_date, warranty_end_date, battery_warranty_end_date
+       FROM vendor_serial_numbers
+      WHERE current_customer_id = $1 AND deleted_at IS NULL
+        AND (UPPER(COALESCE(inventory_asset_code, extra->>'ttspl_id', '')) = ANY($2::text[])
+             OR UPPER(COALESCE(serial_number, '')) = ANY($2::text[]))`,
+    [customerId, codes]
+  );
+  const byCode = new Map();
+  for (const r of rows) { if (r.code) byCode.set(r.code, r); if (r.sn) byCode.set(r.sn, r); }
+  return laptops.map((l) => {
+    const r = byCode.get(String(l.ttspl_id || '').toUpperCase()) || byCode.get(String(l.serial_number || '').toUpperCase());
+    if (!r) return l;
+    const active = lockInActive(r);
+    return {
+      ...l,
+      lock_in_end_date: r.inventory_status === 'rented' ? toDateStr(r.lock_in_end_date) : null,
+      lock_in_active: active,
+      lock_in_days_left: active ? daysUntil(r.lock_in_end_date) : 0,
+      warranty_end_date: r.inventory_status === 'sold' ? toDateStr(r.warranty_end_date) : null,
+      battery_warranty_end_date: r.inventory_status === 'sold' ? toDateStr(r.battery_warranty_end_date) : null,
+      warranty_status: warrantyStatus(r),
+    };
+  });
+}
+
 // GET /laptops?lifecycle=active|returned&search=&date_from=&date_to=&page=&limit=
 exports.listLaptops = async (req, res) => {
   const customerId = req.customer.customer_id;
@@ -177,7 +214,7 @@ exports.listLaptops = async (req, res) => {
     return res.json({
       success: true,
       pagination,
-      laptops: laptops.map((row) => ({
+      laptops: await withLockInAndWarranty(customerId, laptops.map((row) => ({
         ttspl_id: row.ttspl_id || null,
         serial_number: row.serial_number || null,
         brand: row.brand || null,
@@ -194,7 +231,7 @@ exports.listLaptops = async (req, res) => {
         dc_number: row.dc_number || null,
         status: row.status || 'active',
         lifecycle: row.lifecycle || 'active',
-      })),
+      }))),
     });
   } catch (err) {
     // Older databases can miss columns the shared asset query relies on; fall
@@ -270,7 +307,7 @@ exports.listLaptops = async (req, res) => {
       status: row.status || 'active',
     }));
 
-    res.json({ success: true, laptops });
+    res.json({ success: true, laptops: await withLockInAndWarranty(customerId, laptops) });
   } catch (err) {
     console.error('customerPortal listLaptops:', err);
     res.status(500).json({ success: false, message: err.message });

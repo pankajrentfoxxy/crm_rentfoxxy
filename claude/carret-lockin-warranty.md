@@ -98,6 +98,8 @@
 7. A replacement delivered for a rented laptop keeps the old lock-in end (Asset record / API).
 
 ### Not done / later
-- Customer portal: a return request is accepted as before; the lock-in stops it at conversion
-  (Support then raises the early return). The portal does not show lock-in yet.
+- Customer portal (27 Sep): My Laptops shows "Lock-in till … / N days left", or the warranty for a
+  sold laptop; a Return request on a laptop in lock-in shows that it needs approval and may be
+  charged (the request is still accepted; the lock-in stops it at conversion and Support raises
+  the early return). Raise Ticket on an out-of-warranty laptop says repairs are chargeable.
 - The old ticket screens show the server's lock-in / warranty message but no new buttons.

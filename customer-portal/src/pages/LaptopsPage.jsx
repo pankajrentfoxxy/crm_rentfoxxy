@@ -14,6 +14,28 @@ const LIFECYCLE_TABS = [
   { value: 'returned', label: 'Returned' },
 ];
 
+/**
+ * Lock-in (rented) or warranty (sold). A laptop returned before its lock-in
+ * ends needs approval and the remaining rent may be charged.
+ */
+export function TermsCell({ laptop: r }) {
+  if (r.lock_in_active) {
+    return (
+      <span className="text-amber-700 text-xs font-medium whitespace-nowrap" title="Returning it before this date needs approval and may be charged">
+        Lock-in till {fmtDate(r.lock_in_end_date)}
+        <span className="block text-slate-500 font-normal">{r.lock_in_days_left} days left</span>
+      </span>
+    );
+  }
+  if (r.lock_in_end_date) return <span className="text-emerald-700 text-xs whitespace-nowrap">Lock-in complete</span>;
+  if (r.warranty_status === 'in') return <span className="text-emerald-700 text-xs whitespace-nowrap">Warranty till {fmtDate(r.warranty_end_date)}</span>;
+  if (r.warranty_status === 'battery_only') {
+    return <span className="text-amber-700 text-xs whitespace-nowrap">Battery / charger warranty till {fmtDate(r.battery_warranty_end_date)}</span>;
+  }
+  if (r.warranty_status === 'out') return <span className="text-rose-700 text-xs whitespace-nowrap" title="Service and repairs are chargeable">Out of warranty</span>;
+  return <span className="text-slate-400">—</span>;
+}
+
 export default function LaptopsPage() {
   const { readOnly } = useAuth();
   const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/laptops', {
@@ -71,6 +93,11 @@ export default function LaptopsPage() {
       label: 'Monthly Rate',
       render: (r) => (r.monthly_rate ? inr(r.monthly_rate) : '—'),
     },
+    ...(isReturned ? [] : [{
+      key: 'terms',
+      label: 'Lock-in / Warranty',
+      render: (r) => <TermsCell laptop={r} />,
+    }]),
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
     {
       key: 'actions',

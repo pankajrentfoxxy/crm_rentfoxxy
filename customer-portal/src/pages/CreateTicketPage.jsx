@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
+import { fmtDate } from '../utils/format';
 import { useAuth } from '../context/AuthContext';
 import {
   formatIndianMobileInput, indianMobileError, normalizeIndianMobile,
@@ -38,6 +39,7 @@ export default function CreateTicketPage() {
   const [pickupAddr, setPickupAddr] = useState(EMPTY_ADDRESS);
 
   const isReturn = ticketType === 'Return Request';
+  const chosenLaptop = laptops.find((l) => l.ttspl_id && l.ttspl_id === ttsplId) || null;
   // A problem with a laptop (not a return / replacement) says what kind of
   // problem and which part; our support team picks the exact issue.
   const isComplaint = !['Return Request', 'Replacement Request'].includes(ticketType);
@@ -224,6 +226,8 @@ export default function CreateTicketPage() {
             {laptops.map((l) => (
               <option key={l.ttspl_id} value={l.ttspl_id}>
                 {l.ttspl_id} — {[l.brand, l.model].filter(Boolean).join(' ')}
+                {l.lock_in_active ? ` (lock-in till ${fmtDate(l.lock_in_end_date)})` : ''}
+                {l.warranty_status === 'out' ? ' (out of warranty)' : ''}
               </option>
             ))}
           </select>
@@ -233,6 +237,22 @@ export default function CreateTicketPage() {
             </span>
           )}
         </label>
+
+        {isReturn && chosenLaptop?.lock_in_active && (
+          <div className="border border-amber-300 rounded-lg p-3 bg-amber-50 text-sm text-amber-900">
+            <p className="font-semibold">This laptop is in its lock-in period until {fmtDate(chosenLaptop.lock_in_end_date)} ({chosenLaptop.lock_in_days_left} days left).</p>
+            <p className="mt-1 text-xs">
+              You can still send the request. An early return needs approval from our team, and the rent for the remaining
+              lock-in period may be charged. We will contact you to agree it before the pickup.
+            </p>
+          </div>
+        )}
+        {!isReturn && chosenLaptop?.warranty_status === 'out' && (
+          <div className="border border-rose-200 rounded-lg p-3 bg-rose-50 text-sm text-rose-900">
+            This laptop is out of warranty{chosenLaptop.warranty_end_date ? ` (ended ${fmtDate(chosenLaptop.warranty_end_date)})` : ''}.
+            Repairs and parts are chargeable — we will share the cost before doing the work.
+          </div>
+        )}
 
         {isReturn && (
           <div className="border rounded-lg p-3 bg-amber-50/50 space-y-2">
