@@ -15,6 +15,9 @@ import ProtectedRoute from '../router/ProtectedRoute';
 const AssetRecordPage = React.lazy(() => import('../features/carret/AssetRecordPage'));
 const AssetsListPage = React.lazy(() => import('../features/carret/AssetsListPage'));
 const NewUiHomePage = React.lazy(() => import('../features/carret/NewUiHomePage'));
+const ReadyStockPage = React.lazy(() => import('../features/carret/stock/ReadyStockPage'));
+const NotEarningPage = React.lazy(() => import('../features/carret/stock/NotEarningPage'));
+const ScrapPage = React.lazy(() => import('../features/carret/stock/ScrapPage'));
 const OperationsOverviewPage = React.lazy(() => import('../features/carret/OperationsOverviewPage'));
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
@@ -96,6 +99,10 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/home', element: <React.Suspense fallback={null}><NewUiHomePage /></React.Suspense> },
       { path: '/carret/stock/assets', element: guard('inventory_management', 'view', <AssetsListPage />) },
       { path: '/carret/stock/assets/:ttspl', element: guard('inventory_management', 'view', <AssetRecordPage />) },
+      // Stock (claude/carret-stock.md): ready stock with tag + slot, not earning, scrap.
+      { path: '/carret/stock/ready', element: guardAny(['inventory_management', 'ready_to_rent_location'], 'view', <ReadyStockPage />) },
+      { path: '/carret/stock/not-earning', element: guard('inventory_management', 'view', <NotEarningPage />) },
+      { path: '/carret/stock/scrap', element: guardAny(['inventory_management', 'scrap_approval', 'scrap_challans'], 'view', <ScrapPage />) },
 
       // Move (Part 3.7). The gate is the load-bearing screen under Decision 4,
       // so it gets the floor-density shell rather than a cut-down desk page.

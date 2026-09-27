@@ -70,20 +70,24 @@ export const SECTIONS = [
   {
     key: 'stock',
     label: 'Stock',
+    // Stock rebuilt in the new UI (claude/carret-stock.md, 27 Sep 2026). NPA is
+    // now "Not earning"; "Scrapped" opened the PARTS scrap challan and is now
+    // Scrap (laptop requests, approval, challans). Old screens stay under
+    // "Old view" until Stock is signed off (hard rule 6).
+    groups: ['Stock', 'Reports & setup', 'Old view'],
     items: [
-      { to: '/inventory-management/universal-search', label: 'Assets', section: 'inventory_management', action: 'view' },
-      // Part 2.7, behind REACT_APP_CARRET. Sits beside the existing screen
-      // rather than replacing it — nothing is deleted until its replacement is
-      // signed off (hard rule 6).
-      { to: '/carret/stock/assets', label: 'Assets (Carret)', section: 'inventory_management', action: 'view' },
-      { to: '/inventory-management/ready-to-rent-or-sell', label: 'Ready to Rent or Sell', section: 'ready_to_rent_location', action: 'view' },
-      { to: '/inventory-management/asset-movement', label: 'Asset Movements', section: 'inventory_asset_movement', action: 'view' },
-      { to: '/inventory-management/scrap-challans', label: 'Scrapped', section: 'scrap_challans', action: 'view' },
-      { to: '/inventory-management/master-data', label: 'Master Data', section: 'inventory_master_data', action: 'view' },
-      { to: '/inventory-management/npa-assets', label: 'NPA Assets', section: 'inventory_management', action: 'view' },
-      { to: '/customer-inventory', label: 'Customer Inventory', section: 'customer_inventory', action: 'view' },
-      // Bucket C: finished work that had no menu entry until now.
-      { to: '/asset-configuration', label: 'Asset Configuration', section: 'asset_configuration', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/assets', label: 'Assets', section: 'inventory_management', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/ready', label: 'Ready Stock', sections: ['inventory_management', 'ready_to_rent_location'], section: 'inventory_management', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/assets?view=with_customer', label: 'With Customers', section: 'inventory_management', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/not-earning', label: 'Not Earning', section: 'inventory_management', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/scrap', label: 'Scrap', sections: ['inventory_management', 'scrap_approval', 'scrap_challans'], section: 'inventory_management', action: 'view' },
+      { group: 'Reports & setup', to: '/inventory-management/master-data', label: 'Master Data', section: 'inventory_master_data', action: 'view' },
+      { group: 'Reports & setup', to: '/inventory-management/customer-assets', label: 'Deployed Fleet', section: 'customer_inventory', action: 'view' },
+      { group: 'Reports & setup', to: '/asset-configuration', label: 'Asset Configuration', section: 'asset_configuration', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/universal-search', label: 'Search (old)', section: 'inventory_management', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/ready-to-rent-or-sell', label: 'Ready to Rent or Sell (old)', section: 'inventory_management', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/asset-movement', label: 'Asset Movements (old)', section: 'inventory_asset_movement', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/scrap-challans', label: 'Scrap Challans (old)', section: 'scrap_challans', action: 'view' },
     ],
   },
   {

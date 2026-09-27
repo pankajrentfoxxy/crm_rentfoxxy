@@ -1,124 +1,95 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, Panel, StatusChip, DocNumber, Money, DateTime, EmptyState, Button, Segmented,
+  Button, DataTable, DateTime, DocNumber, EmptyState, Input, Money, Segmented, Select, StatusChip,
 } from '../../components/carret';
 import { ASSET_STATUSES } from '../../config/statuses';
-import { useAssetList } from './useAssets';
+import { errMsg, fetchAssetCounts, fetchAssets, TAG_OPTIONS } from './stock/stockApi';
 
 /**
- * Stock → Assets (Part 2.7).
+ * Stock → Assets (claude/carret-stock.md). Every laptop, by TTSPL: where it is,
+ * its state, rent/sell tag, carret slot, customer and PO. Search covers TTSPL,
+ * serial, PO number, customer and model; filters combine.
  *
- * Filters COMBINE. The current screens replace one filter with the next, which
- * is why people export to a spreadsheet to answer a two-dimensional question
- * like "Dell laptops in repair". Here vendor + status + search is an
- * intersection.
- *
- * The status options come from the canonical twelve, so this list cannot invent
- * a thirteenth the way every screen used to.
+ * (It read /inventory-management/lists, which does not exist, so it never loaded.)
  */
-const SEGMENTS = [
-  { key: 'passed', label: 'Ready to rent or sell' },
-  { key: 'rented', label: 'With customers' },
-  { key: 'qc_pending', label: 'Awaiting QC' },
-  { key: 'dead_laptops', label: 'Scrapped' },
+const VIEWS = [
+  { value: '', label: 'All' },
+  { value: 'ready', label: 'Ready' },
+  { value: 'with_customer', label: 'With customers' },
+  { value: 'on_floor', label: 'Not ready yet' },
 ];
+const LIMIT = 50;
 
 export default function AssetsListPage() {
   const navigate = useNavigate();
-  const [segment, setSegment] = useState('passed');
-  const [filters, setFilters] = useState({});
+  const [params] = useSearchParams();
+  const [view, setView] = useState(VIEWS.some((v) => v.value === params.get('view')) ? params.get('view') : '');
+  const [status, setStatus] = useState('');
+  const [tag, setTag] = useState('');
+  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [res, setRes] = useState(null);
+  const [counts, setCounts] = useState(null);
 
-  const { loading, error, rows, total } = useAssetList({ segment, filters });
+  useEffect(() => { const t = setTimeout(() => { setSearch(q.trim()); setPage(1); }, 350); return () => clearTimeout(t); }, [q]);
+  useEffect(() => { fetchAssetCounts().then(({ data }) => setCounts(data.data)).catch(() => {}); }, []);
+  const load = useCallback(() => {
+    setRes(null);
+    fetchAssets({ view: view || undefined, status: status || undefined, tag: tag || undefined, search: search || undefined, page, limit: LIMIT })
+      .then(({ data }) => setRes(data))
+      .catch((e) => { setRes({ data: [], total: 0 }); toast.error(errMsg(e)); });
+  }, [view, status, tag, search, page]);
+  useEffect(() => { load(); }, [load]);
 
-  const onFilter = useCallback((key, value) => {
-    setFilters((f) => ({ ...f, [key]: value }));
-  }, []);
-  const onClear = useCallback(() => setFilters({}), []);
+  const cols = [
+    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: (r) => r.model_name },
+    { key: 'c', header: 'Configuration', render: (r) => [r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ') || '—' },
+    { key: 's', header: 'State', render: (r) => <StatusChip status={r.inventory_status} />, sub: (r) => (r.inventory_status === 'in_stock' ? (r.is_ready ? 'ready' : `QC: ${r.qc_status || '—'}`) : null) },
+    { key: 'w', header: 'Where', render: (r) => r.customer_name || r.location || '—', sub: (r) => (r.customer_name ? r.current_dc_number : (r.tag_label ? `for ${r.tag_label.toLowerCase()}` : null)) },
+    { key: 'r', header: 'Rent', numeric: true, render: (r) => <Money value={r.rent_monthly_rate} showZero={false} /> },
+    { key: 'p', header: 'Bought on', render: (r) => r.purchase_order_number || '—', sub: (r) => r.vendor_name },
+    { key: 'u', header: 'Since', render: (r) => <DateTime value={r.status_changed_at || r.updated_at} /> },
+  ];
 
-  const filterDefs = useMemo(() => [
-    { key: 'search', label: 'Search', type: 'search', placeholder: 'TTSPL or serial' },
-    { key: 'brand', label: 'Brand', options: [
-      { value: 'Dell', label: 'Dell' }, { value: 'HP', label: 'HP' },
-      { value: 'Lenovo', label: 'Lenovo' }, { value: 'Apple', label: 'Apple' },
-    ] },
-    { key: 'status', label: 'Status', options: ASSET_STATUSES.map((s) => ({ value: s.value, label: s.label })) },
-  ], []);
-
-  const columns = useMemo(() => [
-    {
-      key: 'ttspl',
-      header: 'TTSPL',
-      render: (r) => <DocNumber value={r.inventory_asset_code || r.ttspl_id || r.unique_product_serial} />,
-    },
-    { key: 'serial_number', header: 'Serial' },
-    {
-      key: 'config',
-      header: 'Configuration',
-      render: (r) => [r.brand, r.model || r.pd_model, r.processor, r.ram, r.storage]
-        .filter(Boolean).join(' · ') || '—',
-    },
-    {
-      key: 'inventory_status',
-      header: 'State',
-      render: (r) => (r.inventory_status
-        ? <StatusChip status={r.inventory_status} />
-        // Decision D1 made visible: NULL is not a gap, it is "not yet through GRN".
-        : <span className="text-ink-3 font-ui">awaiting GRN</span>),
-    },
-    { key: 'rent_monthly_rate', header: 'Rent', numeric: true, render: (r) => <Money value={r.rent_monthly_rate} showZero={false} /> },
-    { key: 'updated_at', header: 'Updated', render: (r) => <DateTime value={r.updated_at} /> },
-  ], []);
-
-  const open = useCallback((row) => {
-    const code = row.inventory_asset_code || row.ttspl_id || row.unique_product_serial || row.serial_number;
-    if (code) navigate(`/carret/stock/assets/${encodeURIComponent(code)}`);
-  }, [navigate]);
-
+  const pages = res ? Math.max(1, Math.ceil((res.total || 0) / LIMIT)) : 1;
+  const by = counts?.by_status || {};
   return (
-    <DeskShell
-      title="Assets"
-      breadcrumb="Stock"
-      subtitle="Every laptop by TTSPL code: where it is, what state it is in, and what it earns."
-    >
-      <div style={{ display: 'grid', gap: '16px' }}>
-        <div className="flex flex-wrap">
-          <Segmented
-            label="Segment"
-            value={segment}
-            onChange={setSegment}
-            options={SEGMENTS.map((s) => ({ value: s.key, label: s.label }))}
-          />
+    <DeskShell title="Assets" breadcrumb="Stock" subtitle="Every laptop by TTSPL — where it is, its state, and what it earns.">
+      <div className="c-stack">
+        {counts && (
+          <p className="text-ink-3">
+            {counts.total.toLocaleString('en-IN')} laptops · {counts.with_customer.toLocaleString('en-IN')} with customers ·
+            {' '}{counts.ready} ready · {(by.in_stock || 0) - counts.ready} in stock not ready · {by.in_repair || 0} in repair ·
+            {' '}{by.returned || 0} returned · {by.scrapped || 0} scrapped
+          </p>
+        )}
+        <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
+          <Segmented label="View" value={view} onChange={(v) => { setView(v); setPage(1); }} options={VIEWS} />
+          <Input type="search" placeholder="TTSPL, serial, PO, customer or model" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: '20rem' }} />
+          <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} placeholder="Any state" options={ASSET_STATUSES.map((s) => ({ value: s.value, label: s.label }))} style={{ maxWidth: '12rem' }} />
+          <Select value={tag} onChange={(e) => { setTag(e.target.value); setPage(1); }} placeholder="Any tag" options={[...TAG_OPTIONS, { value: 'none', label: 'Not tagged' }]} style={{ maxWidth: '10rem' }} />
+          <span className="text-ink-3">{res ? `${res.total.toLocaleString('en-IN')} found` : ''}</span>
         </div>
-
-        <Panel
-          toolbar={(
-            <FilterBar
-              filters={filterDefs}
-              values={filters}
-              onChange={onFilter}
-              onClear={onClear}
-              count={`${total} shown`}
-            />
-          )}
-        >
-          {loading && <EmptyState title="Loading…" />}
-          {error && <EmptyState title="Could not load assets" body={error} />}
-          {!loading && !error && (
-            <DataTable
-              columns={columns}
-              rows={rows}
-              rowKey={(r, i) => r.serial_id ?? i}
-              onRowClick={open}
-              empty={<EmptyState
-                title="No assets match"
-                body="Every filter here combines, so narrowing one at a time will show what is excluding them."
-                action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-              />}
-            />
-          )}
-        </Panel>
+        {res === null ? <EmptyState title="Loading…" /> : (
+          <DataTable
+            columns={cols}
+            rows={res.data || []}
+            rowKey={(r) => r.serial_id}
+            onRowClick={(r) => navigate(`/carret/stock/assets/${encodeURIComponent(r.ttspl_id || r.serial_number)}`)}
+            empty={<EmptyState title="No laptops match" body="Filters combine — clear one to widen the list." />}
+          />
+        )}
+        {pages > 1 && (
+          <div className="flex items-center" style={{ gap: '8px' }}>
+            <Button variant="quiet" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
+            <span className="text-ink-3">Page {page} of {pages}</span>
+            <Button variant="quiet" disabled={page >= pages} onClick={() => setPage(page + 1)}>Next</Button>
+          </div>
+        )}
       </div>
     </DeskShell>
   );

@@ -1,10 +1,13 @@
-import React, { useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import DeskShell from '../../shells/DeskShell';
 import {
   DocumentHeader, StatusChip, Panel, StatTile, Timeline,
-  DataTable, Money, DocNumber, DateTime, EmptyState, Button,
+  DataTable, Money, DocNumber, DateTime, EmptyState, Button, KeyValue, Notice,
 } from '../../components/carret';
+import { usePermission } from '../../hooks/usePermission';
+import { fetchAsset } from './stock/stockApi';
+import { LocationDrawer, RetagDrawer, ScrapRequestDrawer } from './stock/StockActions';
 import { statusFamily } from '../../config/statuses';
 import useAssetTimeline from './useAssetTimeline';
 
@@ -24,6 +27,19 @@ import useAssetTimeline from './useAssetTimeline';
 export default function AssetRecordPage() {
   const { ttspl } = useParams();
   const { loading, error, asset, events } = useAssetTimeline(ttspl);
+  // Stock facts + actions (claude/carret-stock.md): tag, slot, PO, vendor, scrap.
+  const { hasPermission } = usePermission();
+  const [stock, setStock] = useState(null);
+  const [act, setAct] = useState(null);
+  const loadStock = useCallback(() => {
+    fetchAsset(ttspl).then(({ data }) => setStock(data.data)).catch(() => setStock(null));
+  }, [ttspl]);
+  useEffect(() => { loadStock(); }, [loadStock]);
+  const done = () => { setAct(null); loadStock(); };
+  const canWarehouse = hasPermission('ready_to_rent_location', 'edit');
+  const canRaiseScrap = ['inventory_management', 'floor_tickets', 'qc_management', 'ready_to_rent_location'].some((sec) => hasPermission(sec, 'edit'));
+  const scrappable = stock && ['in_stock', 'in_repair', 'returned', 'qc_failed'].includes(stock.inventory_status)
+    && stock.scrap_request?.status !== 'pending';
 
   const documentColumns = useMemo(() => [
     { key: 'ref', header: 'Reference', render: (r) => <DocNumber value={r.ref} /> },
@@ -92,6 +108,44 @@ export default function AssetRecordPage() {
             { label: 'Billed until', value: <DateTime value={asset?.rent_billed_until} /> },
           ]}
         />
+
+        {stock && (
+          <Panel
+            title="Stock"
+            actions={(
+              <div className="flex" style={{ gap: '6px' }}>
+                {canWarehouse && stock.is_ready && <Button onClick={() => setAct('tag')}>Tag</Button>}
+                {canWarehouse && stock.is_ready && <Button onClick={() => setAct('slot')}>{stock.location ? 'Move slot' : 'Put in a slot'}</Button>}
+                {canRaiseScrap && scrappable && <Button variant="quiet" onClick={() => setAct('scrap')}>Scrap…</Button>}
+              </div>
+            )}
+          >
+            <div className="c-card-b c-stack">
+              {stock.scrap_request?.status === 'pending' && <Notice tone="warn" title="Scrap requested">{stock.scrap_request.reason} — waiting for a manager on Stock → Scrap.</Notice>}
+              {stock.inventory_status === 'in_stock' && !stock.is_ready && <Notice tone="info">In stock but not ready: QC status is “{stock.qc_status || 'none'}”. It becomes ready only after QC passes and it is scanned into a carret slot (Production → Into stock).</Notice>}
+              <KeyValue
+                cols={4}
+                items={[
+                  { label: 'Ready', value: stock.is_ready ? 'Yes' : 'No' },
+                  { label: 'Use for', value: stock.tag_label || (stock.is_ready ? 'Not tagged' : '—') },
+                  { label: 'Carret slot', value: stock.location || (stock.is_ready ? 'No slot' : '—') },
+                  { label: 'Customer', value: stock.customer_name ? <Link to={`/lead-crm/customers/${stock.current_customer_id}`}>{stock.customer_name}</Link> : '—' },
+                  { label: 'Purchase order', value: stock.purchase_order_number || '—' },
+                  { label: 'Vendor', value: stock.vendor_name || '—' },
+                  { label: 'Lock-in till', value: stock.lock_in_end_date ? <DateTime value={stock.lock_in_end_date} /> : '—' },
+                  { label: 'Warranty till', value: stock.warranty_end_date ? <DateTime value={stock.warranty_end_date} /> : '—' },
+                  stock.scrap_challan_number && { label: 'Scrap challan', value: <DocNumber value={stock.scrap_challan_number} /> },
+                ]}
+              />
+              <p className="text-ink-3" style={{ fontSize: '12px' }}>
+                History from the old ERP: <Link to={`/inventory-management/serial-number-status?serial=${encodeURIComponent(stock.serial_number || '')}`}>serial status (old view)</Link>
+              </p>
+            </div>
+          </Panel>
+        )}
+        <RetagDrawer laptops={act === 'tag' && stock ? [stock] : null} onClose={() => setAct(null)} onDone={done} />
+        <LocationDrawer laptop={act === 'slot' ? stock : null} onClose={() => setAct(null)} onDone={done} />
+        <ScrapRequestDrawer laptop={act === 'scrap' ? stock : null} onClose={() => setAct(null)} onDone={done} />
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
           <StatTile
