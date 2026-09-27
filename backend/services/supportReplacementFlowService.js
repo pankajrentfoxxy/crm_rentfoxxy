@@ -36,23 +36,34 @@ async function loadOldDeployedSerial(client, src, customerId) {
 }
 
 /**
- * Resolve the old laptop's price to carry into the replacement line.
- * The serial's `rent_monthly_rate` is often 0/null for units whose rent was never
- * synced (or that were sold), so we fall back through the other places the unit's
- * price was recorded:
- *   1. vendor_serial_numbers.rent_monthly_rate (the deployed serial)
- *   2. customer_inventory.rate (ERP-synced customer holding)
- *   3. the most recent sales_order line rate where this unit was actually deployed
+ * Resolve the old laptop's price to carry into the replacement line: what THIS
+ * customer pays for the unit being returned (or already returned).
+ *   1. this customer's rental SO line the old unit was allocated to
+ *   2. vendor_serial_numbers.rent_monthly_rate, only while the unit is with
+ *      this customer (once back in stock it may be re-rented at another price)
+ *   3. customer_inventory.rate for this customer (ERP-synced holding)
+ *   4. this customer's most recent SO line that deployed the unit
+ * The SO line comes first because the asset row's rate outlives each rental:
+ * on a re-rented unit it can still be the previous customer's price.
  * Returns 0 only when no price is recorded anywhere.
  */
-async function resolveOldUnitPrice(client, { serialRate, code, serialNumber, customerId }) {
-  const direct = serialRate != null ? Number(serialRate) : 0;
-  if (direct > 0) return direct;
+async function resolveOldUnitPrice(client, {
+  serialRate, code, serialNumber, customerId, serialId = null, serialCustomerId = null,
+}) {
+  if (serialId && customerId) {
+    const { resolveCustomerContractRate } = require('./serialRentRateService');
+    const contract = await resolveCustomerContractRate(client, serialId, customerId);
+    if (contract > 0) return contract;
+  }
+
+  const serialIsTheirs = !serialId || !customerId || Number(serialCustomerId) === Number(customerId);
+  const direct = serialIsTheirs && serialRate != null ? Number(serialRate) : 0;
+  if (direct > 1) return direct;
 
   const codes = [...new Set([code, serialNumber].filter(Boolean))];
   if (!codes.length) return 0;
 
-  // 2. customer_inventory (most recent non-zero rate for this unit). rate is stored
+  // 3. customer_inventory (most recent non-zero rate for this unit). rate is stored
   //    as text, so cast defensively.
   const ci = await client.query(
     `SELECT NULLIF(TRIM(rate::text), '')::numeric AS rate
@@ -66,18 +77,20 @@ async function resolveOldUnitPrice(client, { serialRate, code, serialNumber, cus
   );
   if (ci.rows[0]?.rate != null) return Number(ci.rows[0].rate);
 
-  // 3. Last sales-order line where the unit was deployed. sales_order_serials.ttspl_id
-  //    can be composite (e.g. 'TRU1575/TTSPL1052'), so also match on suffix.
+  // 4. Last sales-order line where the unit was deployed to this customer.
+  //    sales_order_serials.ttspl_id can be composite (e.g. 'TRU1575/TTSPL1052'),
+  //    so also match on suffix.
   const primary = code || serialNumber;
   const sol = await client.query(
     `SELECT sol.rate
        FROM sales_order_serials sos
        JOIN sales_order_lines sol ON sol.id = sos.line_id
       WHERE (sos.ttspl_id = ANY($1) OR sos.serial_number = ANY($1) OR sos.ttspl_id ILIKE '%' || $2)
-        AND sol.rate IS NOT NULL AND sol.rate::numeric > 0
+        AND sol.rate IS NOT NULL AND sol.rate::numeric > 1
+        ${customerId ? 'AND sol.customer_id = $3' : ''}
       ORDER BY sol.id DESC
       LIMIT 1`,
-    [codes, primary]
+    customerId ? [codes, primary, customerId] : [codes, primary]
   );
   if (sol.rows[0]?.rate != null) return Number(sol.rows[0].rate);
 
@@ -86,14 +99,18 @@ async function resolveOldUnitPrice(client, { serialRate, code, serialNumber, cus
 
 /** Build replacement laptop config from complaint item + deployed serial. */
 async function resolveConfigFromComplaint(client, src, customerId) {
-  const oldSerial = await loadOldDeployedSerial(client, src, customerId);
-  const extra = parseExtra(oldSerial?.extra);
   const code = src.ttspl_id || src.unique_serial_number || src.serial_number || '';
+  // Deployed with this customer, or else already returned from them.
+  const oldSerial = await loadOldDeployedSerial(client, src, customerId)
+    || await loadSerialByAssetCode(client, code);
+  const extra = parseExtra(oldSerial?.extra);
   const monthlyRate = await resolveOldUnitPrice(client, {
     serialRate: oldSerial?.rent_monthly_rate,
     code,
     serialNumber: oldSerial?.serial_number || src.serial_number,
     customerId,
+    serialId: oldSerial?.serial_id || null,
+    serialCustomerId: oldSerial?.current_customer_id ?? null,
   });
   return {
     brand: src.brand || extra.brand || '',
@@ -697,21 +714,23 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
   const code = pickupItem.ttspl_id || pickupItem.unique_serial_number || pickupItem.serial_number;
   const serial = await loadSerialByAssetCode(client, code);
   const extra = parseExtra(serial?.extra);
-  let monthlyRate = serial?.rent_monthly_rate != null ? Number(serial.rent_monthly_rate) : 0;
+  // The unit is back in the warehouse from this customer, so its asset row is
+  // no longer tied to them; the rate still comes from what they paid for it.
+  // A unit parked mid-repair keeps its rate on the row, so that still counts.
+  let monthlyRate = await resolveOldUnitPrice(client, {
+    serialRate: serial?.rent_monthly_rate,
+    code,
+    serialNumber: serial?.serial_number || pickupItem.serial_number,
+    customerId,
+    serialId: serial?.serial_id || null,
+    serialCustomerId: serial?.current_customer_id ?? customerId,
+  });
   if (!monthlyRate && pickupItem.customer_inventory_id) {
     const ci = await client.query(
       'SELECT rate FROM customer_inventory WHERE id = $1',
       [pickupItem.customer_inventory_id]
     );
     if (ci.rows[0]?.rate != null) monthlyRate = Number(ci.rows[0].rate);
-  }
-  if (!monthlyRate) {
-    monthlyRate = await resolveOldUnitPrice(client, {
-      serialRate: serial?.rent_monthly_rate,
-      code,
-      serialNumber: serial?.serial_number || pickupItem.serial_number,
-      customerId,
-    });
   }
   const src = complaintItem || pickupItem;
   return {

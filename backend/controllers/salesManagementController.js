@@ -5580,21 +5580,27 @@ exports.updateDcDispatch = async (req, res) => {
         const serialId = await resolveSerialId(client, s);
         if (!serialId) continue;
         // reserved -> in_transit (mark the asset unavailable the moment it ships).
+        // Carry this DC's SO rate so the unit can't leave with its previous
+        // customer's rate still on the row.
+        const { resolveSerialRentRate } = require('../services/serialRentRateService');
+        const rentMonthlyRate = await resolveSerialRentRate(client, serialId, dcNumber);
         try {
           await inventorySM.markDispatched(client, serialId, {
             dcNumber,
             customerId: ctx.customer_id || null,
             entityCode: ctx.entity_code || null,
             dispatchMode,
+            rentMonthlyRate,
             actorUserId: req.user.user_id,
             actorName: req.user.name,
           });
         } catch (rErr) {
           await client.query(
             `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
-                    dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW()
+                    dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW(),
+                    rent_monthly_rate = COALESCE($4, rent_monthly_rate)
              WHERE serial_id = $1`,
-            [serialId, dcNumber, dispatchMode]
+            [serialId, dcNumber, dispatchMode, rentMonthlyRate]
           );
         }
       }

@@ -40,6 +40,43 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
   return dcRate > 0 ? dcRate : null;
 }
 
+/**
+ * The monthly rent THIS customer agreed for this laptop: the rate on the
+ * customer's own rental sales-order line the unit was allocated to (the DC's
+ * SO when dcNumber is given, else the latest). A laptop's
+ * vendor_serial_numbers.rent_monthly_rate is one field that outlives each
+ * rental, so on a re-rented unit it can still hold the previous customer's
+ * rate; the SO line cannot. Rs 1 placeholders (demo, draft SOs) don't count.
+ * Returns null when the customer has no such line for the unit.
+ */
+async function resolveCustomerContractRate(db, serialId, customerId, { dcNumber = null } = {}) {
+  if (!serialId || !customerId) return null;
+  const client = db || pool;
+  const params = [serialId, customerId];
+  let dcClause = '';
+  if (dcNumber) {
+    params.push(String(dcNumber));
+    dcClause = `AND sos.dc_number = $${params.length}`;
+  }
+  const r = await client.query(
+    `SELECT sol.rate
+       FROM sales_order_serials sos
+       JOIN sales_order_lines sol ON sol.id = sos.line_id
+      WHERE sos.serial_id = $1
+        AND sol.customer_id = $2
+        AND sos.status <> 'removed'
+        AND COALESCE(sol.quotation_type, 'rental') = 'rental'
+        AND COALESCE(sol.rate, 0) > 1
+        ${dcClause}
+      ORDER BY sos.allocation_id DESC
+      LIMIT 1`,
+    params
+  );
+  const rate = parseFloat(r.rows[0]?.rate || 0);
+  return rate > 0 ? rate : null;
+}
+
 module.exports = {
   resolveSerialRentRate,
+  resolveCustomerContractRate,
 };

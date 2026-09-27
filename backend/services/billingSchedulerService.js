@@ -701,6 +701,54 @@ async function loadOutboundForLines(client, customerId, lines) {
 }
 
 /**
+ * Rate on this customer's rental SO line for each serial's current DC, and
+ * whether someone changed the asset's rate for this customer since dispatch.
+ * The first bill of a rental uses it, because vendor_serial_numbers
+ * .rent_monthly_rate outlives the rental and a re-rented laptop could arrive
+ * still carrying its previous customer's rate (Sept 2026: 31 units billed at
+ * the last renter's price).
+ */
+async function loadCurrentDcContractRates(client, customerId, serialIds) {
+  const ids = normalizeSerialIds(serialIds);
+  const out = new Map();
+  if (!customerId || !ids.length) return out;
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (vsn.serial_id)
+            vsn.serial_id,
+            sol.rate::numeric AS rate,
+            sol.sales_order_number,
+            EXISTS (
+              SELECT 1 FROM customer_asset_activity a
+               WHERE a.vendor_serial_id = vsn.serial_id
+                 AND a.customer_id = $1
+                 AND a.changes::text LIKE '%rent_monthly_rate%'
+                 AND a.created_at >= COALESCE(vsn.dispatched_at, sos.created_at)
+            ) AS rate_edited
+       FROM vendor_serial_numbers vsn
+       JOIN sales_order_serials sos
+         ON sos.serial_id = vsn.serial_id
+        AND sos.dc_number = vsn.current_dc_number
+        AND sos.status <> 'removed'
+       JOIN sales_order_lines sol
+         ON sol.id = sos.line_id
+        AND sol.customer_id = $1
+        AND COALESCE(sol.quotation_type, 'rental') = 'rental'
+        AND COALESCE(sol.rate, 0) > 1
+      WHERE vsn.serial_id = ANY($2::int[])
+      ORDER BY vsn.serial_id, sos.allocation_id DESC`,
+    [customerId, ids]
+  );
+  for (const r of rows) {
+    out.set(Number(r.serial_id), {
+      rate: parseFloat(r.rate),
+      salesOrderNumber: r.sales_order_number,
+      rateEdited: Boolean(r.rate_edited),
+    });
+  }
+  return out;
+}
+
+/**
  * Build prorated line items for unbilled rental serials and advance rent_billed_until.
  * Mutates serial rows via the open transaction client.
  */
@@ -772,6 +820,7 @@ async function buildCustomerInvoiceLines(client, {
   );
   const zohoAckBySerial = await loadZohoBillingAcks(client, customerId, serialIdsForWindow);
   const coverage = await loadCustomerBilledCoverage(client, customerId, serialIdsForWindow);
+  const contractRates = await loadCurrentDcContractRates(client, customerId, serialIdsForWindow);
 
   for (const row of serialsRes.rows) {
     const rentStart = new Date(row.rent_start_date);
@@ -845,7 +894,29 @@ async function buildCustomerInvoiceLines(client, {
 
     if (billStart > billEnd) continue;
 
-    const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
+    let monthlyRate = parseFloat(row.rent_monthly_rate || 0);
+
+    // First bill of this rental: charge the rate on this customer's own SO for
+    // the DC that delivered it, not whatever the asset row still holds from the
+    // laptop's previous customer. A replacement's SO line carries the old
+    // unit's rate, so this also keeps a replacement at the returned unit's
+    // price. A rate someone set on the asset for this customer after dispatch
+    // is deliberate and wins.
+    const contract = contractRates.get(Number(row.serial_id));
+    const rentStartYmd = toLocalYmd(rentStart);
+    const stintBilled = billedUntil
+      || ownCoverage?.billed.some(([, end]) => end >= rentStartYmd);
+    if (contract && !stintBilled && !contract.rateEdited && contract.rate !== monthlyRate) {
+      console.warn(
+        `[billing] ${row.ttspl_id || `serial ${row.serial_id}`} for customer ${customerId}:`
+        + ` asset rate ${monthlyRate || 'none'} replaced by ${contract.salesOrderNumber} rate ${contract.rate}`
+      );
+      monthlyRate = contract.rate;
+      await client.query(
+        `UPDATE vendor_serial_numbers SET rent_monthly_rate = $1, updated_at = NOW() WHERE serial_id = $2`,
+        [monthlyRate, row.serial_id]
+      );
+    }
 
     // BL3: with no rate this used to write a Rs 0 line and then advance
     // rent_billed_until anyway, at the bottom of this loop. The watermark moving
@@ -983,6 +1054,19 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
                    AND COALESCE(cil.line_type, 'rental') <> 'security'
                    AND LOWER(COALESCE(ci.status, '')) <> 'cancelled'
                  ORDER BY ci.invoice_year DESC, ci.invoice_month DESC, cil.rent_end DESC
+                 LIMIT 1
+              ),
+              (
+                SELECT sol.rate
+                  FROM sales_order_serials sos
+                  JOIN sales_order_lines sol ON sol.id = sos.line_id
+                 WHERE sos.serial_id = vsn.serial_id
+                   AND sos.dc_number = vsn.current_dc_number
+                   AND sos.status <> 'removed'
+                   AND sol.customer_id = $1
+                   AND COALESCE(sol.quotation_type, 'rental') = 'rental'
+                   AND COALESCE(sol.rate, 0) > 1
+                 ORDER BY sos.allocation_id DESC
                  LIMIT 1
               ),
               vsn.rent_monthly_rate
@@ -3136,10 +3220,10 @@ async function maybeInvoiceOnRentalDcCreate({
     }
 
     for (const row of serials.rows) {
-      let rate = parseFloat(row.rent_monthly_rate || 0);
-      if (!(rate > 0)) {
-        rate = await resolveSerialRentRate(pool, row.serial_id, dcNumber);
-      }
+      // This DC's SO rate first: a non-zero stored rate may be the previous
+      // customer's, left on the asset when it came back to stock.
+      let rate = await resolveSerialRentRate(pool, row.serial_id, dcNumber);
+      if (!(rate > 0)) rate = parseFloat(row.rent_monthly_rate || 0);
       if (!(rate > 0)) continue;
       await pool.query(
         `UPDATE vendor_serial_numbers
