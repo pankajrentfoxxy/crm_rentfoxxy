@@ -28,7 +28,10 @@ const ASSET_COLUMNS = `
   v.serial_id, v.serial_number, COALESCE(v.inventory_asset_code, v.extra->>'ttspl_id') AS ttspl_id,
   v.inventory_status, ${QC_SQL} AS qc_status, ${TAG_SQL} AS tag,
   v.warehouse_carret, v.warehouse_carret_slot,
-  NULLIF(TRIM(CONCAT(COALESCE(v.extra->>'brand', ''), ' ', COALESCE(v.extra->>'model', v.extra->>'model_name', ''))), '') AS model_name,
+  NULLIF(TRIM(CASE
+    WHEN LOWER(COALESCE(v.extra->>'model', v.extra->>'model_name', '')) LIKE LOWER(COALESCE(v.extra->>'brand', '')) || ' %'
+      THEN COALESCE(v.extra->>'model', v.extra->>'model_name', '')
+    ELSE CONCAT(COALESCE(v.extra->>'brand', ''), ' ', COALESCE(v.extra->>'model', v.extra->>'model_name', '')) END), '') AS model_name,
   v.extra->>'processor' AS processor, v.extra->>'generation' AS generation, v.extra->>'ram' AS ram,
   COALESCE(v.extra->>'storage', v.extra->>'ssd') AS storage,
   v.current_customer_id, COALESCE(c.company_name, c.name) AS customer_name, v.current_entity,
@@ -42,12 +45,21 @@ const ASSET_FROM = `
   LEFT JOIN vendor_purchase_orders p ON p.po_id = v.po_id
   LEFT JOIN vendors vd ON vd.vendor_id = p.vendor_id`;
 
+/** Statuses in which the laptop's rate is what it earns now. */
+const EARNING_STATUSES = new Set(['rented', 'on_demo', 'in_transit', 'dispatch_ready', 'reserved']);
+
 function shapeAsset(r) {
+  const rate = r.rent_monthly_rate != null ? Number(r.rent_monthly_rate) : null;
   return {
     ...r,
     tag_label: r.tag ? (TAGS[r.tag] || r.tag) : null,
     location: r.warehouse_carret ? formatLocation(r.warehouse_carret, r.warehouse_carret_slot) : null,
-    rent_monthly_rate: r.rent_monthly_rate != null ? Number(r.rent_monthly_rate) : null,
+    // The state machine keeps the last customer's rate on a laptop that comes
+    // back (so a repaired unit returns at the same rate). It is NOT what an
+    // in-stock / returned / scrapped laptop earns, so only show it while the
+    // laptop is with (or on its way to) a customer.
+    rent_monthly_rate: EARNING_STATUSES.has(r.inventory_status) ? rate : null,
+    last_rent_monthly_rate: rate,
   };
 }
 

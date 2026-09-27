@@ -153,7 +153,11 @@ export default function AssetRecordPage() {
             value={asset?.inventory_status || 'awaiting GRN'}
             family={statusFamily(asset?.inventory_status)}
           />
-          <StatTile label="Monthly rent" value={<Money value={asset?.rent_monthly_rate} showZero={false} />} />
+          {/* Rent only while it is with a customer; in stock the row keeps the last customer's rate. */}
+          <StatTile
+            label={['rented', 'on_demo'].includes(asset?.inventory_status) ? 'Monthly rent' : 'Last monthly rent'}
+            value={<Money value={asset?.rent_monthly_rate} showZero={false} />}
+          />
           <StatTile label="Events recorded" value={events.length} />
           <StatTile
             label="With a customer"

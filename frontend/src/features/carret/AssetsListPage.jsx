@@ -50,7 +50,9 @@ export default function AssetsListPage() {
     { key: 'c', header: 'Configuration', render: (r) => [r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ') || '—' },
     { key: 's', header: 'State', render: (r) => <StatusChip status={r.inventory_status} />, sub: (r) => (r.inventory_status === 'in_stock' ? (r.is_ready ? 'ready' : `QC: ${r.qc_status || '—'}`) : null) },
     { key: 'w', header: 'Where', render: (r) => r.customer_name || r.location || '—', sub: (r) => (r.customer_name ? r.current_dc_number : (r.tag_label ? `for ${r.tag_label.toLowerCase()}` : null)) },
-    { key: 'r', header: 'Rent', numeric: true, render: (r) => <Money value={r.rent_monthly_rate} showZero={false} /> },
+    // Only what it earns now: a laptop back in stock keeps its last customer's
+    // rate on the row, which is not rent (the backend blanks it outside rental).
+    { key: 'r', header: 'Rent / month', numeric: true, render: (r) => (r.inventory_status === 'sold' ? <span className="text-ink-3">Sold</span> : <Money value={r.rent_monthly_rate} showZero={false} />) },
     { key: 'p', header: 'Bought on', render: (r) => r.purchase_order_number || '—', sub: (r) => r.vendor_name },
     { key: 'u', header: 'Since', render: (r) => <DateTime value={r.status_changed_at || r.updated_at} /> },
   ];
