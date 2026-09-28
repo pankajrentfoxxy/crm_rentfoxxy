@@ -1430,6 +1430,22 @@ function userCanConfirmReturnDcWarehouse(role) {
   return RETURN_DC_WAREHOUSE_ROLES.includes(String(role || '').toLowerCase());
 }
 
+/**
+ * CT1: the warehouse roles above OR return_dc edit in Roles & Permissions — the
+ * same rule supportController.confirmReturnDcWarehouseReceipt enforces.
+ */
+async function userCanConfirmReturnDcWarehouseAsync(user, cache) {
+  if (!user) return false;
+  if (userCanConfirmReturnDcWarehouse(user.role)) return true;
+  const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+  try {
+    return await userHasRoleOrSection(user, [], 'return_dc', 'edit', cache);
+  } catch (err) {
+    console.error('userCanConfirmReturnDcWarehouseAsync:', err.message);
+    return false;
+  }
+}
+
 function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
   if (String(dcl?.status || '').toLowerCase() === 'cancelled') {
     return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
@@ -1474,7 +1490,10 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     warehouse_block_reason = 'Finish the Return DC hardware check so the serial is captured before warehouse e-sign.';
   }
 
-  const roleAllowed = opts.role == null ? true : userCanConfirmReturnDcWarehouse(opts.role);
+  // opts.canConfirm (already resolved role-or-grant) wins over the bare role check.
+  const roleAllowed = opts.canConfirm != null
+    ? Boolean(opts.canConfirm)
+    : (opts.role == null ? true : userCanConfirmReturnDcWarehouse(opts.role));
   return {
     can_warehouse_confirm: roleAllowed && !otpBlocked && !gateBlocked && !configBlocked && !serialBlocked,
     warehouse_block_reason,
@@ -2133,7 +2152,7 @@ async function queryReturnDcPickupItems(rdcNumber, ticketId) {
 }
 
 /** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. Read-only on GET. */
-async function getReturnDcDetail(rdcNumber, { role } = {}) {
+async function getReturnDcDetail(rdcNumber, { role, canConfirm } = {}) {
   const dclRes = await pool.query(
     `SELECT dcl.*, st.customer_phone, st.ticket_email
        FROM delivery_challan_lines dcl
@@ -2276,7 +2295,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
       warehouse_name: whItem?.warehouse_receiver_name || null,
       warehouse_at: whItem?.warehouse_esign_at || null,
     },
-    ...evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, { role }),
+    ...evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, { role, canConfirm }),
   };
 }
 
@@ -3276,6 +3295,7 @@ module.exports = {
   ensureReturnDcPickupItems,
   evaluateReturnDcWarehouseConfirm,
   userCanConfirmReturnDcWarehouse,
+  userCanConfirmReturnDcWarehouseAsync,
   RETURN_DC_WAREHOUSE_ROLES,
   getOperationCounts,
   searchAvailableInventory,

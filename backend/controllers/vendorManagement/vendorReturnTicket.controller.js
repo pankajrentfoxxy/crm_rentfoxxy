@@ -1,5 +1,5 @@
 const pool = require('../../config/db');
-const { actorFromReq, requireWarehouseRole } = require('../../services/vendorReturnToVendorService');
+const { actorFromReq, requireWarehouseOrGrant } = require('../../services/vendorReturnToVendorService');
 const svc = require('../../services/vendorReturnTicketService');
 
 function handleError(res, err) {
@@ -61,7 +61,7 @@ exports.getTicket = async (req, res) => {
 exports.createTicket = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const body = req.body || {};
     const actor = actorFromReq(req);
     await client.query('BEGIN');
@@ -92,7 +92,7 @@ exports.createTicket = async (req, res) => {
 exports.updateTicket = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const body = req.body || {};
     const pick = (a, b) => (body[a] !== undefined ? body[a] : body[b]);
     await client.query('BEGIN');
@@ -144,7 +144,7 @@ exports.downloadRequestPdf = async (req, res) => {
 exports.notifyVendor = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const actor = actorFromReq(req);
     await client.query('BEGIN');
     const result = await svc.notifyVendor(client, {
@@ -172,7 +172,7 @@ exports.notifyVendor = async (req, res) => {
 exports.createDc = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const body = req.body || {};
     const actor = actorFromReq(req);
     await client.query('BEGIN');
@@ -196,7 +196,7 @@ exports.createDc = async (req, res) => {
 exports.cancelItems = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const body = req.body || {};
     const actor = actorFromReq(req);
     await client.query('BEGIN');
@@ -219,7 +219,7 @@ exports.cancelItems = async (req, res) => {
 exports.cancelTicket = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_ticket');
     const body = req.body || {};
     const actor = actorFromReq(req);
     await client.query('BEGIN');

@@ -1,5 +1,6 @@
 import React from 'react';
 import ProtectedRoute from '../router/ProtectedRoute';
+import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
 
 /**
  * Carret routes, behind REACT_APP_CARRET.
@@ -79,6 +80,11 @@ const ChallanRecordPage = React.lazy(() => import('../features/carret/move/Chall
 const DeliveryRegisterPage = React.lazy(() => import('../features/carret/move/DeliveryRegisterPage'));
 const MyDeliveriesPage = React.lazy(() => import('../features/carret/move/MyDeliveriesPage'));
 const CourierTrackingPage = React.lazy(() => import('../features/carret/move/CourierTrackingPage'));
+const ControlUsersPage = React.lazy(() => import('../features/carret/control/UsersPage'));
+const ControlRolesPage = React.lazy(() => import('../features/carret/control/RolesPage'));
+const ControlRolePermissionsPage = React.lazy(() => import('../features/carret/control/RolePermissionsPage'));
+const ControlUserPermissionsPage = React.lazy(() => import('../features/carret/control/UserPermissionsPage'));
+const ControlAuditLogPage = React.lazy(() => import('../features/carret/control/AuditLogPage'));
 
 export const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
 
@@ -89,6 +95,16 @@ const guardAny = (sections, action, node) => (
   <ProtectedRoute sections={sections} action={action}>
     <React.Suspense fallback={null}>{node}</React.Suspense>
   </ProtectedRoute>
+);
+
+/**
+ * Control screens: role OR section (decision CT1), matching the backend's
+ * hardcoded role lists plus the matrix grant. super_admin always passes.
+ */
+const guardControl = (rule, node) => (
+  <ControlGuard rule={rule}>
+    <React.Suspense fallback={null}>{node}</React.Suspense>
+  </ControlGuard>
 );
 
 const guard = (section, action, node) => (
@@ -205,6 +221,16 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/money/invoices', element: guard('customer_billing', 'view', <InvoicesListPage />) },
       { path: '/carret/money/invoices/:invoiceId', element: guard('customer_billing', 'view', <InvoiceRecordPage />) },
       { path: '/carret/money/ageing', element: guard('customer_billing', 'view', <AgeingPage />) },
+
+      // Control (claude/carret-customers-returns-control.md step 4): users,
+      // roles, the permission matrix, per-user overrides and the audit log.
+      { path: '/carret/control/users', element: guardControl(ACCESS.usersView, <ControlUsersPage />) },
+      { path: '/carret/control/roles', element: guardControl(ACCESS.rolesView, <ControlRolesPage />) },
+      { path: '/carret/control/role-permissions', element: guardControl(ACCESS.rolePermsView, <ControlRolePermissionsPage />) },
+      { path: '/carret/control/role-permissions/:role', element: guardControl(ACCESS.rolePermsView, <ControlRolePermissionsPage />) },
+      { path: '/carret/control/user-permissions', element: guardControl(ACCESS.userPermsView, <ControlUserPermissionsPage />) },
+      { path: '/carret/control/user-permissions/:userId', element: guardControl(ACCESS.userPermsView, <ControlUserPermissionsPage />) },
+      { path: '/carret/control/audit-log', element: guardControl(ACCESS.auditView, <ControlAuditLogPage />) },
     ]
   : [];
 

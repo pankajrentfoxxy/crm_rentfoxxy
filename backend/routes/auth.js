@@ -23,6 +23,7 @@ const {
   approveVendor,
   getPendingVendors,
   getTeams,
+  getAssignableRoles,
   requestForgotPasswordOtp,
   resetPasswordWithOtp,
 } = require('../controllers/authController');
@@ -117,6 +118,11 @@ router.put('/users/:id/teams', authMiddleware, updateUserTeams);
 // @desc    List teams for user assignment
 // @access  Private
 router.get('/teams', authMiddleware, getTeams);
+
+// @route   GET /api/auth/assignable-roles
+// @desc    Roles the signed-in user may give a user (escalation guard applied)
+// @access  Private (users create/edit, or admin/manager)
+router.get('/assignable-roles', authMiddleware, getAssignableRoles);
 
 // @route   GET /api/auth/users
 // @desc    Get all users (Manager/Admin)

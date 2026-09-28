@@ -2,34 +2,19 @@ const pool = require('../config/db');
 
 const VALID_ACTIONS = new Set(['can_view', 'can_create', 'can_edit', 'can_delete']);
 
+const {
+  SECTION_ALIASES,
+  CUSTOMER_ACCESS_VALUES: CUSTOMER_ACCESS_LIST,
+  INVENTORY_TAG_ACCESS_VALUES: INVENTORY_TAG_ACCESS_LIST,
+  KNOWN_SECTIONS,
+  buildCatalogue,
+} = require('../constants/permissionCatalog');
+const { valueSources, planOverrides } = require('./rbacGuard');
+
 // Customer Access selector on the customers permission row (all/sales/rental).
 // Sibling of data_scope — do NOT conflate the two.
-const CUSTOMER_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
-const INVENTORY_TAG_ACCESS_VALUES = new Set([
-  'all',
-  'rental_only',
-  'rental_both',
-  'sale_only',
-  'sale_both',
-  'sales',
-  'rental',
-]);
-
-const SECTION_ALIASES = {
-  reports_access: ['reports_access', 'reports'],
-  reports: ['reports', 'reports_access'],
-  follow_ups: ['follow_ups', 'lead_follow_ups'],
-  lead_follow_ups: ['follow_ups', 'lead_follow_ups'],
-  sales_orders: ['sales_orders', 'sales_orders_doc'],
-  sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
-  sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
-  sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
-  vendor_repair_dc: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'],
-  sales_orders_replacement: ['sales_orders_replacement'],
-  replacement_so_laptop_qc: ['replacement_so_laptop_qc'],
-  so_laptop_qc: ['so_laptop_qc'],
-  sales_order_cancel: ['sales_order_cancel'],
-};
+const CUSTOMER_ACCESS_VALUES = new Set(CUSTOMER_ACCESS_LIST);
+const INVENTORY_TAG_ACCESS_VALUES = new Set(INVENTORY_TAG_ACCESS_LIST);
 
 function sectionsToCheck(section) {
   return SECTION_ALIASES[section] || [section];
@@ -81,6 +66,30 @@ async function getPermissionSections() {
     console.error('getPermissionSections error:', error);
   }
   return DEFAULT_SECTIONS;
+}
+
+/**
+ * Full catalogue for the matrix: DB permission_sections merged with
+ * constants/permissionCatalog (groups, labels, hidden, scopes). Tolerates a DB
+ * where migration 360 (section_group / hidden) has not been applied yet.
+ */
+async function getPermissionCatalogue(client = pool) {
+  let rows = [];
+  try {
+    const result = await client.query('SELECT * FROM permission_sections ORDER BY sort_order ASC, section ASC');
+    rows = result.rows;
+  } catch (error) {
+    console.error('getPermissionCatalogue error:', error.message);
+  }
+  return buildCatalogue(rows);
+}
+
+/** Every section a grant may be written for: DB catalogue ∪ code catalogue. */
+async function getKnownSectionSet(client = pool) {
+  const set = new Set(KNOWN_SECTIONS);
+  const result = await client.query('SELECT section FROM permission_sections');
+  result.rows.forEach((r) => set.add(r.section));
+  return set;
 }
 
 async function getUserRole(userId) {
@@ -242,16 +251,22 @@ async function buildUserPermissionsPayload(userId) {
       : (INVENTORY_TAG_ACCESS_VALUES.has(roleTagAccess) ? roleTagAccess : 'all');
   }
 
+  const sources = {};
+  for (const section of sections) {
+    sources[section] = valueSources(roleMap[section] || null, userMap[section] || null);
+  }
+
   return {
     user,
     role_permissions: rolePermissions,
     user_permissions: userPermissions,
     sections,
     effective,
+    sources,
   };
 }
 
-async function upsertRolePermissions(role, permissions) {
+async function upsertRolePermissions(role, permissions, client = pool) {
   const results = [];
   for (const perm of permissions) {
     const { section, data_scope, customer_access, inventory_tag_access } = perm;
@@ -260,7 +275,7 @@ async function upsertRolePermissions(role, permissions) {
     const scope = data_scope === 'assigned' ? 'assigned' : 'all';
     const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : 'all';
     const tagAccess = INVENTORY_TAG_ACCESS_VALUES.has(inventory_tag_access) ? inventory_tag_access : 'all';
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (role, section)
@@ -335,6 +350,70 @@ async function buildEffectivePermissionsForUser(userId, role) {
   return payload?.effective || {};
 }
 
+/**
+ * Save a user's overrides as the differences from their role, in one
+ * transaction. `desiredRows` carry the EFFECTIVE values the editor wants for
+ * each section sent; a value equal to the role's is stored as null (inherit)
+ * and a section with no difference left has its override row deleted.
+ * Sections not sent are left alone. Returns {upserts, deletes, rows}.
+ */
+async function saveUserOverrides(userId, role, desiredRows, grantedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialise concurrent saves for the same user.
+    await client.query('SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE', [userId]);
+    const roleRows = (await client.query(
+      `SELECT section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access
+         FROM role_permissions WHERE role = $1`,
+      [role]
+    )).rows;
+    const existing = (await client.query(
+      'SELECT section FROM user_permissions WHERE user_id = $1',
+      [userId]
+    )).rows;
+    const plan = planOverrides(roleRows, existing, desiredRows);
+    if (plan.deletes.length) {
+      await client.query(
+        'DELETE FROM user_permissions WHERE user_id = $1 AND section = ANY($2::text[])',
+        [userId, plan.deletes]
+      );
+    }
+    const rows = [];
+    for (const o of plan.upserts) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await client.query(
+        `INSERT INTO user_permissions
+           (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access,
+            inventory_tag_access, granted_by, granted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+         ON CONFLICT (user_id, section) DO UPDATE SET
+           can_view = EXCLUDED.can_view,
+           can_create = EXCLUDED.can_create,
+           can_edit = EXCLUDED.can_edit,
+           can_delete = EXCLUDED.can_delete,
+           data_scope = EXCLUDED.data_scope,
+           customer_access = EXCLUDED.customer_access,
+           inventory_tag_access = EXCLUDED.inventory_tag_access,
+           granted_by = EXCLUDED.granted_by,
+           granted_at = NOW()
+         RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, data_scope,
+                   customer_access, inventory_tag_access, granted_by, granted_at`,
+        [userId, o.section, o.can_view, o.can_create, o.can_edit, o.can_delete,
+          o.data_scope, o.customer_access, o.inventory_tag_access, grantedBy]
+      );
+      rows.push(r.rows[0]);
+    }
+    await client.query('COMMIT');
+    return { upserts: plan.upserts, deletes: plan.deletes, rows };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function resetUserPermissions(userId) {
   const result = await pool.query(
     `DELETE FROM user_permissions WHERE user_id = $1 RETURNING section`,
@@ -347,6 +426,9 @@ module.exports = {
   VALID_ACTIONS,
   normalizeAction,
   getPermissionSections,
+  getPermissionCatalogue,
+  getKnownSectionSet,
+  SECTION_ALIASES,
   getUserRole,
   getRolePermissionRow,
   getUserPermissionRow,
@@ -360,4 +442,5 @@ module.exports = {
   upsertUserPermissions,
   buildEffectivePermissionsForUser,
   resetUserPermissions,
+  saveUserOverrides,
 };

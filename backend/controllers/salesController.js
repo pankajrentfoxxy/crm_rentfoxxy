@@ -2131,9 +2131,11 @@ exports.getOrderDetails = async (req, res) => {
         }
 
         const order = orderRes.rows[0];
+        // CT1: roles / legacy qc_access, dispatch_access OR a qc_management / dispatch view grant.
         const isPrivileged =
             ['admin', 'manager', 'floor_manager'].includes(req.user.role) ||
-            (req.user.permissions && (req.user.permissions.includes('qc_access') || req.user.permissions.includes('dispatch_access')));
+            (req.user.permissions && (req.user.permissions.includes('qc_access') || req.user.permissions.includes('dispatch_access'))) ||
+            await require('../middleware/roleOrSection').userHasRoleOrSection(req.user, [], ['qc_management', 'dispatch'], 'view', req.permissionCache || (req.permissionCache = {}));
         if (!isPrivileged && order.owner_user_id !== req.user.user_id) {
             return res.status(403).json({ message: 'Access denied' });
         }

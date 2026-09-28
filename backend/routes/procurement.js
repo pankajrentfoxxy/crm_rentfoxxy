@@ -1,19 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
+const { legacyOrSection, hasLegacyPermission } = require('../middleware/legacyOrSection');
 const { getRequests, updateRequestStatus, receiveItem, assignExistingInventory } = require('../controllers/procurementController');
 
-const requireProcurementAccess = (req, res, next) => {
-  if (
-    req.user.role === 'admin' ||
-    req.user.role === 'manager' ||
-    req.user.role === 'procurement' ||
-    (req.user.permissions && req.user.permissions.includes('procurement_access'))
-  ) {
-    return next();
-  }
-  res.status(403).json({ message: 'Access denied: Procurement access required' });
-};
+// CT1: role / legacy permissions[] as before, OR the procurement grant in Roles & Permissions.
+const requireProcurementAccess = legacyOrSection(
+  (u) => ['admin', 'manager', 'procurement'].includes(u.role) || hasLegacyPermission(u, 'procurement_access'),
+  'procurement', 'edit',
+  { message: 'Access denied: Procurement access required' },
+);
 
 router.use(authMiddleware);
 

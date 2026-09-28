@@ -7,9 +7,11 @@ const {
   updateRole,
   deleteRole,
   getPermissionSections,
+  getAuditLog,
 } = require('../controllers/rbacController');
 
 router.get('/sections', authMiddleware, getPermissionSections);
+router.get('/audit-log', authMiddleware, getAuditLog);
 router.get('/', authMiddleware, listRoles);
 router.post('/', authMiddleware, createRole);
 router.put('/:id', authMiddleware, updateRole);

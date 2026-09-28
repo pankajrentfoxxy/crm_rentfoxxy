@@ -105,6 +105,15 @@ export async function saveUserPermissions(userId, permissions) {
   return data;
 }
 
+/**
+ * Save a user's overrides in one transaction: send the EFFECTIVE rows wanted;
+ * the backend stores only the differences from the role (null = inherit).
+ */
+export async function saveUserOverrides(userId, permissions) {
+  const { data } = await api.put(`/user-permissions/${userId}/overrides`, { permissions });
+  return data;
+}
+
 export async function resetUserPermissions(userId) {
   const { data } = await api.delete(`/user-permissions/${userId}/reset`);
   return data;

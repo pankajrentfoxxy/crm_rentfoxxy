@@ -271,8 +271,8 @@ function assertQcGate({ from, to, qcGate, ticketId }) {
 const CHECKLIST_EXITS = new Set(['Assembly & Software→Final Testing', 'Final Testing→QC1']);
 async function assertStageWorkDone(db, { ticketId, from, to, actor, reason }) {
   if (!from || !CHECKLIST_EXITS.has(`${from.stage_name}→${to}`)) return;
-  const { isManager } = require('./qcGateService');
-  if (actor && isManager(actor) && String(reason || '').trim().length >= 10) return;
+  const { isManagerOrGrant } = require('./qcGateService');
+  if (actor && String(reason || '').trim().length >= 10 && await isManagerOrGrant(actor)) return;
   const { rows } = await db.query(
     `SELECT 1 FROM ticket_checklist_progress p
       WHERE p.ticket_id = $1 AND p.stage_id = $2 AND p.completed_at IS NOT NULL

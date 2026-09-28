@@ -42,90 +42,71 @@ const {
     exportOrdersCsv
 } = require('../controllers/salesController');
 
-// Admin-only middleware
-const requireAdmin = (req, res, next) => {
-    if (req.user.role === 'admin') {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Admin only' });
-    }
-};
+// CT1 (27 Sep 2026): each gate keeps its role / legacy permissions[] check and
+// ALSO accepts the matching Roles & Permissions grant (legacyOrSection).
+const { legacyOrSection, hasLegacyPermission } = require('../middleware/legacyOrSection');
+const isRole = (u, ...roles) => roles.includes(u.role);
 
-// Sales access middleware
-const requireSalesAccess = (req, res, next) => {
-    if (req.user.role === 'admin' || req.user.role === 'manager' || (req.user.permissions && req.user.permissions.includes('sales_access'))) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Sales access required' });
-    }
-};
+// Admin-only middleware
+const requireAdmin = legacyOrSection(
+    (u) => isRole(u, 'admin'),
+    'customers', 'delete',
+    { message: 'Access denied: Admin only' },
+);
+
+// Sales access middleware (legacy orders)
+const requireSalesAccess = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager') || hasLegacyPermission(u, 'sales_access'),
+    'lead_orders', 'edit',
+    { message: 'Access denied: Sales access required' },
+);
 
 // Warehouse access middleware
-const requireWarehouseAccess = (req, res, next) => {
-    if (req.user.role === 'admin' || req.user.role === 'manager' || req.user.role === 'floor_manager' || (req.user.permissions && req.user.permissions.includes('warehouse_access'))) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Warehouse access required' });
-    }
-};
+const requireWarehouseAccess = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'floor_manager') || hasLegacyPermission(u, 'warehouse_access'),
+    'warehouse', 'edit',
+    { message: 'Access denied: Warehouse access required' },
+);
 
 // QC access middleware
-const requireQCAccess = (req, res, next) => {
-    if (req.user.role === 'admin' || req.user.role === 'manager' || req.user.role === 'floor_manager' || req.user.role === 'qc' || (req.user.permissions && req.user.permissions.includes('qc_access'))) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: QC access required' });
-    }
-};
+const requireQCAccess = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'floor_manager', 'qc') || hasLegacyPermission(u, 'qc_access'),
+    'qc_management', 'edit',
+    { message: 'Access denied: QC access required' },
+);
 
 // Customers view: admin or customers_access
-const requireCustomersAccess = (req, res, next) => {
-    if (req.user.role === 'admin' || (req.user.permissions && req.user.permissions.includes('customers_access'))) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Customers access required' });
-    }
-};
+const requireCustomersAccess = legacyOrSection(
+    (u) => isRole(u, 'admin') || hasLegacyPermission(u, 'customers_access'),
+    'customers', 'view',
+    { message: 'Access denied: Customers access required' },
+);
 
 // Customers edit profile (name, GST, company): admin, manager, sales, or customers_edit/sales_access
-const requireCustomersEdit = (req, res, next) => {
-    if (
-        req.user.role === 'admin' ||
-        req.user.role === 'manager' ||
-        req.user.role === 'sales' ||
-        (req.user.permissions && (req.user.permissions.includes('customers_edit') || req.user.permissions.includes('sales_access')))
-    ) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Customers edit permission required' });
-    }
-};
+const requireCustomersEdit = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'sales') || hasLegacyPermission(u, 'customers_edit', 'sales_access'),
+    'customers', 'edit',
+    { message: 'Access denied: Customers edit permission required' },
+);
 
 // Address add/update: admin, customers_edit, or sales_access
-const requireAddressAccess = (req, res, next) => {
-    if (req.user.role === 'admin' || (req.user.permissions && (req.user.permissions.includes('customers_edit') || req.user.permissions.includes('sales_access')))) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied' });
-    }
-};
+const requireAddressAccess = legacyOrSection(
+    (u) => isRole(u, 'admin') || hasLegacyPermission(u, 'customers_edit', 'sales_access'),
+    'customers', 'edit',
+    { message: 'Access denied' },
+);
 
-// Dispatch access middleware
+// Dispatch access middleware. Sales stays view-only here whatever it is granted.
+const dispatchGate = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'floor_manager', 'dispatch') || hasLegacyPermission(u, 'dispatch_access'),
+    'dispatch', 'edit',
+    { message: 'Access denied: Dispatch access required' },
+);
 const requireDispatchAccess = (req, res, next) => {
     if (req.user.role === 'sales') {
         return res.status(403).json({ message: 'Access denied: Sales team is view-only for dispatch workflow' });
     }
-    if (
-        req.user.role === 'admin' ||
-        req.user.role === 'manager' ||
-        req.user.role === 'floor_manager' ||
-        req.user.role === 'dispatch' ||
-        (req.user.permissions && req.user.permissions.includes('dispatch_access'))
-    ) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Dispatch access required' });
-    }
+    return dispatchGate(req, res, next);
 };
 
 // router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
@@ -153,34 +134,21 @@ const upload = multer({
     },
 });
 
-router.post('/customers', authMiddleware, (req, res, next) => {
-    if (
-        req.user.role === 'admin' ||
-        req.user.role === 'manager' ||
-        req.user.role === 'sales' ||
-        (req.user.permissions && (req.user.permissions.includes('sales_access') || req.user.permissions.includes('customers_edit')))
-    ) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied' });
-    }
-}, createCustomer);
-router.post('/customers/upload', authMiddleware, (req, res, next) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
-    next();
-}, upload.single('file'), uploadCustomersCsv);
-const requireCustomersOrSalesAccess = (req, res, next) => {
-    if (
-        req.user.role === 'admin' ||
-        req.user.role === 'manager' ||
-        req.user.role === 'sales' ||
-        (req.user.permissions && (req.user.permissions.includes('sales_access') || req.user.permissions.includes('customers_access')))
-    ) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied' });
-    }
-};
+router.post('/customers', authMiddleware, legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'sales') || hasLegacyPermission(u, 'sales_access', 'customers_edit'),
+    'customers', 'create',
+    { message: 'Access denied' },
+), createCustomer);
+router.post('/customers/upload', authMiddleware, legacyOrSection(
+    (u) => isRole(u, 'admin'),
+    'customers', 'create',
+    { message: 'Admin only' },
+), upload.single('file'), uploadCustomersCsv);
+const requireCustomersOrSalesAccess = legacyOrSection(
+    (u) => isRole(u, 'admin', 'manager', 'sales') || hasLegacyPermission(u, 'sales_access', 'customers_access'),
+    'customers', 'view',
+    { message: 'Access denied' },
+);
 router.get('/customers', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomers);
 router.get('/customers/:id', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomerById);
 router.put('/customers/:id', authMiddleware, requireCustomersEdit, customerScope, updateCustomer);

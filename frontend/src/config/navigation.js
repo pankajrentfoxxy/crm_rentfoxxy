@@ -218,17 +218,28 @@ export const SECTIONS = [
   {
     key: 'control',
     label: 'Control',
+    // Control in Carret (27 Sep 2026, step 4): users, roles, the permission
+    // matrix, per-user overrides and the audit log. The menu can only test
+    // sections, so each link shows on its section grant; the page routes also
+    // accept the backend's role lists (CT1). Old screens stay under "Old view"
+    // until Control is signed off (hard rule 6).
+    groups: ['Overview', 'Access', 'Settings', 'Old view'],
     items: [
-      { to: '/dashboard', label: 'Overview', section: 'dashboard', action: 'view' },
-      { to: '/carret', label: 'Operations (Carret)', section: 'dashboard', action: 'view' },
-      { to: '/settings/roles', label: 'Roles & Permissions', section: 'roles', action: 'view' },
-      { to: '/settings/role-permissions', label: 'Role Permissions', section: 'role_permissions', action: 'view' },
-      { to: '/settings/user-permissions', label: 'User Permissions', section: 'user_permissions', action: 'view' },
-      { to: '/settings/role-reference', label: 'Role Reference', section: 'roles', action: 'view' },
-      { to: '/settings/users', label: 'Users', section: 'users', action: 'view' },
-      { to: '/teams', label: 'Teams', section: 'teams', action: 'view' },
-      { to: '/settings/companies', label: 'Settings', section: 'company_settings', action: 'view' },
-      { to: '/reports', label: 'Reports', section: 'reports_access', action: 'view' },
+      { group: 'Overview', to: '/dashboard', label: 'Overview', section: 'dashboard', action: 'view' },
+      { group: 'Overview', to: '/carret', label: 'Operations (Carret)', section: 'dashboard', action: 'view' },
+      { group: 'Access', to: '/carret/control/users', label: 'Users', section: 'users', action: 'view' },
+      { group: 'Access', to: '/carret/control/roles', label: 'Roles', section: 'roles', action: 'view' },
+      { group: 'Access', to: '/carret/control/role-permissions', label: 'Role Permissions', section: 'role_permissions', action: 'view' },
+      { group: 'Access', to: '/carret/control/user-permissions', label: 'User Permissions', section: 'user_permissions', action: 'view' },
+      { group: 'Access', to: '/carret/control/audit-log', label: 'Audit Log', sections: ['role_permissions', 'user_permissions'], section: 'role_permissions', action: 'view' },
+      { group: 'Settings', to: '/teams', label: 'Teams', section: 'teams', action: 'view' },
+      { group: 'Settings', to: '/settings/companies', label: 'Settings', section: 'company_settings', action: 'view' },
+      { group: 'Settings', to: '/reports', label: 'Reports', section: 'reports_access', action: 'view' },
+      { group: 'Old view', to: '/settings/users', label: 'Users (old)', section: 'users', action: 'view' },
+      { group: 'Old view', to: '/settings/roles', label: 'Roles & Permissions (old)', section: 'roles', action: 'view' },
+      { group: 'Old view', to: '/settings/role-permissions', label: 'Role Permissions (old)', section: 'role_permissions', action: 'view' },
+      { group: 'Old view', to: '/settings/user-permissions', label: 'User Permissions (old)', section: 'user_permissions', action: 'view' },
+      { group: 'Old view', to: '/settings/role-reference', label: 'Role Reference (old)', section: 'roles', action: 'view' },
     ],
   },
 ];

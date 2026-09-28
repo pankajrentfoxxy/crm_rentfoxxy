@@ -259,7 +259,11 @@ async function acceptOrder(client, { salesOrderNumber, userId, user }) {
     return { ok: false, status: 400, message: `Cannot accept from status ${wf.status}` };
   }
   if (wf.assigned_user_id && wf.assigned_user_id !== userId) {
-    const isAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+    // CT1: admin role OR dispatch_workflow delete grant (edit is held by every
+    // dispatch user, and must not let one take another's order).
+    const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+    const isAdmin = user?.role === 'super_admin' || user?.role === 'admin'
+      || await userHasRoleOrSection(user, [], 'dispatch_workflow', 'delete');
     if (!isAdmin) {
       return { ok: false, status: 403, message: 'This order is assigned to another dispatch user' };
     }

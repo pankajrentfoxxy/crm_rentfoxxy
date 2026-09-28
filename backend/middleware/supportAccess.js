@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { hasPermission } = require('../services/permissionService');
+const { userHasRoleOrSection } = require('./roleOrSection');
 
 const SUPPORT_ROLES = ['admin', 'manager', 'super_admin', 'support_lead', 'support_tech'];
 
@@ -40,6 +41,47 @@ const canManageAsTicketLead = (user) =>
 /** Internal viewer (not a field technician) who only sees tickets assigned to them. */
 const isAssignedTicketsOnly = (user) =>
   Boolean(user && !isSupportLead(user) && (isSupportTechnician(user) || hasSupportTicketAssigneeGrant(user)));
+
+/*
+ * CT1 (27 Sep 2026): the role lists above also accept a Roles & Permissions
+ * grant. Lead-level actions (create / assign / cancel / close / manage a ticket)
+ * need support_tickets DELETE — support_tickets EDIT is held by agent-level
+ * roles (support_agent), so it must not make someone a lead. These async
+ * variants never throw: a permission lookup failure denies (fails closed).
+ */
+const SUPPORT_LEAD_SECTION = 'support_tickets';
+const SUPPORT_LEAD_ACTION = 'delete';
+
+function permCache(req) {
+  if (!req) return undefined;
+  if (!req.permissionCache) req.permissionCache = {};
+  return req.permissionCache;
+}
+
+async function grantSafe(user, roles, section, action, cache) {
+  try {
+    return await userHasRoleOrSection(user, roles, section, action, cache);
+  } catch (err) {
+    console.error('supportAccess grant check failed:', err.message);
+    return false;
+  }
+}
+
+/** isSupportLead OR support_tickets delete grant. */
+const isSupportLeadOrGranted = (user, cache) =>
+  grantSafe(user, SUPPORT_LEAD_ROLES, SUPPORT_LEAD_SECTION, SUPPORT_LEAD_ACTION, cache);
+
+/** canManageAsTicketLead OR support_tickets delete grant. */
+const canManageAsTicketLeadOrGranted = async (user, cache) =>
+  canManageAsTicketLead(user) || isSupportLeadOrGranted(user, cache);
+
+/** canCloseSupportTicket OR support_tickets delete grant. */
+const canCloseSupportTicketOrGranted = async (user, cache) =>
+  Boolean(canCloseSupportTicket(user)) || isSupportLeadOrGranted(user, cache);
+
+/** canCancelSupportTicket OR support_tickets delete grant. */
+const canCancelSupportTicketOrGranted = (user, cache) =>
+  grantSafe(user, ['super_admin', 'admin', 'support_lead'], SUPPORT_LEAD_SECTION, SUPPORT_LEAD_ACTION, cache);
 
 async function resolveTicketIdFromRequest(req) {
   const ticketId = parseInt(req.params.ticketId, 10);
@@ -83,7 +125,7 @@ const requireTicketLead = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
-  if (isSupportLead(req.user)) return next();
+  if (await isSupportLeadOrGranted(req.user, permCache(req))) return next();
   if (!hasSupportTicketAssigneeGrant(req.user)) {
     return res.status(403).json({ success: false, message: 'Support lead or assigned warehouse lead required' });
   }
@@ -150,31 +192,31 @@ const requireSupportAccess = async (req, res, next) => {
     }
 };
 
-const requireSupportLead = (req, res, next) => {
+const requireSupportLead = async (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    if (!isSupportLead(req.user)) {
+    if (!(await isSupportLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Support lead or admin required' });
     }
     return next();
 };
 
-const requireSupportTicketClose = (req, res, next) => {
+const requireSupportTicketClose = async (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    if (!canCloseSupportTicket(req.user)) {
+    if (!(await canCloseSupportTicketOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Not allowed to close support tickets' });
     }
     return next();
 };
 
-const requireSupportTicketCancel = (req, res, next) => {
+const requireSupportTicketCancel = async (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    if (!canCancelSupportTicket(req.user)) {
+    if (!(await canCancelSupportTicketOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Not allowed to cancel support tickets' });
     }
     return next();
@@ -215,4 +257,9 @@ module.exports = {
     requireSupportTicketClose,
     requireSupportTicketCancel,
     resolveSupportAssigneeId,
+    permCache,
+    isSupportLeadOrGranted,
+    canManageAsTicketLeadOrGranted,
+    canCloseSupportTicketOrGranted,
+    canCancelSupportTicketOrGranted,
 };

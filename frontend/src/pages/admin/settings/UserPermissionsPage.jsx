@@ -11,10 +11,10 @@ import {
   fetchRoles,
   fetchUserPermissions,
   fetchUsersByRole,
-  matrixDiffToOverridePayload,
+  matrixToPermissionsArray,
   permissionsArrayToMatrix,
   resetUserPermissions,
-  saveUserPermissions,
+  saveUserOverrides,
 } from '../../../utils/rbacApi';
 import { ADMIN_ONLY_RBAC_SECTIONS, mergeRbacSectionList } from '../../../constants/sections';
 
@@ -131,11 +131,10 @@ export default function UserPermissionsPage() {
     if (!selectedUserId) return;
     setSaving(true);
     try {
-      const overrides = matrixDiffToOverridePayload(matrix, roleDefaultsMatrix);
-      await resetUserPermissions(selectedUserId);
-      if (overrides.length) {
-        await saveUserPermissions(selectedUserId, overrides);
-      }
+      // One call, one transaction: the backend keeps only what differs from
+      // the role (it used to be a delete-everything then re-insert, which
+      // left the user with no overrides if the second call failed).
+      await saveUserOverrides(selectedUserId, matrixToPermissionsArray(matrix));
       setSavedMatrix(JSON.parse(JSON.stringify(matrix)));
       if (String(user?.user_id) === String(selectedUserId)) {
         await refreshPermissions();

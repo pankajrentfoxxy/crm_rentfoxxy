@@ -301,8 +301,9 @@ async function submitDiagnosisV2(client, req, res, ticketBefore) {
     if (ticketBefore.stage_name !== 'Diagnosis') {
         return fail(409, `This laptop is at ${ticketBefore.stage_name || 'another stage'}, not Diagnosis.`);
     }
-    const { isManager } = require('../services/qcGateService');
-    if (Number(ticketBefore.assigned_user_id) !== Number(user.user_id) && !isManager(user)) {
+    const { isManagerOrGrant } = require('../services/qcGateService');
+    if (Number(ticketBefore.assigned_user_id) !== Number(user.user_id)
+        && !(await isManagerOrGrant(user, req.permissionCache || (req.permissionCache = {})))) {
         return fail(403, 'Only the technician it is assigned to (or a floor manager) submits its diagnosis.');
     }
 
