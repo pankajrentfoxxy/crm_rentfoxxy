@@ -69,6 +69,9 @@ async function canUsers(req, action) {
     req.permissionCache
   );
 }
+// Admin-only actions pass [] as the section: on QA the matrix grants were set
+// loosely for years (the role lists overrode them), so letting a section open an
+// admin-only action would hand it to managers etc. who hold those grants today.
 async function roleOr(req, roles, section, action) {
   if (!req.permissionCache) req.permissionCache = {};
   return userHasRoleOrSection(req.user, roles, section, action, req.permissionCache);
@@ -759,7 +762,7 @@ exports.exportUsersCsv = async (req, res) => {
 
 exports.exportUsersExcel = async (req, res) => {
   try {
-    if (!(await roleOr(req, ['admin'], 'users', 'view'))) {
+    if (!(await roleOr(req, ['admin'], [], 'view'))) {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
 
@@ -971,7 +974,7 @@ exports.updateUserStatus = async (req, res) => {
       return res.status(403).json({ success: false, message: guard.reason || 'Cannot modify this user' });
     }
     // Blocking stays with admins (or a `users` delete grant); managers never could.
-    if (status === 'blocked' && !(await roleOr(req, ['admin'], 'users', 'delete'))) {
+    if (status === 'blocked' && !(await roleOr(req, ['admin'], [], 'delete'))) {
       return res.status(403).json({ success: false, message: 'Only admin can block users' });
     }
 
@@ -1113,7 +1116,7 @@ exports.loginAsUser = async (req, res) => {
 
 exports.resetUserPassword = async (req, res) => {
   try {
-    if (!(await roleOr(req, ['admin'], 'users', 'edit'))) {
+    if (!(await roleOr(req, ['admin'], [], 'edit'))) {
       return res.status(403).json({ success: false, message: 'Admin only' });
     }
 
@@ -1357,14 +1360,14 @@ exports.registerTechnician = async (req, res) => {
   const { name, email, password, mobile_no, permissions } = req.body;
 
   try {
-    if (!(await roleOr(req, ['admin'], 'users', 'create'))) {
+    if (!(await roleOr(req, ['admin'], [], 'create'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     const hasOverrides = Array.isArray(permissions) && permissions.length > 0;
     if (hasOverrides) {
       // Granting access on create needs the user_permissions grant too, and
       // only known sections.
-      if (!(await roleOr(req, ['admin'], 'user_permissions', 'edit'))) {
+      if (!(await roleOr(req, ['admin'], [], 'edit'))) {
         return res.status(403).json({ success: false, message: 'You cannot grant permissions' });
       }
       const { getKnownSectionSet } = require('../services/permissionService');
@@ -1462,7 +1465,7 @@ exports.approveVendor = async (req, res) => {
 // List pending vendor registrations (admin/super_admin)
 exports.getPendingVendors = async (req, res) => {
   try {
-    if (!(await roleOr(req, ['admin'], 'vendor_management', 'view'))) {
+    if (!(await roleOr(req, ['admin'], [], 'view'))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 

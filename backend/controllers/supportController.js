@@ -6271,7 +6271,10 @@ exports.ensureSupportSchema = async () => {
         '025_support_module.sql',
         '026_support_redesign.sql',
         '027_support_v2.sql',
-        '028_support_user_roles.sql',
+        // 028 (users_role_check with a hardcoded role list) is no longer replayed:
+        // services/userRoleCheck.js owns that constraint now (migration 362), and
+        // replaying 028 at boot put the old list back — no support_agent /
+        // support_manager / custom roles — and failed once a user held one.
         '029_support_v3.sql',
         '031_support_ticket_category.sql',
         '068_phase6_support_customer_portal.sql',

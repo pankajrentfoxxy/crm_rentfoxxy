@@ -44,14 +44,18 @@ const { ensureUsersRoleCheck } = require('../services/userRoleCheck');
  */
 const ACCESS = {
   rolesView: [['admin', 'manager'], ['roles', 'role_permissions', 'user_permissions'], 'view'],
-  rolesCreate: [['admin'], 'roles', 'create'],
-  rolesEdit: [['admin'], 'roles', 'edit'],
-  rolesDelete: [['admin'], 'roles', 'delete'],
+  // Writes are admin-only (super_admin always passes): on QA the manager role
+  // holds roles / role_permissions / user_permissions edit from years of loose
+  // grants, so letting the section open these would hand managers the power to
+  // grant their own role everything. Views may still come from a section.
+  rolesCreate: [['admin'], [], 'create'],
+  rolesEdit: [['admin'], [], 'edit'],
+  rolesDelete: [['admin'], [], 'delete'],
   sectionsView: [['admin', 'manager'], ['roles', 'role_permissions', 'user_permissions'], 'view'],
   rolePermView: [['admin', 'manager'], 'role_permissions', 'view'],
-  rolePermEdit: [['admin'], 'role_permissions', 'edit'],
+  rolePermEdit: [['admin'], [], 'edit'],
   userPermView: [['admin'], 'user_permissions', 'view'],
-  userPermEdit: [['admin'], 'user_permissions', 'edit'],
+  userPermEdit: [['admin'], [], 'edit'],
   usersByRole: [['admin'], ['users', 'roles'], 'view'],
   auditView: [['admin'], ['role_permissions', 'user_permissions'], 'view'],
 };
