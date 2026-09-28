@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkRole, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const { roleOrSection } = require('../middleware/roleOrSection');
 
 // Part 5.6 (finding R13) — most of this router had auth and no permission, so
 // any logged-in user could rewrite a production asset's configuration or record
@@ -22,7 +23,8 @@ router.get(
   checkSectionPermission('pending_inventory', 'view'),
   ctrl.getCarretAvailability
 );
-router.post('/backfill', checkRole('admin', 'super_admin'), ctrl.backfill);
+// CT1: admin role OR pending_inventory edit grant.
+router.post('/backfill', roleOrSection(['admin', 'super_admin'], 'pending_inventory', 'edit'), ctrl.backfill);
 router.get('/by-ticket/:ticketId', paView, ctrl.getByTicket);
 router.get('/:id', paView, ctrl.getById);
 router.patch('/:id/config', paEdit, ctrl.updateConfig);

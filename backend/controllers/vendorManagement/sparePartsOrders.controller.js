@@ -657,8 +657,7 @@ async function updateStatus(req, res) {
   }
 
   if (status === 'rejected') {
-    const role = String(req.user?.role || '').toLowerCase();
-    if (!(req.user?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(role))) {
+    if (!(await isSpareManager(req))) {
       return res.status(403).json({ success: false, message: 'Only managers can send a spare parts PO back' });
     }
     if (prev !== 'pending') return res.status(400).json({ success: false, message: 'Only a PO waiting for approval can be sent back.' });
@@ -667,8 +666,7 @@ async function updateStatus(req, res) {
   if (status === 'approved') {
     // D13: spare POs get the same approval as laptop POs — a manager, and
     // never the person who created or submitted it (there was no check at all).
-    const role = String(req.user?.role || '').toLowerCase();
-    if (!(req.user?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(role))) {
+    if (!(await isSpareManager(req))) {
       return res.status(403).json({ success: false, message: 'Only managers can approve spare parts POs' });
     }
     const people = await poRules.sparePoPeople(pool, cur.rows[0]);
@@ -1600,6 +1598,24 @@ const reasonValidators = [
 ];
 const isManager = (u) => u?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(String(u?.role || '').toLowerCase());
 
+/**
+ * CT1 (27 Sep 2026): a manager by role (above) OR the parts_procurement DELETE grant in
+ * Roles & Permissions. Delete, not edit: edit is held by the procurement role, and
+ * approving / cancelling / short-closing is a manager's call. Denies on lookup failure.
+ */
+async function isSpareManager(req) {
+  if (isManager(req?.user)) return true;
+  if (!req?.user) return false;
+  if (!req.permissionCache) req.permissionCache = {};
+  try {
+    const { userHasRoleOrSection } = require('../../middleware/roleOrSection');
+    return await userHasRoleOrSection(req.user, [], 'parts_procurement', 'delete', req.permissionCache);
+  } catch (err) {
+    console.error('isSpareManager failed:', err.message);
+    return false;
+  }
+}
+
 function spareAction(name, check, sql) {
   return async (req, res) => {
     const errors = validationResult(req);
@@ -1615,7 +1631,7 @@ function spareAction(name, check, sql) {
       if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Spare parts PO not found' }); }
       prev = cur.rows[0];
       const received = await poRules.receivedCount(client, { spoId: id });
-      const refusal = check(prev, received, req.user);
+      const refusal = await check(prev, received, req.user, req);
       if (refusal) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, message: refusal }); }
       row = (await client.query(sql, [req.user?.user_id || null, reason, id])).rows[0];
       if (name === 'cancelled') {
@@ -1647,19 +1663,19 @@ const amend = spareAction('amended', (po, received) => {
          amend_reason = $2, status_updated_by_admin_id = $1, updated_at = NOW()
    WHERE spo_id = $3 RETURNING *`);
 
-const cancel = spareAction('cancelled', (po, received, user) => {
+const cancel = spareAction('cancelled', async (po, received, user, req) => {
   const st = String(po.status || '').toLowerCase();
   if (['cancelled', 'completed', 'closed'].includes(st)) return `This spare parts PO is already ${st}.`;
   if (received > 0) return `${received} part(s) are already received, so it can't be cancelled. Short-close it instead.`;
-  if (SPARE_OPEN.includes(st) && !isManager(user)) return 'This PO is approved — only a manager can cancel it.';
+  if (SPARE_OPEN.includes(st) && !(await isSpareManager(req))) return 'This PO is approved — only a manager can cancel it.';
   return null;
 }, `UPDATE vendor_spare_parts_purchase_orders
      SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $1, cancel_reason = $2,
          status_updated_by_admin_id = $1, updated_at = NOW()
    WHERE spo_id = $3 RETURNING *`);
 
-const shortClose = spareAction('short_closed', (po, received, user) => {
-  if (!isManager(user)) return 'Only a manager can short-close a spare parts PO.';
+const shortClose = spareAction('short_closed', async (po, received, user, req) => {
+  if (!(await isSpareManager(req))) return 'Only a manager can short-close a spare parts PO.';
   if (!SPARE_OPEN.includes(String(po.status).toLowerCase())) return `Only an open, approved spare parts PO can be short-closed (this one is ${po.status}).`;
   if (received === 0) return 'Nothing has been received on this PO — cancel it instead.';
   return null;

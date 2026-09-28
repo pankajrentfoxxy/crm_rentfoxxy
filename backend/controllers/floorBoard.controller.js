@@ -178,7 +178,7 @@ exports.dismantle = (req, res) => inTransaction(res, async (db, out) => {
 // "done" needs every item ticked and no part still waiting to be fitted; any
 // other outcome needs a reason for the next person.
 const floorChecklists = require('../services/floorChecklists');
-const { isManager } = require('../services/qcGateService');
+const { isManagerOrGrant } = require('../services/qcGateService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
@@ -212,7 +212,8 @@ exports.completeStageWork = (req, res) => inTransaction(res, async (db, out) => 
   if (!outcomes) return fail(out, 409, `There is no work form to finish at ${t.stage_name || 'this stage'}.`);
   const outcome = outcomes[req.body?.outcome];
   if (!outcome) return fail(out, 400, 'Choose what happens next.');
-  if (Number(t.assigned_user_id) !== Number(req.user.user_id) && !isManager(req.user)) {
+  if (Number(t.assigned_user_id) !== Number(req.user.user_id)
+    && !(await isManagerOrGrant(req.user, req.permissionCache || (req.permissionCache = {})))) {
     return fail(out, 403, 'Only the technician it is assigned to (or a floor manager) finishes this stage.');
   }
 

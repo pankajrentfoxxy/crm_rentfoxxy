@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { assertMayPassQc, assertQc2Matched, overrideFrom } = require('../services/qcGateService');
+const { assertMayPassQc, assertQc2Matched, overrideFromAsync } = require('../services/qcGateService');
 const { reserveOnQcPass } = require('../services/qcPassReservation');
 const {
     pickNextAssigneeForTeam,
@@ -381,7 +381,7 @@ exports.submitQC = async (req, res) => {
         let qcGate = { kind: 'checklist' };
         if (result === 'PASS' && ['QC1', 'QC2'].includes(qcStage)) {
             try {
-                const override = overrideFrom(req.user, req.body.qc_override_reason);
+                const override = await overrideFromAsync(req.user, req.body.qc_override_reason, req.permissionCache || (req.permissionCache = {}));
                 await assertMayPassQc(client, { ticketId: Number(id), user: req.user, stageName: qcStage });
                 if (qcStage === 'QC2') {
                     if (override) qcGate = { kind: 'checklist', override: override.reason };

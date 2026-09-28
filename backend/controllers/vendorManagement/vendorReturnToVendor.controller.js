@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 const {
   actorFromReq,
-  requireWarehouseRole,
+  requireWarehouseOrGrant,
   listEligibleLaptops,
   listEligibleVendors,
   listReturnDcs,
@@ -69,7 +69,7 @@ exports.getDc = async (req, res) => {
 exports.createDc = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_to_vendor');
     const body = req.body || {};
     const actor = actorFromReq(req);
     await client.query('BEGIN');
@@ -104,7 +104,7 @@ exports.createDc = async (req, res) => {
 exports.dispatchDc = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_to_vendor');
     const actor = actorFromReq(req);
     await client.query('BEGIN');
     const dc = await dispatchReturnDc(client, {
@@ -129,7 +129,7 @@ exports.dispatchDc = async (req, res) => {
 exports.completeDc = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_to_vendor');
     const actor = actorFromReq(req);
     await client.query('BEGIN');
     const dc = await completeVendorReturn(client, {
@@ -176,7 +176,7 @@ exports.downloadPdf = async (req, res) => {
 exports.cancelDc = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_to_vendor');
     const actor = actorFromReq(req);
     await client.query('BEGIN');
     const dc = await cancelReturnDc(client, {
@@ -317,7 +317,7 @@ exports.saveEwayBill = async (req, res) => {
 exports.setItemValues = async (req, res) => {
   const client = await pool.connect();
   try {
-    requireWarehouseRole(req.user?.role);
+    await requireWarehouseOrGrant(req, 'vendor_return_to_vendor');
     const dcNumber = req.params.dcNumber;
     // Checked under the row lock, inside the transaction (it was read before
     // BEGIN, so the DC could leave draft between the check and the write).

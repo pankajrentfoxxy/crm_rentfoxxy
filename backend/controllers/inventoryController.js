@@ -231,9 +231,10 @@ exports.updateInventory = async (req, res) => {
         brand, model, processor, generation, ram, storage, gpu, screen_size, grade, status, stage
     } = req.body;
 
-    const canEditDetails =
-        req.user &&
-        ['admin', 'manager'].includes(req.user.role);
+    // CT1: role lists OR the inventory_management delete grant (edit is held by
+    // warehouse / floor roles, who may only change status here).
+    const canEditDetails = Boolean(req.user) &&
+        await require('../middleware/roleOrSection').userHasRoleOrSection(req.user, ['admin', 'manager'], 'inventory_management', 'delete', req.permissionCache || (req.permissionCache = {}));
 
     // Adjusting stock_type / status is allowed for roles on this route (e.g. return workflow).
     // Admin/Manager-only: device specs, brand/model, grade, stage, stock_type splits for data correction modal.
@@ -253,7 +254,7 @@ exports.updateInventory = async (req, res) => {
     const stockSplitTouched = stock_type !== undefined;
 
     const canChangeStockType =
-        req.user && ['admin', 'manager', 'floor_manager'].includes(req.user.role);
+        Boolean(req.user) && await require('../middleware/roleOrSection').userHasRoleOrSection(req.user, ['admin', 'manager', 'floor_manager'], 'inventory_management', 'delete', req.permissionCache || (req.permissionCache = {}));
 
     if (!canEditDetails && specFieldsTouched) {
         return res.status(403).json({

@@ -4,6 +4,7 @@ const path = require('path');
 const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
 const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
+const { roleOrSection } = require('../middleware/roleOrSection');
 const customerScope = require('../middleware/customerScope');
 const ctrl = require('../controllers/customerManagementController');
 
@@ -22,14 +23,15 @@ router.use(authMiddleware);
 router.use(customerScope); // resolves req.allowedCustomerTypes (Customer Access role permission)
 
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
-router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);
-router.get('/customers/assets/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomerAssetsExcel);
-router.get('/customers/sale-assets/export', checkRole('admin', 'super_admin'), ctrl.exportCustomerSaleAssets);
+// CT1: admin role OR the matching grant.
+router.get('/customers/export.xlsx', roleOrSection(['admin', 'super_admin'], 'customer_management', 'view'), ctrl.exportCustomersExcel);
+router.get('/customers/assets/export.xlsx', roleOrSection(['admin', 'super_admin'], 'customer_assets', 'edit'), ctrl.exportCustomerAssetsExcel);
+router.get('/customers/sale-assets/export', roleOrSection(['admin', 'super_admin'], 'customer_assets', 'edit'), ctrl.exportCustomerSaleAssets);
 router.get('/customers/ids', cp('customers', 'view'), ctrl.listCustomerIds);
 router.get('/customers', cp('customers', 'view'), ctrl.listCustomers);
 router.patch(
   '/customers/bulk-customer-type',
-  checkRole('admin', 'super_admin'),
+  roleOrSection(['admin', 'super_admin'], 'customer_management', 'edit'),
   ctrl.bulkUpdateCustomerType
 );
 router.post(

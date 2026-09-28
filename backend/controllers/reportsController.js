@@ -2432,7 +2432,12 @@ const CLIENT_NAME_ROLES = ['super_admin', 'admin', 'sales', 'accounts'];
 exports.getSalesOrderReportDrilldown = async (req, res) => {
     try {
         const data = await getSalesOrderReportDrilldown(req.query);
-        const canSeeClient = CLIENT_NAME_ROLES.includes(req.user?.role);
+        // CT1: the roles above OR a customers view grant may see client names.
+        if (!req.permissionCache) req.permissionCache = {};
+        const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+        const canSeeClient = await userHasRoleOrSection(
+            req.user, CLIENT_NAME_ROLES, 'customers', 'view', req.permissionCache
+        );
         // Only privileged roles may see the client name; strip it for everyone else.
         const items = canSeeClient
             ? data.items

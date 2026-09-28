@@ -2,10 +2,21 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
-const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant, canManageAsTicketLead, isTicketAssignedToUser, isAssignedTicketsOnly } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician, hasSupportTicketAssigneeGrant, canManageAsTicketLead, isTicketAssignedToUser, isAssignedTicketsOnly, permCache, isSupportLeadOrGranted, canManageAsTicketLeadOrGranted, canCloseSupportTicketOrGranted, canCancelSupportTicketOrGranted } = require('../middleware/supportAccess');
+const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+
+/** CT1: role list OR a Roles & Permissions grant; never throws (denies on lookup failure). */
+async function roleOrGrant(req, roles, section, action) {
+    try {
+        return await userHasRoleOrSection(req.user, roles, section, action, permCache(req));
+    } catch (err) {
+        console.error('roleOrGrant failed:', err.message);
+        return false;
+    }
+}
 
 async function canLeadThisTicket(user, ticketId) {
-    if (isSupportLead(user)) return true;
+    if (await isSupportLeadOrGranted(user)) return true;
     if (!hasSupportTicketAssigneeGrant(user) || !ticketId) return false;
     return isTicketAssignedToUser(ticketId, user.user_id);
 }
@@ -1507,7 +1518,7 @@ exports.getNavBadges = async (req, res) => {
 };
 
 exports.createTicket = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!(await isSupportLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can create tickets' });
     }
     const {
@@ -1668,7 +1679,7 @@ exports.getTicket = async (req, res) => {
 };
 
 exports.closeTicket = async (req, res) => {
-    if (!canCloseSupportTicket(req.user)) {
+    if (!(await canCloseSupportTicketOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Not allowed to close support tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -1767,7 +1778,7 @@ exports.closeTicket = async (req, res) => {
 };
 
 exports.cancelTicket = async (req, res) => {
-    if (!canCancelSupportTicket(req.user)) {
+    if (!(await canCancelSupportTicketOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Not allowed to cancel support tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -1916,7 +1927,7 @@ exports.addComment = async (req, res) => {
     } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
     }
-    if (isSupportTechnician(req.user) && !canManageAsTicketLead(req.user) && item.assigned_to !== req.user.user_id) {
+    if (isSupportTechnician(req.user) && !(await canManageAsTicketLeadOrGranted(req.user, permCache(req))) && item.assigned_to !== req.user.user_id) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -2279,7 +2290,7 @@ exports.schedulePickup = async (req, res) => {
 };
 
 exports.assignItem = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can assign technicians' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -2417,7 +2428,7 @@ exports.getSettings = async (req, res) => {
 
 exports.updateSettings = async (req, res) => {
     // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
-    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
+    if (!(await roleOrGrant(req, ['admin', 'super_admin', 'support_lead'], 'support_settings', 'edit'))) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const { auto_close_enabled, overdue_threshold_hours, msr91_enabled } = req.body || {};
@@ -2459,7 +2470,7 @@ exports.updateSettings = async (req, res) => {
 
 exports.upsertCategory = async (req, res) => {
     // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
-    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
+    if (!(await roleOrGrant(req, ['admin', 'super_admin', 'support_lead'], 'support_settings', 'edit'))) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const { id, name, sort_order, active } = req.body || {};
@@ -2487,7 +2498,7 @@ exports.upsertCategory = async (req, res) => {
 
 exports.deleteCategory = async (req, res) => {
     // Settings / categories: admin, super_admin and the support lead (S11) — was the 'admin' string only.
-    if (!['admin', 'super_admin', 'support_lead'].includes(req.user.role)) {
+    if (!(await roleOrGrant(req, ['admin', 'super_admin', 'support_lead'], 'support_settings', 'edit'))) {
         return res.status(403).json({ success: false, message: 'Admin only' });
     }
     const categoryId = parseInt(req.params.categoryId, 10);
@@ -2526,7 +2537,7 @@ exports.checkDuplicateTicket = async (req, res) => {
 
 /** Add pickup / replacement phase items to an existing ticket (linked to complaint or replacement source). */
 exports.addWorkflowPhaseItems = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can add workflow phases' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2620,7 +2631,7 @@ exports.addWorkflowPhaseItems = async (req, res) => {
 };
 
 exports.assignTicketBulk = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!(await isSupportLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can assign technicians' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2704,7 +2715,7 @@ exports.assignTicketBulk = async (req, res) => {
 };
 
 exports.updateTicket = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can edit tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2828,7 +2839,7 @@ exports.updateTicket = async (req, res) => {
 };
 
 exports.updatePickupAddress = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can edit pickup address' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -3285,7 +3296,7 @@ exports.markVisited = exports.logVisit;
 // OTP in one step. For a technician dispatch the item lands in their laptop
 // bucket; for courier/porter it is tracked via the delivery register.
 exports.createPickupWithReturnDc = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Support lead only' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -3345,7 +3356,7 @@ exports.createPickupWithReturnDc = async (req, res) => {
 
 /** Create a new pickup ticket + Return DC + assignment in one step (new-ticket form). */
 exports.createPickupTicket = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!(await isSupportLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Support lead only' });
     }
     const {
@@ -4024,7 +4035,7 @@ exports.confirmWarehouseReceipt = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { esign_data, signer_name } = req.body || {};
 
-    if (!['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(req.user.role)) {
+    if (!(await roleOrGrant(req, ['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'], 'return_dc', 'edit'))) {
         return res.status(403).json({ success: false, message: 'Warehouse access required' });
     }
     if (!esign_data || !String(esign_data).startsWith('data:image')) {
@@ -4124,7 +4135,7 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
     const { esign_data, signer_name } = req.body || {};
 
-    if (!['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(req.user.role)) {
+    if (!(await roleOrGrant(req, ['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'], 'return_dc', 'edit'))) {
         return res.status(403).json({ success: false, message: 'Warehouse access required' });
     }
     if (!rdcNumber) {
@@ -4243,8 +4254,9 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
 exports.getTechnicianLaptopBucket = async (req, res) => {
     // U22 pattern: only an exact 'support_tech' was narrowed; any other role saw
     // every technician's laptops. Now: your own unless you supervise.
-    const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'support_lead', 'warehouse']);
-    const isTech = !SUPERVISORS.has(req.user.role);
+    // CT1: supervisor role OR technicians_bucket_list view grant sees every technician.
+    const SUPERVISORS = ['super_admin', 'admin', 'manager', 'support_lead', 'warehouse'];
+    const isTech = !(await roleOrGrant(req, SUPERVISORS, 'technicians_bucket_list', 'view'));
     const params = [];
     let techFilter = '';
     if (isTech) {
@@ -4409,7 +4421,7 @@ exports.getReplacementContext = async (req, res) => {
 };
 
 exports.moveComplaintToReplacement = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can move to replacement' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -4582,7 +4594,7 @@ const reuseReturnDcForReplacement = async (client, ticket, ticketId, userId, ope
 };
 
 exports.initiateReplacement = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can initiate replacement' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5085,7 +5097,7 @@ async function buildRdcEntriesForPickupRows(client, pickupRows) {
 
 /** Remove laptop(s) from a Return DC before guard inward (e.g. 3 → 2 today, 1 later). */
 exports.editReturnPickupMachines = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can edit return pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5289,7 +5301,7 @@ exports.editReturnPickupMachines = async (req, res) => {
 };
 
 exports.cancelReturnPickup = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can cancel return pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5521,7 +5533,7 @@ exports.cancelReturnPickup = async (req, res) => {
 
 /** Assign technician / courier / porter to an existing Return DC (created without dispatch). */
 exports.assignReturnPickupDispatch = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can assign pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5590,7 +5602,7 @@ exports.assignReturnPickupDispatch = async (req, res) => {
 
 /** Add or update courier name + AWB after pickup started but before gate inward. */
 exports.updatePickupCourierDetails = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can update courier details' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -5625,7 +5637,7 @@ exports.updatePickupCourierDetails = async (req, res) => {
 
 /** Change return pickup assignee before pickup starts (technician / courier / porter). */
 exports.changeReturnPickupAssignment = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can change pickup assignment' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5690,7 +5702,7 @@ exports.changeReturnPickupAssignment = async (req, res) => {
 };
 
 exports.updateReplacementOrder = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can update replacement orders' });
     }
     const orderId = parseInt(req.params.orderId, 10);
@@ -5734,7 +5746,7 @@ exports.updateReplacementOrder = async (req, res) => {
 };
 
 exports.deliverReplacement = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can complete replacement delivery' });
     }
     const orderId = parseInt(req.params.orderId, 10);
@@ -5889,7 +5901,7 @@ exports.getAvailableAssets = async (req, res) => {
 };
 
 exports.removeTicketItem = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only team lead can remove items' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -5915,7 +5927,7 @@ exports.getServiceDcEligibility = async (req, res) => {
 };
 
 exports.createServiceDc = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can create Service Delivery Challan' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5990,7 +6002,7 @@ exports.getRepairSwapContext = async (req, res) => {
 };
 
 exports.initiateRepairSwap = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can initiate a repair swap' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -6072,7 +6084,7 @@ exports.getResendLaptopContext = async (req, res) => {
 };
 
 exports.initiateResendLaptop = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can resend a replacement laptop' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -6126,7 +6138,7 @@ exports.getReturnRedeliveryContext = async (req, res) => {
 };
 
 exports.initiateReturnRedelivery = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can create a replacement order' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -6190,7 +6202,7 @@ exports.initiateReturnRedelivery = async (req, res) => {
 };
 
 exports.changeServiceDcTechnician = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) {
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) {
         return res.status(403).json({ success: false, message: 'Only support lead can change the Service DC technician' });
     }
     const sdcNumber = req.params.sdcNumber;
@@ -6459,7 +6471,7 @@ async function loadIssueItem(req, res) {
 
 /** PATCH /support/items/:itemId/reported-issue — the lead corrects / completes what was reported. */
 exports.setReportedIssue = async (req, res) => {
-    if (!canManageAsTicketLead(req.user)) return res.status(403).json({ success: false, message: 'Only the support lead can change the reported issue' });
+    if (!(await canManageAsTicketLeadOrGranted(req.user, permCache(req)))) return res.status(403).json({ success: false, message: 'Only the support lead can change the reported issue' });
     const item = await loadIssueItem(req, res);
     if (!item) return;
     try {
@@ -6513,7 +6525,9 @@ exports.getIssueInsights = async (req, res) => {
 exports.getTechBucketBoard = async (req, res) => {
     try {
         const { techBucketBoard } = require('../services/supportTechBucketService');
-        const supervisor = isSupportLead(req.user) || ['super_admin', 'admin', 'manager', 'support_lead', 'warehouse'].includes(req.user.role);
+        // CT1: supervisor role OR technicians_bucket_list view grant sees every technician.
+        const supervisor = isSupportLead(req.user)
+            || await roleOrGrant(req, ['super_admin', 'admin', 'manager', 'support_lead', 'warehouse'], 'technicians_bucket_list', 'view');
         const technicians = await techBucketBoard(pool, { userId: supervisor ? (req.query.user_id || null) : req.user.user_id });
         res.json({ success: true, supervisor, technicians });
     } catch (e) {
@@ -6522,12 +6536,13 @@ exports.getTechBucketBoard = async (req, res) => {
 };
 
 /* ---- Support settings: the issue list (rework E) ---- */
-const canEditSupportSettings = (user) => ['admin', 'super_admin', 'support_lead'].includes(user?.role);
+// CT1: role OR support_settings edit grant.
+const canEditSupportSettings = (req) => roleOrGrant(req, ['admin', 'super_admin', 'support_lead'], 'support_settings', 'edit');
 
 /** GET /support/issue-catalog/admin — every entry, switched-off ones too. */
 exports.getIssueCatalogAdmin = async (req, res) => {
     try {
-        res.json({ success: true, can_edit: canEditSupportSettings(req.user), ...(await supportIssues.catalogTree(pool, { includeInactive: true })) });
+        res.json({ success: true, can_edit: await canEditSupportSettings(req), ...(await supportIssues.catalogTree(pool, { includeInactive: true })) });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
@@ -6535,7 +6550,7 @@ exports.getIssueCatalogAdmin = async (req, res) => {
 
 /** POST /support/issue-catalog { parent_id, name } */
 exports.addIssueCatalogEntry = async (req, res) => {
-    if (!canEditSupportSettings(req.user)) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
+    if (!(await canEditSupportSettings(req))) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
     try {
         const row = await supportIssues.addCatalogEntry(pool, req.body || {});
         res.status(201).json({ success: true, message: `Added "${row.name}"`, entry: row });
@@ -6546,7 +6561,7 @@ exports.addIssueCatalogEntry = async (req, res) => {
 
 /** PATCH /support/issue-catalog/:id { name?, active? } */
 exports.updateIssueCatalogEntry = async (req, res) => {
-    if (!canEditSupportSettings(req.user)) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
+    if (!(await canEditSupportSettings(req))) return res.status(403).json({ success: false, message: 'Only admin or the support lead can change the issue list' });
     try {
         await supportIssues.updateCatalogEntry(pool, req.params.id, req.body || {});
         res.json({ success: true, message: 'Saved' });

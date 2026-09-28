@@ -63,6 +63,22 @@ const FULL_SELECT = `
 
 const PRIVILEGED = ['admin', 'manager', 'super_admin'];
 
+/**
+ * CT1: floor-manager / warehouse / admin role lists also accept parts_approval
+ * EDIT (the warehouse desk grant). Not parts_requests: technicians hold that to
+ * raise requests, and it must not let them remove or cancel other people's.
+ */
+async function partsDeskOrGrant(req, roles) {
+  if (!req.permissionCache) req.permissionCache = {};
+  try {
+    const { userHasRoleOrSection } = require('../middleware/roleOrSection');
+    return await userHasRoleOrSection(req.user, roles, 'parts_approval', 'edit', req.permissionCache);
+  } catch (err) {
+    console.error('partsDeskOrGrant failed:', err.message);
+    return false;
+  }
+}
+
 let partsSpecEnsured = false;
 async function ensurePartsSpecColumns(db) {
   if (partsSpecEnsured) return;
@@ -1044,10 +1060,8 @@ exports.detachAttachedPart = async (req, res) => {
     }
 
     if (!returnToInventory) {
-      const canDetach = PRIVILEGED.includes(req.user.role)
-        || req.user.role === 'floor_manager'
-        || req.user.role === 'warehouse'
-        || Number(r.requested_by) === Number(req.user.user_id);
+      const canDetach = Number(r.requested_by) === Number(req.user.user_id)
+        || await partsDeskOrGrant(req, [...PRIVILEGED, 'floor_manager', 'warehouse']);
       if (!canDetach) {
         await client.query('ROLLBACK');
         return res.status(403).json({ success: false, message: 'Not allowed to remove this attached part' });
@@ -1382,10 +1396,8 @@ exports.cancelPartRequest = async (req, res) => {
       });
     }
     // Requester, floor manager, warehouse (released reserved PRT), or admin.
-    const canCancel = PRIVILEGED.includes(req.user.role)
-      || req.user.role === 'floor_manager'
-      || req.user.role === 'warehouse'
-      || Number(pr.requested_by) === Number(req.user.user_id);
+    const canCancel = Number(pr.requested_by) === Number(req.user.user_id)
+      || await partsDeskOrGrant(req, [...PRIVILEGED, 'floor_manager', 'warehouse']);
     if (!canCancel) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'You can only cancel your own requests' });
