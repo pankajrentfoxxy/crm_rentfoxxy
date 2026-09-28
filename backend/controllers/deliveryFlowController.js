@@ -17,18 +17,6 @@ const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnici
 const { emailDocument, generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { getDeliveryChallanLines } = require('../services/salesManagementService');
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
-const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-
-/** CT1: role list OR a Roles & Permissions grant; denies (never throws) on lookup failure. */
-async function roleOrGrant(req, roles, section, action) {
-  if (!req.permissionCache) req.permissionCache = {};
-  try {
-    return await userHasRoleOrSection(req.user, roles, section, action, req.permissionCache);
-  } catch (err) {
-    console.error('roleOrGrant failed:', err.message);
-    return false;
-  }
-}
 const sm = require('./salesManagementController');
 const vrtdcFlow = require('../services/vendorReturnDeliveryFlow');
 
@@ -485,9 +473,8 @@ exports.markTechReached = async (req, res) => {
     }
     const { latitude, longitude } = req.body || {};
     // V5: only the person the DC is out with (or a supervisor) marks it reached.
-    // CT1: supervisor role OR delivery_register_management edit grant.
-    const SUPERVISORS = ['super_admin', 'admin', 'manager', 'dispatch', 'support_lead', 'warehouse'];
-    if (!(await roleOrGrant(req, SUPERVISORS, 'delivery_register_management', 'edit'))) {
+    const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'dispatch', 'support_lead', 'warehouse']);
+    if (!SUPERVISORS.has(String(req.user?.role || '').toLowerCase())) {
       const techId = await resolveTechnicianId(req.user.user_id);
       const own = await pool.query(
         `SELECT 1 FROM delivery_challan_lines
@@ -1119,8 +1106,7 @@ exports.verifyWarehouseReturnOtp = async (req, res) => {
 
 // PATCH /delivery-challans/:dcNumber/courier-rejected  (warehouse — mark rejected; inventory after OTP)
 exports.markCourierRejected = async (req, res) => {
-  // CT1: warehouse role OR delivery_register_management edit grant.
-  if (!(await roleOrGrant(req, WAREHOUSE_ROLES, 'delivery_register_management', 'edit'))) {
+  if (!WAREHOUSE_ROLES.includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Warehouse access required' });
   }
   const client = await pool.connect();

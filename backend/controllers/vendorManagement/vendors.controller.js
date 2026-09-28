@@ -819,11 +819,7 @@ async function updatePortalAccess(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
-  // CT1: admin role OR vendor_management delete grant.
-  const privileged = req.user?.is_superadmin === true
-    || await require('../../middleware/roleOrSection').userHasRoleOrSection(
-      req.user, ['admin', 'super_admin'], 'vendor_management', 'delete', req.permissionCache || (req.permissionCache = {})
-    );
+  const privileged = req.user?.role === 'admin' || req.user?.role === 'super_admin' || req.user?.is_superadmin === true;
   if (!privileged) {
     return res.status(403).json({
       success: false,

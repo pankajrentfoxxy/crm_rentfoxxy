@@ -3,7 +3,6 @@
  */
 const express = require('express');
 const { authMiddleware, checkRole, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
-const { roleOrSection } = require('../middleware/roleOrSection');
 const inventoryList = require('../controllers/inventoryManagement/inventoryList.controller');
 const qcProcess = require('../controllers/inventoryManagement/qcProcess.controller');
 const serialStatus = require('../controllers/inventoryManagement/serialStatus.controller');
@@ -30,10 +29,9 @@ const readyToRentLocationAccess = [
   authMiddleware,
   checkSectionPermission('ready_to_rent_location', 'edit'),
 ];
-// CT1: admin role OR inventory_management delete grant (then edit, as before).
 const invAdmin = [
   authMiddleware,
-  roleOrSection(['admin', 'super_admin'], 'inventory_management', 'delete'),
+  checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_management', 'edit')
 ];
 /** Move QC Pending or Dead laptop to QC Process + floor ticket */

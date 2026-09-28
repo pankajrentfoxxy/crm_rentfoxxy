@@ -52,16 +52,8 @@ async function resolveAssignedTechForItem(client, supportItemId, ticketId, fallb
   return itemRes.rows[0]?.assigned_to || fallbackUserId;
 }
 
-// CT1: role lists below also accept the support part queue grant (support_part_challan).
-const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-const partQueueGrant = (user, roles, action, cache) =>
-  userHasRoleOrSection(user, roles, 'support_part_challan', action, cache).catch((err) => {
-    console.error('support part queue grant check failed:', err.message);
-    return false;
-  });
-
 async function userCanActOnPartRequest(client, spr, user) {
-  if (await partQueueGrant(user, ['admin', 'support_lead', 'manager', 'super_admin'], 'edit')) return true;
+  if (['admin', 'support_lead', 'manager', 'super_admin'].includes(user.role)) return true;
   if (spr.assigned_to_tech === user.user_id) return true;
   if (spr.support_item_id) {
     const itemRes = await client.query(
@@ -237,8 +229,7 @@ exports.cancelSupportPartRequest = async (req, res) => {
       });
     }
 
-    if (!req.permissionCache) req.permissionCache = {};
-    const isWarehouse = await partQueueGrant(req.user, ['warehouse', 'admin', 'support_lead', 'manager', 'super_admin'], 'edit', req.permissionCache);
+    const isWarehouse = ['warehouse', 'admin', 'support_lead', 'manager', 'super_admin'].includes(req.user.role);
     const isRequester = Number(spr.requested_by) === Number(req.user.user_id);
     const canAct = isWarehouse || isRequester || (await userCanActOnPartRequest(client, spr, req.user));
     if (!canAct) {
@@ -1411,8 +1402,7 @@ const BUCKET_SUPERVISOR_ROLES = new Set([
 
 exports.getTechnicianBucket = async (req, res) => {
   try {
-    if (!req.permissionCache) req.permissionCache = {};
-    const isSupervisor = await partQueueGrant(req.user, BUCKET_SUPERVISOR_ROLES, 'view', req.permissionCache);
+    const isSupervisor = BUCKET_SUPERVISOR_ROLES.has(req.user.role);
     const params = [];
     let techFilter = '';
     if (!isSupervisor) {
@@ -1934,7 +1924,7 @@ exports.requestReassign = async (req, res) => {
     const spr = r.rows[0];
 
     if (spr.assigned_to_tech !== req.user.user_id &&
-        !(await partQueueGrant(req.user, ['admin', 'support_lead', 'manager', 'warehouse', 'super_admin'], 'edit', req.permissionCache || (req.permissionCache = {}))))
+        !['admin', 'support_lead', 'manager', 'warehouse', 'super_admin'].includes(req.user.role))
       throw Object.assign(new Error('Not authorised'), { status: 403 });
     if (spr.status !== 'issued')
       throw new Error(`Only parts currently in your bucket can be moved (status: ${spr.status})`);

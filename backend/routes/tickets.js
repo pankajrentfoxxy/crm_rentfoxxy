@@ -122,13 +122,9 @@ router.get('/my', floorAnyView, getMyTickets);
 // PD4 / F10: moving many tickets at once and failing a laptop back to its
 // vendor are floor-manager decisions. One floor grant (floor_tickets edit),
 // which technicians hold, used to open both.
-// CT1: manager role OR floor_pipeline delete grant (see qcGateService.isManagerOrGrant).
-const requireFloorLead = (req, res, next) => require('../services/qcGateService')
-  .isManagerOrGrant(req.user, req.permissionCache || (req.permissionCache = {}))
-  .then((ok) => (ok
-    ? next()
-    : res.status(403).json({ success: false, message: 'Only a floor manager or manager can do this.' })))
-  .catch(next);
+const requireFloorLead = (req, res, next) => (require('../services/qcGateService').isManager(req.user)
+  ? next()
+  : res.status(403).json({ success: false, message: 'Only a floor manager or manager can do this.' }));
 router.post('/bulk-move', ftEdit, requireFloorLead, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)

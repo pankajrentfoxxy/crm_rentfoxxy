@@ -6,20 +6,9 @@ const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneV
 const path = require('path');
 const fs = require('fs');
 
-/** CT1: warehouse roles as before, OR vendor_repair_dc edit in Roles & Permissions. */
-async function requireWarehouse(req, res, next) {
-  try {
-    if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
-    const cache = req.permissionCache || (req.permissionCache = {});
-    if (req.user.role === 'super_admin'
-      || await hasPermission(req.user.user_id, req.user.role, 'vendor_repair_dc', 'can_edit', cache)) {
-      return next();
-    }
-    return res.status(403).json({ success: false, message: 'Warehouse or admin access required' });
-  } catch (e) {
-    console.error('vendorRepair requireWarehouse:', e);
-    return res.status(500).json({ success: false, message: 'Server error checking permissions' });
-  }
+function requireWarehouse(req, res, next) {
+  if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
+  return res.status(403).json({ success: false, message: 'Warehouse or admin access required' });
 }
 
 /** Create Out-for-Repair DC from Diagnosis Failed — RBAC, with legacy warehouse-role fallback. */

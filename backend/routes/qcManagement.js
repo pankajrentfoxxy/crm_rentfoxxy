@@ -7,8 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const { multerLimits, multerErrorMessage } = require('../config/uploadLimits');
-const { authMiddleware } = require('../middleware/auth');
-const { legacyOrSection, hasLegacyPermission } = require('../middleware/legacyOrSection');
+const { authMiddleware, checkRoleOrPermission } = require('../middleware/auth');
 const orders = require('../controllers/qcManagement/orders.controller');
 
 const router = express.Router();
@@ -31,16 +30,9 @@ const returnRepareUpload = multer({
   }
 });
 
-// CT1: role / legacy qc_access as before, OR the qc_management grant
-// (view for reads, edit for QC actions).
-const qcLegacy = (u) => ['admin', 'manager', 'floor_manager', 'qc'].includes(u.role) || hasLegacyPermission(u, 'qc_access');
 const authorize = [
   authMiddleware,
-  legacyOrSection(qcLegacy, 'qc_management', 'view', { success: false, message: 'Access forbidden' }),
-];
-const authorizeEdit = [
-  authMiddleware,
-  legacyOrSection(qcLegacy, 'qc_management', 'edit', { success: false, message: 'Access forbidden' }),
+  checkRoleOrPermission(['admin', 'manager', 'floor_manager', 'qc'], ['qc_access'])
 ];
 
 router.get('/', authorize, (req, res) =>
@@ -69,11 +61,11 @@ router.get(
   orders.listPendingProductsByPo
 );
 router.post('/order-details', authorize, orders.orderDetailsValidators, orders.getOrderDetails);
-router.post('/qc-check', authorizeEdit, orders.qcCheckValidators, orders.qcCheck);
-router.post('/hardware-qc-check', authorizeEdit, orders.hardwareQcValidators, orders.hardwareQcCheck);
+router.post('/qc-check', authorize, orders.qcCheckValidators, orders.qcCheck);
+router.post('/hardware-qc-check', authorize, orders.hardwareQcValidators, orders.hardwareQcCheck);
 router.post(
   '/return-and-repare-check',
-  authorizeEdit,
+  authorize,
   (req, res, next) => {
     returnRepareUpload.array('files', 10)(req, res, (err) => {
       if (err) {

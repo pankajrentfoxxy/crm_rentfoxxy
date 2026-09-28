@@ -4585,11 +4585,7 @@ exports.getReturnDcDetail = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
     await assertReturnDcAssignedAccess(req, rdcNumber);
-    const { userCanConfirmReturnDcWarehouseAsync } = require('../services/salesManagementService');
-    const canConfirm = await userCanConfirmReturnDcWarehouseAsync(
-      req.user, req.permissionCache || (req.permissionCache = {})
-    );
-    const detail = await getReturnDcDetail(rdcNumber, { role: req.user?.role, canConfirm });
+    const detail = await getReturnDcDetail(rdcNumber, { role: req.user?.role });
     if (!detail) {
       return res.status(404).json({ success: false, message: 'Return DC not found' });
     }

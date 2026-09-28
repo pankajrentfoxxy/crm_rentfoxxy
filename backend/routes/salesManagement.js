@@ -7,7 +7,6 @@ const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole, checkRoleOrPermission } = require('../middleware/auth');
 const { SO_VIEW_SECTIONS, SO_SERIAL_EDIT_SECTIONS, SO_SERIAL_VIEW_SECTIONS } = require('../services/dataScopeService');
 const cp = checkSectionPermission;
-const { roleOrSection } = require('../middleware/roleOrSection');
 const cpAny = checkAnySectionPermission;
 
 // POD photo uploads -> backend/uploads/pod (served at /uploads/pod/...)
@@ -161,8 +160,7 @@ router.patch('/so-lines/:lineId/config', soLineRateConfigEdit, ctrl.updateSoLine
 // Super Admin / granted users — correct monthly rate (regenerates SO + linked DC PDFs)
 router.patch('/so-lines/:lineId/rate', soLineRateConfigEdit, ctrl.updateSoLineRate);
 // Admin / Super Admin — override line HSN/SAC
-// CT1: admin role OR sales-order edit grant.
-router.patch('/so-lines/:lineId/hsn', roleOrSection(['admin', 'super_admin'], ['sales_orders_sale', 'sales_orders_rental', 'sales_orders_doc'], 'edit'), ctrl.updateSoLineHsn);
+router.patch('/so-lines/:lineId/hsn', checkRole('admin', 'super_admin'), ctrl.updateSoLineHsn);
 router.get('/so-lines/:lineId/cancel-eligibility', soView, checkSalesOrderCancel, ctrl.getSoLineCancelEligibility);
 router.patch('/so-lines/:lineId/partial-cancel', checkSalesOrderCancel, ctrl.partialCancelSoLine);
 
@@ -262,7 +260,7 @@ router.post(
 );
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/delivery-date', soDcEdit, ctrl.updateDcDeliveryDate));
-router.patch(...dcRoute('/dispatch-date', roleOrSection(['admin', 'super_admin'], 'delivery_challans', 'edit'), ctrl.updateDcDispatchDate));
+router.patch(...dcRoute('/dispatch-date', checkRole('admin', 'super_admin'), ctrl.updateDcDispatchDate));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
 router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));
@@ -272,7 +270,7 @@ router.post(...dcRoute('/warehouse-return-otp/verify', whReturnEdit, flowCtrl.ve
 router.get(...dcRoute('/warehouse-return-units', whReturnView, flowCtrl.getRefusedReturnUnits));
 router.post(...dcRoute('/warehouse-receive-back', whReturnEdit, flowCtrl.receiveRefusedReturn));
 router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejected));
-router.patch(...dcRoute('/hsn', roleOrSection(['admin', 'super_admin'], 'delivery_challans', 'edit'), ctrl.updateDcHsn));
+router.patch(...dcRoute('/hsn', checkRole('admin', 'super_admin'), ctrl.updateDcHsn));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
 router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDeliveryChallan);

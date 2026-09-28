@@ -2592,24 +2592,6 @@ function isManagerUser(user) {
   return MANAGER_ROLES.has(String(user.role || '').toLowerCase());
 }
 
-/**
- * CT1 (27 Sep 2026): a manager by role (above) OR the vendor_management DELETE grant in
- * Roles & Permissions. Delete, not edit: edit is held by the procurement role, and
- * approving / cancelling / short-closing is a manager's call. Denies on lookup failure.
- */
-async function isPoManager(req) {
-  if (isManagerUser(req?.user)) return true;
-  if (!req?.user) return false;
-  if (!req.permissionCache) req.permissionCache = {};
-  try {
-    const { userHasRoleOrSection } = require('../../middleware/roleOrSection');
-    return await userHasRoleOrSection(req.user, [], 'vendor_management', 'delete', req.permissionCache);
-  } catch (err) {
-    console.error('isPoManager failed:', err.message);
-    return false;
-  }
-}
-
 /* PO workflow: draft → pending_approval → approved (+ email) | rejected */
 const statusValidators = [
   param('id').isInt().toInt(),
@@ -2754,7 +2736,7 @@ async function updateStatus(req, res) {
       console.error('PO pending-approval manager email failed:', emailErr);
     }
   } else if (status === 'approved') {
-    if (!(await isPoManager(req))) {
+    if (!isManagerUser(req.user)) {
       return res.status(403).json({ success: false, message: 'Only managers can approve purchase orders' });
     }
     if (prev !== 'pending_approval') {
@@ -2796,7 +2778,7 @@ async function updateStatus(req, res) {
       console.error('PO approval email failed:', emailErr);
     }
   } else if (status === 'rejected') {
-    if (!(await isPoManager(req))) {
+    if (!isManagerUser(req.user)) {
       return res.status(403).json({ success: false, message: 'Only managers can reject purchase orders' });
     }
     if (prev !== 'pending_approval') {
@@ -3184,7 +3166,7 @@ async function poAction(req, res, { name, check, apply, describe }) {
     if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Purchase order not found' }); }
     po = cur.rows[0];
     const received = await poRules.receivedCount(client, { poId: id });
-    const refusal = await check(po, received);
+    const refusal = check(po, received);
     if (refusal) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, message: refusal }); }
     updated = await apply(client, po, reason, received);
     await client.query('COMMIT');
@@ -3228,11 +3210,11 @@ const amend = (req, res) => poAction(req, res, {
 /** Cancel: only while nothing is received. After approval, a manager's call. */
 const cancel = (req, res) => poAction(req, res, {
   name: 'cancelled',
-  check: async (po, received) => {
+  check: (po, received) => {
     const st = String(po.status || '').toLowerCase();
     if (['cancelled', 'completed', 'closed'].includes(st)) return `This purchase order is already ${st}.`;
     if (received > 0) return `${received} laptop(s) are already received, so it can't be cancelled. Short-close it instead.`;
-    if (APPROVED_STATES.includes(st) && !(await isPoManager(req))) return 'This PO is approved and was sent to the vendor — only a manager can cancel it.';
+    if (APPROVED_STATES.includes(st) && !isManagerUser(req.user)) return 'This PO is approved and was sent to the vendor — only a manager can cancel it.';
     return null;
   },
   apply: async (client, po, reason) => {
@@ -3256,8 +3238,8 @@ const cancel = (req, res) => poAction(req, res, {
 /** Short-close: partly received and nothing more is coming. Manager only. */
 const shortClose = (req, res) => poAction(req, res, {
   name: 'short_closed',
-  check: async (po, received) => {
-    if (!(await isPoManager(req))) return 'Only a manager can short-close a purchase order.';
+  check: (po, received) => {
+    if (!isManagerUser(req.user)) return 'Only a manager can short-close a purchase order.';
     if (!APPROVED_STATES.includes(String(po.status).toLowerCase())) return `Only an open, approved purchase order can be short-closed (this one is ${po.status}).`;
     if (received === 0) return 'Nothing has been received on this PO — cancel it instead.';
     return null;

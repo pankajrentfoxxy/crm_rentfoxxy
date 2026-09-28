@@ -3,8 +3,7 @@ const fs = require('fs');
 const multer = require('multer');
 const router = require('express').Router();
 const ctrl = require('../controllers/partRequestController');
-const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
-const { roleOrSection } = require('../middleware/roleOrSection');
+const { authMiddleware, checkRole, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 
 const photoDir = path.join(__dirname, '..', 'uploads', 'part-requests');
@@ -61,8 +60,7 @@ router.get(
   checkAnySectionPermission(['parts_approval_export', 'parts_approval'], 'view'),
   ctrl.exportWarehouseQueueCsv
 );
-// CT1: role OR parts_procurement grant.
-router.get('/procurement-queue', roleOrSection(['procurement', 'admin', 'manager', 'super_admin'], 'parts_procurement', 'view'), ctrl.getProcurementQueue);
+router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
 // PD8 — old parts the warehouse still has to collect from the floor.
 router.get('/old-parts/to-collect', allowPartInstanceRead, ctrl.listOldPartsToCollect);
@@ -83,7 +81,7 @@ router.get('/:requestId', checkAnySectionPermission(['parts_requests', 'parts_ap
 router.patch('/:requestId/approve', requirePartsApprovalEdit, ctrl.approvePartRequest);
 router.patch('/:requestId/reject', requirePartsApprovalEdit, ctrl.rejectPartRequest);
 router.patch('/:requestId/escalate', requirePartsApprovalEdit, ctrl.escalateToProcurement);
-router.patch('/:requestId/link-spo', roleOrSection(['procurement', 'admin', 'super_admin'], 'parts_procurement', 'edit'), ctrl.linkRequestToSpo);
+router.patch('/:requestId/link-spo', checkRole('procurement', 'admin', 'super_admin'), ctrl.linkRequestToSpo);
 router.patch('/:requestId/received', requirePartsApprovalEdit, ctrl.markPartReceived);
 router.post('/:requestId/attach', checkSectionPermission('parts_requests', 'create'), ctrl.attachPartAndReturnOld);
 const allowPartDetach = (req, res, next) => {

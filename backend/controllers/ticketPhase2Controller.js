@@ -1,5 +1,4 @@
 const pool = require('../config/db');
-const { userHasRoleOrSection } = require('../middleware/roleOrSection');
 const { reserveOnQcPass } = require('../services/qcPassReservation');
 const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
@@ -17,7 +16,7 @@ const {
   assertQcGate,
   QC_PASS_MOVES,
 } = require('../services/stageTransitionService');
-const { assertMayPassQc, overrideFromAsync, isManagerOrGrant: gateIsManagerOrGrant } = require('../services/qcGateService');
+const { assertMayPassQc, overrideFrom, isManager: gateIsManager } = require('../services/qcGateService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
@@ -39,28 +38,10 @@ function isSuperAdmin(user) {
 // transition is a row in the table (migration 271 added the ones the code was
 // already performing); there is no role that is exempt from the map.
 
-/*
- * CT1 (27 Sep 2026): the privileged / stage-routing role lists also accept a
- * Roles & Permissions grant — floor_pipeline DELETE. Not edit: floor_pipeline
- * edit is held by technicians, QC and dispatch QC, and granting it must not lift
- * the "QC acts on QC stages only" restrictions. Denies on lookup failure.
- */
-async function roleOrFloorGrant(req, roles, section = 'floor_pipeline', action = 'delete') {
-  if (!req?.user) return false;
-  if (!req.permissionCache) req.permissionCache = {};
-  try {
-    return await userHasRoleOrSection(req.user, roles, section, action, req.permissionCache);
-  } catch (err) {
-    console.error('roleOrFloorGrant failed:', err.message);
-    return false;
-  }
-}
-
-async function isStageRouter(req) {
-  const user = req?.user;
+function isStageRouter(user) {
   if (!user) return false;
   if (isSuperAdmin(user)) return true;
-  return roleOrFloorGrant(req, STAGE_ROUTING_ROLES);
+  return STAGE_ROUTING_ROLES.includes(user.role);
 }
 
 function isAssignedTechnician(user, ticket) {
@@ -71,7 +52,7 @@ function isAssignedTechnician(user, ticket) {
 }
 
 async function canMarkDiagnosisRepair(req, ticket, targetStageName) {
-  if (await isStageRouter(req)) return true;
+  if (isStageRouter(req.user)) return true;
   if (!DIAGNOSIS_REPAIR_STAGES.includes(targetStageName)) return false;
   if (!isAssignedTechnician(req.user, ticket)) return false;
   const currentStage = await getStageById(pool, ticket.current_stage_id);
@@ -296,7 +277,7 @@ exports.moveToStage = async (req, res) => {
     // reason (PD3). The same gate sits in applyStageMove for every other door.
     let qcGate = null;
     try {
-      qcGate = await overrideFromAsync(req.user, req.body.qc_override_reason, req.permissionCache || (req.permissionCache = {}));
+      qcGate = overrideFrom(req.user, req.body.qc_override_reason);
       const isPass = QC_PASS_MOVES.has(`${currentStageName}→${effectiveToStage}`);
       if (isPass && qcGate) {
         await assertMayPassQc(client, { ticketId: ticket.ticket_id, user: req.user, stageName: currentStageName });
@@ -318,7 +299,7 @@ exports.moveToStage = async (req, res) => {
     // send any ticket there, from any stage, with no reason).
     const why = String(reason || '').trim();
     if (effectiveToStage === 'Floor Manager' && currentStageName !== 'Floor Manager') {
-      if (!(await gateIsManagerOrGrant(req.user, req.permissionCache || (req.permissionCache = {})))) {
+      if (!gateIsManager(req.user)) {
         await client.query('ROLLBACK');
         return res.status(403).json({ success: false, message: 'Only a floor manager or manager can send a ticket back to Floor Manager.' });
       }
@@ -378,7 +359,7 @@ exports.moveToStage = async (req, res) => {
       }
     }
 
-    const privileged = await roleOrFloorGrant(req, PRIVILEGED_ROLES);
+    const privileged = PRIVILEGED_ROLES.includes(req.user.role);
     const dispatchQcActor = req.user.role === 'dispatch' || req.user.role === 'dispatch_qc';
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
@@ -391,8 +372,8 @@ exports.moveToStage = async (req, res) => {
     if (
       currentStageName === 'Dispatch QC'
       && effectiveToStage === 'Inventory'
-      // CT1: admin role OR dispatch_qc delete grant (held by admin only today).
-      && !(await roleOrFloorGrant(req, ['super_admin', 'admin'], 'dispatch_qc', 'delete'))
+      && req.user.role !== 'super_admin'
+      && req.user.role !== 'admin'
     ) {
       await client.query('ROLLBACK');
       return res.status(403).json({
@@ -402,7 +383,7 @@ exports.moveToStage = async (req, res) => {
     }
 
     const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
-    if (managerRoutes?.includes(effectiveToStage) && !(await isStageRouter(req))) {
+    if (managerRoutes?.includes(effectiveToStage) && !isStageRouter(req.user)) {
       const techRepairOk = await canMarkDiagnosisRepair(req, ticket, effectiveToStage);
       if (!techRepairOk) {
         await client.query('ROLLBACK');
@@ -416,7 +397,8 @@ exports.moveToStage = async (req, res) => {
     if (
       currentStageName === 'Diagnosis'
       && effectiveToStage === 'Assembly & Software'
-      && !privileged
+      && req.user.role !== 'super_admin'
+      && !PRIVILEGED_ROLES.includes(req.user.role)
     ) {
       await client.query('ROLLBACK');
       return res.status(403).json({
@@ -1241,7 +1223,7 @@ exports.markDiagnosisFailed = async (req, res) => {
     const stageName = ticket.stage_name;
     const onHwStage = !stageName || HW_SW_DIAGNOSIS_STAGES.has(stageName) || stageName === 'Floor Manager';
     const canMark = onHwStage && (
-      (await isStageRouter(req))
+      isStageRouter(req.user)
       || isAssignedTechnician(req.user, ticket)
       || ['super_admin'].includes(req.user.role)
     );

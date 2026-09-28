@@ -104,11 +104,6 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
   const ewayComplete = isVrtdcEwayComplete(head, needsEway);
   const isSuperAdmin = user?.role === 'super_admin';
   const canUpload = isSuperAdmin || await canUploadVrtdcEwayBill(user, permissionCache);
-  // CT1: requester roles OR vendor_return_to_vendor edit grant.
-  const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-  const canRequest = isSuperAdmin || (user?.user_id
-    ? await userHasRoleOrSection(user, REQUESTER_ROLES, 'vendor_return_to_vendor', 'edit', permissionCache)
-    : REQUESTER_ROLES.has(String(user?.role || '')));
   const valued = Array.isArray(items)
     ? items.filter((r) => Number.isFinite(Number(r.declared_value))).length
     : null;
@@ -132,7 +127,7 @@ async function buildVrtdcEwayCompliance(head, items, user, permissionCache = {})
     // to them as an attachment.
     can_download_pdf: !needsEway || ewayComplete || isSuperAdmin,
     can_upload_eway: canUpload,
-    can_request_eway: canRequest,
+    can_request_eway: isSuperAdmin || REQUESTER_ROLES.has(String(user?.role || '')),
     request_sent: Boolean(head?.accounts_notified_at),
     accounts_notified_at: head?.accounts_notified_at || null,
     accounts_email: ACCOUNTS_EMAIL,

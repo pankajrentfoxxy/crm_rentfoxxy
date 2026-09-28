@@ -88,9 +88,7 @@ async function listBoard(req, q = {}) {
     fp
   );
 
-  // CT1: manager role OR floor_pipeline delete grant (same rule as qcGateService.isManagerOrGrant).
-  const canClaimAny = MANAGER_ROLES.has(String(user.role || '').toLowerCase())
-    || await require('./qcGateService').isManagerOrGrant(user, req.permissionCache || (req.permissionCache = {}));
+  const canClaimAny = MANAGER_ROLES.has(String(user.role || '').toLowerCase());
   const byStage = Object.fromEntries(counts.rows.map((r) => [r.stage_name, r.n]));
   const mine = userId ? (await db.query(`SELECT COUNT(*)::int AS n ${base} AND t.assigned_user_id = ${Number(userId)}`, params)).rows[0].n : 0;
   const unassigned = (await db.query(`SELECT COUNT(*)::int AS n ${base} AND t.assigned_user_id IS NULL`, params)).rows[0].n;

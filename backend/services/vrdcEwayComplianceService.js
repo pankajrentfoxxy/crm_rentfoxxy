@@ -94,12 +94,6 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
   const isSuperAdmin = user?.role === 'super_admin';
   const canUpload = isSuperAdmin || await canUploadVrdcEwayBill(user, permissionCache);
   const canDownload = isSuperAdmin || !needsEway || ewayComplete || canUpload;
-  // CT1: requester roles OR vendor_repair_dc edit grant.
-  const REQUESTER_ROLES = ['warehouse', 'admin', 'manager', 'floor_manager', 'dispatch'];
-  const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-  const canRequest = isSuperAdmin || (user?.user_id
-    ? await userHasRoleOrSection(user, REQUESTER_ROLES, 'vendor_repair_dc', 'edit', permissionCache)
-    : REQUESTER_ROLES.includes(user?.role));
 
   return {
     applies: needsEway,
@@ -111,7 +105,12 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
     eway_status: !needsEway ? 'not_required' : (ewayComplete ? 'uploaded' : 'pending'),
     can_download_pdf: canDownload,
     can_upload_eway: canUpload,
-    can_request_eway: canRequest,
+    can_request_eway: isSuperAdmin
+    || user?.role === 'warehouse'
+    || user?.role === 'admin'
+    || user?.role === 'manager'
+    || user?.role === 'floor_manager'
+    || user?.role === 'dispatch',
     request_sent: Boolean(head?.accounts_notified_at),
     accounts_notified_at: head?.accounts_notified_at || null,
     accounts_email: ACCOUNTS_EMAIL,

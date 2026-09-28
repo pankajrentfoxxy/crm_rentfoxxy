@@ -1,21 +1,4 @@
 const pool = require('../config/db');
-const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-
-/*
- * CT1 (27 Sep 2026): floor-manager-level role checks also accept the
- * floor_pipeline DELETE grant (edit is held by technicians / QC, so it must not
- * unlock manager-only actions). Denies on lookup failure.
- */
-async function floorManagerOrGrant(req, roles) {
-  if (!req?.user) return false;
-  if (!req.permissionCache) req.permissionCache = {};
-  try {
-    return await userHasRoleOrSection(req.user, roles, 'floor_pipeline', 'delete', req.permissionCache);
-  } catch (err) {
-    console.error('floorManagerOrGrant failed:', err.message);
-    return false;
-  }
-}
 const { queryDispatchQcEligibleMembers } = require('../utils/dispatchQcAccess');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const { pickNextAssigneeForTeam } = require('../services/qcRoundRobinService');
@@ -120,7 +103,7 @@ exports.createTicket = async (req, res) => {
     let finalUserId = req.user.user_id;
 
     // Override if Floor Manager/Admin and provided specific assignments
-    if (assigned_team_id && await floorManagerOrGrant(req, ['floor_manager', 'admin'])) {
+    if ((req.user.role === 'floor_manager' || req.user.role === 'admin') && assigned_team_id) {
       finalTeamId = assigned_team_id;
       // User ID is optional but can be assigned if provided
       finalUserId = assigned_user_id || null;
@@ -949,7 +932,7 @@ async function moveToNextStageInner(req, res, db) {
     const currentStageCategory = currentStageMeta.rows[0]?.stage_category;
 
     // Check for Manual Override (Jump)
-    const canJump = await floorManagerOrGrant(req, ['floor_manager', 'admin']);
+    const canJump = req.user.role === 'floor_manager' || req.user.role === 'admin';
 
     if (target_stage_id && canJump) {
       // Fetch target stage
@@ -1178,7 +1161,7 @@ async function assignTicketInner(req, res, db) {
     // (Order to delivery), which this rule does not cover.
     const toSelf = user_id && Number(user_id) === Number(req.user.user_id) && !team_id;
     const floorWork = currentTicket.ticket_type !== 'sales_order_qc' && currentTicket.stage_name !== 'Dispatch QC';
-    if (floorWork && !toSelf && !(await require('../services/qcGateService').isManagerOrGrant(req.user, req.permissionCache || (req.permissionCache = {})))) {
+    if (floorWork && !toSelf && !require('../services/qcGateService').isManager(req.user)) {
       return res.status(403).json({ success: false, message: 'Only a floor manager assigns a laptop to someone else. Claim it to take it yourself.' });
     }
     const preserveDispatchQcStage =
@@ -1440,8 +1423,8 @@ exports.claimTicket = async (req, res) => {
     const ticket = ticketCheck.rows[0];
 
     const ticketTeamId = parseInt(ticket.assigned_team_id, 10);
-    const canClaim = (userTeamIds.length > 0 && userTeamIds.includes(ticketTeamId))
-      || await floorManagerOrGrant(req, ['admin', 'floor_manager', 'manager', 'super_admin']);
+    const canClaim = ['admin', 'floor_manager', 'manager', 'super_admin'].includes(req.user.role)
+      || (userTeamIds.length > 0 && userTeamIds.includes(ticketTeamId));
 
     if (!canClaim) {
       return res.status(403).json({ success: false, message: 'Ticket is not assigned to your team' });
@@ -1523,7 +1506,7 @@ exports.updateGrade = async (req, res) => {
 
     const userTeamIds = req.user.team_ids || (req.user.team_id != null ? [req.user.team_id] : []);
     const isGradingTeam = userTeamIds.includes(9);
-    if (!isGradingTeam && !(await floorManagerOrGrant(req, ['admin', 'floor_manager']))) {
+    if (!isGradingTeam && req.user.role !== 'admin' && req.user.role !== 'floor_manager') {
       return res.status(403).json({ success: false, message: 'Only Grading Team can update grades' });
     }
 
@@ -1889,7 +1872,7 @@ exports.startWork = async (req, res) => {
     if (!ticket.assigned_user_id) {
       return res.status(409).json({ success: false, message: 'Claim this ticket (or have it assigned) before starting work.' });
     }
-    if (Number(ticket.assigned_user_id) !== Number(userId) && !(await require('../services/qcGateService').isManagerOrGrant(req.user, req.permissionCache || (req.permissionCache = {})))) {
+    if (Number(ticket.assigned_user_id) !== Number(userId) && !require('../services/qcGateService').isManager(req.user)) {
       return res.status(403).json({ success: false, message: 'This ticket is assigned to someone else — only they start its timer.' });
     }
 

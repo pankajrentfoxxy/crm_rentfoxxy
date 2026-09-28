@@ -1,15 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
-const { legacyOrSection, hasLegacyPermission } = require('../middleware/legacyOrSection');
 const { getWarehouseItems, markReady, replaceMachine } = require('../controllers/warehouseController');
 
-// CT1: role / legacy permissions[] as before, OR the warehouse grant in Roles & Permissions.
-const requireWarehouseAccess = legacyOrSection(
-  (u) => ['admin', 'manager', 'warehouse'].includes(u.role) || hasLegacyPermission(u, 'warehouse_access'),
-  'warehouse', 'edit',
-  { message: 'Access denied: Warehouse access required' },
-);
+const requireWarehouseAccess = (req, res, next) => {
+    if (
+        req.user.role === 'admin' ||
+        req.user.role === 'manager' ||
+        req.user.role === 'warehouse' ||
+        (req.user.permissions && req.user.permissions.includes('warehouse_access'))
+    ) {
+        return next();
+    }
+    res.status(403).json({ message: 'Access denied: Warehouse access required' });
+};
 
 router.use(authMiddleware);
 

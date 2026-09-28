@@ -15,24 +15,6 @@ const po = require('./purchaseOrders.controller');
 
 const RECEIVABLE = ['approved', 'sent', 'vendor_accepted', 'processing'];
 const isManager = (u) => u?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(String(u?.role || '').toLowerCase());
-
-/**
- * CT1 (27 Sep 2026): a manager by role (above) OR the vendor_management DELETE grant in
- * Roles & Permissions. Delete, not edit: edit is held by the procurement role, and
- * approving / cancelling / short-closing is a manager's call. Denies on lookup failure.
- */
-async function isDeliveryManager(req) {
-  if (isManager(req?.user)) return true;
-  if (!req?.user) return false;
-  if (!req.permissionCache) req.permissionCache = {};
-  try {
-    const { userHasRoleOrSection } = require('../../middleware/roleOrSection');
-    return await userHasRoleOrSection(req.user, [], 'vendor_management', 'delete', req.permissionCache);
-  } catch (err) {
-    console.error('isDeliveryManager failed:', err.message);
-    return false;
-  }
-}
 const bad = (res, errors) => res.status(400).json({ success: false, message: errors.array()[0].msg, errors: errors.array() });
 
 const DELIVERY_SELECT = `
@@ -242,7 +224,7 @@ async function setInvoice(req, res) {
 
 /** POST /serials/:serialId/approve-waiver — D5: a manager accepts a laptop received unchecked. */
 async function approveWaiver(req, res) {
-  if (!(await isDeliveryManager(req))) return res.status(403).json({ success: false, message: 'Only a manager can approve a laptop received without the configuration check.' });
+  if (!isManager(req.user)) return res.status(403).json({ success: false, message: 'Only a manager can approve a laptop received without the configuration check.' });
   const serialId = Number(req.params.serialId);
   if (!Number.isInteger(serialId)) return res.status(400).json({ success: false, message: 'Bad serial' });
   const u = await pool.query(

@@ -81,26 +81,6 @@ function requireWarehouseRole(role) {
   }
 }
 
-/**
- * CT1: the warehouse roles as before, OR the section grant (edit) in Roles &
- * Permissions — vendor_return_to_vendor for RTV DCs, vendor_return_ticket for
- * return tickets. Throws the same 403 as requireWarehouseRole.
- */
-async function requireWarehouseOrGrant(req, section) {
-  const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-  const user = req?.user;
-  if (user && !req.permissionCache) req.permissionCache = {};
-  const role = String(user?.role || '').toLowerCase();
-  const ok = user
-    && (WAREHOUSE_ROLES.has(role)
-      || await userHasRoleOrSection(user, [], section, 'edit', req.permissionCache));
-  if (!ok) {
-    const err = new Error('Warehouse or admin role required');
-    err.status = 403;
-    throw err;
-  }
-}
-
 async function nextVendorReturnDcNumber(client) {
   // Serialised for the caller's transaction: plain MAX()+1 let two concurrent
   // creates take the same VRTDC number (the second failed on the unique key).
@@ -896,7 +876,6 @@ module.exports = {
   INVENTORY_STATUS_FILTERS,
   actorFromReq,
   requireWarehouseRole,
-  requireWarehouseOrGrant,
   listEligibleLaptops,
   listEligibleVendors,
   listReturnDcs,

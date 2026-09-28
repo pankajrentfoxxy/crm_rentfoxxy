@@ -21,8 +21,6 @@ const WFH_CHARGE = Number(process.env.SUPPORT_WFH_CHARGE || 799);
 const PART_GST_RATE = 18;
 const PART_HSN = process.env.SUPPORT_PART_HSN || '847330';
 const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'support_lead']);
-// CT1: the supervisor roles OR the lead-level support grant (support_tickets delete).
-const { userHasRoleOrSection } = require('../middleware/roleOrSection');
 
 function fail(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -66,7 +64,7 @@ async function laptopWfh(db, { code, customerId }) {
  * (and its DC if already made). Refused when the laptop is not WFH.
  */
 async function chargeWfhDelivery(client, { itemId, user }) {
-  if (!(await userHasRoleOrSection(user, SUPERVISORS, 'support_tickets', 'delete'))) throw fail('Only the support lead can charge a delivery', 403);
+  if (!SUPERVISORS.has(String(user?.role || ''))) throw fail('Only the support lead can charge a delivery', 403);
   const item = (await client.query(
     `SELECT i.*, t.customer_id FROM support_ticket_items i JOIN support_tickets t ON t.id = i.ticket_id
       WHERE i.id = $1 FOR UPDATE OF i`,

@@ -26,38 +26,11 @@ class QcGateError extends Error {
 
 const isManager = (user) => user?.is_superadmin === true || MANAGER_ROLES.has(String(user?.role || '').toLowerCase());
 
-/**
- * CT1 (27 Sep 2026): a manager by role (above) OR the floor_pipeline DELETE
- * grant in Roles & Permissions. Not edit — technicians hold floor_pipeline /
- * floor_tickets edit, and manager-only actions must not open to them.
- * Denies on lookup failure.
- */
-async function isManagerOrGrant(user, cache) {
-  if (isManager(user)) return true;
-  if (!user) return false;
-  const { userHasRoleOrSection } = require('../middleware/roleOrSection');
-  try {
-    return await userHasRoleOrSection(user, [], 'floor_pipeline', 'delete', cache);
-  } catch (err) {
-    console.error('isManagerOrGrant failed:', err.message);
-    return false;
-  }
-}
-
-/** A valid manager override: a manager (by role), and a real reason. */
+/** A valid manager override: a manager, and a real reason. */
 function overrideFrom(user, reason) {
   const why = String(reason || '').trim();
   if (!why) return null;
   if (!isManager(user)) throw new QcGateError('Only a manager can override a QC check.');
-  if (why.length < 10) throw new QcGateError('Give the override reason in a sentence (at least 10 characters).', 400);
-  return { kind: 'override', reason: why };
-}
-
-/** CT1: as overrideFrom, but a manager by role OR the floor_pipeline delete grant. */
-async function overrideFromAsync(user, reason, cache) {
-  const why = String(reason || '').trim();
-  if (!why) return null;
-  if (!(await isManagerOrGrant(user, cache))) throw new QcGateError('Only a manager can override a QC check.');
   if (why.length < 10) throw new QcGateError('Give the override reason in a sentence (at least 10 characters).', 400);
   return { kind: 'override', reason: why };
 }
@@ -98,5 +71,5 @@ async function assertQc2Matched(db, { ticketId }) {
 }
 
 module.exports = {
-  QcGateError, assertMayPassQc, assertQc2Matched, overrideFrom, overrideFromAsync, isManager, isManagerOrGrant, TECHNICIAN_ROLES,
+  QcGateError, assertMayPassQc, assertQc2Matched, overrideFrom, isManager, TECHNICIAN_ROLES,
 };
