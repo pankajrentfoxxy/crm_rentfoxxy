@@ -80,3 +80,16 @@
 3. Support → Damage charges: price (warehouse) → propose (sales / accounts) → approve (accounts) →
    Finance → Support charges to bill shows "Damage charges".
 4. Technician: My work → a job → Report damage on this laptop.
+
+## Control — merged 28 Sep 2026 (a549fe1a)
+- New UI: Control → Users, Roles, Role permissions (grouped matrix, scopes, copy from role, defaults
+  only where they exist), User permissions (overrides only, source shown), Audit log. Old screens
+  under Old view.
+- Backend: role change / password reset end sessions; Apply defaults can no longer wipe a role;
+  user overrides saved as differences in one transaction; escalation guard (only super_admin edits
+  admin roles / users; no self-edits; section and role names validated); one section catalogue
+  with groups (migration 360, 31 unused sections hidden); users_role_check from the roles table
+  (362) — support_agent / support_manager / custom roles assignable; 028/029/207 no longer replayed
+  at boot; legacy permission strings re-derived on role change.
+- CT1 (role gates also accept a grant) REVERTED: it widened access through loose existing grants.
+  To redo: new dedicated grants per gate group, seeded to exactly today's role lists.
