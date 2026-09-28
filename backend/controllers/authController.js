@@ -88,6 +88,9 @@ async function knownAssignableRoleNames() {
  * Legacy JWT permissions[] strings, derived from the role. Written at create
  * AND on every role change (they used to go stale after a role change).
  */
+const ROLE_DERIVED_LEGACY_PERMISSIONS = [
+  'procurement_access', 'qc_access', 'dispatch_access', 'support_access', 'customer_inventory_access',
+];
 function legacyPermissionsForRole(role) {
   if (role === 'procurement') return ['procurement_access'];
   if (role === 'qc' || role === 'dispatch_qc') return ['qc_access'];
@@ -869,7 +872,14 @@ exports.updateUser = async (req, res) => {
          -- for 30 days) and re-derives the legacy permissions[] strings,
          -- which were only ever written at create and went stale.
          token_version = CASE WHEN $12::boolean THEN token_version + 1 ELSE token_version END,
-         permissions = CASE WHEN $12::boolean THEN $13::text[] ELSE permissions END,
+         -- Only the role-derived strings are swapped; any other legacy
+         -- string the user carries (sales_access, customers_access, ...) stays.
+         permissions = CASE WHEN $12::boolean THEN ARRAY(
+           SELECT p FROM unnest(COALESCE(permissions, ARRAY[]::text[])) AS p
+            WHERE p <> ALL($14::text[])
+           UNION
+           SELECT unnest($13::text[])
+         ) ELSE permissions END,
          updated_at = NOW()
        WHERE user_id = $11`,
       [
@@ -879,6 +889,7 @@ exports.updateUser = async (req, res) => {
         designation || null, department || null, employee_id || null,
         joining_date || null, notes || null, id,
         roleChanged, legacyPermissionsForRole(requestedRole || previousRole),
+        ROLE_DERIVED_LEGACY_PERMISSIONS,
       ]
     );
 

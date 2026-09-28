@@ -260,7 +260,8 @@ describe('sessions end on role change and password reset', () => {
   it('updateUser bumps token_version when the role changes', () => {
     const body = src.slice(src.indexOf('exports.updateUser = '), src.indexOf('exports.updateUserStatus'));
     assert.match(body, /token_version = CASE WHEN \$12::boolean THEN token_version \+ 1/);
-    assert.match(body, /permissions = CASE WHEN \$12::boolean THEN \$13::text\[\]/);
+    assert.match(body, /permissions = CASE WHEN \$12::boolean THEN ARRAY\(/);
+    assert.match(body, /WHERE p <> ALL\(\$14::text\[\]\)/);
   });
   it('resetUserPassword bumps token_version', () => {
     const body = src.slice(src.indexOf('exports.resetUserPassword'), src.indexOf('exports.updateUserTeams'));
