@@ -44,6 +44,12 @@ exports.closureCheck = async (req, res) => {
 
 exports.closeAccount = async (req, res) => {
   const pool = require('../config/db');
+  // Customer Access scope, as the read endpoints above: an out-of-scope
+  // customer is "not found" here too (it used to close regardless).
+  try {
+    const row = await svc.getOverview(req.params.customerId, { allowedTypes: req.allowedCustomerTypes });
+    if (!row) return res.status(404).json({ success: false, message: 'Customer not found or outside your Customer Access scope' });
+  } catch (e) { return fail(res, e, 'customerOverview.closeAccount'); }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

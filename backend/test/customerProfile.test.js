@@ -92,6 +92,14 @@ describe('Customer Access scope on single-customer endpoints', () => {
     assert.equal(kyc.code, 200);
   });
 
+  it('account closure refuses an out-of-scope customer', async () => {
+    const overview = require('../controllers/customerOverviewController');
+    const rental = await customer({ type: 'rental' });
+    const r = await H.call(as(overview.closeAccount, SALES_ONLY), { params: { customerId: rental }, body: { note: 'closing it' }, user: ADMIN });
+    assert.equal(r.code, 404);
+    assert.equal((await db.query('SELECT closed_at FROM customers WHERE customer_id = $1', [rental])).rows[0].closed_at, null);
+  });
+
   it('set-default leaves exactly one default address', async () => {
     const c = await customer();
     const ids = [];
