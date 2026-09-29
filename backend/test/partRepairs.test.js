@@ -106,6 +106,10 @@ describe('part repairs — challan, receive, QC, cancel', () => {
 
     const pending = await h.call(ctrl.listQcPending, { user, query: { search: tag, limit: 50 } });
     assert.equal(pending.code, 200);
+    const mine = pending.body.data.filter((x) => [ids[0], replacementId].includes(x.instance_id));
+    assert.equal(mine.length, 2);
+    assert.ok(mine.every((x) => x.from_dc_number === dc && x.vendor_name), 'QC sees the challan and vendor it came back on');
+    assert.deepEqual(mine.map((x) => x.receive_mode).sort(), ['repaired', 'replacement']);
 
     assert.equal((await h.call(ctrl.passQc, { user, params: { instanceId: ids[0] }, body: { notes: 'works' } })).code, 200);
     assert.equal((await unit(ids[0])).status, 'in_stock');

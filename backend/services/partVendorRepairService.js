@@ -900,9 +900,19 @@ async function listQcPendingPartInstances({ page = 1, limit = 50, search } = {})
   const listR = await pool.query(
     `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.status, pi.unit_cost,
             pi.vendor_repair_dc_number, pi.notes, pi.updated_at,
-            p.part_id, p.part_name, p.category
+            p.part_id, p.part_name, p.category,
+            -- Receive clears vendor_repair_dc_number, so QC could not see which
+            -- challan (and vendor) the unit came back on.
+            src.dc_number AS from_dc_number, src.receive_mode, src.vendor_name
        FROM part_instances pi
        JOIN parts p ON p.part_id = pi.part_id
+       LEFT JOIN LATERAL (
+         SELECT i.dc_number, i.receive_mode, d.vendor_name
+           FROM vendor_repair_dc_part_items i
+           JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
+          WHERE i.instance_id = pi.instance_id OR i.replacement_instance_id = pi.instance_id
+          ORDER BY i.id DESC LIMIT 1
+       ) src ON TRUE
       WHERE ${where}
       ORDER BY pi.updated_at DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
