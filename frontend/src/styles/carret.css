@@ -384,6 +384,10 @@
 .c-line-n{ font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); flex:none }
 .c-line-cfg{ font-size:var(--d-base); color:var(--ink); font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .c-line-amt{ margin-left:auto; font-family:var(--font-mono); color:var(--ink); flex:none }
+.c-line.is-saved{ background:var(--surface-2); padding:10px 16px }
+.c-line.is-saved .c-line-cfg{ white-space:normal }
+.c-line-sub{ font-size:var(--d-sm); color:var(--ink-3); margin-top:2px }
+.c-line-ok{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--alert-good, #1f7a4d); color:#fff; flex:none }
 .c-totals{ display:grid; gap:6px; font-size:var(--d-base) }
 .c-totals div{ display:flex; justify-content:space-between; gap:12px; color:var(--ink-2) }
 .c-totals div span:last-child{ font-family:var(--font-mono); color:var(--ink) }

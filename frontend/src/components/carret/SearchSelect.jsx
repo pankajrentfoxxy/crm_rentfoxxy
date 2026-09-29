@@ -1,4 +1,5 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * A <Select> you can type into. Same props as Select — value, onChange(e),
@@ -9,6 +10,9 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
  * across the label and an optional `search` string per option (GSTIN, phone).
  * Arrow keys move, Enter picks, Esc closes; the list shows the first 100
  * matches so a 5,000-row list stays quick.
+ *
+ * The list is portalled to <body> with fixed positioning: cards clip their
+ * content (overflow:hidden), which cut an in-card list down to one row.
  */
 const LIMIT = 100;
 const norm = (s) => String(s ?? '').toLowerCase();
@@ -25,6 +29,7 @@ export default function SearchSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [rect, setRect] = useState(null);
 
   const items = useMemo(() => options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o)), [options]);
   const selected = items.find((o) => String(o.value) === String(value ?? '')) || null;
@@ -39,10 +44,26 @@ export default function SearchSelect({
 
   useEffect(() => { setActive(0); }, [query, open]);
 
+  // Follow the input while the page scrolls or resizes.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const r = inputRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - 8;
+      const up = below < 200 && r.top > below;
+      setRect({ left: r.left, width: r.width, top: r.bottom + 2, bottom: window.innerHeight - r.top + 2, up, max: Math.min(320, (up ? r.top : below) - 8) });
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+  }, [open]);
+
   // Close on a click anywhere else.
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    const onDown = (e) => { if (!wrapRef.current?.contains(e.target) && !listRef.current?.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
@@ -91,14 +112,15 @@ export default function SearchSelect({
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         onKeyDown={onKeyDown}
       />
-      {open && !disabled && (
+      {open && !disabled && rect && createPortal(
         <ul
           ref={listRef}
           id={listId}
           role="listbox"
-          className="absolute bg-surface border border-rule font-ui m-0"
+          className="bg-surface border border-rule font-ui m-0"
           style={{
-            left: 0, right: 0, top: 'calc(100% + 2px)', zIndex: 40, maxHeight: '16rem', overflowY: 'auto',
+            position: 'fixed', left: rect.left, width: rect.width, zIndex: 1300, maxHeight: Math.max(rect.max, 120), overflowY: 'auto',
+            ...(rect.up ? { bottom: rect.bottom } : { top: rect.top }),
             listStyle: 'none', padding: '4px 0', borderRadius: 'var(--d-radius)', boxShadow: 'var(--shadow-lg)',
           }}
         >
@@ -126,7 +148,8 @@ export default function SearchSelect({
           {matches.length === LIMIT && (
             <li className="text-ink-3" style={{ padding: '6px 10px', fontSize: 'var(--d-sm)' }}>Showing the first {LIMIT} — type more to narrow down</li>
           )}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );

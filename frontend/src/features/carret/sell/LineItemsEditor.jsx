@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { Trash2, Plus } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Trash2, Plus, Pencil, Check } from 'lucide-react';
 import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
 import { Field, Input, Select, FormGrid, Money, Button } from '../../../components/carret';
 
@@ -14,6 +14,12 @@ import { Field, Input, Select, FormGrid, Money, Button } from '../../../componen
  * Rental and demo lines carry a lock-in; sale lines carry the two warranties.
  * `required` lists the fields the caller insists on (the SO needs processor,
  * generation, RAM and storage to match stock).
+ *
+ * `collapsible` (the quotation and sales-order forms): each configuration is
+ * saved with its own button and then shows as a one-line summary — config,
+ * qty × price, lock-in or warranty — so the salesperson sees exactly what is on
+ * the order before adding the next one. A line is open while `_editing` is not
+ * false; lines loaded from a saved document come in closed.
  */
 export const emptyLine = () => ({
   brand: '', model_name: '', processor: '', generation: '', ram: '', storage: '',
@@ -72,6 +78,20 @@ const LABELS = {
 };
 export const fieldLabel = (f) => LABELS[f] || f;
 
+const plural = (n, w) => `${n} ${w}${Number(n) === 1 ? '' : 's'}`;
+
+/** "Lock-in 12 months" / "Warranty 12 months technical, 6 months battery". */
+export function termsText(l, isSale) {
+  if (isSale) {
+    const parts = [
+      Number(l.technical_warranty) > 0 && `${plural(l.technical_warranty, 'month')} technical`,
+      Number(l.battery_charger_warranty) > 0 && `${plural(l.battery_charger_warranty, 'month')} battery/charger`,
+    ].filter(Boolean);
+    return parts.length ? `Warranty ${parts.join(', ')}` : 'No warranty set';
+  }
+  return Number(l.locking_period) > 0 ? `Lock-in ${plural(l.locking_period, 'month')}` : 'No lock-in';
+}
+
 // Keep a stored value visible even when the catalog spells it differently.
 const withCurrent = (options, current) => {
   const list = Array.isArray(options) ? options : [];
@@ -79,8 +99,9 @@ const withCurrent = (options, current) => {
 };
 
 export default function LineItemsEditor({
-  lines, onChange, quotationType = 'rental', required = [], errors = null, disabled = false,
+  lines, onChange, quotationType = 'rental', required = [], errors = null, disabled = false, collapsible = false,
 }) {
+  const [saveErr, setSaveErr] = useState(null);
   const catalog = useAssetCascadeCatalog(true);
   const isSale = quotationType === 'sale' || quotationType === 'sales';
 
@@ -89,20 +110,74 @@ export default function LineItemsEditor({
   const set = (i, patch) => {
     const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
     onChange(next);
+    if (saveErr?.index === i) setSaveErr(null);
   };
   const setBrand = (i, brand) => {
     catalog.loadBrandData(brand);
     set(i, { brand, model_name: '', processor: '', generation: '' });
   };
-  const remove = (i) => onChange(lines.filter((_, idx) => idx !== i));
-  const add = () => onChange([...lines, emptyLine()]);
+  const remove = (i) => { setSaveErr(null); onChange(lines.filter((_, idx) => idx !== i)); };
+
+  // A line the last submit flagged stays open until it is complete.
+  const isOpen = (l, i) => !collapsible || l._editing !== false
+    || Boolean(errors && errors.index === i && firstMissing([l], required));
+  // Close every open line that is complete; stop at the first one that is not.
+  const closeOpen = () => {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i]._editing === false) continue;
+      const miss = firstMissing([lines[i]], required);
+      if (miss) { setSaveErr({ index: i, field: miss.field }); return null; }
+    }
+    setSaveErr(null);
+    return lines.map((l) => ({ ...l, _editing: false }));
+  };
+  const saveLine = (i) => {
+    const miss = firstMissing([lines[i]], required);
+    if (miss) { setSaveErr({ index: i, field: miss.field }); return; }
+    setSaveErr(null);
+    set(i, { _editing: false });
+  };
+  const add = () => {
+    if (!collapsible) { onChange([...lines, emptyLine()]); return; }
+    const closed = closeOpen();
+    if (closed) onChange([...closed, emptyLine()]);
+  };
 
   const req = (f) => required.includes(f);
-  const err = (i, f) => (errors && errors.index === i && errors.field === f ? `${fieldLabel(f)} is required` : null);
+  const errOf = (i) => (saveErr && saveErr.index === i ? saveErr : (errors && errors.index === i ? errors : null));
+  const err = (i, f) => (errOf(i)?.field === f ? `${fieldLabel(f)} is required` : null);
 
   return (
     <div className="c-stack">
-      {lines.map((l, i) => (
+      {lines.map((l, i) => (!isOpen(l, i) ? (
+        <div key={l.line_id || l.id || i} className="c-line is-saved">
+          <div className="c-line-h" style={{ marginBottom: 0 }}>
+            <span className="c-line-n">Line {i + 1}</span>
+            <span className="c-line-ok" aria-hidden="true"><Check size={14} /></span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="c-line-cfg">{configText(l)}</div>
+              <div className="c-line-sub">
+                {plural(Number(l.quantity) || 0, 'laptop')} × <Money value={Number(l.rate) || 0} />{isSale ? '' : ' / month'}
+                {' · '}{termsText(l, isSale)}
+                {l.remark ? ` · ${l.remark}` : ''}
+              </div>
+            </div>
+            <span className="c-line-amt"><Money value={lineAmount(l)} /></span>
+            {!disabled && (
+              <>
+                <Button variant="quiet" onClick={() => set(i, { _editing: true })} aria-label={`Edit line ${i + 1}`}>
+                  <Pencil size={14} aria-hidden="true" /> Edit
+                </Button>
+                {lines.length > 1 && (
+                  <button type="button" className="c-icon-btn" onClick={() => remove(i)} aria-label={`Remove line ${i + 1}`}>
+                    <Trash2 size={16} aria-hidden="true" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
         <div
           key={l.line_id || l.id || i}
           className="c-line"
@@ -250,8 +325,18 @@ export default function LineItemsEditor({
               />
             </Field>
           </FormGrid>
+          {collapsible && !disabled && (
+            <div className="flex items-center" style={{ gap: '10px', marginTop: '12px' }}>
+              <Button onClick={() => saveLine(i)}><Check size={16} aria-hidden="true" /> Save configuration</Button>
+              {saveErr?.index === i && (
+                <span className="c-note is-error">
+                  {fieldLabel(saveErr.field)} {saveErr.field === 'rate' ? 'must be above 0' : saveErr.field === 'quantity' ? 'must be at least 1' : 'is required'}
+                </span>
+              )}
+            </div>
+          )}
         </div>
-      ))}
+      )))}
 
       {!disabled && (
         <div>

@@ -75,7 +75,7 @@ export default function TicketActions({ data, techs, reload }) {
     } catch (e) { toast.error(errMsg(e)); }
     const byCode = new Map(assets.flatMap((a) => [a.unique_serial_number, a.serial_number].filter(Boolean).map((c) => [String(c).toUpperCase(), a])));
     const termsOf = (l) => byCode.get(String(l.ttspl_id || '').toUpperCase()) || byCode.get(String(l.serial_number || '').toUpperCase()) || null;
-    laptops = laptops.map((l) => ({ ...l, terms: termsOf(l) }));
+    laptops = laptops.map((l) => ({ ...l, terms: termsOf(l), is_wfh: Boolean(l.is_wfh ?? termsOf(l)?.is_wfh) }));
     if (!laptops.length) {
       laptops = assets.map((a) => {
         const [brand, ...rest] = String(a.model_name || '').split(' ');
@@ -175,6 +175,8 @@ export default function TicketActions({ data, techs, reload }) {
     if (!window.confirm(`Withdraw the early-return request for ${r.asset_code}? The customer keeps the laptop.`)) return;
     try { await cancelEarlyReturn(r.id, 'Withdrawn by Support'); toast.success('Withdrawn'); loadEarlyReturns(); } catch (e) { toast.error(errMsg(e)); }
   };
+  // Laptops delivered work-from-home: collecting them is chargeable (Rs 799 + GST).
+  const wfhPickup = pk ? pk.laptops.filter((l) => pk.selected[l.key] && l.is_wfh) : [];
   const lockedInPickup = pk && pk.pickup_type === 'return'
     ? pk.laptops.filter((l) => pk.selected[l.key] && l.terms?.lock_in_active && l.terms?.early_return?.status !== 'approved')
     : [];
@@ -389,6 +391,12 @@ export default function TicketActions({ data, techs, reload }) {
                 {lockedInPickup.some((l) => l.terms.early_return)
                   ? ' An early-return request is already with Sales / Accounts — the pickup can be made once it is approved.'
                   : ' Raise an early return: Sales agrees the charge with the customer, Accounts approve it, then schedule the pickup.'}
+              </Notice>
+            )}
+            {wfhPickup.length > 0 && (
+              <Notice tone="warn" title="Work-from-home pickup — chargeable ₹799 + GST">
+                {wfhPickup.map((l) => l.ttspl_id || l.serial_number).join(', ')} {wfhPickup.length === 1 ? 'was' : 'were'} delivered to an employee’s home.
+                {' '}Once the pickup is created, use “Charge WFH ₹799” on its row so it goes on Delivery Charges.
               </Notice>
             )}
             <DispatchFields value={pk.dispatch} onChange={(d) => setPk({ ...pk, dispatch: d })} technicians={techs} addressLabel="Pickup address" />

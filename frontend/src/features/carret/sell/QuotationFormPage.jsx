@@ -282,6 +282,7 @@ export default function QuotationFormPage() {
               quotationType={type}
               required={['brand']}
               errors={errors.line}
+              collapsible
             />
           </Section>
 

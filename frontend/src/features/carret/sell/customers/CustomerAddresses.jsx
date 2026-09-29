@@ -18,7 +18,7 @@ import { STATE_OPTIONS, mobileProblem, pincodeProblem } from './customerProfileS
  * (customer_addresses: add, edit, delete, make default).
  */
 const EMPTY = { address: '', city: '', state: '', pincode: '', concern_person: '', mobile_no: '', address_type: 'Shipping' };
-const ADDRESS_TYPES = ['Shipping', 'Billing', 'Head office', 'Branch', 'Warehouse'];
+const ADDRESS_TYPES = ['Shipping', 'Billing', 'Head office', 'Branch', 'Warehouse', 'WFH'];
 const line = (a) => [a.city, a.state, a.pincode].filter(Boolean).join(', ');
 
 function addressErrors(f) {
@@ -118,7 +118,7 @@ export default function AddressesTab({ customer, canEdit, onEditProfile }) {
     : 'Same as billing';
   const cols = [
     { key: 'a', header: 'Address', render: (r) => r.address, sub: (r) => line(r) },
-    { key: 't', header: 'Kind', render: (r) => (r.is_head_office ? <StatusChip status="default" label="Default" /> : (r.address_type || 'Shipping')) },
+    { key: 't', header: 'Kind', render: (r) => (r.is_head_office ? <StatusChip status="default" label="Default" /> : (String(r.address_type).toUpperCase() === 'WFH' ? 'WFH (employee home)' : (r.address_type || 'Shipping'))) },
     { key: 'c', header: 'Contact', render: (r) => r.concern_person || '—', sub: (r) => r.mobile_no },
     ...(canEdit ? [{
       key: 'x',

@@ -40,6 +40,9 @@ export function buildBillingAddress(customer) {
   };
 }
 
+/** A saved address kept from a work-from-home order (address_type 'WFH'). */
+export const isWfhAddress = (addr) => String(addr?.address_type || '').toUpperCase() === 'WFH';
+
 export const emptyManualAddress = () => ({
   name: '', phone: '', country: 'India', state: '', city: '', zip_code: '', address: '',
 });
@@ -72,9 +75,11 @@ export function buildShippingOptions(customer, savedAddresses = []) {
   }
 
   (savedAddresses || []).forEach((addr, i) => {
+    const wfh = isWfhAddress(addr);
     options.push({
-      label: `${addr.concern_person || 'Address'} — ${addr.address}, ${addr.pincode || ''}`,
+      label: `${wfh ? 'WFH · ' : ''}${addr.concern_person || 'Address'} — ${addr.address}, ${addr.pincode || ''}`,
       value: `saved_${addr.customer_address_id || i}`,
+      is_wfh: wfh,
       address: {
         name: addr.concern_person || customer.name || customer.customer_name,
         phone: addr.mobile_no || customer.phone,

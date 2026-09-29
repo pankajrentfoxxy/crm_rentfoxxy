@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
@@ -7,7 +7,8 @@ import {
 } from '../../../components/carret';
 import { ENTITIES } from '../../../config/entities';
 import {
-  createSalesOrder, getQuotation, getSalesOrderFull, getSalesOrderMeta, listQuotations, updateSalesOrder,
+  createSalesOrder, createSalesOrderDraft, getQuotation, getSalesOrderDraft, getSalesOrderFull, getSalesOrderMeta,
+  listQuotations, updateSalesOrder, updateSalesOrderDraft,
 } from '../../sales-pipeline/salesPipelineApi';
 import {
   computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
@@ -38,8 +39,17 @@ import GstinField from './GstinField';
  *
  * Processor, generation, RAM and storage are required on every line because
  * the attach step matches stock on exactly those four.
+ *
+ * Work from home: the ship-to contact IS the employee (one name and phone, not
+ * two), shipping defaults to Rs 799 with GST on it, and the server keeps the
+ * address on the customer as a WFH address so a later pickup from it is seen
+ * to be chargeable.
+ *
+ * Save as draft (migration 406) keeps the form without taking an SO number;
+ * ?draft=<id> reopens it, and creating the order deletes the draft.
  */
 const REQUIRED = ['processor', 'generation', 'ram', 'storage'];
+const WFH_SHIPPING = 799;
 
 const TYPES = [
   { value: 'rental', label: 'Rental' },
@@ -69,6 +79,7 @@ function linesFromDoc(rows) {
     technical_warranty: l.technical_warranty || '',
     battery_charger_warranty: l.battery_charger_warranty || '',
     remark: l.remark || '',
+    _editing: false,
   }));
 }
 
@@ -78,6 +89,12 @@ export default function SalesOrderFormPage() {
   const editSo = soNumber ? decodeURIComponent(soNumber) : null;
   const [params] = useSearchParams();
   const fromQuotationParam = params.get('quotation') || '';
+  const draftParam = editSo ? '' : (params.get('draft') || '');
+  const [draftId, setDraftId] = useState(draftParam);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const loadedDraft = useRef('');
+  // A restored draft carries its own lines; don't re-copy its quotation over them.
+  const skipQuote = useRef('');
 
   const [type, setType] = useState('rental');
   const [demoBook, setDemoBook] = useState('rentfoxxy');
@@ -94,7 +111,7 @@ export default function SalesOrderFormPage() {
   const [securityType, setSecurityType] = useState('none');
   const [shipping, setShipping] = useState('');
   const [inPlace, setInPlace] = useState(false);
-  const [wfh, setWfh] = useState({ on: false, name: '', phone: '' });
+  const [wfh, setWfh] = useState({ on: false });
   const [shipChoice, setShipChoice] = useState({ key: 'billing', manual: null });
   const [advance, setAdvance] = useState({ on: false, amount: '', due: '' });
   const [errors, setErrors] = useState({});
@@ -118,6 +135,7 @@ export default function SalesOrderFormPage() {
   // Copy an accepted quotation in.
   useEffect(() => {
     if (!quotationNumber || editSo) return;
+    if (skipQuote.current === quotationNumber) { skipQuote.current = ''; return; }
     getQuotation(quotationNumber).then(({ data }) => {
       const qLines = data?.lines || [];
       const h = qLines[0] || {};
@@ -141,6 +159,32 @@ export default function SalesOrderFormPage() {
     }).catch(() => setQuoteNote(`Could not load ${quotationNumber}.`));
   }, [quotationNumber, editSo]);
 
+  // Reopen a draft.
+  useEffect(() => {
+    if (!draftParam || loadedDraft.current === draftParam) return;
+    loadedDraft.current = draftParam;
+    getSalesOrderDraft(draftParam).then(({ data }) => {
+      const d = data?.draft?.payload || {};
+      if (d.quotationNumber) skipQuote.current = d.quotationNumber;
+      setType(d.type || 'rental');
+      setDemoBook(d.demoBook || 'rentfoxxy');
+      setQuotationNumber(d.quotationNumber || '');
+      setCustomerId(d.customerId ? String(d.customerId) : '');
+      setGst(d.gst || '');
+      setLines(Array.isArray(d.lines) && d.lines.length ? d.lines : [emptyLine()]);
+      setSecurityType(d.securityType || 'none');
+      setShipping(d.shipping ?? '');
+      setInPlace(Boolean(d.inPlace));
+      setWfh({ on: Boolean(d.wfh?.on) });
+      setShipChoice(d.shipChoice || { key: 'billing', manual: null });
+      setAdvance(d.advance || { on: false, amount: '', due: '' });
+      setDraftId(String(data.draft.draft_id));
+    }).catch((e) => {
+      setDraftId('');
+      setLoadError(e?.response?.data?.message || 'Could not load the draft.');
+    });
+  }, [draftParam]);
+
   // Edit: load the order.
   useEffect(() => {
     if (!editSo) return;
@@ -160,8 +204,7 @@ export default function SalesOrderFormPage() {
       setSecurityType(h.security_type || (Number(h.security_amount) > 0 ? 'one_month_rental' : 'none'));
       setShipping(h.shiping_charges ?? '');
       const isW = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
-      const delivery = parseJson(h.delivery_address) || {};
-      setWfh({ on: isW, name: delivery.employee_name || '', phone: delivery.employee_phone || '' });
+      setWfh({ on: isW });
       setAdvance(Number(h.advance_amount) > 0
         ? { on: true, amount: String(h.advance_amount), due: h.advance_due_date ? String(h.advance_due_date).slice(0, 10) : '' }
         : { on: false, amount: '', due: '' });
@@ -198,9 +241,26 @@ export default function SalesOrderFormPage() {
   const selectedCustomer = (meta?.customers || []).find((x) => String(x.customer_id) === String(customerId));
   const gstLocked = Boolean(gst) && gst === customerGstin(selectedCustomer);
 
+  const shipOption = addr.options.find((o) => o.value === shipChoice.key);
+
+  const onWfh = (on) => {
+    setWfh({ on });
+    if (on) {
+      if (!(Number(shipping) > 0)) setShipping(String(WFH_SHIPPING));
+      // An employee's home is never the billing / office address: start from a
+      // saved WFH address or a blank one.
+      if (!String(shipChoice.key).startsWith('saved_') && shipChoice.key !== 'manual') {
+        const saved = addr.options.find((o) => o.is_wfh);
+        setShipChoice(saved ? { key: saved.value, manual: null } : { key: 'manual', manual: shipChoice.manual || null });
+      }
+    } else if (Number(shipping) === WFH_SHIPPING) {
+      setShipping('');
+    }
+  };
+
   const onCustomer = (id) => {
     setCustomerId(id);
-    setShipChoice({ key: 'billing', manual: null });
+    setShipChoice({ key: wfh.on ? 'manual' : 'billing', manual: null });
     const c = (meta?.customers || []).find((x) => String(x.customer_id) === String(id));
     // Only a real GSTIN is copied (and then locked); placeholders like "NA" are not.
     setGst(customerGstin(c));
@@ -229,8 +289,9 @@ export default function SalesOrderFormPage() {
       return;
     }
 
+    // WFH: the ship-to contact is the employee.
     const shipPayload = inPlace ? null : (wfh.on
-      ? { ...shipAddress, employee_name: wfh.name || undefined, employee_phone: wfh.phone || undefined }
+      ? { ...shipAddress, employee_name: shipAddress?.name || undefined, employee_phone: shipAddress?.phone || undefined }
       : shipAddress);
     const payload = {
       customer_id: customerId,
@@ -250,9 +311,10 @@ export default function SalesOrderFormPage() {
       customer_billing_address: addr.billing,
       advance_amount: advance.on ? Number(advance.amount) || 0 : '',
       advance_due_date: advance.on ? advance.due || null : null,
-      is_wfh: wfh.on,
-      wfh_employee_name: wfh.on ? wfh.name || undefined : undefined,
-      wfh_employee_phone: wfh.on ? wfh.phone || undefined : undefined,
+      is_wfh: wfh.on && !inPlace,
+      wfh_employee_name: wfh.on && !inPlace ? shipAddress?.name || undefined : undefined,
+      wfh_employee_phone: wfh.on && !inPlace ? shipAddress?.phone || undefined : undefined,
+      draft_id: !editSo && draftId ? draftId : undefined,
       ...linesToPayload(lines),
     };
 
@@ -275,6 +337,35 @@ export default function SalesOrderFormPage() {
     }
   };
 
+  const saveDraft = async () => {
+    const c = selectedCustomer;
+    const body = {
+      payload: { type, demoBook, quotationNumber, customerId, gst, lines, securityType, shipping, inPlace, wfh, shipChoice, advance },
+      customer_id: customerId || null,
+      customer_name: c ? (c.company_name || c.name) : '',
+      quotation_type: type,
+      quotation_number: quotationNumber || '',
+      total: totals.grand_total || 0,
+    };
+    setDraftSaving(true);
+    try {
+      if (draftId) {
+        await updateSalesOrderDraft(draftId, body);
+      } else {
+        const { data } = await createSalesOrderDraft(body);
+        const id = String(data.draft_id);
+        setDraftId(id);
+        loadedDraft.current = id;
+        navigate(`/carret/sell/sales-orders/new?draft=${id}`, { replace: true });
+      }
+      toast.success('Draft saved — find it under Sales orders → Drafts');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Could not save the draft.');
+    } finally {
+      setDraftSaving(false);
+    }
+  };
+
   if (editSo && editLocked) {
     return (
       <DeskShell title={`Edit ${editSo}`} breadcrumb="Sell / Sales orders">
@@ -285,9 +376,9 @@ export default function SalesOrderFormPage() {
 
   return (
     <DeskShell
-      title={editSo ? `Edit ${editSo}` : 'New sales order'}
+      title={editSo ? `Edit ${editSo}` : (draftId ? 'New sales order (draft)' : 'New sales order')}
       breadcrumb="Sell / Sales orders"
-      subtitle={editSo ? 'Changes regenerate the order PDF.' : 'The SO number is assigned when you save.'}
+      subtitle={editSo ? 'Changes regenerate the order PDF.' : 'The SO number is assigned when you create the order. A draft takes no number.'}
     >
       <div className="c-split">
         <div className="c-stack">
@@ -351,7 +442,7 @@ export default function SalesOrderFormPage() {
           </Section>
 
           <Section title="Laptops">
-            <LineItemsEditor lines={lines} onChange={setLines} quotationType={type} required={REQUIRED} errors={errors.line} />
+            <LineItemsEditor lines={lines} onChange={setLines} quotationType={type} required={REQUIRED} errors={errors.line} collapsible />
           </Section>
 
           <Section title="Delivery">
@@ -366,28 +457,36 @@ export default function SalesOrderFormPage() {
               {!inPlace && (
                 <>
                   <Checkbox
-                    label="Work-from-home delivery to an employee (GST applies to shipping)"
+                    label={`Work-from-home delivery to an employee (₹${WFH_SHIPPING} shipping + GST)`}
                     checked={wfh.on}
-                    onChange={(e) => setWfh((w) => ({ ...w, on: e.target.checked }))}
+                    onChange={(e) => onWfh(e.target.checked)}
                   />
-                  {wfh.on && (
-                    <FormGrid cols={2}>
-                      <Field label="Employee name"><Input value={wfh.name} onChange={(e) => setWfh((w) => ({ ...w, name: e.target.value }))} /></Field>
-                      <Field label="Employee phone"><Input value={wfh.phone} inputMode="tel" onChange={(e) => setWfh((w) => ({ ...w, phone: e.target.value }))} /></Field>
-                    </FormGrid>
-                  )}
                   {customerId ? (
                     <div className="c-form-grid" style={{ '--c-cols': 2 }}>
                       <div>
                         <div className="c-label" style={{ marginBottom: '6px' }}>Bill to</div>
                         {addr.loading ? <span className="text-ink-3">Loading…</span> : <AddressText address={addr.billing} />}
                       </div>
-                      <ShippingPicker options={addr.options} value={shipChoice} onChange={setShipChoice} errors={errors.ship} />
+                      <ShippingPicker
+                        options={addr.options}
+                        value={shipChoice}
+                        onChange={setShipChoice}
+                        errors={errors.ship}
+                        label={wfh.on ? 'Employee’s home address' : 'Ship to'}
+                        hint={wfh.on ? 'Saved on the customer as a WFH address, so a later pickup from it is charged.' : undefined}
+                        nameLabel={wfh.on ? 'Employee name' : undefined}
+                        phoneLabel={wfh.on ? 'Employee phone' : undefined}
+                      />
                     </div>
                   ) : (
                     <p className="font-ui text-ink-3 m-0">Choose the customer to pick a delivery address.</p>
                   )}
                   {errors.ship?.address && shipChoice.key !== 'manual' && <Notice tone="crit">{errors.ship.address}</Notice>}
+                  {!wfh.on && shipOption?.is_wfh && (
+                    <Notice tone="warn" action={<Button onClick={() => onWfh(true)}>Make it WFH</Button>}>
+                      This is a saved work-from-home address. Tick work-from-home delivery so the ₹{WFH_SHIPPING} shipping and GST apply.
+                    </Notice>
+                  )}
                   <p className="font-ui text-ink-3 m-0" style={{ fontSize: 'var(--d-sm)' }}>
                     Laptops can go to different addresses: set each one on the order after attaching them. One challan is made per address.
                   </p>
@@ -408,7 +507,7 @@ export default function SalesOrderFormPage() {
                 </Field>
               )}
               {!inPlace && (
-                <Field label="Shipping charges (₹)" required={wfh.on} error={errors.shipping}>
+                <Field label="Shipping charges (₹)" required={wfh.on} error={errors.shipping} hint={wfh.on ? `Work from home: ₹${WFH_SHIPPING} by default, GST added` : undefined}>
                   <Input type="number" min="0" step="0.01" value={shipping} onChange={(e) => setShipping(e.target.value)} />
                 </Field>
               )}
@@ -436,7 +535,7 @@ export default function SalesOrderFormPage() {
               {totals.gst_type === 'intra'
                 ? (<><div><span>CGST 9%</span><span><Money value={totals.cgst} /></span></div><div><span>SGST 9%</span><span><Money value={totals.sgst} /></span></div></>)
                 : <div><span>IGST 18%</span><span><Money value={totals.igst} /></span></div>}
-              <div><span>Shipping{wfh.on ? ' (taxed)' : ''}</span><span><Money value={totals.shipping} /></span></div>
+              <div><span>Shipping{wfh.on ? ' (WFH, GST added)' : ''}</span><span><Money value={totals.shipping} /></span></div>
               {!isSale && <div><span>Security deposit</span><span><Money value={totals.security} /></span></div>}
               <div className="is-grand"><span>{isSale ? 'Total' : 'First payment'}</span><span><Money value={totals.grand_total} /></span></div>
               {advance.on && Number(advance.amount) > 0 && <div><span>Advance before dispatch</span><span><Money value={Number(advance.amount)} /></span></div>}
@@ -446,7 +545,10 @@ export default function SalesOrderFormPage() {
             </p>
           </Section>
           <div className="c-stack" style={{ gap: '8px' }}>
-            <Button variant="primary" onClick={submit} disabled={saving}>{saving ? 'Saving…' : (editSo ? 'Save changes' : 'Create sales order')}</Button>
+            <Button variant="primary" onClick={submit} disabled={saving || draftSaving}>{saving ? 'Saving…' : (editSo ? 'Save changes' : 'Create sales order')}</Button>
+            {!editSo && (
+              <Button onClick={saveDraft} disabled={saving || draftSaving}>{draftSaving ? 'Saving draft…' : (draftId ? 'Update draft' : 'Save as draft')}</Button>
+            )}
             <Button variant="quiet" onClick={() => navigate(editSo ? `/carret/sell/sales-orders/${encodeURIComponent(editSo)}` : '/carret/sell/sales-orders')} disabled={saving}>Cancel</Button>
           </div>
         </aside>

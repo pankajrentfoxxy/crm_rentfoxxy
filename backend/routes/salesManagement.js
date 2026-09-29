@@ -197,6 +197,13 @@ router.patch(...soRoute('/shipping-address', checkRole('super_admin'), ctrl.upda
 router.patch(/^\/sales-orders\/(.+)$/, bindSoNumber, soEdit, ctrl.updateSalesOrder);
 router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, checkSoViewOrAssignedDispatch, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
+// Sales order drafts (migration 406) — the new SO form saved half-way; no SO number.
+const soDraftCtrl = require('../controllers/salesOrderDraftController');
+router.get('/sales-order-drafts', soCreate, soDraftCtrl.listDrafts);
+router.get('/sales-order-drafts/:draftId', soCreate, soDraftCtrl.getDraft);
+router.post('/sales-order-drafts', soCreate, soDraftCtrl.createDraft);
+router.put('/sales-order-drafts/:draftId', soCreate, soDraftCtrl.updateDraft);
+router.delete('/sales-order-drafts/:draftId', soCreate, soDraftCtrl.deleteDraft);
 
 router.get('/delivery-challans/meta/add', soDcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);

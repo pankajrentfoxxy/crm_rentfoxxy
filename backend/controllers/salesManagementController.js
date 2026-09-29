@@ -1050,6 +1050,34 @@ async function applySoAdvance(client, soNumber, body = {}) {
   );
 }
 
+/**
+ * A work-from-home delivery address is kept on the customer as address_type
+ * 'WFH', so it can be picked again and so a later pickup from it is seen to be
+ * chargeable (Rs 799 + GST, see supportChargesService). Matched on address +
+ * pincode; an address already saved (of any type) is not duplicated.
+ */
+async function saveWfhAddress(client, customerId, addr) {
+  if (!customerId || !addr) return;
+  const address = String(addr.address || '').trim();
+  const pincode = String(addr.pincode || addr.zip_code || '').trim();
+  if (!address) return;
+  const hit = await client.query(
+    `SELECT customer_address_id FROM customer_addresses
+      WHERE customer_id = $1
+        AND LOWER(REGEXP_REPLACE(TRIM(address), '\\s+', ' ', 'g')) = LOWER(REGEXP_REPLACE($2, '\\s+', ' ', 'g'))
+        AND COALESCE(pincode, '') = $3
+      LIMIT 1`,
+    [customerId, address, pincode]
+  );
+  if (hit.rows.length) return;
+  await client.query(
+    `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, city, state, pincode, is_head_office, address_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 'WFH')`,
+    [customerId, String(addr.name || '').trim() || null, String(addr.phone || '').trim().slice(0, 50) || null,
+      address, String(addr.city || '').trim() || null, String(addr.state || '').trim() || null, pincode || null]
+  );
+}
+
 exports.storeSalesOrder = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1343,6 +1371,9 @@ exports.storeSalesOrder = async (req, res) => {
       quotationType: body.quotation_type || 'rental',
       user: req.user,
     });
+
+    if (isWfh && !isInPlace) await saveWfhAddress(client, customerId, lineDeliveryAddress);
+    if (body.draft_id) await require('./salesOrderDraftController').consumeDraft(client, body.draft_id, req.user);
 
     await client.query('COMMIT');
 
@@ -1686,6 +1717,9 @@ exports.updateSalesOrder = async (req, res) => {
     }
 
     await applySoAdvance(client, soNumber, body);
+    if ((body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1) && shipping && typeof shipping === 'object') {
+      await saveWfhAddress(client, customerId, shipping);
+    }
     await client.query('COMMIT');
 
     let pdfPath = null;

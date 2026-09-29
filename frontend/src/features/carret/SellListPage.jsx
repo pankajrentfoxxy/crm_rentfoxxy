@@ -9,6 +9,7 @@ import { usePermission } from '../../hooks/usePermission';
 import { SO_SECTIONS } from './sell/sellShared';
 import { ENTITIES } from '../../config/entities';
 import { useSellList } from './useSell';
+import SoDraftsTable from './sell/SoDraftsTable';
 
 /**
  * Sell — Quotations, Sales Orders and Customers (Part 4.5).
@@ -54,6 +55,7 @@ const RESOURCES = {
     tabs: [
       { key: '', label: 'All' }, { key: 'pending', label: 'Open' }, { key: 'dispatched', label: 'Dispatched' },
       { key: 'delivered', label: 'Delivered' }, { key: 'cancelled', label: 'Cancelled' },
+      { key: 'drafts', label: 'Drafts' },
     ],
     create: { label: 'New sales order', to: '/carret/sell/sales-orders/new', section: SO_SECTIONS },
     open: (r) => `/carret/sell/sales-orders/${encodeURIComponent(r.sales_order_number)}`,
@@ -112,7 +114,7 @@ export default function SellListPage({ kind = 'sales-orders' }) {
 
   const { loading, error, rows, total, pages } = useSellList(config.resource, {
     entity,
-    status,
+    status: status === 'drafts' ? '' : status,
     search: filters.search || '',
     page,
     dateFrom: created.from,
@@ -180,7 +182,7 @@ export default function SellListPage({ kind = 'sales-orders' }) {
           toolbar={(
             <>
             {config.tabs.length > 0 && (
-              <Tabs tabs={config.tabs} value={status} onChange={(v) => { setStatus(v); setPage(1); }} />
+              <Tabs tabs={config.tabs.filter((t) => t.key !== 'drafts' || canCreate)} value={status} onChange={(v) => { setStatus(v); setPage(1); }} />
             )}
             <FilterBar
               filters={filterDefs}
@@ -192,9 +194,10 @@ export default function SellListPage({ kind = 'sales-orders' }) {
             </>
           )}
         >
-          {loading && <EmptyState title="Loading…" />}
-          {error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
-          {!loading && !error && (
+          {status === 'drafts' && <SoDraftsTable />}
+          {status !== 'drafts' && loading && <EmptyState title="Loading…" />}
+          {status !== 'drafts' && error && <EmptyState title={`Could not load ${config.title.toLowerCase()}`} body={error} />}
+          {status !== 'drafts' && !loading && !error && (
             <DataTable
               columns={columns}
               rows={rows}
@@ -207,7 +210,7 @@ export default function SellListPage({ kind = 'sales-orders' }) {
               />}
             />
           )}
-          {pages > 1 && (
+          {status !== 'drafts' && pages > 1 && (
             <div className="c-toolbar" style={{ borderTop: '1px solid var(--rule)', borderBottom: 0 }}>
               <Button variant="quiet" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
               <span className="font-ui text-ink-3">Page {page} of {pages}</span>

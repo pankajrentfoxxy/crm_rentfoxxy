@@ -22,6 +22,12 @@ export const logSoDocumentActivity = (n, d) => api.post(`${base}/sales-orders/${
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
 export const updateSalesOrder = (n, d) => api.patch(`${base}/sales-orders/${encSo(n)}`, d);
 export const cancelSalesOrder = (n) => api.patch(`${base}/sales-orders/${encSo(n)}/cancel`);
+// Drafts of the new SO form (migration 406): no SO number until created.
+export const listSalesOrderDrafts = () => api.get(`${base}/sales-order-drafts`);
+export const getSalesOrderDraft = (id) => api.get(`${base}/sales-order-drafts/${id}`);
+export const createSalesOrderDraft = (d) => api.post(`${base}/sales-order-drafts`, d);
+export const updateSalesOrderDraft = (id, d) => api.put(`${base}/sales-order-drafts/${id}`, d);
+export const deleteSalesOrderDraft = (id) => api.delete(`${base}/sales-order-drafts/${id}`);
 export const getSoLineCancelEligibility = (lineId) =>
   api.get(`${base}/so-lines/${lineId}/cancel-eligibility`);
 export const partialCancelSoLine = (lineId, d) =>

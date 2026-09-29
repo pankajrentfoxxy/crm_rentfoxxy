@@ -63,15 +63,15 @@ export function AddressText({ address, empty = 'No address' }) {
 }
 
 /** Editable address fields with pincode → city/state autofill. */
-export function AddressFields({ value, onChange, errors = {} }) {
+export function AddressFields({ value, onChange, errors = {}, nameLabel = 'Contact name', phoneLabel = 'Phone' }) {
   const v = value || emptyManualAddress();
   const set = (patch) => onChange({ ...v, ...patch });
   return (
     <FormGrid cols={3}>
-      <Field label="Contact name" required error={errors.name}>
+      <Field label={nameLabel} required error={errors.name}>
         <Input value={v.name} onChange={(e) => set({ name: e.target.value })} />
       </Field>
-      <Field label="Phone" required error={errors.phone}>
+      <Field label={phoneLabel} required error={errors.phone}>
         <Input value={v.phone} inputMode="tel" onChange={(e) => set({ phone: e.target.value })} />
       </Field>
       <Field label="Pincode" required error={errors.zip_code}>
@@ -119,11 +119,11 @@ export function validateAddress(a) {
  * Shipping choice: one of the customer's addresses, or typed in.
  * value: { key, manual } → resolved address via resolveShipping().
  */
-export function ShippingPicker({ options, value, onChange, errors }) {
+export function ShippingPicker({ options, value, onChange, errors, label = 'Ship to', hint, nameLabel, phoneLabel }) {
   const key = value?.key || 'billing';
   return (
     <div className="c-stack" style={{ gap: '12px' }}>
-      <Field label="Ship to">
+      <Field label={label} hint={hint}>
         <Select
           value={key}
           onChange={(e) => onChange({ ...value, key: e.target.value })}
@@ -131,7 +131,7 @@ export function ShippingPicker({ options, value, onChange, errors }) {
         />
       </Field>
       {key === 'manual'
-        ? <AddressFields value={value?.manual} onChange={(manual) => onChange({ ...value, manual })} errors={errors} />
+        ? <AddressFields value={value?.manual} onChange={(manual) => onChange({ ...value, manual })} errors={errors} nameLabel={nameLabel} phoneLabel={phoneLabel} />
         : <AddressText address={options.find((o) => o.value === key)?.address} />}
     </div>
   );
