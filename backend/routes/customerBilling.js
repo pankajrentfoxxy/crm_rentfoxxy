@@ -3,11 +3,15 @@ const router = express.Router();
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/customerBillingController');
 const deliveryCharges = require('../controllers/deliveryChargesController');
+const customerScope = require('../middleware/customerScope');
 
 // RBAC is driven by the role_permissions matrix (section + action).
 const cp = checkSectionPermission;
 
 router.use(authMiddleware);
+// Customer Access scope (customer_access all | sales | rental): every list and
+// record below narrows to it, like every other customer-touching API.
+router.use(customerScope);
 
 // Part 6.2 — declared BEFORE /invoices/:invoiceId, or the parameterised route
 // swallows them.
@@ -28,6 +32,9 @@ router.get('/invoices/pdf-zip', cp('customer_billing', 'view'), ctrl.downloadInv
 router.post('/invoices/generate', cp('customer_billing', 'create'), ctrl.generateInvoice);
 router.post('/invoices/generate-bulk', cp('customer_billing', 'create'), ctrl.generateInvoicesBulk);
 router.get('/invoices/:invoiceId/payments', cp('customer_billing', 'view'), ctrl.listInvoicePayments);
+// Finance -> Payments received. Same section as the per-invoice payments list;
+// that list was the only way to see a payment before this.
+router.get('/payments', cp('customer_billing', 'view'), ctrl.listCustomerPayments);
 router.post('/invoices/:id/payments', cp('customer_billing', 'edit'), ctrl.recordInvoicePayment);
 router.get('/invoices/:invoiceId/pdf', cp('customer_billing', 'view'), ctrl.downloadInvoicePdf);
 router.get('/invoices/:invoiceId', cp('customer_billing', 'view'), ctrl.getInvoice);
@@ -55,9 +62,12 @@ router.get('/credit-notes/pdf-zip', cp('credit_notes', 'view'), ctrl.downloadCre
 router.get('/credit-notes/:id/pdf', cp('credit_notes', 'view'), ctrl.downloadCreditNotePdf);
 router.get('/credit-notes/:id', cp('credit_notes', 'view'), ctrl.getCreditNote);
 router.patch('/credit-notes/:id/approve', cp('credit_notes', 'edit'), ctrl.approveCreditNote);
+// MD2: withdrawing a note is the checker's decision, like approving it.
+router.patch('/credit-notes/:id/cancel', cp('credit_notes', 'edit'), ctrl.cancelCreditNote);
 
 router.get('/security-deposits', cp('security_deposits', 'view'), ctrl.listSecurityDeposits);
 router.post('/security-deposits', cp('security_deposits', 'create'), ctrl.recordSecurityDeposit);
+// MD3 / SD1: closed (410). Deposits are refunded only through account closure.
 router.patch('/security-deposits/:id/refund', cp('security_deposits', 'edit'), ctrl.refundSecurityDeposit);
 
 module.exports = router;

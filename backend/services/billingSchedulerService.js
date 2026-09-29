@@ -212,6 +212,19 @@ async function nextVendorBillNumber(db = pool) {
   return formatDocumentNumber(res.rows[0].prefix, res.rows[0].last_value);
 }
 
+/**
+ * MD2 — the one credit-note number allocator. Manual, return and repair notes
+ * share the CN/yy-yy/NNNN financial-year series (nextFinancialYearNumber), and
+ * the number is taken inside the caller's transaction so a rolled-back note
+ * never burns one. Given the pool rather than a client, it opens its own short
+ * transaction so the sequence row is still locked while it is read.
+ */
+async function nextCreditNoteNumber(db = null) {
+  const { nextFinancialYearNumber } = require('./salesManagementService');
+  const isClient = Boolean(db && typeof db.release === 'function');
+  return nextFinancialYearNumber('credit_note', isClient ? db : null);
+}
+
 async function alertOpsOnBillingFailure(runName, summary) {
   const to = process.env.OPS_ALERT_EMAIL || process.env.SMTP_USER;
   if (!to) return;
@@ -2168,55 +2181,88 @@ async function applyOpenCreditNotes(client, { customerId, invoiceId, invoiceNumb
 /**
  * Approve a draft credit note, then apply it to the linked (or latest draft) invoice.
  */
-async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
+async function approveAndApplyCreditNote(creditNoteId, actorUserId = null, { correlationId = null } = {}) {
+  const { creditNoteEvent, BILLING_EVENTS } = require('./billingEventService');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const locked = await client.query(
+      'SELECT * FROM customer_credit_notes WHERE credit_note_id = $1 FOR UPDATE',
+      [creditNoteId]
+    );
+    const current = locked.rows[0];
+    if (!current || String(current.status || '').toLowerCase() !== 'pending') {
+      await client.query('ROLLBACK');
+      return { ok: false, status: current ? 409 : 404, reason: 'Credit note not found or not pending' };
+    }
+    // MD2 maker-checker: whoever raised the note cannot approve it. A note with
+    // no recorded maker (the cron, older rows) is let through, as for vendor bills.
+    const maker = Number(current.created_by) || null;
+    if (maker && actorUserId && maker === Number(actorUserId)) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        status: 403,
+        reason: 'You raised this credit note, so you cannot approve it. Maker and checker must be different people.',
+      };
+    }
+    if (!(Number(current.amount) > 0)) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, reason: 'A credit note of Rs 0 cannot be approved — set the amount or cancel it' };
+    }
     const updated = await client.query(
       `UPDATE customer_credit_notes
           SET status = 'approved',
               approved_by = $1,
+              approved_at = NOW(),
               updated_at = NOW()
         WHERE credit_note_id = $2 AND status = 'pending'
         RETURNING *`,
       [actorUserId, creditNoteId]
     );
-    if (!updated.rows.length) {
-      await client.query('ROLLBACK');
-      return { ok: false, reason: 'Credit note not found or not pending' };
-    }
     const cn = updated.rows[0];
-    let invoiceId = cn.invoice_id || null;
-    if (!invoiceId) {
-      const draft = await client.query(
-        `SELECT invoice_id, invoice_number
-           FROM customer_invoices
-          WHERE customer_id = $1 AND status = 'draft'
-          ORDER BY invoice_year DESC, invoice_month DESC, invoice_id DESC
-          LIMIT 1`,
-        [cn.customer_id]
-      );
-      invoiceId = draft.rows[0]?.invoice_id || null;
+    // Apply to the customer's draft: the linked invoice when it is a draft,
+    // else the latest draft. Only if the note fits (it is never cut to fit).
+    let invoiceId = null;
+    let invoiceNumber = null;
+    const candidates = await client.query(
+      `SELECT invoice_id, invoice_number
+         FROM customer_invoices
+        WHERE customer_id = $1 AND status = 'draft'
+        ORDER BY CASE WHEN invoice_id = $2 THEN 0 ELSE 1 END,
+                 invoice_year DESC, invoice_month DESC, invoice_id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [cn.customer_id, cn.invoice_id || 0]
+    );
+    let applied = { total: 0, notes: [], deferred: [] };
+    if (candidates.rows.length) {
+      invoiceId = candidates.rows[0].invoice_id;
+      invoiceNumber = candidates.rows[0].invoice_number;
+      applied = await applyApprovedCreditNotesToDraft(client, {
+        customerId: cn.customer_id,
+        invoiceId,
+        invoiceNumber,
+        creditNoteIds: [cn.credit_note_id],
+      });
     }
-    let applied = { total: 0, notes: [] };
-    if (invoiceId) {
-      const inv = await client.query(
-        `SELECT invoice_id, invoice_number, status FROM customer_invoices WHERE invoice_id = $1`,
-        [invoiceId]
-      );
-      const invoice = inv.rows[0];
-      if (invoice && String(invoice.status || '').toLowerCase() === 'draft') {
-        applied = await applyOpenCreditNotes(client, {
-          customerId: cn.customer_id,
-          invoiceId,
-          invoiceNumber: invoice.invoice_number,
-          creditNoteIds: [cn.credit_note_id],
-        });
-        if (applied.notes.length) {
-          await refreshInvoiceCreditTotals(client, invoiceId);
-        }
-      }
-    }
+    await creditNoteEvent(client, {
+      creditNoteId: cn.credit_note_id,
+      creditNoteNumber: cn.credit_note_number,
+      eventType: BILLING_EVENTS.CREDIT_NOTE_APPROVED,
+      fromState: 'pending',
+      toState: applied.notes.length ? 'applied' : 'approved',
+      payload: {
+        amount: Number(cn.amount),
+        maker,
+        checker: Number(actorUserId) || null,
+        applied_in_invoice: applied.notes.length ? invoiceNumber : null,
+        deferred: applied.deferred && applied.deferred.length ? 'larger than the draft can absorb' : undefined,
+      },
+      actor: actorUserId ? { user_id: actorUserId } : null,
+      correlationId,
+      source: 'billingSchedulerService.approveAndApplyCreditNote',
+    });
     const latest = await client.query(
       `SELECT * FROM customer_credit_notes WHERE credit_note_id = $1`,
       [creditNoteId]
@@ -2226,7 +2272,7 @@ async function approveAndApplyCreditNote(creditNoteId, actorUserId = null) {
       ok: true,
       credit_note: latest.rows[0],
       applied: applied.notes.length > 0,
-      invoice_id: invoiceId,
+      invoice_id: applied.notes.length ? invoiceId : null,
     };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -2282,7 +2328,15 @@ async function approveSelectedCreditNoteLines(creditNoteId, selection = {}, acto
     const cn = locked.rows[0];
     if (String(cn.status || '').toLowerCase() !== 'pending') {
       await client.query('ROLLBACK');
-      return { ok: false, reason: 'Credit note is not a draft' };
+      return { ok: false, status: 409, reason: 'Credit note is not a draft' };
+    }
+    if (Number(cn.created_by) && actorUserId && Number(cn.created_by) === Number(actorUserId)) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        status: 403,
+        reason: 'You raised this credit note, so you cannot approve it. Maker and checker must be different people.',
+      };
     }
 
     const lines = linesFromCreditNote(cn);
@@ -2300,15 +2354,17 @@ async function approveSelectedCreditNoteLines(creditNoteId, selection = {}, acto
     if (remainder.length) {
       leftover = await persistConsolidatedReturnCreditNote(client, {
         customerId: cn.customer_id,
-        actorUserId,
+        actorUserId: cn.created_by || null,
         lines: remainder,
         source: cn.source || 'invoice_generation',
         reason: cn.reason || RETURN_CN_REASON,
         survivor: cn,
       });
+      // The split copy keeps the original maker, or the approver would become
+      // its maker and the maker-checker rule would refuse their own approval.
       const created = await persistConsolidatedReturnCreditNote(client, {
         customerId: cn.customer_id,
-        actorUserId,
+        actorUserId: cn.created_by || null,
         lines: selected,
         source: cn.source || 'invoice_generation',
         reason: cn.reason || RETURN_CN_REASON,
@@ -2510,12 +2566,7 @@ async function persistConsolidatedReturnCreditNote(client, {
 
   // BL8 applies here too — a credit note is a statutory document with the same
   // consecutive-series requirement as the invoice it credits.
-  const num = await client.query(
-    `UPDATE sm_document_sequences SET last_value = last_value + 1
-      WHERE doc_type = 'credit_note'
-      RETURNING prefix, last_value`
-  );
-  const cnNumber = formatDocumentNumber(num.rows[0].prefix, num.rows[0].last_value);
+  const cnNumber = await nextCreditNoteNumber(client);
   const ins = await client.query(
     // credit_note_type = 'return': a permanent return, unused prepaid days
     // refunded. Repair-window credits are typed 'repair' so finance can filter
@@ -2638,11 +2689,7 @@ async function createRepairWindowCreditNote(db, {
     days_in_month: effective.days,
   };
 
-  const num = await db.query(
-    `UPDATE sm_document_sequences SET last_value = last_value + 1
-      WHERE doc_type = 'credit_note'
-      RETURNING prefix, last_value`
-  );
+  const cnNumber = await nextCreditNoteNumber(db);
   const ins = await db.query(
     `INSERT INTO customer_credit_notes
       (credit_note_number, customer_id, reason, description, amount, quantity, unit_rate,
@@ -2651,7 +2698,7 @@ async function createRepairWindowCreditNote(db, {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9::date,$10::jsonb,$11::jsonb,'pending',$12,$13::int,$14,$15::int)
      RETURNING *`,
     [
-      formatDocumentNumber(num.rows[0].prefix, num.rows[0].last_value),
+      cnNumber,
       customerId,
       REPAIR_CN_REASON,
       `${serial.ttspl_id || `serial ${serialId}`} in warehouse for repair ${fromDate} to ${toDate} (${effective.days} day(s) @ ${effective.dailyRate}/day)`,
@@ -2981,7 +3028,174 @@ async function generateReturnCreditNotesForCustomers({
   return results;
 }
 
+/**
+ * Every generate path — single Generate, bulk, the 1st-of-month cron, invoice on
+ * DC-create / delivery, postpaid, and the scripts — comes through here, so the
+ * finishing work that used to run only after the single Generate button (GST
+ * split, due date, approved credit notes, the "generated" event) now runs for
+ * all of them. claude/carret-money.md: "applied only by single Generate".
+ */
 async function generateCustomerInvoice(customerId, month, year, options = {}) {
+  const result = await generateCustomerInvoiceCore(customerId, month, year, options);
+  if (result && result.invoice_id && !result.error) {
+    const fin = await finaliseGeneratedInvoice(result.invoice_id, {
+      actor: options.actor || null,
+      correlationId: options.correlationId || null,
+      source: options.source || 'billingSchedulerService.generateCustomerInvoice',
+      created: !result.skipped && !result.appended && !result.rebuilt,
+      changed: !result.skipped,
+    });
+    if (fin && fin.credit_notes_applied) {
+      result.credit_notes_applied = Number(result.credit_notes_applied || 0) + fin.credit_notes_applied;
+    }
+  }
+  return result;
+}
+
+/**
+ * Finish a generated invoice from its own stored numbers, in one transaction
+ * with the row locked:
+ *   - a draft takes any approved credit notes not yet applied anywhere (the
+ *     note says "applies when the invoice is ready" — nothing used to do it),
+ *     but only up to what the invoice can absorb, so a credit is never lost to
+ *     the Rs 0 floor;
+ *   - the Net-15 due date (BL9) if it has none;
+ *   - the CGST/SGST vs IGST split (BL7) while it is still a draft or unclassified;
+ *   - an invoice_generated event (BL11) when the row is new, or
+ *     invoice_regenerated when a draft was rebuilt / appended.
+ * Never throws: an invoice that generated correctly must not fail here.
+ */
+async function finaliseGeneratedInvoice(invoiceId, {
+  actor = null, correlationId = null, source = 'billing', created = false, changed = true,
+} = {}) {
+  if (!invoiceId) return null;
+  const { applyInvoiceGstSplit } = require('./billingGstService');
+  const { invoiceEvent, BILLING_EVENTS } = require('./billingEventService');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT invoice_id, invoice_number, customer_id, status, grand_total, due_date, is_intra_state
+         FROM customer_invoices WHERE invoice_id = $1 FOR UPDATE`,
+      [invoiceId]
+    );
+    const inv = rows[0];
+    if (!inv || String(inv.status || '').toLowerCase() === 'cancelled') {
+      await client.query('COMMIT');
+      return null;
+    }
+    const isDraft = String(inv.status || '').toLowerCase() === 'draft';
+    let applied = { total: 0, notes: [] };
+    if (isDraft) {
+      applied = await applyApprovedCreditNotesToDraft(client, {
+        customerId: inv.customer_id, invoiceId, invoiceNumber: inv.invoice_number,
+      });
+    }
+    await client.query(
+      `UPDATE customer_invoices
+          SET due_date = COALESCE(due_date, (COALESCE(invoice_date, CURRENT_DATE) + INTERVAL '15 days')::date)
+        WHERE invoice_id = $1 AND due_date IS NULL`,
+      [invoiceId]
+    );
+    let split = null;
+    if (isDraft || inv.is_intra_state === null) {
+      split = await applyInvoiceGstSplit(client, invoiceId);
+    }
+    if (created || changed || applied.notes.length) {
+      const after = await client.query(
+        'SELECT grand_total FROM customer_invoices WHERE invoice_id = $1',
+        [invoiceId]
+      );
+      await invoiceEvent(client, {
+        invoiceId,
+        invoiceNumber: inv.invoice_number,
+        eventType: created ? BILLING_EVENTS.INVOICE_GENERATED : BILLING_EVENTS.INVOICE_REGENERATED,
+        toState: inv.status,
+        payload: {
+          customer_id: inv.customer_id,
+          grand_total: after.rows[0]?.grand_total,
+          credit_notes_applied: applied.notes.map((n) => n.credit_note_number),
+          gst: split ? {
+            cgst: split.cgst, sgst: split.sgst, igst: split.igst,
+            place_of_supply: split.place_of_supply, intra_state: split.is_intra_state,
+          } : null,
+        },
+        actor: actor || { actor_type: 'system', actor_id: null, actor_name: 'billing' },
+        correlationId,
+        source,
+      });
+    }
+    await client.query('COMMIT');
+    return { credit_notes_applied: applied.notes.length, split };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    billingLog.error({ invoiceId, err: err.message }, 'finaliseGeneratedInvoice failed');
+    return null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * What a draft can still absorb before its grand total would hit the Rs 0
+ * floor: subtotal + GST + security less the credit already on it.
+ */
+async function invoiceCreditHeadroom(client, invoiceId) {
+  const { rows } = await client.query(
+    `SELECT subtotal, gst_percent, credit_note_adjustment, security_deposit
+       FROM customer_invoices WHERE invoice_id = $1`,
+    [invoiceId]
+  );
+  if (!rows.length) return 0;
+  const r = rows[0];
+  const subtotal = Number(r.subtotal || 0);
+  const gst = parseFloat((subtotal * Number(r.gst_percent != null ? r.gst_percent : 18) / 100).toFixed(2));
+  return parseFloat((subtotal + gst + Number(r.security_deposit || 0) - Number(r.credit_note_adjustment || 0)).toFixed(2));
+}
+
+/**
+ * Apply approved, not-yet-applied credit notes of this customer to a draft,
+ * oldest first, each only if it fits in the remaining headroom. A note that does
+ * not fit stays approved for the next invoice.
+ */
+async function applyApprovedCreditNotesToDraft(client, { customerId, invoiceId, invoiceNumber, creditNoteIds = null }) {
+  const params = [customerId];
+  let extra = '';
+  if (Array.isArray(creditNoteIds) && creditNoteIds.length) {
+    params.push(creditNoteIds);
+    extra = ' AND credit_note_id = ANY($2::int[])';
+  }
+  const open = await client.query(
+    `SELECT credit_note_id, amount
+       FROM customer_credit_notes
+      WHERE customer_id = $1 AND status = 'approved' AND applied_in_invoice_id IS NULL
+        AND COALESCE(amount, 0) > 0 ${extra}
+      ORDER BY created_at, credit_note_id
+      FOR UPDATE`,
+    params
+  );
+  if (!open.rows.length) return { total: 0, notes: [], deferred: [] };
+  let headroom = await invoiceCreditHeadroom(client, invoiceId);
+  const fit = [];
+  const deferred = [];
+  for (const cn of open.rows) {
+    const amt = Number(cn.amount || 0);
+    if (amt <= headroom + 0.001) {
+      fit.push(cn.credit_note_id);
+      headroom = parseFloat((headroom - amt).toFixed(2));
+    } else {
+      deferred.push(cn.credit_note_id);
+    }
+  }
+  if (!fit.length) return { total: 0, notes: [], deferred };
+  const applied = await applyOpenCreditNotes(client, {
+    customerId, invoiceId, invoiceNumber, creditNoteIds: fit,
+  });
+  if (applied.notes.length) await refreshInvoiceCreditTotals(client, invoiceId);
+  return { ...applied, deferred };
+}
+
+async function generateCustomerInvoiceCore(customerId, month, year, options = {}) {
   const billingType = await getCustomerBillingType(pool, customerId);
   if (billingType === 'postpaid') {
     return generatePostpaidCustomerInvoice(customerId, month, year);
@@ -3568,12 +3782,32 @@ async function sendGeneratedCustomerInvoice(invoiceId, actorUserId = null) {
     });
   }
 
-  await pool.query(
+  // Issued: fix the GST split on the final numbers, and stamp the Net-15 due
+  // date — invoices sent from here had none, so they were never overdue and sat
+  // in no ageing bucket (claude/carret-money.md).
+  const { applyInvoiceGstSplit } = require('./billingGstService');
+  const { invoiceEvent, BILLING_EVENTS } = require('./billingEventService');
+  await applyInvoiceGstSplit(pool, invoiceId).catch((e) => billingLog.error({ invoiceId, err: e.message }, 'GST split on send failed'));
+  const marked = await pool.query(
     `UPDATE customer_invoices
-        SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW()
-      WHERE invoice_id = $2 AND status = 'draft'`,
+        SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW(),
+            due_date = COALESCE(due_date, (COALESCE(invoice_date, CURRENT_DATE) + INTERVAL '15 days')::date)
+      WHERE invoice_id = $2 AND status = 'draft'
+      RETURNING invoice_id, due_date`,
     [actorUserId, invoiceId]
   );
+  if (marked.rows.length) {
+    await invoiceEvent(pool, {
+      invoiceId,
+      invoiceNumber: invoice.invoice_number,
+      eventType: BILLING_EVENTS.INVOICE_SENT,
+      fromState: 'draft',
+      toState: 'sent',
+      payload: { to: invoice.customer_email || null, email_sent: Boolean(sent), automatic: true, due_date: marked.rows[0].due_date },
+      actor: actorUserId ? { user_id: actorUserId } : { actor_type: 'system', actor_id: null, actor_name: 'invoice on delivery' },
+      source: 'billingSchedulerService.sendGeneratedCustomerInvoice',
+    });
+  }
 
   return Boolean(sent);
 }
@@ -4152,6 +4386,12 @@ module.exports = {
   VENDOR_LINE_RATE_SQL,
   startBillingScheduler,
   generateCustomerInvoice,
+  generateCustomerInvoiceCore,
+  finaliseGeneratedInvoice,
+  applyApprovedCreditNotesToDraft,
+  invoiceCreditHeadroom,
+  refreshInvoiceCreditTotals,
+  nextCreditNoteNumber,
   generatePostpaidCustomerInvoice,
   generateAllCustomerInvoices,
   generateVendorBill,
