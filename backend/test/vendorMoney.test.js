@@ -290,6 +290,17 @@ describe('vendor bills, debit notes and payments — end to end (rolled back)', 
     assert.equal(deducted.code, 409);
   });
 
+  it('the vendor pick-list: billable vendors by default, every active vendor with scope=all', async () => {
+    const billable = await H.call(ctrl.listBillableVendors, { query: {}, user: maker });
+    const all = await H.call(ctrl.listBillableVendors, { query: { scope: 'all' }, user: maker });
+    assert.equal(billable.code, 200);
+    assert.equal(all.code, 200);
+    assert.ok(all.body.vendors.length >= billable.body.vendors.length);
+    const dnVendors = (await db.query(`SELECT DISTINCT vendor_id FROM vendor_debit_notes`)).rows.map((r) => r.vendor_id);
+    const ids = new Set(all.body.vendors.map((v) => v.vendor_id));
+    for (const v of dnVendors) assert.ok(ids.has(v), `vendor ${v} with a debit note is pickable`);
+  });
+
   it('a manual debit note gets its number inside the transaction and checks the PO belongs to the vendor', async () => {
     const before_ = (await db.query(`SELECT last_value FROM sm_document_sequences WHERE doc_type = 'vendor_debit_note'`)).rows[0];
     const otherPo = (await db.query(`SELECT po_id FROM vendor_purchase_orders WHERE vendor_id <> $1 LIMIT 1`, [vendorId])).rows[0];

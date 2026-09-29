@@ -44,6 +44,17 @@ function generateSkipMessage(reason) {
 
 exports.listBillableVendors = async (req, res) => {
   try {
+    // ?scope=all — every active vendor, for raising a debit note against a
+    // vendor we only buy from (returns / repairs), which the billable list omits.
+    if (String(req.query?.scope || '') === 'all') {
+      const all = await pool.query(
+        `SELECT v.vendor_id, COALESCE(NULLIF(v.business_name, ''), v.first_name) AS vendor_name
+           FROM vendors v
+          WHERE v.deleted_at IS NULL
+          ORDER BY vendor_name ASC, v.vendor_id`
+      );
+      return res.json({ success: true, vendors: all.rows });
+    }
     const result = await pool.query(
       `SELECT v.vendor_id,
               COALESCE(NULLIF(v.business_name, ''), v.first_name) AS vendor_name
