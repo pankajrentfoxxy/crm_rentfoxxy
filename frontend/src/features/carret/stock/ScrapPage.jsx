@@ -3,11 +3,12 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FormGrid, Input, Notice, Segmented, StatusChip, Textarea,
+  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FormGrid, Input, Money, Notice, Segmented, StatusChip, Textarea,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import {
-  cancelScrap, createScrapChallan, decideScrap, errMsg, fetchScrapChallans, fetchScrapRequests, fetchScrappedAwaitingChallan,
+  PART_UNITS_VIEW_SECTIONS, cancelScrap, createScrapChallan, decideScrap, errMsg, fetchDiscardedParts, fetchScrapChallans,
+  fetchScrapRequests, fetchScrappedAwaitingChallan,
 } from './stockApi';
 
 /**
@@ -19,7 +20,13 @@ import {
  *   Challans — every scrap challan (laptops and parts): search, status, dates;
  *     dispatch, e-sign, e-way, cancel and PDF are on the Carret challan record
  *     (/carret/stock/scrap/challans/:no — replaces the old Scrap Challans screens).
- * Discarded spare parts are put on challans from Parts → Discarded (old view).
+ *   Discarded parts — catalogue parts marked discarded (PRT units) not yet on
+ *     a scrap challan (replaces the old /inventory-management/discarded-parts):
+ *     pick them, enter what the buyer pays, raise the challan. Laptops and
+ *     parts picked on both tabs go on one challan (same API, POST
+ *     /scrap-challans/create with serial_ids + instance_ids).
+ * Dead parts with no CRM record (DP numbers) go out on a Part DC from
+ * Movement → Dead parts — in & out, not here.
  */
 const WAREHOUSE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead', 'procurement'];
 const REQ_LABEL = { pending: 'Waiting for approval', approved: 'Approved — scrapped', rejected: 'Rejected', cancelled: 'Withdrawn' };
@@ -30,9 +37,11 @@ export default function ScrapPage() {
   const canChallan = WAREHOUSE_ROLES.includes(user?.role) || hasPermission('scrap_challans', 'edit');
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const tab = ['requests', 'handover', 'challans'].includes(params.get('tab')) ? params.get('tab') : 'requests';
+  const canSeeParts = PART_UNITS_VIEW_SECTIONS.some((sec) => hasPermission(sec, 'view'));
+  const tab = ['requests', 'handover', 'challans', ...(canSeeParts ? ['parts'] : [])].includes(params.get('tab')) ? params.get('tab') : 'requests';
   const setTab = (t) => setParams((p) => { const n = new URLSearchParams(p); n.set('tab', t); return n; }, { replace: true });
   const [cf, setCf] = useState({ search: '', status: '', from: '', to: '' });
+  const [partSearch, setPartSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [reqStatus, setReqStatus] = useState('pending');
@@ -45,17 +54,23 @@ export default function ScrapPage() {
 
   const load = useCallback(() => {
     setRows(null);
-    const req = tab === 'requests' ? fetchScrapRequests(reqStatus)
-      : tab === 'handover' ? fetchScrappedAwaitingChallan()
-        : fetchScrapChallans({
-          limit: 50, page, search: cf.search.trim() || undefined, status: cf.status || undefined, date_from: cf.from || undefined, date_to: cf.to || undefined,
-        });
-    req.then(({ data }) => { setRows(data.data || []); setPages(data.pagination?.totalPages || 1); }).catch((e) => { setRows([]); toast.error(errMsg(e)); });
-  }, [tab, reqStatus, page, cf]);
+    let req;
+    if (tab === 'requests') req = fetchScrapRequests(reqStatus);
+    else if (tab === 'handover') req = fetchScrappedAwaitingChallan();
+    else if (tab === 'parts') req = fetchDiscardedParts(partSearch.trim());
+    else {
+      req = fetchScrapChallans({
+        limit: 50, page, search: cf.search.trim() || undefined, status: cf.status || undefined, date_from: cf.from || undefined, date_to: cf.to || undefined,
+      });
+    }
+    req.then(({ data }) => { setRows(data.data || data.units || []); setPages(data.pagination?.totalPages || 1); }).catch((e) => { setRows([]); toast.error(errMsg(e)); });
+  }, [tab, reqStatus, page, cf, partSearch]);
+  // Picks (laptops and parts) survive switching tabs so one challan can carry both.
   useEffect(() => {
-    const t = setTimeout(() => { load(); setPicked({}); }, tab === 'challans' && cf.search ? 300 : 0);
+    const typing = (tab === 'challans' && cf.search) || (tab === 'parts' && partSearch);
+    const t = setTimeout(load, typing ? 300 : 0);
     return () => clearTimeout(t);
-  }, [load, tab, cf.search]);
+  }, [load, tab, cf.search, partSearch]);
   useEffect(() => { setPage(1); }, [cf]);
 
   const submitDecision = async () => {
@@ -70,14 +85,33 @@ export default function ScrapPage() {
   const withdraw = async (r) => {
     try { await cancelScrap(r.id); toast.success('Withdrawn'); load(); } catch (e) { toast.error(errMsg(e)); }
   };
-  const chosen = (tab === 'handover' ? rows || [] : []).filter((r) => picked[r.serial_id]);
-  const saleTotal = chosen.reduce((s, r) => s + (Number(values[r.serial_id]) || 0), 0);
+  // picked: `laptop:<serial_id>` / `part:<instance_id>` → row; values use the same keys.
+  const pickKey = (kind, r) => (kind === 'laptop' ? `laptop:${r.serial_id}` : `part:${r.instance_id}`);
+  const togglePick = (kind, r) => setPicked((p) => {
+    const k = pickKey(kind, r);
+    const n = { ...p };
+    if (n[k]) delete n[k]; else n[k] = r;
+    return n;
+  });
+  const pickedKeys = Object.keys(picked);
+  const chosenLaptops = pickedKeys.filter((k) => k.startsWith('laptop:')).map((k) => picked[k]);
+  const chosenParts = pickedKeys.filter((k) => k.startsWith('part:')).map((k) => picked[k]);
+  const chosenCount = pickedKeys.length;
+  const saleTotal = pickedKeys.reduce((s, k) => s + (Number(values[k]) || 0), 0);
+  const pickedLabel = [
+    chosenLaptops.length ? `${chosenLaptops.length} laptop${chosenLaptops.length === 1 ? '' : 's'}` : null,
+    chosenParts.length ? `${chosenParts.length} part${chosenParts.length === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' + ');
   const submitChallan = async () => {
+    if (busy) return;
     setBusy(true);
     try {
-      const saleValues = Object.fromEntries(chosen.filter((r) => values[r.serial_id] !== undefined && values[r.serial_id] !== '').map((r) => [`laptop:${r.serial_id}`, values[r.serial_id]]));
+      const saleValues = Object.fromEntries(pickedKeys.filter((k) => values[k] !== undefined && values[k] !== '').map((k) => [k, values[k]]));
+      const itemRemarks = Object.fromEntries(chosenParts.filter((u) => u.notes).map((u) => [u.instance_id, u.notes]));
       const { data } = await createScrapChallan({
-        serial_ids: chosen.map((r) => r.serial_id),
+        serial_ids: chosenLaptops.map((r) => r.serial_id),
+        instance_ids: chosenParts.map((u) => u.instance_id),
+        item_remarks: itemRemarks,
         sale_values: saleValues,
         recipient_name: challan.name,
         recipient_address: challan.address,
@@ -88,6 +122,8 @@ export default function ScrapPage() {
       });
       toast.success(`Scrap challan ${data.challan_number} raised — dispatch it from the challan page`);
       setChallan(null);
+      setPicked({});
+      setValues({});
       navigate(`/carret/stock/scrap/challans/${encodeURIComponent(data.challan_number)}`);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
@@ -110,15 +146,30 @@ export default function ScrapPage() {
     },
   ];
   const handoverCols = [
-    ...(canChallan ? [{ key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} checked={Boolean(picked[r.serial_id])} onChange={() => setPicked({ ...picked, [r.serial_id]: !picked[r.serial_id] })} /> }] : []),
+    ...(canChallan ? [{ key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} checked={Boolean(picked[pickKey('laptop', r)])} onChange={() => togglePick('laptop', r)} /> }] : []),
     { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: (r) => r.model_name },
     { key: 'r', header: 'Why scrapped', render: (r) => r.reason || '—' },
     { key: 'd', header: 'Scrapped', render: (r) => <DateTime value={r.status_changed_at} /> },
     {
       key: 'v',
       header: 'Buyer pays (₹)',
-      render: (r) => (picked[r.serial_id]
-        ? <Input type="number" min="0" value={values[r.serial_id] ?? ''} onChange={(e) => setValues({ ...values, [r.serial_id]: e.target.value })} style={{ maxWidth: '8rem' }} />
+      render: (r) => (picked[pickKey('laptop', r)]
+        ? <Input type="number" min="0" value={values[pickKey('laptop', r)] ?? ''} onChange={(e) => setValues({ ...values, [pickKey('laptop', r)]: e.target.value })} style={{ maxWidth: '8rem' }} />
+        : null),
+    },
+  ];
+  const partCols = [
+    ...(canChallan ? [{ key: 'x', header: '', width: '2.5rem', render: (u) => <input type="checkbox" aria-label={`Pick ${u.prt_id}`} checked={Boolean(picked[pickKey('part', u)])} onChange={() => togglePick('part', u)} /> }] : []),
+    { key: 'p', header: 'Part', render: (u) => <DocNumber value={u.prt_id} />, sub: (u) => [u.part_name, u.serial_number].filter(Boolean).join(' · ') || null },
+    { key: 'c', header: 'Category', render: (u) => u.category || '—', sub: (u) => [u.brand_name, u.model_name].filter(Boolean).join(' ') || null },
+    { key: 'k', header: 'Our cost', numeric: true, render: (u) => (u.unit_cost != null ? <Money value={u.unit_cost} /> : '—') },
+    { key: 'r', header: 'Why discarded', render: (u) => u.notes || '—', sub: (u) => (u.removed_from_ttspl_id ? `from ${u.removed_from_ttspl_id}` : null) },
+    { key: 'd', header: 'Discarded', render: (u) => <DateTime value={u.updated_at || u.created_at} /> },
+    {
+      key: 'v',
+      header: 'Buyer pays (₹)',
+      render: (u) => (picked[pickKey('part', u)]
+        ? <Input type="number" min="0" value={values[pickKey('part', u)] ?? ''} onChange={(e) => setValues({ ...values, [pickKey('part', u)]: e.target.value })} style={{ maxWidth: '8rem' }} />
         : null),
     },
   ];
@@ -132,18 +183,36 @@ export default function ScrapPage() {
   ];
 
   return (
-    <DeskShell title="Scrap" breadcrumb="Stock" subtitle="Scrap requests, approval, and handing scrapped laptops to the buyer on a scrap challan.">
+    <DeskShell title="Scrap" breadcrumb="Stock" subtitle="Scrap requests, approval, and handing scrapped laptops and discarded parts to the buyer on a scrap challan.">
       <div className="c-stack">
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
-          <Segmented label="Show" value={tab} onChange={setTab} options={[{ value: 'requests', label: 'Requests' }, { value: 'handover', label: 'To hand over' }, { value: 'challans', label: 'Scrap challans' }]} />
+          <Segmented
+            label="Show"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'requests', label: 'Requests' },
+              { value: 'handover', label: 'To hand over' },
+              ...(canSeeParts ? [{ value: 'parts', label: 'Discarded parts' }] : []),
+              { value: 'challans', label: 'Scrap challans' },
+            ]}
+          />
           {tab === 'requests' && <Segmented label="Status" value={reqStatus} onChange={setReqStatus} options={[{ value: 'pending', label: 'Waiting' }, { value: 'approved', label: 'Approved' }, { value: 'rejected', label: 'Rejected' }, { value: 'all', label: 'All' }]} />}
-          {tab === 'handover' && canChallan && chosen.length > 0 && (
-            <Button variant="primary" onClick={() => setChallan({ name: '', address: '', contact: '', mobile: '', billing: '', remarks: '' })}>
-              Scrap challan for {chosen.length} laptop(s){saleTotal ? ` · ₹${saleTotal.toLocaleString('en-IN')}` : ''}
-            </Button>
+          {(tab === 'handover' || tab === 'parts') && canChallan && chosenCount > 0 && (
+            <>
+              <Button variant="primary" onClick={() => setChallan({ name: '', address: '', contact: '', mobile: '', billing: '', remarks: '' })}>
+                Scrap challan for {pickedLabel}{saleTotal ? ` · ₹${saleTotal.toLocaleString('en-IN')}` : ''}
+              </Button>
+              <Button variant="quiet" onClick={() => { setPicked({}); setValues({}); }}>Clear picks</Button>
+            </>
           )}
-          {tab === 'challans' && <Link to="/inventory-management/discarded-parts" className="text-ink-3">Discarded parts → scrap challan (old view)</Link>}
         </div>
+        {tab === 'parts' && (
+          <div className="flex flex-wrap items-end" style={{ gap: '8px' }}>
+            <Input type="search" placeholder="PRT-ID, part, serial, TTSPL" value={partSearch} onChange={(e) => setPartSearch(e.target.value)} style={{ width: '18rem' }} aria-label="Search discarded parts" />
+            <span className="text-ink-3">Parts marked discarded and not yet on a scrap challan. Laptops picked on To hand over go on the same challan.</span>
+          </div>
+        )}
         {tab === 'challans' && (
           <div className="flex flex-wrap items-end" style={{ gap: '8px' }}>
             <Input type="search" placeholder="Challan, buyer, TTSPL, PRT-ID, serial" value={cf.search} onChange={(e) => setCf({ ...cf, search: e.target.value })} style={{ width: '18rem' }} aria-label="Search scrap challans" />
@@ -156,9 +225,9 @@ export default function ScrapPage() {
         {tab === 'requests' && <Notice tone="info">Raise a scrap request from the laptop&apos;s page (Stock → Assets → the laptop → Scrap…). Someone other than the requester approves.</Notice>}
         {rows === null ? <EmptyState title="Loading…" /> : (
           <DataTable
-            columns={tab === 'requests' ? reqCols : tab === 'handover' ? handoverCols : challanCols}
+            columns={{ requests: reqCols, handover: handoverCols, parts: partCols }[tab] || challanCols}
             rows={rows}
-            rowKey={(r) => r.id || r.serial_id || r.challan_number}
+            rowKey={(r) => r.id || r.serial_id || r.instance_id || r.challan_number}
             onRowClick={tab === 'challans' ? (c) => navigate(`/carret/stock/scrap/challans/${encodeURIComponent(c.challan_number)}`) : undefined}
             empty={<EmptyState title="Nothing here" />}
           />
@@ -185,7 +254,7 @@ export default function ScrapPage() {
       <Drawer open={Boolean(challan)} onClose={() => setChallan(null)} title="New scrap challan" width="36rem" footer={<Button variant="primary" disabled={busy || !challan?.name?.trim() || !challan?.address?.trim()} onClick={submitChallan}>Raise scrap challan</Button>}>
         {challan && (
           <div className="c-stack">
-            <p>{chosen.length} laptop(s){saleTotal ? `, buyer pays ₹${saleTotal.toLocaleString('en-IN')} in total` : ''}. Dispatch, e-way bill and signatures are done on the challan page.</p>
+            <p>{pickedLabel}{saleTotal ? `, buyer pays ₹${saleTotal.toLocaleString('en-IN')} in total` : ''}. Dispatch, e-way bill and signatures are done on the challan page.</p>
             <Field label="Buyer / recycler name" required><Input value={challan.name} onChange={(e) => setChallan({ ...challan, name: e.target.value })} /></Field>
             <Field label="Buyer address" required><Textarea rows={2} value={challan.address} onChange={(e) => setChallan({ ...challan, address: e.target.value })} /></Field>
             <FormGrid cols={2}>

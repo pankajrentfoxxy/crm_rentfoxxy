@@ -64,8 +64,8 @@ export function dispatchPhysicalOutward(outwardNumber, body) {
   return api.post(`${base}/outwards/${encodeURIComponent(outwardNumber)}/dispatch`, body, { timeout: 120000 });
 }
 
-export function cancelDraftPhysicalOutward(outwardNumber) {
-  return api.post(`${base}/outwards/${encodeURIComponent(outwardNumber)}/cancel`);
+export function cancelDraftPhysicalOutward(outwardNumber, reason) {
+  return api.post(`${base}/outwards/${encodeURIComponent(outwardNumber)}/cancel`, reason ? { reason } : undefined);
 }
 
 function downloadBlobResponse(response, fallbackName) {
