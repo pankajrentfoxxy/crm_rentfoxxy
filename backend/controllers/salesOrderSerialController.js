@@ -89,6 +89,7 @@ exports.listSerials = async (req, res) => {
 
     const allocRes = await pool.query(
       `SELECT sos.*, t.status AS ticket_status, s.stage_name AS ticket_stage,
+              t.assigned_user_id AS qc_assigned_user_id, au.name AS qc_assigned_name,
               COALESCE(
                 NULLIF(TRIM(vsn.extra->>'brand'), ''),
                 NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
@@ -133,6 +134,7 @@ exports.listSerials = async (req, res) => {
             LIMIT 1
          ) dcr ON sos.qc_ticket_id IS NOT NULL
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+         LEFT JOIN users au ON au.user_id = t.assigned_user_id
          LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
          LEFT JOIN vendor_product_details vpd
            ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int

@@ -142,13 +142,21 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
             render: (a) => (
               <span className="flex items-center flex-wrap" style={{ gap: '6px' }}>
                 {qcChip(a)}
+                {a.qc_ticket_id && (a.qc_assigned_name
+                  ? <span className="font-ui text-ink" style={{ fontWeight: 600 }} title="Dispatch QC technician">{a.qc_assigned_name}</span>
+                  : String(a.qc_status || 'pending') === 'pending' && <span className="font-ui text-ink-3">Not assigned</span>)}
                 {a.qc_ticket_id && (
                   <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="font-ui" style={{ fontSize: 'var(--d-sm)' }}>
                     Ticket #{a.qc_ticket_id}
                   </Link>
                 )}
                 {a.qc_ticket_id && canEdit && String(a.qc_status || 'pending') === 'pending' && (
-                  <Button variant="quiet" onClick={() => setAssign({ ticket_id: a.qc_ticket_id, ttspl: a.ttspl_id || a.serial_number })}>Assign</Button>
+                  <Button
+                    variant="quiet"
+                    onClick={() => setAssign({ ticket_id: a.qc_ticket_id, ttspl: a.ttspl_id || a.serial_number, assigned_user_id: a.qc_assigned_user_id })}
+                  >
+                    {a.qc_assigned_user_id ? 'Change' : 'Assign'}
+                  </Button>
                 )}
               </span>
             ),
@@ -342,7 +350,10 @@ function AssignQcDrawer({ ticket, onClose, onDone }) {
       .then(({ data }) => {
         const list = data?.members || [];
         setMembers(list);
-        if (list.length) {
+        // Re-assigning: start from the person it is with now.
+        if (ticket.assigned_user_id && list.some((m) => String(m.user_id) === String(ticket.assigned_user_id))) {
+          setWho(String(ticket.assigned_user_id));
+        } else if (list.length) {
           const best = list.reduce((b, m) => ((m.active_tickets ?? 0) < (b.active_tickets ?? 0) ? m : b));
           setWho(String(best.user_id));
         }
@@ -371,7 +382,7 @@ function AssignQcDrawer({ ticket, onClose, onDone }) {
     <Drawer
       open={Boolean(ticket)}
       onClose={onClose}
-      title="Assign Dispatch QC"
+      title={ticket?.assigned_user_id ? 'Change Dispatch QC technician' : 'Assign Dispatch QC'}
       footer={(
         <div className="flex justify-end" style={{ gap: '8px' }}>
           <Button variant="quiet" onClick={onClose}>Later</Button>
