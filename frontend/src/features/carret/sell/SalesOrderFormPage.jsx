@@ -22,7 +22,9 @@ import LineItemsEditor, {
 import {
   useCustomerAddresses, ShippingPicker, resolveShipping, AddressText, validateAddress,
 } from './CustomerAddresses';
-import { customerGstin, gstinError, parseJson } from './sellShared';
+import {
+  customerGstin, gstinError, parseJson, SECURITY_OPTIONS, securityMonths, securityTypeFor,
+} from './sellShared';
 import GstinField from './GstinField';
 
 /**
@@ -235,7 +237,7 @@ export default function SalesOrderFormPage() {
 
   const isSale = type === 'sale';
   const subtotal = linesTotal(lines);
-  const security = !isSale && !inPlace && securityType === 'one_month_rental' ? subtotal : 0;
+  const security = !isSale && !inPlace ? subtotal * securityMonths(securityType) : 0;
   const shippingCharge = inPlace ? 0 : (Number(shipping) || 0);
   const totals = computeGstBreakdown({
     subtotal, shipping: shippingCharge, security, supplyState, gstOnShipping: wfh.on,
@@ -290,6 +292,9 @@ export default function SalesOrderFormPage() {
     setCustomerId(id);
     setShipChoice({ key: wfh.on ? 'manual' : 'billing', manual: null });
     const c = (meta?.customers || []).find((x) => String(x.customer_id) === String(id));
+    // A new order starts from the customer's agreed security (set at the lead
+    // win / on the customer); it can be lowered or removed for this order.
+    if (c && c.security_deposit_months != null && type !== 'sale') setSecurityType(securityTypeFor(c.security_deposit_months));
     // Only a real GSTIN is copied (and then locked); placeholders like "NA" are not.
     setGst(customerGstin(c));
   };
@@ -330,7 +335,7 @@ export default function SalesOrderFormPage() {
       quotation_number: quotationNumber || '',
       quotation_type: type,
       branch: book,
-      security_type: security > 0 ? 'one_month_rental' : 'none',
+      security_type: security > 0 ? securityType : 'none',
       security_amount: security,
       shiping_charges: shippingCharge,
       GST_number: gst || null,
@@ -545,11 +550,18 @@ export default function SalesOrderFormPage() {
           <Section title="Charges">
             <FormGrid cols={3}>
               {!isSale && !inPlace && (
-                <Field label="Security deposit">
+                <Field
+                  label="Security deposit"
+                  hint={selectedCustomer?.security_deposit_months != null
+                    ? `Customer’s default: ${SECURITY_OPTIONS.find((o) => o.months === Number(selectedCustomer.security_deposit_months))?.label || 'None'}${securityMonths(securityType) !== Number(selectedCustomer.security_deposit_months) ? ' — changed for this order' : ''}`
+                    : undefined}
+                >
                   <Select
                     value={securityType}
                     onChange={(e) => setSecurityType(e.target.value)}
-                    options={[{ value: 'none', label: 'None' }, { value: 'one_month_rental', label: 'One month’s rent' }]}
+                    options={SECURITY_OPTIONS.some((o) => o.value === securityType)
+                      ? SECURITY_OPTIONS
+                      : [{ value: securityType, label: securityType }, ...SECURITY_OPTIONS]}
                   />
                 </Field>
               )}

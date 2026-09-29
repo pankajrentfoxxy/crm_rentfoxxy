@@ -258,6 +258,8 @@ function formatCustomerRow(row) {
     profile: details.profile || null,
     upload_docs: uploadDocs,
     total_security_amount: Number(row.total_security_amount || 0),
+    // Default for NEW rental / demo orders (migration 407); null = never set.
+    security_deposit_months: row.security_deposit_months == null ? null : Number(row.security_deposit_months),
     active_item_count: Number(row.active_item_count || 0),
     billing_address: billingObj,
     billingAddress: billingObj.address,
@@ -1573,6 +1575,15 @@ exports.updateCustomer = async (req, res) => {
       detailsChanged = true;
     }
     applyFinanceSpockDetails(details, body);
+    // Default security for NEW orders only — orders already raised keep theirs.
+    if (body.security_deposit_months !== undefined) {
+      const raw = body.security_deposit_months;
+      const months = raw === '' || raw === null ? null : Number(raw);
+      if (months !== null && !(Number.isInteger(months) && months >= 0 && months <= 3)) {
+        return fail(400, 'Security deposit must be None, 1, 2 or 3 months of rent');
+      }
+      await client.query('UPDATE customers SET security_deposit_months = $1 WHERE customer_id = $2', [months, customerId]);
+    }
     if (detailsChanged) {
       await client.query('UPDATE customers SET details = $1 WHERE customer_id = $2', [
         JSON.stringify(details),

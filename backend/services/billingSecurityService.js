@@ -1,6 +1,7 @@
 'use strict';
 
 const { toLocalYmd } = require('./billingMath');
+const { securityMonths } = require('../utils/securityDeposit');
 
 function isSecurityLine(line) {
   return line?.line_type === 'security' || line?.is_security === true;
@@ -31,9 +32,9 @@ function securityAssetKey(line) {
 }
 
 function perUnitSecurity(row) {
-  const type = String(row.security_type || '').toLowerCase();
+  const months = securityMonths(row.security_type);
   const rate = Number(row.rate || row.rent_monthly_rate || 0);
-  if (type === 'one_month_rental' && rate > 0) return parseFloat(rate.toFixed(2));
+  if (months > 0 && rate > 0) return parseFloat((rate * months).toFixed(2));
   const qty = Number(row.main_qty ?? row.quantity ?? 1) || 1;
   const share = Number(row.security_amount || 0) / qty;
   return parseFloat((share || 0).toFixed(2));
@@ -118,7 +119,7 @@ async function collectUnbilledSecurityLines(client, {
         AND vsn.deleted_at IS NULL
         AND vsn.inventory_status IN ('rented', 'returned', 'in_transit')
         AND (
-          LOWER(COALESCE(sol.security_type, '')) = 'one_month_rental'
+          LOWER(COALESCE(sol.security_type, '')) IN ('one_month_rental', 'two_month_rental', 'three_month_rental')
           OR COALESCE(sol.security_amount, 0) > 0
         )
         AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) IS NOT NULL

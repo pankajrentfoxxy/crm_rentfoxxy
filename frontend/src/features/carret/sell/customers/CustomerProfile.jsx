@@ -13,6 +13,7 @@ import {
   COMPANY_TYPES, STATE_OPTIONS, cleanGstin, cleanPan, emailProblem, gstinProblem, mobileProblem, panProblem,
   pincodeProblem, sameState, stateFromGstin, supplyState,
 } from './customerProfileShared';
+import { MONTH_CHOICES } from '../sellShared';
 
 /**
  * Customer record → Profile: company, GST, PAN, contacts, billing / shipping
@@ -41,6 +42,7 @@ export function profileForm(c) {
     company_type: c.company_type || '',
     industry: c.industry || '',
     billing_type: c.billing_type === 'postpaid' ? 'postpaid' : 'prepaid',
+    security_deposit_months: c.security_deposit_months == null ? '' : String(c.security_deposit_months),
     billing_address: street(c),
     billing_city: c.billing_city || '',
     billing_state: stateValue(c.billing_state),
@@ -140,6 +142,7 @@ export function ProfileTab({ c, canEdit, onEdit }) {
             { label: 'Billing', value: c.billing_type === 'postpaid' ? 'Postpaid — last month billed on the 1st' : 'Prepaid — this month billed on the 1st' },
             { label: 'GST billed to (place of supply)', value: pos || 'Not set — CGST + SGST by default' },
             { label: 'Security held', value: <Money value={c.total_security_amount} /> },
+            { label: 'Security on new orders', value: c.security_deposit_months == null ? 'Not set — None' : (MONTH_CHOICES.find((o) => o.value === String(c.security_deposit_months))?.label || '—') },
           ]}
         />
       </Section>
@@ -253,6 +256,7 @@ export function ProfileDrawer({ open, customer, onClose, onSaved }) {
       const { finance_same: _fs, spock_same: _ss, ...fields } = f;
       const body = {
         ...fields,
+        security_deposit_months: fields.security_deposit_months === '' ? null : Number(fields.security_deposit_months),
         customer_number: normalizeIndianMobile(f.customer_number),
         contact_person_name: f.customer_name,
         contact_person_number: normalizeIndianMobile(f.customer_number),
@@ -318,6 +322,9 @@ export function ProfileDrawer({ open, customer, onClose, onSaved }) {
             <Field label="Industry"><Input value={f.industry} onChange={set('industry')} /></Field>
             <Field label="Billing">
               <Select value={f.billing_type} onChange={set('billing_type')} options={[{ value: 'prepaid', label: 'Prepaid — bill this month on the 1st' }, { value: 'postpaid', label: 'Postpaid — bill last month on the 1st' }]} />
+            </Field>
+            <Field label="Security deposit on new orders" hint="Rental and demo orders start from this. Orders already raised keep their deposit.">
+              <Select value={f.security_deposit_months} onChange={set('security_deposit_months')} placeholder="Not set" options={MONTH_CHOICES} />
             </Field>
           </FormGrid>
         </Section>

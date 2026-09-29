@@ -23,6 +23,26 @@ export function openPdf(path) {
   if (url) window.open(url, '_blank', 'noopener');
 }
 
+/**
+ * Security deposit in months of rent (migration 407). The customer's default
+ * (customers.security_deposit_months) is set when a lead is won and can be
+ * changed on the customer; a new rental / demo order starts from it.
+ */
+export const SECURITY_OPTIONS = [
+  { value: 'none', label: 'None', months: 0 },
+  { value: 'one_month_rental', label: '1 month’s rent', months: 1 },
+  { value: 'two_month_rental', label: '2 months’ rent', months: 2 },
+  { value: 'three_month_rental', label: '3 months’ rent', months: 3 },
+];
+export const securityMonths = (type) => SECURITY_OPTIONS.find((o) => o.value === type)?.months || 0;
+export const securityTypeFor = (months) => SECURITY_OPTIONS.find((o) => o.months === Number(months))?.value || 'none';
+export const MONTH_CHOICES = [
+  { value: '0', label: 'None' },
+  { value: '1', label: '1 month’s rent' },
+  { value: '2', label: '2 months’ rent' },
+  { value: '3', label: '3 months’ rent' },
+];
+
 /** GSTIN: 2-digit state, PAN, entity, Z, check character — 15 in all. */
 export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 export const validGstin = (v) => GSTIN_RE.test(String(v || '').trim().toUpperCase());

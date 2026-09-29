@@ -204,7 +204,7 @@ async function listCustomersForOrderScope(scope, allowedCustomerTypes = null) {
   appendCustomerTypeCondition(allowedCustomerTypes, conditions, params);
 
   const { rows } = await pool.query(
-    `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
+    `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type, security_deposit_months
        FROM customers c
       WHERE COALESCE(c.status, 1) = 1
         AND ${typeSql}
@@ -2772,12 +2772,14 @@ function isIntraState(supplyState, sellerStateCode = SELLER_STATE_CODE) {
 }
 
 /** One laptop's security share on an SO line (one month rent when applicable). */
+const { securityMonths, securityTypeForMonths } = require('../utils/securityDeposit');
+
 function perUnitSecurityForLine(line) {
   const qty = Number(line.main_qty ?? line.quantity ?? 1) || 1;
-  const type = String(line.security_type || '').toLowerCase();
-  if (type === 'one_month_rental') {
+  const months = securityMonths(line.security_type);
+  if (months > 0) {
     const rate = Number(line.rate || 0);
-    if (rate > 0) return +rate.toFixed(2);
+    if (rate > 0) return +(rate * months).toFixed(2);
   }
   return +(Number(line.security_amount || 0) / qty).toFixed(2);
 }
@@ -2785,12 +2787,12 @@ function perUnitSecurityForLine(line) {
 /** Total security deposit for a sales order. */
 function sumSoSecurityAmount(lines = []) {
   if (!lines.length) return 0;
-  const type = String(lines[0].security_type || '').toLowerCase();
-  if (type === 'one_month_rental') {
+  const months = securityMonths(lines[0].security_type);
+  if (months > 0) {
     return +lines.reduce((sum, line) => {
       const qty = Number(line.main_qty ?? line.quantity ?? 1) || 1;
       const rate = Number(line.rate || 0);
-      if (rate > 0) return sum + rate * qty;
+      if (rate > 0) return sum + rate * qty * months;
       return sum + Number(line.security_amount || 0);
     }, 0).toFixed(2);
   }
@@ -2808,20 +2810,19 @@ function computeDcSecurityFromSerials(serials = [], soLines = []) {
   return +total.toFixed(2);
 }
 
-/** Recompute per-line one-month security; returns new SO total or null. */
+/** Recompute per-line N-month security; returns new SO total or null. */
 async function recalcSoSecurityIfOneMonthRental(db, salesOrderNumber) {
   const typeRes = await db.query(
     `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
     [salesOrderNumber]
   );
-  if (String(typeRes.rows[0]?.security_type || '').toLowerCase() !== 'one_month_rental') {
-    return null;
-  }
+  const months = securityMonths(typeRes.rows[0]?.security_type);
+  if (!months) return null;
   await db.query(
     `UPDATE sales_order_lines
-        SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2)
+        SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1) * $2)::numeric, 2)
       WHERE sales_order_number = $1`,
-    [salesOrderNumber]
+    [salesOrderNumber, months]
   );
   const sumRes = await db.query(
     `SELECT COALESCE(SUM(security_amount), 0) AS total
@@ -3279,6 +3280,8 @@ module.exports = {
   computeGstBreakdown,
   perUnitSecurityForLine,
   sumSoSecurityAmount,
+  securityMonths,
+  securityTypeForMonths,
   computeDcSecurityFromSerials,
   recalcSoSecurityIfOneMonthRental,
   syncDcSecurityForSo,

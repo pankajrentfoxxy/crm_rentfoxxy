@@ -7,6 +7,7 @@ import {
   completeFollowUp, fetchLeadStages, updateLeadStatus, winLead,
 } from './leadApi';
 import { CLOSED_STATUSES, OUTCOMES, STATUS_HINT, addDaysIst, leadErr, todayIst } from './leadShared';
+import { MONTH_CHOICES } from '../sellShared';
 
 /**
  * The three things done to a lead (claude/carret-lead.md):
@@ -132,15 +133,17 @@ export function WinDrawer({ lead, status = 'Deal', open, onClose, onDone }) {
       shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
       spock_person_name: lead.name || '', spock_person_email: lead.email || '', spock_person_mobile: lead.phone || '',
       finance_contact_email: '', finance_contact_mobile: '',
+      security_deposit_months: '',
       notes: '',
     });
   }, [open, lead, status]);
   if (!lead || !f) return null;
   const s = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const save = async () => {
+    if (f.security_deposit_months === '') { toast.error('Choose the security deposit agreed with the customer'); return; }
     setBusy(true);
     try {
-      const { data } = await winLead(lead.leadId, { ...f, gst_number: f.gst_number.trim().toUpperCase() });
+      const { data } = await winLead(lead.leadId, { ...f, gst_number: f.gst_number.trim().toUpperCase(), security_deposit_months: Number(f.security_deposit_months) });
       toast.success(data.message || `${f.status} — customer created`);
       onDone?.(data);
       onClose();
@@ -179,6 +182,9 @@ export function WinDrawer({ lead, status = 'Deal', open, onClose, onDone }) {
           <Field label="Finance email (optional)"><Input type="email" value={f.finance_contact_email} onChange={s('finance_contact_email')} /></Field>
           <Field label="Finance mobile (optional)"><Input value={f.finance_contact_mobile} onChange={(e) => setF({ ...f, finance_contact_mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })} inputMode="numeric" /></Field>
         </FormGrid>
+        <Field label="Security deposit" required hint="Every new sales order for this customer starts with it; Sales can lower or remove it on an order, or change it on the customer later.">
+          <Select value={f.security_deposit_months} onChange={s('security_deposit_months')} placeholder="Choose…" options={MONTH_CHOICES} />
+        </Field>
         <Field label="Note (optional)"><Textarea rows={2} value={f.notes} onChange={s('notes')} placeholder="e.g. PO received, 10 laptops for 12 months" /></Field>
       </div>
     </Drawer>

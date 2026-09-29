@@ -2,6 +2,7 @@ const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRec
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { securityMonths } = require('../utils/securityDeposit');
 const { isValidGstin } = require('../services/gstinLookupService');
 const { respondIfRefused } = require('../utils/transitionRefusal');
 const inventorySM = require('../services/inventoryStateMachine');
@@ -301,6 +302,7 @@ function normalizeCustomerForQuotation(row) {
     email: row.email,
     phone: row.phone,
     gst_no: row.gst_no,
+    security_deposit_months: row.security_deposit_months == null ? null : Number(row.security_deposit_months),
     address: row.address,
     customer_type: row.customer_type || 'both',
     billing_address: billing,
@@ -832,7 +834,7 @@ exports.getAddSalesOrderMeta = async (req, res) => {
     const customers = entityScope === 'sale' || entityScope === 'rental'
       ? await listCustomersForOrderScope(entityScope, req.allowedCustomerTypes)
       : (await pool.query(
-        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
+        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type, security_deposit_months
            FROM customers WHERE COALESCE(status, 1) = 1
            ${scopeConds.length ? `AND ${scopeConds[0]}` : ''}
            ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`,
@@ -1359,17 +1361,18 @@ exports.storeSalesOrder = async (req, res) => {
     );
     await applySoAdvance(client, salesOrderNumber, body);
 
-    // Security: 'one_month_rental' auto-computes from the sum of each line's
-    // monthly rate x qty (server-authoritative). 'none' = 0.
+    // Security: 1 / 2 / 3 months of rent auto-computes from each line's
+    // monthly rate x qty x months (server-authoritative). 'none' = 0.
     // No deposit on a sale in place — the unit is being bought, not rented.
     const securityType = isInPlace ? 'none' : String(body.security_type || 'none').toLowerCase();
-    if (securityType === 'one_month_rental') {
+    const secMonths = securityMonths(securityType);
+    if (secMonths > 0) {
       await client.query(
         `UPDATE sales_order_lines
-            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2),
-                security_type = 'one_month_rental'
+            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1) * $2)::numeric, 2),
+                security_type = $3
           WHERE sales_order_number = $1`,
-        [salesOrderNumber]
+        [salesOrderNumber, secMonths, securityType]
       );
     } else {
       await client.query(
@@ -1713,13 +1716,14 @@ exports.updateSalesOrder = async (req, res) => {
     );
 
     const securityType = String(body.security_type || 'none').toLowerCase();
-    if (securityType === 'one_month_rental') {
+    const secMonths = securityMonths(securityType);
+    if (secMonths > 0) {
       await client.query(
         `UPDATE sales_order_lines
-            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2),
-                security_type = 'one_month_rental'
+            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1) * $2)::numeric, 2),
+                security_type = $3
           WHERE sales_order_number = $1`,
-        [soNumber]
+        [soNumber, secMonths, securityType]
       );
     } else if (body.security_amount != null || body.security_type != null) {
       await client.query(
@@ -3311,7 +3315,7 @@ exports.storeDeliveryChallan = async (req, res) => {
     if (body.sales_order_number) {
       const soLinesForSec = await getSalesOrderLines(body.sales_order_number);
       const securityType = String(soLinesForSec[0]?.security_type || '').toLowerCase();
-      if (securityType === 'one_month_rental' && thisDcSerialCount > 0) {
+      if (securityMonths(securityType) > 0 && thisDcSerialCount > 0) {
         let matched = 0;
         dcSecurity = 0;
         for (let i = 0; i < count; i++) {

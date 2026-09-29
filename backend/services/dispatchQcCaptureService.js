@@ -14,6 +14,7 @@ const { applyStageMove } = require('./stageTransitionService');
 const { buildQcFailure } = require('./qcFailureService');
 const { serialMatchesSoLine, configMismatchMessage, enrichSerialSpecs } = require('../utils/soInventorySpecMatch');
 const { getSalesOrderLines } = require('./salesManagementService');
+const { securityMonths } = require('../utils/securityDeposit');
 const { secureAccessNumber } = require('../utils/secureRandom');
 const {
   ensureTables,
@@ -225,16 +226,17 @@ async function applyDispatchQcFailure(client, {
     `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
     [soNumber]
   );
-  if (String(secTypeRes.rows[0]?.security_type || '').toLowerCase() === 'one_month_rental') {
+  const secMonths = securityMonths(secTypeRes.rows[0]?.security_type);
+  if (secMonths > 0) {
     await client.query(
       `UPDATE sales_order_lines sol
-          SET security_amount = t.one_month
+          SET security_amount = t.one_month * $2
          FROM (
            SELECT COALESCE(SUM(COALESCE(rate, 0) * COALESCE(quantity, 1)), 0) AS one_month
              FROM sales_order_lines WHERE sales_order_number = $1
          ) t
         WHERE sol.sales_order_number = $1`,
-      [soNumber]
+      [soNumber, secMonths]
     );
   }
 

@@ -158,6 +158,13 @@ async function winLead(db, leadId, body, userId) {
   const lead = (await db.query('SELECT * FROM leads WHERE lead_id = $1 FOR UPDATE', [leadId])).rows[0];
   if (!lead) throw fail('Lead not found', 404);
   const conv = await convertLead(db, lead, body, userId);
+  // Security deposit agreed at the win (None / 1 / 2 / 3 months of rent): the
+  // default for the customer's new rental / demo orders, editable later.
+  if (body.security_deposit_months !== undefined && body.security_deposit_months !== '') {
+    const months = Number(body.security_deposit_months);
+    if (!(Number.isInteger(months) && months >= 0 && months <= 3)) throw fail('Security deposit must be None, 1, 2 or 3 months of rent');
+    await db.query('UPDATE customers SET security_deposit_months = $1 WHERE customer_id = $2', [months, conv.customer_id]);
+  }
   const stage = status === 'Demo' ? 'Demo' : 'Deal';
   await db.query(
     `UPDATE leads SET status = $2::text, lead_stage = $3::text, rejection_reason = NULL,
