@@ -85,6 +85,7 @@ function creditNoteEvent(db, {
 /** The vocabulary, in one place, so a typo cannot create a second timeline. */
 const BILLING_EVENTS = Object.freeze({
   INVOICE_GENERATED: 'invoice_generated',
+  INVOICE_REGENERATED: 'invoice_regenerated',
   INVOICE_SENT: 'invoice_sent',
   INVOICE_PAID: 'invoice_paid',
   INVOICE_PAYMENT_RECORDED: 'invoice_payment_recorded',
@@ -97,6 +98,7 @@ const BILLING_EVENTS = Object.freeze({
   BILL_CANCELLED: 'vendor_bill_cancelled',
   CREDIT_NOTE_CREATED: 'credit_note_created',
   CREDIT_NOTE_APPROVED: 'credit_note_approved',
+  CREDIT_NOTE_CANCELLED: 'credit_note_cancelled',
 });
 
 module.exports = {

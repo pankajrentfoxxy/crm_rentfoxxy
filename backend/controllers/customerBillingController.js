@@ -24,25 +24,48 @@ const {
   approveSelectedCreditNoteLines,
   generateReturnCreditNotesForCustomer,
   generateReturnCreditNotesForCustomers,
+  finaliseGeneratedInvoice,
 } = require('../services/billingSchedulerService');
 const {
   listZohoCandidates,
   markInvoiceGeneratedOnZoho,
 } = require('../services/billingZohoService');
 const {
+  PaymentError,
   recordPayment,
   recordFullPayment,
   listPayments,
+  listCustomerPayments,
 } = require('../services/paymentLedgerService');
+const {
+  ScopeError,
+  scopedTypes,
+  appendScope,
+  assertCustomer,
+  assertInvoice,
+  assertCreditNote,
+  assertDeposit,
+  guard,
+} = require('../services/billingCustomerScope');
+const {
+  CreditNoteError,
+  createManualCreditNote,
+  cancelCreditNote,
+} = require('../services/creditNoteService');
 
-async function nextCreditNoteNumber() {
-  const res = await pool.query(
-    `UPDATE sm_document_sequences
-     SET last_value = last_value + 1
-     WHERE doc_type = 'credit_note'
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
-  );
-  return res.rows[0].number;
+/** A request's idempotency key: the Idempotency-Key header, else the body field. */
+function idempotencyKeyOf(req) {
+  const h = typeof req.get === 'function' ? req.get('Idempotency-Key') : req.headers?.['idempotency-key'];
+  return h || req.body?.idempotency_key || null;
+}
+
+/** Map the money services' own errors to their status; anything else is a 500. */
+function respondMoneyError(res, err) {
+  if (err instanceof PaymentError || err instanceof CreditNoteError || err instanceof ScopeError
+    || err?.name === 'BillingActionError') {
+    return res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+  return res.status(500).json({ success: false, message: err.message });
 }
 
 // Exposed for tests / scripts.
@@ -78,10 +101,11 @@ function parseMonthList(raw) {
   )];
 }
 
-function invoiceListFilters(query, { includeStatus = true } = {}) {
+function invoiceListFilters(query, { includeStatus = true } = {}, req = null) {
   const { customer_id, month, months, year, status, search } = query;
   const params = [];
   const where = ['1=1'];
+  appendScope(req, where, params);
   if (customer_id) {
     params.push(customer_id);
     where.push(`ci.customer_id = $${params.length}`);
@@ -121,8 +145,8 @@ exports.listInvoices = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 25));
     const offset = (page - 1) * limit;
-    const list = invoiceListFilters(req.query, { includeStatus: true });
-    const kpi = invoiceListFilters(req.query, { includeStatus: false });
+    const list = invoiceListFilters(req.query, { includeStatus: true }, req);
+    const kpi = invoiceListFilters(req.query, { includeStatus: false }, req);
     if (String(req.query.status || '') !== 'cancelled') {
       kpi.where.push(`ci.status <> 'cancelled'`);
     }
@@ -326,7 +350,7 @@ const MONTH_LABELS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'
 /** Excel of billed rental serials for the current invoice filters. */
 exports.exportInvoiceSerialsExcel = async (req, res) => {
   try {
-    const list = invoiceListFilters(req.query, { includeStatus: true });
+    const list = invoiceListFilters(req.query, { includeStatus: true }, req);
     if (!req.query.status) {
       list.where.push(`ci.status <> 'cancelled'`);
     }
@@ -532,8 +556,9 @@ exports.listInvoiceCoverage = async (req, res) => {
          FROM assets a
          JOIN customers c ON c.customer_id = a.customer_id
          LEFT JOIN inv i ON i.customer_id = a.customer_id
+        WHERE ($4::text[] IS NULL OR COALESCE(c.customer_type, 'both') = ANY($4::text[]))
         ORDER BY 2 ASC`,
-      [monthEndYmd(year, month), month, year]
+      [monthEndYmd(year, month), month, year, scopedTypes(req)]
     );
 
     const customers = result.rows.map((row) => ({
@@ -563,6 +588,7 @@ exports.listInvoiceCoverage = async (req, res) => {
 exports.getInvoice = async (req, res) => {
   try {
     const { invoiceId } = req.params;
+    if (!(await guard(res, () => assertInvoice(req, invoiceId)))) return;
     const result = await pool.query(
       `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
               c.gst_no AS gst_number, c.address AS billing_address
@@ -575,14 +601,21 @@ exports.getInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const creditNotes = await pool.query(
-      `SELECT credit_note_id, credit_note_number, amount, status
+      `SELECT credit_note_id, credit_note_number, amount, status, credit_note_type,
+              applied_in_invoice_id, invoice_id
        FROM customer_credit_notes
        WHERE (applied_in_invoice_id = $1 OR invoice_id = $1)
-         AND status IN ('approved', 'applied')`,
+         AND status IN ('pending', 'approved', 'applied')
+       ORDER BY created_at DESC`,
       [invoiceId]
     );
     const invoice = result.rows[0];
     invoice.line_items = await enrichLineItemsWithSpecs(parseLineItems(invoice));
+    const deposits = await pool.query(
+      `SELECT deposit_id, serial_id, ttspl_id, amount, status, refund_amount
+         FROM customer_security_deposits WHERE invoice_id = $1 ORDER BY deposit_id`,
+      [invoiceId]
+    );
     const [zohoCandidates, zohoAcks] = await Promise.all([
       listZohoCandidates(pool, {
         customerId: invoice.customer_id,
@@ -603,6 +636,7 @@ exports.getInvoice = async (req, res) => {
       success: true,
       invoice,
       credit_notes: creditNotes.rows,
+      security_deposits: deposits.rows,
       zoho_candidates: zohoCandidates,
       zoho_acks: zohoAcks.rows,
     });
@@ -614,6 +648,7 @@ exports.getInvoice = async (req, res) => {
 exports.markInvoiceGeneratedOnZoho = async (req, res) => {
   try {
     const invoiceId = Number(req.params.id);
+    if (!(await guard(res, () => assertInvoice(req, invoiceId)))) return;
     const body = req.body || {};
     const serialIds = Array.isArray(body.serial_ids) ? body.serial_ids : [];
     const result = await markInvoiceGeneratedOnZoho({
@@ -646,7 +681,9 @@ exports.markInvoiceGeneratedOnZoho = async (req, res) => {
       : [];
     const reconciled = [];
     for (const draft of laterDrafts) {
-      const gen = await generateCustomerInvoice(customerId, draft.invoice_month, draft.invoice_year);
+      const gen = await generateCustomerInvoice(customerId, draft.invoice_month, draft.invoice_year, {
+        actor: req.user, source: 'customerBillingController.markInvoiceGeneratedOnZoho',
+      });
       reconciled.push({
         invoice_month: draft.invoice_month,
         invoice_year: draft.invoice_year,
@@ -666,13 +703,18 @@ exports.generateInvoice = async (req, res) => {
     if (!customer_id || !month || !year) {
       return res.status(400).json({ success: false, message: 'customer_id, month, year required' });
     }
-    const result = await generateCustomerInvoice(Number(customer_id), Number(month), Number(year));
+    if (!(await guard(res, () => assertCustomer(req, customer_id)))) return;
+    // GST heads (BL7), due date (BL9), approved credit notes and the
+    // "generated" event (BL11) are applied inside generateCustomerInvoice now,
+    // for every path — not only this button.
+    const result = await generateCustomerInvoice(Number(customer_id), Number(month), Number(year), {
+      actor: req.user,
+      correlationId: req.correlationId || null,
+      source: 'customerBillingController.generateInvoice',
+    });
     if (result.skipped && !result.invoice_id) {
       return res.status(200).json({ success: true, skipped: true, reason: result.reason });
     }
-    // Part 6.2 — classify the GST heads (BL7), stamp the due date the overdue
-    // sweep needs (BL9), and record that this invoice was generated (BL11).
-    await finaliseGeneratedInvoice(result.invoice_id, req);
 
     const inv = await pool.query(
       `SELECT ci.*, c.company_name AS customer_name FROM customer_invoices ci
@@ -697,6 +739,12 @@ exports.generateInvoicesBulk = async (req, res) => {
 
     let results;
     if (all) {
+      if (scopedTypes(req)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Your Customer Access is limited, so pick the customers to invoice instead of "all billable customers".',
+        });
+      }
       results = await generateAllCustomerInvoices(m, y);
     } else {
       const ids = Array.isArray(customer_ids)
@@ -711,7 +759,12 @@ exports.generateInvoicesBulk = async (req, res) => {
       results = [];
       for (const customerId of ids) {
         try {
-          const result = await generateCustomerInvoice(customerId, m, y);
+          await assertCustomer(req, customerId);
+          const result = await generateCustomerInvoice(customerId, m, y, {
+            actor: req.user,
+            correlationId: req.correlationId || null,
+            source: 'customerBillingController.generateInvoicesBulk',
+          });
           results.push({ customer_id: customerId, ...result });
         } catch (err) {
           results.push({ customer_id: customerId, error: err.message });
@@ -750,6 +803,7 @@ exports.sendInvoice = async (req, res) => {
       return res.status(403).json({ success: false, email_sent: false, message: CUSTOMER_INVOICE_DISABLED_MESSAGE });
     }
     const { id } = req.params;
+    if (!(await guard(res, () => assertInvoice(req, id)))) return;
     const { to_email, cc_emails } = req.body || {};
     const result = await pool.query(
       `SELECT ci.*,
@@ -772,9 +826,19 @@ exports.sendInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
+    if (String(invoice.status || '').toLowerCase() === 'cancelled') {
+      return res.status(409).json({ success: false, message: 'This invoice is cancelled — it cannot be sent' });
+    }
+    const to = String(to_email || invoice.customer_email || '').trim();
+    if (!to) {
+      return res.status(400).json({ success: false, message: 'The customer has no email address — enter one to send to' });
+    }
+    // Fix the GST heads on the final numbers before the document goes out.
+    if (String(invoice.status || '').toLowerCase() === 'draft') {
+      await applyInvoiceGstSplit(pool, Number(id)).catch(() => {});
+    }
     const pdfPath = await generateCustomerInvoicePdf(invoice);
     await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    const to = to_email || invoice.customer_email;
     const cc = Array.isArray(cc_emails) ? cc_emails.join(',') : cc_emails;
     const sent = await emailDocument({
       to,
@@ -829,13 +893,18 @@ exports.sendInvoice = async (req, res) => {
 exports.markPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference, method } = req.body || {};
+    if (!(await guard(res, () => assertInvoice(req, id)))) return;
+    const { payment_reference, method, payment_date } = req.body || {};
+    // Pays exactly what is outstanding, computed under the invoice's row lock,
+    // so a second click finds nothing left and posts nothing (MD1).
     const result = await recordFullPayment(pool, {
       partyType: 'customer',
       invoiceId: Number(id),
       reference: payment_reference || null,
       method: method || 'adjustment',
+      paymentDate: payment_date || null,
       recordedBy: req.user?.user_id || null,
+      idempotencyKey: idempotencyKeyOf(req),
     });
     if (result.skipped) {
       const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
@@ -845,27 +914,36 @@ exports.markPaid = async (req, res) => {
       return res.json({ success: true, invoice: inv.rows[0], message: result.reason });
     }
     const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
-    await invoiceEvent(pool, {
-      invoiceId: Number(id),
-      invoiceNumber: inv.rows[0]?.invoice_number,
-      eventType: BILLING_EVENTS.INVOICE_PAID,
-      toState: 'paid',
-      payload: { reference: payment_reference || null, method: method || 'adjustment' },
-      actor: req.user,
-      correlationId: req.correlationId || null,
-      source: 'customerBillingController.markPaid',
-    });
-    res.json({ success: true, invoice: inv.rows[0], payment: result.payment });
+    if (!result.duplicate) {
+      await invoiceEvent(pool, {
+        invoiceId: Number(id),
+        invoiceNumber: inv.rows[0]?.invoice_number,
+        eventType: BILLING_EVENTS.INVOICE_PAID,
+        fromState: result.from_status || null,
+        toState: 'paid',
+        payload: {
+          amount: Number(result.payment?.amount || 0),
+          reference: payment_reference || null,
+          method: method || 'adjustment',
+          payment_id: result.payment?.payment_id,
+        },
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        source: 'customerBillingController.markPaid',
+      });
+    }
+    res.json({ success: true, invoice: inv.rows[0], payment: result.payment, duplicate: Boolean(result.duplicate) });
   } catch (err) {
-    res.status(err.message === 'Invoice not found' ? 404 : 500).json({ success: false, message: err.message });
+    respondMoneyError(res, err);
   }
 };
 
 exports.recordInvoicePayment = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!(await guard(res, () => assertInvoice(req, id)))) return;
     const { amount, payment_date, method, reference, notes } = req.body || {};
-    if (!amount) {
+    if (amount === undefined || amount === null || amount === '') {
       return res.status(400).json({ success: false, message: 'amount is required' });
     }
     const result = await recordPayment(pool, {
@@ -877,18 +955,59 @@ exports.recordInvoicePayment = async (req, res) => {
       reference,
       notes,
       recordedBy: req.user?.user_id || null,
+      idempotencyKey: idempotencyKeyOf(req),
     });
     const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
-    res.status(201).json({
+    if (!result.duplicate) {
+      await invoiceEvent(pool, {
+        invoiceId: Number(id),
+        invoiceNumber: inv.rows[0]?.invoice_number,
+        eventType: result.status === 'paid' ? BILLING_EVENTS.INVOICE_PAID : BILLING_EVENTS.INVOICE_PAYMENT_RECORDED,
+        fromState: result.from_status || null,
+        toState: result.status,
+        payload: {
+          amount: Number(result.payment?.amount || 0),
+          method: method || null,
+          reference: reference || null,
+          payment_id: result.payment?.payment_id,
+          outstanding: result.outstanding,
+        },
+        actor: req.user,
+        correlationId: req.correlationId || null,
+        source: 'customerBillingController.recordInvoicePayment',
+      });
+    }
+    res.status(result.duplicate ? 200 : 201).json({
       success: true,
+      duplicate: Boolean(result.duplicate),
       payment: result.payment,
       amount_paid: result.amount_paid,
+      outstanding: result.outstanding,
       status: result.status,
       invoice: inv.rows[0],
     });
   } catch (err) {
-    const code = err.message === 'Invoice not found' ? 404 : 500;
-    res.status(code).json({ success: false, message: err.message });
+    respondMoneyError(res, err);
+  }
+};
+
+/** Finance → Payments received: every customer payment, newest first. */
+exports.listCustomerPayments = async (req, res) => {
+  try {
+    const q = req.query || {};
+    const data = await listCustomerPayments(pool, {
+      search: q.search,
+      customerId: q.customer_id ? Number(q.customer_id) : null,
+      from: q.from || null,
+      to: q.to || null,
+      method: q.method || null,
+      page: q.page,
+      limit: q.limit,
+      customerTypes: scopedTypes(req),
+    });
+    res.json({ success: true, ...data, total_pages: Math.max(1, Math.ceil(data.total / data.limit)) });
+  } catch (err) {
+    respondMoneyError(res, err);
   }
 };
 
@@ -896,6 +1015,7 @@ exports.listInvoicePayments = async (req, res) => {
   try {
     const { invoiceId, id } = req.params;
     const targetId = invoiceId || id;
+    if (!(await guard(res, () => assertInvoice(req, targetId)))) return;
     const payments = await listPayments({ invoiceId: Number(targetId) });
     const inv = await pool.query(
       `SELECT invoice_id, grand_total, amount_paid, status FROM customer_invoices WHERE invoice_id = $1`,
@@ -915,6 +1035,7 @@ exports.downloadInvoicePdf = async (req, res) => {
     // Route param is :invoiceId (older code read :id, which was always undefined
     // and made every PDF download 404). Accept either for safety.
     const id = req.params.invoiceId || req.params.id;
+    if (!(await guard(res, () => assertInvoice(req, id)))) return;
     const result = await pool.query(
       `SELECT ci.*,
               c.company_name AS customer_name,
@@ -1004,8 +1125,9 @@ exports.downloadInvoicesZip = async (req, res) => {
         WHERE ci.invoice_month = $1
           AND ci.invoice_year = $2
           AND ci.status <> 'cancelled'
+          AND ($3::text[] IS NULL OR COALESCE(c.customer_type, 'both') = ANY($3::text[]))
         ORDER BY COALESCE(c.company_name, c.name, ci.invoice_number)`,
-      [month, year]
+      [month, year, scopedTypes(req)]
     );
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'No invoices found for that month' });
@@ -1057,10 +1179,11 @@ const CN_BILL_DATE = `COALESCE(cn.to_date, cn.from_date, (cn.created_at AT TIME 
 
 const CREDIT_NOTE_TYPES = ['return', 'repair', 'manual', 'other'];
 
-function creditNoteListFilters(query, { includeStatus = true, includePeriod = true } = {}) {
+function creditNoteListFilters(query, { includeStatus = true, includePeriod = true } = {}, req = null) {
   const { customer_id, status, search, ttspl } = query;
   const params = [];
   const where = ['1=1'];
+  appendScope(req, where, params);
   if (customer_id) {
     params.push(customer_id);
     where.push(`cn.customer_id = $${params.length}`);
@@ -1157,14 +1280,14 @@ exports.listCreditNotes = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 25));
     const offset = (page - 1) * limit;
-    const list = creditNoteListFilters(req.query, { includeStatus: true });
-    const kpi = creditNoteListFilters(req.query, { includeStatus: false });
+    const list = creditNoteListFilters(req.query, { includeStatus: true }, req);
+    const kpi = creditNoteListFilters(req.query, { includeStatus: false }, req);
     const laptopQuery = { ...req.query };
     delete laptopQuery.ttspl;
-    const laptopScope = creditNoteListFilters(laptopQuery, { includeStatus: true });
+    const laptopScope = creditNoteListFilters(laptopQuery, { includeStatus: true }, req);
     list.params.push(limit, offset);
 
-    const monthScope = creditNoteListFilters(req.query, { includeStatus: true, includePeriod: false });
+    const monthScope = creditNoteListFilters(req.query, { includeStatus: true, includePeriod: false }, req);
     const [listRes, countRes, summaryRes, laptopRes, monthRes] = await Promise.all([
       pool.query(
         `SELECT cn.*,
@@ -1358,6 +1481,12 @@ exports.generateCreditNotesBulk = async (req, res) => {
 
     let results;
     const actorUserId = req.user?.user_id || req.user?.id || null;
+    if (all && scopedTypes(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your Customer Access is limited, so pick the customers instead of "all customers".',
+      });
+    }
     if (all) {
       results = await generateReturnCreditNotesForCustomers({
         all: true, month: m, year: y, actorUserId,
@@ -1371,6 +1500,9 @@ exports.generateCreditNotesBulk = async (req, res) => {
           success: false,
           message: 'Select at least one customer, or enable “All billable customers”',
         });
+      }
+      for (const cid of ids) {
+        if (!(await guard(res, () => assertCustomer(req, cid)))) return;
       }
       results = await generateReturnCreditNotesForCustomers({
         customerIds: ids, month: m, year: y, actorUserId,
@@ -1405,6 +1537,7 @@ exports.generateCreditNote = async (req, res) => {
     if (!customerId || !m || !y) {
       return res.status(400).json({ success: false, message: 'customer_id, month and year required' });
     }
+    if (!(await guard(res, () => assertCustomer(req, customerId)))) return;
     const result = await generateReturnCreditNotesForCustomer(
       customerId,
       m,
@@ -1419,7 +1552,7 @@ exports.generateCreditNote = async (req, res) => {
 
 exports.listCreditNoteReviewGroups = async (req, res) => {
   try {
-    const list = creditNoteListFilters({ ...req.query, status: 'pending' }, { includeStatus: true });
+    const list = creditNoteListFilters({ ...req.query, status: 'pending' }, { includeStatus: true }, req);
     const result = await pool.query(
       `SELECT cn.*,
               c.company_name AS customer_name,
@@ -1524,7 +1657,7 @@ exports.listCreditNoteLaptops = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(500, Math.max(10, parseInt(req.query.limit, 10) || 50));
     const offset = (page - 1) * limit;
-    const list = creditNoteListFilters(req.query, { includeStatus: true });
+    const list = creditNoteListFilters(req.query, { includeStatus: true }, req);
     const result = await pool.query(
       `SELECT cn.*,
               c.company_name AS customer_name,
@@ -1559,6 +1692,7 @@ exports.listCreditNoteLaptops = async (req, res) => {
 
 exports.getCreditNote = async (req, res) => {
   try {
+    if (!(await guard(res, () => assertCreditNote(req, req.params.id)))) return;
     const result = await pool.query(
       `${CREDIT_NOTE_DETAIL_SELECT} WHERE cn.credit_note_id = $1`,
       [req.params.id]
@@ -1590,6 +1724,7 @@ exports.getCreditNote = async (req, res) => {
 
 exports.downloadCreditNotePdf = async (req, res) => {
   try {
+    if (!(await guard(res, () => assertCreditNote(req, req.params.id)))) return;
     const result = await pool.query(
       `${CREDIT_NOTE_DETAIL_SELECT} WHERE cn.credit_note_id = $1`,
       [req.params.id]
@@ -1649,8 +1784,9 @@ exports.downloadCreditNotesZip = async (req, res) => {
        WHERE EXTRACT(MONTH FROM ${CN_BILL_DATE}) = $1
          AND EXTRACT(YEAR FROM ${CN_BILL_DATE}) = $2
          AND LOWER(COALESCE(cn.status, '')) IN ('approved', 'applied')
+         AND ($3::text[] IS NULL OR COALESCE(c.customer_type, 'both') = ANY($3::text[]))
        ORDER BY cn.customer_id, cn.created_at DESC, cn.credit_note_id DESC`,
-      [month, year]
+      [month, year, scopedTypes(req)]
     );
     const byCustomer = new Map();
     for (const row of result.rows) {
@@ -1716,43 +1852,40 @@ exports.downloadCreditNotesZip = async (req, res) => {
 exports.createCreditNote = async (req, res) => {
   try {
     const body = req.body || {};
-    if (!body.customer_id || !body.reason) {
-      return res.status(400).json({ success: false, message: 'customer_id and reason required' });
-    }
-    const cnNumber = await nextCreditNoteNumber();
-    const amount = parseFloat(body.amount || 0);
-    const result = await pool.query(
-      // Raised by hand from the billing screen, so it is typed 'manual' rather
-      // than sitting untyped alongside the automated return and repair credits.
-      `INSERT INTO customer_credit_notes
-        (credit_note_number, customer_id, invoice_id, reason, description, amount,
-         quantity, unit_rate, from_date, to_date, ttspl_ids, created_by, credit_note_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,'manual')
-       RETURNING *`,
-      [
-        cnNumber,
-        body.customer_id,
-        body.invoice_id || null,
-        body.reason,
-        body.description || null,
-        amount,
-        body.quantity || 0,
-        body.unit_rate || 0,
-        body.from_date || null,
-        body.to_date || null,
-        JSON.stringify(body.ttspl_ids || []),
-        req.user?.user_id || null,
-      ]
-    );
-    res.status(201).json({ success: true, credit_note: result.rows[0] });
+    if (!(await guard(res, () => assertCustomer(req, body.customer_id)))) return;
+    // MD2: FY-series number inside the transaction, amount > 0 and within the
+    // invoice's creditable balance, invoice belongs to the customer, created
+    // as a draft for a different person to approve.
+    const creditNote = await createManualCreditNote(pool, body, {
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.status(201).json({ success: true, credit_note: creditNote });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    respondMoneyError(res, err);
+  }
+};
+
+/** MD2 — withdraw a credit note; one applied on a draft comes off that draft. */
+exports.cancelCreditNote = async (req, res) => {
+  try {
+    if (!(await guard(res, () => assertCreditNote(req, req.params.id)))) return;
+    const creditNote = await cancelCreditNote(pool, {
+      creditNoteId: Number(req.params.id),
+      reason: req.body?.reason,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    res.json({ success: true, credit_note: creditNote, message: `${creditNote.credit_note_number} cancelled` });
+  } catch (err) {
+    respondMoneyError(res, err);
   }
 };
 
 exports.approveCreditNote = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!(await guard(res, () => assertCreditNote(req, id)))) return;
     const body = req.body || {};
     const hasSelection = Boolean(
       (Array.isArray(body.line_keys) && body.line_keys.length)
@@ -1763,8 +1896,8 @@ exports.approveCreditNote = async (req, res) => {
       ? await approveSelectedCreditNoteLines(Number(id), body, req.user?.user_id || null)
       : await approveAndApplyCreditNote(Number(id), req.user?.user_id || null);
     if (!result.ok) {
-      return res.status(result.reason && /not found/i.test(result.reason) ? 404 : 400)
-        .json({ success: false, message: result.reason });
+      const code = result.status || (result.reason && /not found/i.test(result.reason) ? 404 : 400);
+      return res.status(code).json({ success: false, message: result.reason });
     }
     res.json({
       success: true,
@@ -1792,6 +1925,7 @@ exports.approveCreditNotesBulk = async (req, res) => {
     const results = [];
     for (const id of ids) {
       try {
+        await assertCreditNote(req, id);
         const result = await approveAndApplyCreditNote(id, req.user?.user_id || null);
         results.push({ credit_note_id: id, ...result });
       } catch (err) {
@@ -1813,9 +1947,10 @@ exports.approveCreditNotesBulk = async (req, res) => {
 
 exports.listSecurityDeposits = async (req, res) => {
   try {
-    const { customer_id, status } = req.query;
+    const { customer_id, status, search, source } = req.query;
     const params = [];
     const where = ['1=1'];
+    appendScope(req, where, params);
     if (customer_id) {
       params.push(customer_id);
       where.push(`sd.customer_id = $${params.length}`);
@@ -1824,12 +1959,28 @@ exports.listSecurityDeposits = async (req, res) => {
       params.push(status);
       where.push(`sd.status = $${params.length}`);
     }
+    if (source === 'invoice') where.push('sd.invoice_id IS NOT NULL');
+    else if (source === 'sales_order') where.push('sd.so_payment_id IS NOT NULL');
+    else if (source === 'manual') where.push('sd.invoice_id IS NULL AND sd.so_payment_id IS NULL');
+    const q = String(search || '').trim();
+    if (q) {
+      params.push(`%${q}%`);
+      const n = params.length;
+      where.push(`(COALESCE(c.company_name, '') ILIKE $${n} OR COALESCE(c.name, '') ILIKE $${n}
+                   OR COALESCE(sd.ttspl_id, '') ILIKE $${n} OR COALESCE(sd.sales_order_number, '') ILIKE $${n}
+                   OR COALESCE(ci.invoice_number, '') ILIKE $${n} OR COALESCE(sd.dc_number, '') ILIKE $${n})`);
+    }
     const result = await pool.query(
-      `SELECT sd.*, c.company_name AS customer_name
+      `SELECT sd.*, COALESCE(NULLIF(c.company_name, ''), c.name) AS customer_name,
+              c.closed_at AS customer_closed_at,
+              ci.invoice_number, ci.status AS invoice_status,
+              (sd.amount - COALESCE(sd.refund_amount, 0))::numeric AS held_amount
        FROM customer_security_deposits sd
        LEFT JOIN customers c ON c.customer_id = sd.customer_id
+       LEFT JOIN customer_invoices ci ON ci.invoice_id = sd.invoice_id
        WHERE ${where.join(' AND ')}
-       ORDER BY sd.received_date DESC`,
+       ORDER BY sd.received_date DESC NULLS LAST, sd.deposit_id DESC
+       LIMIT 2000`,
       params
     );
     res.json({ success: true, deposits: result.rows });
@@ -1841,66 +1992,58 @@ exports.listSecurityDeposits = async (req, res) => {
 exports.recordSecurityDeposit = async (req, res) => {
   try {
     const body = req.body || {};
-    if (!body.customer_id || !body.amount || !body.received_date) {
-      return res.status(400).json({ success: false, message: 'customer_id, amount, received_date required' });
+    const amount = Math.round(Number(body.amount) * 100) / 100;
+    if (!body.customer_id || !(amount > 0) || !body.received_date) {
+      return res.status(400).json({ success: false, message: 'Customer, an amount above Rs 0 and the received date are required' });
+    }
+    const receivedDate = String(body.received_date).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate) || receivedDate > new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ success: false, message: 'Received date must be a valid date, not in the future' });
+    }
+    const customer = await guard(res, () => assertCustomer(req, body.customer_id));
+    if (!customer) return;
+    if (customer.closed_at) {
+      return res.status(409).json({ success: false, message: 'This customer account is closed' });
+    }
+    const key = idempotencyKeyOf(req);
+    if (key) {
+      const dup = await pool.query('SELECT * FROM customer_security_deposits WHERE idempotency_key = $1', [String(key).slice(0, 80)]);
+      if (dup.rows.length) return res.json({ success: true, duplicate: true, deposit: dup.rows[0] });
     }
     const result = await pool.query(
       `INSERT INTO customer_security_deposits
-        (customer_id, sales_order_number, amount, received_date, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6)
+        (customer_id, sales_order_number, amount, received_date, status, notes, created_by, idempotency_key)
+       VALUES ($1,$2,$3,$4,'held',$5,$6,$7)
        RETURNING *`,
       [
-        body.customer_id,
-        body.sales_order_number || null,
-        body.amount,
-        body.received_date,
-        body.notes || null,
+        Number(body.customer_id),
+        body.sales_order_number ? String(body.sales_order_number).trim().slice(0, 50) : null,
+        amount.toFixed(2),
+        receivedDate,
+        body.notes ? String(body.notes).slice(0, 2000) : null,
         req.user?.user_id || null,
+        key ? String(key).slice(0, 80) : null,
       ]
     );
     res.status(201).json({ success: true, deposit: result.rows[0] });
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ success: false, message: 'This deposit was already recorded' });
+    }
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-exports.refundSecurityDeposit = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { refund_amount, refund_reference } = req.body || {};
-    const existing = await pool.query('SELECT * FROM customer_security_deposits WHERE deposit_id = $1', [id]);
-    if (!existing.rows.length) {
-      return res.status(404).json({ success: false, message: 'Deposit not found' });
-    }
-    const dep = existing.rows[0];
-    const already = parseFloat(dep.refund_amount || 0);
-    const remaining = +(parseFloat(dep.amount) - already).toFixed(2);
-    if (remaining <= 0 || dep.status === 'refunded') {
-      return res.status(409).json({ success: false, message: 'This deposit is already fully refunded' });
-    }
-    // With no amount given, refund what is LEFT — not the full deposit again
-    // (a partly refunded deposit was being over-refunded).
-    const refund = refund_amount === undefined || refund_amount === null || refund_amount === ''
-      ? remaining
-      : parseFloat(refund_amount);
-    if (!(refund > 0) || refund > remaining + 0.001) {
-      return res.status(400).json({ success: false, message: `Refund must be more than 0 and at most the Rs ${remaining} still held` });
-    }
-    const totalRefunded = +(already + refund).toFixed(2);
-    const newStatus = totalRefunded >= parseFloat(dep.amount) ? 'refunded' : 'partially_refunded';
-    const result = await pool.query(
-      `UPDATE customer_security_deposits
-       SET refund_amount = $1, refund_date = CURRENT_DATE, refund_reference = $2,
-           status = $3, updated_at = NOW()
-       WHERE deposit_id = $4
-       RETURNING *`,
-      [totalRefunded, refund_reference || null, newStatus, id]
-    );
-    res.json({ success: true, deposit: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+/**
+ * MD3 / SD1 — a deposit is refunded only when the customer's account is closed
+ * (Customers → the customer → Close account), which refunds what is held less
+ * anything still owed, under a lock. This standalone route could refund twice
+ * and bypassed the dues check, so it is closed.
+ */
+exports.refundSecurityDeposit = async (req, res) => res.status(410).json({
+  success: false,
+  message: 'Deposits are refunded only when the customer account is closed. Open the customer and use Close account.',
+});
 
 // ── Part 6.2 — the invoice lifecycle that had no endpoints ───────────────
 //
@@ -1928,6 +2071,7 @@ function respondBillingError(res, err) {
 /** BL13 — cancel, with a reason, instead of an UPDATE nobody sees. */
 exports.cancelInvoice = async (req, res) => {
   try {
+    if (!(await guard(res, () => assertInvoice(req, req.params.id)))) return;
     const invoice = await cancelInvoice(pool, {
       invoiceId: Number(req.params.id),
       reason: req.body?.reason,
@@ -1972,6 +2116,7 @@ exports.getAgeing = async (req, res) => {
     const rows = await ageingBuckets(pool, {
       customerId: req.query.customer_id ? Number(req.query.customer_id) : null,
       asOf: req.query.as_of || null,
+      customerTypes: scopedTypes(req),
     });
     const totals = rows.reduce((acc, r) => {
       ['outstanding', 'not_due', 'days_1_30', 'days_31_60', 'days_61_90', 'days_90_plus']
@@ -1987,6 +2132,7 @@ exports.getAgeing = async (req, res) => {
 /** Statement of account — invoices, credit notes and payments, running balance. */
 exports.getStatementOfAccount = async (req, res) => {
   try {
+    if (!(await guard(res, () => assertCustomer(req, req.params.customerId)))) return;
     const data = await statementOfAccount(pool, {
       customerId: Number(req.params.customerId),
       fromDate: req.query.from || null,
@@ -2006,6 +2152,7 @@ exports.getStatementOfAccount = async (req, res) => {
  */
 exports.getInvoiceTimeline = async (req, res) => {
   try {
+    if (!(await guard(res, () => assertInvoice(req, req.params.invoiceId)))) return;
     const events = await timelineFor(ENTITY.INVOICE, Number(req.params.invoiceId), { db: pool });
     res.json({ success: true, events });
   } catch (err) {
@@ -2014,49 +2161,14 @@ exports.getInvoiceTimeline = async (req, res) => {
 };
 
 /**
- * Part 6.2 — everything a freshly generated invoice needs that the generator
- * does not do.
- *
- * Kept out of billingSchedulerService on purpose: that module writes invoices
- * from seven different paths with slightly different totals, and the safe way to
- * add a classification to all of them is once, after the row exists, from its
- * own stored numbers. Never throws — an invoice that generated correctly must
- * not fail because its GST heads could not be written.
+ * Part 6.2 — the finishing work for a generated invoice (GST split, due date,
+ * approved credit notes, generated event) moved into
+ * billingSchedulerService.generateCustomerInvoice so every generate path runs
+ * it, not only the single Generate button. Kept as an alias for old callers.
  */
-async function finaliseGeneratedInvoice(invoiceId, req) {
-  if (!invoiceId) return;
-  try {
-    await pool.query(
-      `UPDATE customer_invoices
-          SET due_date = COALESCE(due_date, (COALESCE(invoice_date, CURRENT_DATE) + INTERVAL '15 days')::date)
-        WHERE invoice_id = $1`,
-      [invoiceId]
-    );
-    const split = await applyInvoiceGstSplit(pool, invoiceId);
-    const { rows } = await pool.query(
-      `SELECT invoice_number, customer_id, grand_total FROM customer_invoices WHERE invoice_id = $1`,
-      [invoiceId]
-    );
-    await invoiceEvent(pool, {
-      invoiceId,
-      invoiceNumber: rows[0]?.invoice_number,
-      eventType: BILLING_EVENTS.INVOICE_GENERATED,
-      toState: 'draft',
-      payload: {
-        customer_id: rows[0]?.customer_id,
-        grand_total: rows[0]?.grand_total,
-        gst: split ? {
-          cgst: split.cgst, sgst: split.sgst, igst: split.igst,
-          place_of_supply: split.place_of_supply, intra_state: split.is_intra_state,
-        } : null,
-      },
-      actor: req?.user,
-      correlationId: req?.correlationId || null,
-      source: 'customerBillingController.generateInvoice',
-    });
-  } catch (err) {
-    console.error(`[billing] finaliseGeneratedInvoice(${invoiceId}):`, err.message);
-  }
-}
-
-exports._finaliseGeneratedInvoice = finaliseGeneratedInvoice;
+exports._finaliseGeneratedInvoice = (invoiceId, req) => finaliseGeneratedInvoice(invoiceId, {
+  actor: req?.user || null,
+  correlationId: req?.correlationId || null,
+  source: 'customerBillingController._finaliseGeneratedInvoice',
+  created: true,
+});

@@ -209,6 +209,14 @@ async function closeAccount(client, customerId, { note, refundReference, user })
   if (cur.closed_at) throw Object.assign(new Error('This account is already closed'), { status: 409 });
   const why = String(note || '').trim();
   if (why.length < 3) throw Object.assign(new Error('Say why the account is being closed'), { status: 400 });
+  // MD3: lock the deposits before reading what is held, so nothing else can
+  // move them between the check and the refund below.
+  await client.query(
+    `SELECT deposit_id FROM customer_security_deposits
+      WHERE customer_id = $1 AND LOWER(COALESCE(status, '')) NOT IN ('refunded', 'cancelled')
+      ORDER BY deposit_id FOR UPDATE`,
+    [id]
+  );
   const chk = await closureCheck(client, id);
   if (chk.blockers.length) throw Object.assign(new Error(`Cannot close yet: ${chk.blockers.join('; ')}`), { status: 409 });
   // Refund deposits oldest first up to the refundable amount; the rest is kept against dues.
@@ -216,16 +224,24 @@ async function closeAccount(client, customerId, { note, refundReference, user })
   const refunded = [];
   for (const d of chk.deposits) {
     const remaining = Number(d.amount) - Number(d.refund_amount);
-    const give = Math.min(remaining, left);
+    const give = Math.round(Math.max(0, Math.min(remaining, left)) * 100) / 100;
     const total = Math.round((Number(d.refund_amount) + give) * 100) / 100;
+    // MD3: nothing refunded is not a refund. A deposit kept in full against
+    // dues stays 'held' (no refund date or reference), with the reason noted.
+    let status;
+    if (total >= Number(d.amount) - 0.001) status = 'refunded';
+    else if (total > 0) status = 'partially_refunded';
+    else status = d.status && d.status !== 'partially_refunded' ? d.status : 'held';
     await client.query(
       `UPDATE customer_security_deposits
-          SET refund_amount = $2, refund_date = CURRENT_DATE, refund_reference = $3,
+          SET refund_amount = $2,
+              refund_date = CASE WHEN $6::numeric > 0 THEN CURRENT_DATE ELSE refund_date END,
+              refund_reference = CASE WHEN $6::numeric > 0 THEN $3 ELSE refund_reference END,
               status = $4, notes = CONCAT_WS(E'\\n', notes, $5::text), updated_at = NOW()
         WHERE deposit_id = $1`,
-      [d.deposit_id, total, refundReference || null,
-        total >= Number(d.amount) - 0.001 ? 'refunded' : 'partially_refunded',
-        give < remaining ? `Account closed: Rs ${Math.round((remaining - give) * 100) / 100} kept against dues` : 'Refunded on account closure']
+      [d.deposit_id, total, refundReference || null, status,
+        give < remaining ? `Account closed: Rs ${Math.round((remaining - give) * 100) / 100} kept against dues` : 'Refunded on account closure',
+        give]
     );
     refunded.push({ deposit_id: d.deposit_id, refunded: Math.round(give * 100) / 100 });
     left = Math.round((left - give) * 100) / 100;

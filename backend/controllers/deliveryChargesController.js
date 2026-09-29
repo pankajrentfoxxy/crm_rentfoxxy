@@ -9,6 +9,7 @@ const {
   buildCustomerStatementHtml,
 } = require('../services/deliveryChargesService');
 const { renderHtmlToPdf, sanitizeCustomerFileName } = require('../services/customerInvoicePdfService');
+const { scopedTypes } = require('../services/billingCustomerScope');
 
 const TMP_DIR = path.join(__dirname, '../uploads/delivery-charges');
 
@@ -20,7 +21,7 @@ function sendError(res, err, label) {
 
 exports.getDeliveryCharges = async (req, res) => {
   try {
-    const report = await getMonthReport(req.query);
+    const report = await getMonthReport(req.query, { customerTypes: scopedTypes(req) });
     res.json({ success: true, ...report });
   } catch (err) {
     sendError(res, err, 'getDeliveryCharges');
@@ -30,7 +31,9 @@ exports.getDeliveryCharges = async (req, res) => {
 exports.exportDeliveryChargesExcel = async (req, res) => {
   try {
     const { month, year } = parsePeriod(req.query);
-    const rows = await listMonthCharges({ month, year, customerId: req.query.customer_id, search: req.query.search });
+    const rows = await listMonthCharges({
+      month, year, customerId: req.query.customer_id, search: req.query.search, customerTypes: scopedTypes(req),
+    });
     const customers = groupByCustomer(rows);
     const period = `${MONTH_LABELS[month]} ${year}`;
 
@@ -100,7 +103,7 @@ exports.downloadDeliveryChargesStatement = async (req, res) => {
     const customerId = parseInt(req.query.customer_id, 10);
     if (!Number.isInteger(customerId)) return res.status(400).json({ success: false, message: 'customer_id required' });
 
-    const rows = await listMonthCharges({ month, year, customerId });
+    const rows = await listMonthCharges({ month, year, customerId, customerTypes: scopedTypes(req) });
     const [group] = groupByCustomer(rows);
     if (!group) return res.status(404).json({ success: false, message: 'No delivery charges for this customer in this month' });
 

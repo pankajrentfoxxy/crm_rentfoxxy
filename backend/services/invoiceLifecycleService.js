@@ -83,17 +83,43 @@ async function sweepOverdueInvoices(db = pool, { asOf = null, actor = null, corr
  * A paid invoice is not cancellable: money has moved, and the instrument for
  * that is a credit note, which this system already has. Refusing here is the
  * point — the alternative is what happens today, which is an UPDATE nobody sees.
+ *
+ * MD4: the row is locked and the status re-read under the lock, so a payment
+ * posted a moment earlier (or a second cancel) is seen. Cancelling releases
+ * what the invoice consumed, so none of it is lost:
+ *   - credit notes applied on it go back to "approved" and apply to the next
+ *     draft;
+ *   - security deposits created by its security lines are removed, so the next
+ *     invoice bills the security again;
+ *   - each laptop's rent watermark is moved back to the day before this
+ *     invoice's first rental line for it, so the next invoice bills those days
+ *     again (the month slot itself stays taken by the cancelled invoice).
  */
 async function cancelInvoice(db, { invoiceId, reason, actor, correlationId = null }) {
-  const client = db || pool;
   const trimmed = String(reason || '').trim();
   if (trimmed.length < 5) {
     throw new BillingActionError('A cancellation reason is required (at least 5 characters)');
   }
+  const base = db || pool;
+  const client = typeof base.connect === 'function' ? await base.connect() : base;
+  const ownTx = client !== base;
+  try {
+    if (ownTx) await client.query('BEGIN');
+    const out = await cancelInvoiceIn(client, { invoiceId, reason: trimmed, actor, correlationId });
+    if (ownTx) await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    if (ownTx) await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    if (ownTx) client.release();
+  }
+}
 
+async function cancelInvoiceIn(client, { invoiceId, reason, actor, correlationId }) {
   const { rows: current } = await client.query(
-    `SELECT invoice_id, invoice_number, status, amount_paid, grand_total
-       FROM customer_invoices WHERE invoice_id = $1`,
+    `SELECT invoice_id, invoice_number, customer_id, status, amount_paid, grand_total, line_items
+       FROM customer_invoices WHERE invoice_id = $1 FOR UPDATE`,
     [invoiceId]
   );
   const invoice = current[0];
@@ -103,7 +129,12 @@ async function cancelInvoice(db, { invoiceId, reason, actor, correlationId = nul
   if (status === 'cancelled') {
     throw new BillingActionError('This invoice is already cancelled', 409);
   }
-  if (status === 'paid' || Number(invoice.amount_paid || 0) > 0) {
+  const ledger = await client.query(
+    'SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM payment_records WHERE invoice_id = $1',
+    [invoiceId]
+  );
+  const paidOnLedger = Number(ledger.rows[0]?.paid || 0);
+  if (status === 'paid' || status === 'partially_paid' || Number(invoice.amount_paid || 0) > 0 || paidOnLedger > 0) {
     throw new BillingActionError(
       'This invoice has payment against it. Raise a credit note instead of cancelling it.',
       409
@@ -116,7 +147,65 @@ async function cancelInvoice(db, { invoiceId, reason, actor, correlationId = nul
             cancellation_reason = $3, updated_at = NOW()
       WHERE invoice_id = $1
       RETURNING *`,
-    [invoiceId, actor?.user_id || null, trimmed.slice(0, 2000)]
+    [invoiceId, actor?.user_id || null, reason.slice(0, 2000)]
+  );
+
+  // Credit notes consumed by this invoice go back to approved (MD4).
+  const released = await client.query(
+    `UPDATE customer_credit_notes
+        SET status = 'approved', applied_in_invoice_id = NULL,
+            invoice_id = CASE WHEN invoice_id = $1 THEN NULL ELSE invoice_id END,
+            updated_at = NOW()
+      WHERE applied_in_invoice_id = $1 AND status = 'applied'
+      RETURNING credit_note_id, credit_note_number, amount`,
+    [invoiceId]
+  );
+  // Open notes that were only linked to it are unlinked, so they apply elsewhere.
+  await client.query(
+    `UPDATE customer_credit_notes
+        SET invoice_id = NULL, updated_at = NOW()
+      WHERE invoice_id = $1 AND applied_in_invoice_id IS NULL AND status IN ('pending', 'approved')
+        AND COALESCE(credit_note_type, '') <> 'manual'`,
+    [invoiceId]
+  );
+
+  // Security billed on this invoice is released so the next invoice bills it.
+  const deposits = await client.query(
+    `DELETE FROM customer_security_deposits
+      WHERE invoice_id = $1 AND status = 'held' AND COALESCE(refund_amount, 0) = 0
+        AND so_payment_id IS NULL
+      RETURNING deposit_id, serial_id, amount`,
+    [invoiceId]
+  );
+
+  // Rent watermark back to the day before this invoice's first rental day for
+  // each laptop still with this customer, never past its rent start.
+  const watermarks = await client.query(
+    `WITH lines AS (
+       SELECT (elem->>'serial_id')::int AS serial_id,
+              MIN(NULLIF(LEFT(elem->>'rent_start', 10), '')::date) AS first_day
+         FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof($2::jsonb) = 'array' THEN $2::jsonb ELSE '[]'::jsonb END
+              ) elem
+        WHERE NULLIF(elem->>'serial_id', '') ~ '^[0-9]+$'
+          AND COALESCE(elem->>'line_type', 'rental') <> 'security'
+          AND LOWER(COALESCE(elem->>'is_security', 'false')) NOT IN ('true', 't', '1', 'yes')
+          AND NULLIF(LEFT(elem->>'rent_start', 10), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        GROUP BY 1
+     )
+     UPDATE vendor_serial_numbers vsn
+        SET rent_billed_until = GREATEST(
+              l.first_day - 1,
+              COALESCE(vsn.rent_start_date - 1, l.first_day - 1)
+            ),
+            updated_at = NOW()
+       FROM lines l
+      WHERE vsn.serial_id = l.serial_id
+        AND vsn.current_customer_id = $1
+        AND vsn.rent_billed_until IS NOT NULL
+        AND vsn.rent_billed_until >= l.first_day
+     RETURNING vsn.serial_id, vsn.rent_billed_until`,
+    [invoice.customer_id, JSON.stringify(invoice.line_items || [])]
   );
 
   await invoiceEvent(client, {
@@ -125,13 +214,26 @@ async function cancelInvoice(db, { invoiceId, reason, actor, correlationId = nul
     eventType: BILLING_EVENTS.INVOICE_CANCELLED,
     fromState: status,
     toState: 'cancelled',
-    payload: { reason: trimmed, grand_total: invoice.grand_total },
+    payload: {
+      reason,
+      grand_total: invoice.grand_total,
+      credit_notes_released: released.rows.map((r) => r.credit_note_number),
+      security_deposits_released: deposits.rows.length,
+      rent_watermarks_reset: watermarks.rows.length,
+    },
     actor,
     correlationId,
     source: 'invoiceLifecycleService.cancelInvoice',
   });
 
-  return rows[0];
+  return {
+    ...rows[0],
+    released: {
+      credit_notes: released.rows,
+      security_deposits: deposits.rows.length,
+      rent_watermarks: watermarks.rows.length,
+    },
+  };
 }
 
 /** The same, for a vendor bill. */
@@ -266,7 +368,7 @@ async function approveVendorBill(db, { billId, actor, correlationId = null }) {
  * Neither this nor the statement below existed. "How much is owed, and how old
  * is it" could not be answered from this system at all.
  */
-async function ageingBuckets(db, { customerId = null, asOf = null } = {}) {
+async function ageingBuckets(db, { customerId = null, asOf = null, customerTypes = null } = {}) {
   const client = db || pool;
   const { rows } = await client.query(
     `SELECT
@@ -289,9 +391,10 @@ async function ageingBuckets(db, { customerId = null, asOf = null } = {}) {
       WHERE LOWER(COALESCE(ci.status,'')) NOT IN ('cancelled', 'paid', 'draft')
         AND COALESCE(ci.grand_total,0) > COALESCE(ci.amount_paid,0)
         AND ($1::int IS NULL OR ci.customer_id = $1::int)
+        AND ($3::text[] IS NULL OR COALESCE(c.customer_type, 'both') = ANY($3::text[]))
       GROUP BY ci.customer_id, COALESCE(c.company_name, c.name)
       ORDER BY outstanding DESC`,
-    [customerId, asOf]
+    [customerId, asOf, customerTypes && customerTypes.length ? customerTypes : null]
   );
   return rows;
 }

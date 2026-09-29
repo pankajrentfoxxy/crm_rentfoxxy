@@ -4941,23 +4941,56 @@ exports.recordPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Sales order not found' });
     }
     const customerId = soLines[0].customer_id || null;
-    const result = await pool.query(
-      `INSERT INTO sales_order_payments
-        (sales_order_number, customer_id, payment_type, amount, payment_date, payment_mode, reference_number, notes, recorded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       RETURNING payment_id`,
-      [
-        soNumber,
-        customerId,
-        paymentType,
-        amount,
-        body.payment_date || new Date().toISOString().slice(0, 10),
-        body.payment_mode || 'bank_transfer',
-        body.reference_number || null,
-        body.notes || null,
-        req.user.user_id,
-      ]
-    );
+    const paymentDate = body.payment_date || new Date().toISOString().slice(0, 10);
+    // A security deposit taken on the SO is money held for the customer, so it
+    // must appear in the deposits ledger (and be refunded at account closure,
+    // SD1) — it used to exist only as an SO payment row. Both rows are written
+    // in one transaction.
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query('BEGIN');
+      result = await client.query(
+        `INSERT INTO sales_order_payments
+          (sales_order_number, customer_id, payment_type, amount, payment_date, payment_mode, reference_number, notes, recorded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING payment_id`,
+        [
+          soNumber,
+          customerId,
+          paymentType,
+          amount,
+          paymentDate,
+          body.payment_mode || 'bank_transfer',
+          body.reference_number || null,
+          body.notes || null,
+          req.user.user_id,
+        ]
+      );
+      if (paymentType === 'security_deposit' && customerId) {
+        await client.query(
+          `INSERT INTO customer_security_deposits
+            (customer_id, sales_order_number, amount, received_date, status, notes, created_by, so_payment_id)
+           VALUES ($1,$2,$3,$4,'held',$5,$6,$7)
+           ON CONFLICT (so_payment_id) WHERE so_payment_id IS NOT NULL DO NOTHING`,
+          [
+            customerId,
+            soNumber,
+            Number(amount).toFixed(2),
+            paymentDate,
+            `Collected on ${soNumber} (SO payment #${result.rows[0].payment_id}${body.reference_number ? `, ref ${body.reference_number}` : ''})`,
+            req.user.user_id,
+            result.rows[0].payment_id,
+          ]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
     res.status(201).json({
       success: true,
       payment_id: result.rows[0].payment_id,

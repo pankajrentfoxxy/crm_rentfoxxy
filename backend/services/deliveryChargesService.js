@@ -56,6 +56,7 @@ const DC_CHARGES_CTE = `
     SELECT dc.*,
            COALESCE(NULLIF(dc.dcl_customer_name, ''), c.company_name, c.name) AS customer_name,
            COALESCE(NULLIF(dc.dcl_gst_number, ''), c.gst_no) AS gst_number,
+           COALESCE(c.customer_type, 'both') AS customer_type,
            EXTRACT(MONTH FROM dc.dispatched_at AT TIME ZONE 'Asia/Kolkata')::int AS charge_month,
            EXTRACT(YEAR FROM dc.dispatched_at AT TIME ZONE 'Asia/Kolkata')::int AS charge_year
       FROM dc
@@ -110,9 +111,13 @@ function shapeRow(r) {
 }
 
 /** Every charged DC for one month, optionally narrowed to a customer or a search term. */
-async function listMonthCharges({ month, year, customerId, search }) {
+async function listMonthCharges({ month, year, customerId, search, customerTypes = null }) {
   const params = [month, year];
   const where = ['charge_month = $1', 'charge_year = $2'];
+  if (Array.isArray(customerTypes) && customerTypes.length) {
+    params.push(customerTypes);
+    where.push(`customer_type = ANY($${params.length}::text[])`);
+  }
   if (customerId) {
     params.push(Number(customerId));
     where.push(`customer_id = $${params.length}`);
@@ -166,7 +171,7 @@ function groupByCustomer(rows) {
 }
 
 /** Month-by-month totals for the trailing 12 months ending at the given period. */
-async function monthlyTrend({ month, year }) {
+async function monthlyTrend({ month, year, customerTypes = null }) {
   const endIdx = year * 12 + (month - 1);
   const startIdx = endIdx - 11;
   const res = await pool.query(
@@ -177,8 +182,9 @@ async function monthlyTrend({ month, year }) {
             SUM(delivery_charge)::numeric AS total
        FROM charged
       WHERE (charge_year * 12 + charge_month - 1) BETWEEN $1 AND $2
+        AND ($3::text[] IS NULL OR customer_type = ANY($3::text[]))
       GROUP BY 1, 2`,
-    [startIdx, endIdx],
+    [startIdx, endIdx, Array.isArray(customerTypes) && customerTypes.length ? customerTypes : null],
   );
   const byKey = new Map(res.rows.map((r) => [`${r.charge_year}-${r.charge_month}`, r]));
   const out = [];
@@ -198,13 +204,14 @@ async function monthlyTrend({ month, year }) {
   return out;
 }
 
-async function getMonthReport(query) {
+async function getMonthReport(query, { customerTypes = null } = {}) {
   const { month, year } = parsePeriod(query);
   const rows = await listMonthCharges({
     month,
     year,
     customerId: query.customer_id,
     search: query.search,
+    customerTypes,
   });
   const customers = groupByCustomer(rows);
   const total = rows.reduce((s, r) => s + r.delivery_charge, 0);
@@ -219,7 +226,7 @@ async function getMonthReport(query) {
       total: Number(total.toFixed(2)),
     },
     customers,
-    trend: await monthlyTrend({ month, year }),
+    trend: await monthlyTrend({ month, year, customerTypes }),
   };
 }
 

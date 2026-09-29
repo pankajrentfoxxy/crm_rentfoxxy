@@ -267,10 +267,13 @@ describe('6.2 — cancelling an invoice (BL13)', () => {
   });
 
   it('cancels an unpaid invoice and records who and why', async () => {
+    // lock+read, ledger sum, the UPDATE, then the MD4 releases (credit notes,
+    // linked notes, security deposits, rent watermarks) and the event.
     const db = fakeDb([
-      [{ invoice_id: 1, invoice_number: 'INV/26-27/000001', status: 'draft', amount_paid: 0, grand_total: 100 }],
+      [{ invoice_id: 1, invoice_number: 'INV/26-27/000001', customer_id: 9, status: 'draft', amount_paid: 0, grand_total: 100, line_items: [] }],
+      [{ paid: 0 }],
       [{ invoice_id: 1, status: 'cancelled', cancellation_reason: 'duplicate of INV/26-27/000002' }],
-      [],
+      [], [], [], [], [],
     ]);
     const inv = await cancelInvoice(db, {
       invoiceId: 1, reason: 'duplicate of INV/26-27/000002', actor: { user_id: 3 },
@@ -279,6 +282,7 @@ describe('6.2 — cancelling an invoice (BL13)', () => {
     const update = db.calls.find((c) => /UPDATE customer_invoices/.test(c.sql));
     assert.ok(update, 'the cancel must be an UPDATE through this service, not a raw one');
     assert.equal(update.params[1], 3, 'cancelled_by is recorded');
+    assert.match(db.calls[0].sql, /FOR UPDATE/, 'the invoice row is locked before its status is trusted (MD4)');
   });
 });
 
@@ -304,7 +308,9 @@ describe('6.2 — billing joins the event spine (BL11)', () => {
     const ctrl = fs.readFileSync(`${__dirname}/../controllers/customerBillingController.js`, 'utf8');
     assert.match(ctrl, /BILLING_EVENTS\.INVOICE_SENT/);
     assert.match(ctrl, /BILLING_EVENTS\.INVOICE_PAID/);
-    assert.match(ctrl, /BILLING_EVENTS\.INVOICE_GENERATED/);
+    // Generation records from the one generate routine every path uses.
+    const svc = fs.readFileSync(`${__dirname}/../services/billingSchedulerService.js`, 'utf8');
+    assert.match(svc, /BILLING_EVENTS\.INVOICE_GENERATED/);
   });
 
   it('the invoice timeline reads the shared events table back', () => {

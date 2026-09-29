@@ -379,6 +379,9 @@ const FY_DOC_TYPES = {
   vendor_return_ticket: { docType: 'vendor_return_ticket', prefix: 'VRT', table: 'vendor_return_tickets', column: 'ticket_number' },
   // Out-of-warranty service on a sold laptop (migration 352).
   service_order: { docType: 'service_order', prefix: 'SVO', table: 'support_service_orders', column: 'order_number' },
+  // Customer credit notes (MD2): one FY series for manual, return and repair
+  // notes alike. Reconciles against MAX() of live CN/yy-yy/NNNN numbers.
+  credit_note: { docType: 'credit_note', prefix: 'CN', table: 'customer_credit_notes', column: 'credit_note_number' },
 };
 const FY_SEQ_PAD = 4;
 
