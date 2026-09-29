@@ -8,6 +8,9 @@ import {
 } from '../../sales-pipeline/salesPipelineApi';
 import { isAccountsMailBlocked } from '../../sales-pipeline/salesPipelineUtils';
 import { pdfUrl } from '../sell/sellShared';
+import {
+  REPLACE_REASON_MIN, ReplaceReason, SharedInvoiceConfirm, errCode, isReplacing,
+} from '../money/gst/gstShared';
 
 /**
  * A challan's paperwork: the e-way bill (value ≥ ₹50,000) and, for a sale or a
@@ -20,10 +23,13 @@ import { pdfUrl } from '../sell/sellShared';
 const FileLink = ({ path, children }) => (path ? <a href={pdfUrl(path)} target="_blank" rel="noreferrer">{children}</a> : null);
 
 function EwayPanel({ dc, status, c, onChanged }) {
-  const [f, setF] = useState({ number: '', date: '', vehicle: '', file: null });
+  const [f, setF] = useState({ number: '', date: '', vehicle: '', file: null, reason: '' });
   const [busy, setBusy] = useState('');
-  useEffect(() => { setF({ number: c.eway_bill_number || '', date: c.eway_bill_date ? String(c.eway_bill_date).slice(0, 10) : '', vehicle: c.vehicle_number || '', file: null }); }, [c]);
+  useEffect(() => { setF({ number: c.eway_bill_number || '', date: c.eway_bill_date ? String(c.eway_bill_date).slice(0, 10) : '', vehicle: c.vehicle_number || '', file: null, reason: '' }); }, [c]);
   const mailBlocked = isAccountsMailBlocked(status);
+  // MD7: a different number than the one on file is a replace, which needs a reason.
+  const ewayChanges = isReplacing(c.eway_bill_number, f.number)
+    ? [{ label: 'E-way bill', from: c.eway_bill_number, to: f.number.trim() }] : [];
 
   const ask = async () => {
     setBusy('ask');
@@ -33,8 +39,10 @@ function EwayPanel({ dc, status, c, onChanged }) {
     if (!f.number.trim()) { toast.error('Enter the e-way bill number'); return; }
     if (!f.file && !c.eway_bill_pdf_path) { toast.error('Attach the e-way bill document'); return; }
     if (c.requires_vehicle_number && !f.vehicle.trim()) { toast.error('Enter the vehicle number'); return; }
+    if (ewayChanges.length && f.reason.trim().length < REPLACE_REASON_MIN) { toast.error('Give a reason for replacing the e-way bill'); return; }
     const fd = new FormData();
     fd.append('eway_bill_number', f.number.trim());
+    if (ewayChanges.length) { fd.append('replace', '1'); fd.append('replace_reason', f.reason.trim()); }
     if (f.date) fd.append('eway_bill_date', f.date);
     if (f.file) fd.append('eway_bill_pdf', f.file);
     if (f.vehicle.trim()) fd.append('vehicle_number', f.vehicle.trim().toUpperCase());
@@ -90,6 +98,9 @@ function EwayPanel({ dc, status, c, onChanged }) {
               </Field>
             </FormGrid>
             <div style={{ marginTop: '12px' }}>
+              <ReplaceReason changes={ewayChanges} value={f.reason} onChange={(v) => setF((x) => ({ ...x, reason: v }))} />
+            </div>
+            <div style={{ marginTop: '12px' }}>
               <Button variant="primary" onClick={upload} disabled={busy === 'up'}>{busy === 'up' ? 'Saving…' : (c.eway_complete ? 'Update e-way bill' : 'Save and unlock the challan')}</Button>
             </div>
           </div>
@@ -100,11 +111,18 @@ function EwayPanel({ dc, status, c, onChanged }) {
 }
 
 function EinvoicePanel({ dc, status, c, onChanged }) {
-  const [f, setF] = useState({ number: '', file: null, ewayNumber: '', ewayFile: null });
+  const [f, setF] = useState({ number: '', file: null, ewayNumber: '', ewayFile: null, reason: '' });
   const [busy, setBusy] = useState('');
-  useEffect(() => { setF({ number: c.einvoice_number || '', file: null, ewayNumber: c.eway_bill_number || '', ewayFile: null }); }, [c]);
+  const [sharedAsk, setSharedAsk] = useState(null);
+  const [share, setShare] = useState(false);
+  useEffect(() => { setF({ number: c.einvoice_number || '', file: null, ewayNumber: c.eway_bill_number || '', ewayFile: null, reason: '' }); setSharedAsk(null); setShare(false); }, [c]);
   const needsEway = Boolean(c.requires_eway_bill);
   const mailBlocked = isAccountsMailBlocked(status);
+  // MD7: changing a number on file is an explicit replace with a reason.
+  const changes = [
+    isReplacing(c.einvoice_number, f.number) && { label: 'E-invoice number', from: c.einvoice_number, to: f.number.trim() },
+    needsEway && isReplacing(c.eway_bill_number, f.ewayNumber) && { label: 'E-way bill', from: c.eway_bill_number, to: f.ewayNumber.trim() },
+  ].filter(Boolean);
 
   const ask = async () => {
     setBusy('ask');
@@ -115,15 +133,26 @@ function EinvoicePanel({ dc, status, c, onChanged }) {
     if (!f.file && !c.einvoice_pdf_path) { toast.error('Attach the e-invoice'); return; }
     if (needsEway && !f.ewayNumber.trim()) { toast.error('Enter the e-way bill number'); return; }
     if (needsEway && !f.ewayFile && !c.eway_bill_pdf_path) { toast.error('Attach the e-way bill'); return; }
+    if (changes.length && f.reason.trim().length < REPLACE_REASON_MIN) { toast.error('Give a reason for replacing'); return; }
+    if (sharedAsk && !share) { toast.error('Confirm the shared invoice first'); return; }
     const fd = new FormData();
     fd.append('einvoice_number', f.number.trim());
+    if (changes.length) { fd.append('replace', '1'); fd.append('replace_reason', f.reason.trim()); }
+    if (share) fd.append('share_invoice', '1');
     if (f.file) fd.append('einvoice_pdf', f.file);
     if (needsEway) {
       fd.append('eway_bill_number', f.ewayNumber.trim());
       if (f.ewayFile) fd.append('eway_bill_pdf', f.ewayFile);
     }
     setBusy('up');
-    try { await uploadSaleDcCompliance(dc, fd); toast.success('Invoice saved — the challan is unlocked'); onChanged?.(); } catch (e) { toast.error(e?.response?.data?.message || 'Could not save the invoice.'); } finally { setBusy(''); }
+    try {
+      await uploadSaleDcCompliance(dc, fd);
+      toast.success('Invoice saved — the challan is unlocked');
+      onChanged?.();
+    } catch (e) {
+      if (errCode(e) === 'SHARED_INVOICE_CONFIRM') setSharedAsk({ message: e.response.data.message });
+      else toast.error(e?.response?.data?.message || 'Could not save the invoice.');
+    } finally { setBusy(''); }
   };
 
   return (
@@ -159,6 +188,10 @@ function EinvoicePanel({ dc, status, c, onChanged }) {
                 </>
               )}
             </FormGrid>
+            <div className="c-stack" style={{ marginTop: '12px' }}>
+              <ReplaceReason changes={changes} value={f.reason} onChange={(v) => setF((x) => ({ ...x, reason: v }))} />
+              <SharedInvoiceConfirm ask={sharedAsk} checked={share} onChange={setShare} />
+            </div>
             <div style={{ marginTop: '12px' }}>
               <Button variant="primary" onClick={upload} disabled={busy === 'up'}>{busy === 'up' ? 'Saving…' : 'Save'}</Button>
             </div>
