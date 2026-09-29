@@ -707,9 +707,14 @@ function isCourierOrPorterPickup(item) {
   return method === 'courier' || method === 'porter';
 }
 
+/**
+ * Collected from the customer. The technician's e-sign is NOT proof: it is
+ * taken at arrival, before the OTP, and used to be stamped on every laptop of
+ * the Return DC — so a laptop the customer kept looked ready for the gate.
+ */
 function pickupReadyForGateInward(item) {
   if (isCourierOrPorterPickup(item)) return true;
-  return !!(item.customer_otp_verified_at || item.picked_up_at || item.technician_esign_at);
+  return !!(item.customer_otp_verified_at || item.picked_up_at);
 }
 
 async function loadReturnDc(db, rdcNumber) {
@@ -765,6 +770,8 @@ async function loadReturnDc(db, rdcNumber) {
   const cancelled = r.rows.every((row) => CANCELLED_DC.has(String(row.status || '').toLowerCase()));
   const gateInwardDone = items.rows.length > 0 && items.rows.every((i) => i.gate_inward_at);
   const pickupReady = items.rows.length === 0 || items.rows.every(pickupReadyForGateInward);
+  const readyCount = items.rows.filter(pickupReadyForGateInward).length;
+  const notCollected = items.rows.length - readyCount;
 
   let active = true;
   let inactive_reason = null;
@@ -779,7 +786,9 @@ async function loadReturnDc(db, rdcNumber) {
     inactive_reason = 'Guard inward already recorded. Warehouse can now e-sign.';
   } else if (!pickupReady) {
     active = false;
-    inactive_reason = 'Technician has not completed customer pickup yet. Guard inward is after pickup.';
+    inactive_reason = readyCount > 0
+      ? `${readyCount} laptop${readyCount === 1 ? '' : 's'} ready; ${notCollected} not collected — ask support to use Collect later for the laptop the customer kept, then scan ${head.dc_number} again.`
+      : 'Technician has not completed customer pickup yet. Guard inward is after pickup.';
   }
 
   return {
@@ -796,6 +805,12 @@ async function loadReturnDc(db, rdcNumber) {
     active,
     inactive_reason,
     laptops,
+    // Laptops the customer still has: never auto-verified from the RDC QR.
+    not_collected_codes: items.rows
+      .filter((row) => !pickupReadyForGateInward(row))
+      .flatMap((row) => [row.ttspl_id, row.unique_serial_number, row.serial_number])
+      .filter(Boolean)
+      .map((c) => normalizeCode(c)),
   };
 }
 
@@ -2180,8 +2195,13 @@ async function seedDocumentConfirmMovements(db, { session, ctx, actor }) {
 
 async function autoVerifyDocumentLaptops(db, { session, ctx, actor }) {
   const laptops = ctx.laptops || [];
+  const notCollected = new Set(ctx.not_collected_codes || []);
   let verified = 0;
   for (const laptop of laptops) {
+    if (notCollected.size && [laptop.ttspl, laptop.serial_number]
+      .some((c) => c && notCollected.has(normalizeCode(c)))) {
+      continue;
+    }
     const serial = laptop.serial_id
       ? await findSerialById(db, laptop.serial_id)
       : await findSerial(db, laptop.ttspl || laptop.serial_number);
@@ -2999,4 +3019,7 @@ module.exports = {
   getSession,
   getDashboard,
   getHistory,
+  // Read-only helpers, exported for tests (collect later / RDC readiness).
+  loadReturnDc,
+  pickupReadyForGateInward,
 };

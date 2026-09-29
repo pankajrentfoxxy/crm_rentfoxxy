@@ -66,6 +66,19 @@ async function markRepairPickupPickedUp(db, item, actorUserId, actorName) {
   return { itemId: item.id, repair_pickup: true, ...out };
 }
 
+/**
+ * Only laptops that actually left the customer: collected with the OTP, or
+ * received, or sent by courier / porter (the carrier collected them). A
+ * laptop the customer kept stays open — it is on its own Return DC now
+ * ("Collect later"), and its own completion resolves it.
+ */
+const COLLECTED_SQL = `(
+  picked_up_at IS NOT NULL
+  OR customer_otp_verified_at IS NOT NULL
+  OR warehouse_received_at IS NOT NULL
+  OR LOWER(COALESCE(pickup_method, '')) IN ('courier', 'porter')
+)`;
+
 async function finalizeSupportPickupTicket(db, supportTicketId, dcNumber) {
   if (!supportTicketId) return;
 
@@ -80,7 +93,9 @@ async function finalizeSupportPickupTicket(db, supportTicketId, dcNumber) {
               status = CASE WHEN status = 'inventory_updated' THEN status ELSE 'picked_up' END,
               updated_at = NOW()
         WHERE ticket_id = $1 AND item_type = 'pickup'
-          AND return_dc_number = $2`,
+          AND return_dc_number = $2
+          AND COALESCE(status, '') NOT IN ('cancelled', 'removed')
+          AND ${COLLECTED_SQL}`,
       [supportTicketId, dcNumber]
     );
     await db.query(
@@ -90,6 +105,8 @@ async function finalizeSupportPickupTicket(db, supportTicketId, dcNumber) {
     return;
   }
 
+  // The Return DC being completed only — never every pickup on the ticket
+  // (a second Return DC of the same ticket may still be with the customer).
   await db.query(
     `UPDATE support_ticket_items
         SET status = 'resolved',
@@ -97,22 +114,20 @@ async function finalizeSupportPickupTicket(db, supportTicketId, dcNumber) {
             resolved_at  = COALESCE(resolved_at, NOW()),
             updated_at = NOW()
       WHERE ticket_id = $1 AND item_type = 'pickup'
-        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return')
-        AND COALESCE(pickup_type, CASE WHEN source_item_id IS NOT NULL THEN 'repair' END) <> 'repair'`,
-    [supportTicketId]
+        AND ($2::text IS NULL OR return_dc_number = $2)
+        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return', 'cancelled', 'removed')
+        AND COALESCE(pickup_type, CASE WHEN source_item_id IS NOT NULL THEN 'repair' END) <> 'repair'
+        AND ${COLLECTED_SQL}`,
+    [supportTicketId, dcNumber || null]
   );
   await db.query(
-    `UPDATE support_tickets
-        SET status = CASE WHEN NOT EXISTS (
-              SELECT 1 FROM support_ticket_items
-               WHERE ticket_id = $1
-                 AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return')
-            ) THEN 'closed' ELSE 'in_progress' END,
-            last_activity_at = NOW(),
-            updated_at = NOW()
-      WHERE id = $1`,
+    `UPDATE support_tickets SET last_activity_at = NOW(), updated_at = NOW() WHERE id = $1`,
     [supportTicketId]
   );
+  // One rule for when a ticket closes (cancelled / removed laptops count as
+  // done; a repair waiting for its Service DC keeps it open).
+  const { recomputeTicketStatus } = require('../controllers/supportController');
+  await recomputeTicketStatus(db, supportTicketId);
 }
 
 async function processReturnedSerials(db, {
@@ -214,4 +229,4 @@ async function processReturnedSerials(db, {
   return results;
 }
 
-module.exports = { processReturnedSerials };
+module.exports = { processReturnedSerials, finalizeSupportPickupTicket };

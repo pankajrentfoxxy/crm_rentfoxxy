@@ -38,7 +38,12 @@ async function myWork(userId) {
   const rows = (await pool.query(
     `SELECT i.*, t.customer_name, t.priority, t.customer_id,
             COALESCE(NULLIF(t.ticket_phone_override, ''), t.customer_phone) AS phone, t.ticket_alt_phone,
-            t.ticket_address, t.pickup_address, t.top_level_remarks
+            t.ticket_address, t.pickup_address, t.top_level_remarks,
+            (SELECT COUNT(*)::int FROM support_ticket_items s2
+              WHERE i.return_dc_number IS NOT NULL
+                AND s2.return_dc_number = i.return_dc_number
+                AND s2.item_type = 'pickup'
+                AND COALESCE(s2.status, '') NOT IN ('cancelled', 'removed')) AS rdc_laptops
        FROM support_ticket_items i
        JOIN support_tickets t ON t.id = i.ticket_id
       WHERE (i.assigned_to = $1 OR i.pickup_assigned_to = $1)
@@ -73,6 +78,11 @@ async function myWork(userId) {
       needs_finding: Boolean(r.item_type === 'complaint' && r.reported_issue_id && !r.found_issue_id),
       remarks: r.remarks || r.top_level_remarks || null,
       return_dc_number: r.return_dc_number || null,
+      // Laptops on this pickup's Return DC. With more than one, a laptop the
+      // customer keeps can move to a later pickup ("Collect later").
+      rdc_laptops: r.rdc_laptops || 0,
+      collected: Boolean(r.customer_otp_verified_at || r.picked_up_at),
+      pickup_scheduled_at: r.pickup_scheduled_at || null,
       visited_at: r.visited_at,
       outcome: r.outcome,
       has_photo: Boolean(r.pod_image_path || r.proof_of_completion_path),

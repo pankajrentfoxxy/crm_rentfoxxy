@@ -261,6 +261,8 @@ router.patch(
 router.post('/items/:itemId/pickup-reached', logVisit);
 router.post('/items/:itemId/technician-esign', technicianSignPickup);
 router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
+// Customer keeps one laptop: move it to a new Return DC on the same ticket (own OTP).
+router.post('/items/:itemId/collect-later', require('../controllers/supportController').collectLaterPickup);
 router.post('/items/:itemId/send-otp', sendSupportOtp);
 router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 

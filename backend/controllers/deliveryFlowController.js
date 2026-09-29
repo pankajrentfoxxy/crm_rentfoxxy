@@ -477,6 +477,36 @@ async function fieldAssignmentRefusal(req, dcNumber, kind = challanKind(dcNumber
   return { status: 403, message: 'This challan is assigned to someone else' };
 }
 
+/**
+ * A support Return DC (it carries support pickup laptops) is worked laptop by
+ * laptop in Support → My work: per-laptop customer OTP, photo, charger, and
+ * "Collect later" when the customer keeps one. The challan-wide steps here
+ * (reached / scan + OTP / deliver) marked every laptop collected at once.
+ */
+const SUPPORT_RDC_EXISTS = `EXISTS (
+  SELECT 1 FROM support_ticket_items s
+   WHERE s.return_dc_number = d.dc_number
+     AND s.item_type = 'pickup'
+     AND COALESCE(s.status, '') NOT IN ('cancelled', 'removed')
+)`;
+
+async function supportRdcRefusal(dcNumber) {
+  const r = await pool.query(
+    `SELECT d.support_ticket_id
+       FROM delivery_challan_lines d
+      WHERE d.dc_number = $1 AND d.movement_type = 'return' AND ${SUPPORT_RDC_EXISTS}
+      LIMIT 1`,
+    [dcNumber]
+  );
+  if (!r.rows.length) return null;
+  const ticket = r.rows[0].support_ticket_id ? ` (ticket #${r.rows[0].support_ticket_id})` : '';
+  return {
+    status: 409,
+    message: `${dcNumber} is a support pickup${ticket} — collect each laptop from Support → My work with the customer's OTP. `
+      + 'If the customer keeps a laptop, use "Collect later" there.',
+  };
+}
+
 function refuse(res, refusal) {
   return res.status(refusal.status).json({ success: false, message: refusal.message });
 }
@@ -538,7 +568,9 @@ exports.getMyDeliveries = async (req, res) => {
                         AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
                        OR (d.status = 'rejected' AND d.return_to_warehouse_at IS NULL
                            AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
-                     )`;
+                     )
+                     -- Support pickups are worked per laptop in Support → My work.
+                     AND NOT (d.movement_type = 'return' AND ${SUPPORT_RDC_EXISTS})`;
     const items = await buildDcFlow(where, params, { includeOtp: false });
     const vendorReturns = await vrtdcFlow.listBucketVendorReturns({
       technicianId: techId,
@@ -568,6 +600,10 @@ exports.markTechReached = async (req, res) => {
     // V5: only the person the challan is out with (or a supervisor) marks it reached.
     const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
     if (refusal) return refuse(res, refusal);
+    if (kind === 'dc') {
+      const supportRefusal = await supportRdcRefusal(dcNumber);
+      if (supportRefusal) return refuse(res, supportRefusal);
+    }
     if (kind === 'vrtdc') {
       await vrtdcFlow.markReached(dcNumber, { latitude, longitude });
       return res.json({ success: true, otp_generated: false });
@@ -600,6 +636,10 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
     const kind = challanKind(dcNumber);
     const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
     if (refusal) return refuse(res, refusal);
+    if (kind === 'dc') {
+      const supportRefusal = await supportRdcRefusal(dcNumber);
+      if (supportRefusal) return refuse(res, supportRefusal);
+    }
     if (kind === 'vrtdc') {
       const result = await vrtdcFlow.verifySerial(dcNumber, req.body?.serial_number);
       return res.json(result);
@@ -748,6 +788,10 @@ exports.submitDeliveryWithPod = async (req, res) => {
   try {
     const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
     if (refusal) return refuse(res, refusal);
+    if (kind === 'dc') {
+      const supportRefusal = await supportRdcRefusal(dcNumber);
+      if (supportRefusal) return refuse(res, supportRefusal);
+    }
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
