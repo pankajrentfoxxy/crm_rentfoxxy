@@ -143,7 +143,9 @@ async function cancelVendorBill(db, { billId, reason, actor, correlationId = nul
   }
 
   const { rows: current } = await client.query(
-    `SELECT bill_id, bill_number, status, amount_paid FROM vendor_monthly_bills WHERE bill_id = $1`,
+    // MD5 — locked: run inside the caller's transaction (the controller opens
+    // one) so a payment cannot land between this check and the UPDATE.
+    `SELECT bill_id, bill_number, status, amount_paid FROM vendor_monthly_bills WHERE bill_id = $1 FOR UPDATE`,
     [billId]
   );
   const bill = current[0];
@@ -162,9 +164,20 @@ async function cancelVendorBill(db, { billId, reason, actor, correlationId = nul
     `UPDATE vendor_monthly_bills
         SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2,
             cancellation_reason = $3, updated_at = NOW()
-      WHERE bill_id = $1
+      WHERE bill_id = $1 AND status <> 'cancelled'
       RETURNING *`,
     [billId, actor?.user_id || null, trimmed.slice(0, 2000)]
+  );
+  if (!rows.length) throw new BillingActionError('This bill is already cancelled', 409);
+
+  // MD5 — the debit notes this bill deducted go back to 'approved', so the
+  // next bill for this vendor (or a regenerated one) deducts them instead.
+  const released = await client.query(
+    `UPDATE vendor_debit_notes
+        SET status = 'approved', adjusted_in_bill_id = NULL, updated_at = NOW()
+      WHERE adjusted_in_bill_id = $1 AND status = 'adjusted'
+      RETURNING debit_note_number`,
+    [billId]
   );
 
   await vendorBillEvent(client, {
@@ -173,7 +186,7 @@ async function cancelVendorBill(db, { billId, reason, actor, correlationId = nul
     eventType: BILLING_EVENTS.BILL_CANCELLED,
     fromState: status,
     toState: 'cancelled',
-    payload: { reason: trimmed },
+    payload: { reason: trimmed, debit_notes_released: (released.rows || []).map((r) => r.debit_note_number) },
     actor,
     correlationId,
     source: 'invoiceLifecycleService.cancelVendorBill',
@@ -198,7 +211,7 @@ async function approveVendorBill(db, { billId, actor, correlationId = null }) {
   const approverId = Number(actor?.user_id) || null;
 
   const { rows: current } = await client.query(
-    `SELECT bill_id, bill_number, status, generated_by FROM vendor_monthly_bills WHERE bill_id = $1`,
+    `SELECT bill_id, bill_number, status, generated_by FROM vendor_monthly_bills WHERE bill_id = $1 FOR UPDATE`,
     [billId]
   );
   const bill = current[0];

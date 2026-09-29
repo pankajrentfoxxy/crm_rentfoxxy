@@ -3781,7 +3781,16 @@ const VENDOR_LINE_RATE_SQL = `COALESCE(
                 NULLIF(NULLIF(vln.ln->>'rate', '')::numeric, 0)
               )`;
 
-async function generateVendorBill(vendorId, month, year) {
+/**
+ * @param opts.actor who generated it (req.user). MD5: written to generated_by
+ *        so maker-checker on approval has someone to compare against. The cron
+ *        and scripts pass nothing — approval lets those through, as before.
+ */
+async function generateVendorBill(vendorId, month, year, { actor = null } = {}) {
+  const actorUserId = Number(actor?.user_id) || null;
+  // Lazy: vendorBillService pulls in salesManagementService.
+  const { vendorSupplyState, vendorBillGst, pickDebitNotes } = require('./vendorBillService');
+  const { vendorBillEvent, BILLING_EVENTS } = require('./billingEventService');
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
 
@@ -3791,7 +3800,9 @@ async function generateVendorBill(vendorId, month, year) {
 
     const existing = await client.query(
       `SELECT bill_id FROM vendor_monthly_bills
-       WHERE vendor_id = $1 AND bill_month = $2 AND bill_year = $3`,
+       WHERE vendor_id = $1 AND bill_month = $2 AND bill_year = $3
+         -- A cancelled bill is history; the month can be billed again (369).
+         AND status <> 'cancelled'`,
       [vendorId, month, year]
     );
     if (existing.rows.length) {
@@ -3919,8 +3930,17 @@ async function generateVendorBill(vendorId, month, year) {
       return { skipped: true, reason: 'No active serials in this month' };
     }
 
+    subtotal = parseFloat(subtotal.toFixed(2));
+
+    // MD5 — CGST+SGST or IGST from the vendor's state against the company's,
+    // via the shared helper, stored per bill. Was a flat 18% of the subtotal, unsplit.
+    const supply = await vendorSupplyState(client, vendorId);
+    const gst = vendorBillGst(subtotal, supply.state);
+    const gstAmount = gst.gst_amount;
+    const gross = parseFloat((subtotal + gstAmount).toFixed(2));
+
     const dnRes = await client.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total_dn
+      `SELECT debit_note_id, debit_note_number, amount
        FROM vendor_debit_notes
        WHERE vendor_id = $1 AND status = 'approved'
          AND adjusted_in_bill_id IS NULL
@@ -3931,15 +3951,20 @@ async function generateVendorBill(vendorId, month, year) {
          --
          -- A note cannot be adjusted against a period that ended before it was
          -- raised. vendor_debit_notes carries no "adjust from" column, so
-         -- created_at is the only honest bound available; it is enough to stop
-         -- the backfill case, which is the one the finding describes.
-         AND created_at::date <= $2::date`,
+         -- created_at is the only honest bound available.
+         AND created_at::date <= $2::date
+       ORDER BY created_at, debit_note_id
+       FOR UPDATE`,
       [vendorId, toLocalYmd(monthEnd)]
     );
-    const debitAdjustment = parseFloat(dnRes.rows[0].total_dn || 0);
-
-    const gstAmount = parseFloat((subtotal * 0.18).toFixed(2));
-    const totalPayable = Math.max(0, parseFloat((subtotal + gstAmount - debitAdjustment).toFixed(2)));
+    // MD5 — only the notes this bill actually deducts are marked adjusted.
+    // The old UPDATE marked EVERY approved note adjusted, including ones raised
+    // after the bill month that the SUM above had (rightly) left out — their
+    // credit was lost. A note that does not fit under the bill's value is left
+    // approved for the next bill instead of being clipped to zero.
+    const picked = pickDebitNotes(dnRes.rows, gross);
+    const debitAdjustment = picked.total;
+    const totalPayable = parseFloat((gross - debitAdjustment).toFixed(2));
 
     const billNumber = await nextVendorBillNumber(client);
 
@@ -3947,8 +3972,9 @@ async function generateVendorBill(vendorId, month, year) {
       `INSERT INTO vendor_monthly_bills
         (bill_number, vendor_id, bill_month, bill_year,
          bill_date, from_date, to_date, line_items,
-         subtotal, gst_amount, debit_note_adjustment, total_payable, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'generated')
+         subtotal, gst_amount, debit_note_adjustment, total_payable, status,
+         cgst_amount, sgst_amount, igst_amount, place_of_supply, is_intra_state, generated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'generated',$13,$14,$15,$16,$17,$18)
        RETURNING bill_id, bill_number`,
       [
         billNumber, vendorId, month, year,
@@ -3957,21 +3983,40 @@ async function generateVendorBill(vendorId, month, year) {
         toLocalYmd(monthEnd),
         JSON.stringify(lineItems),
         subtotal.toFixed(2), gstAmount, debitAdjustment.toFixed(2), totalPayable,
+        gst.cgst_amount, gst.sgst_amount, gst.igst_amount,
+        gst.place_of_supply ? String(gst.place_of_supply).slice(0, 100) : null,
+        gst.is_intra_state,
+        actorUserId || null,
       ]
     );
 
     const billId = insertRes.rows[0].bill_id;
     await insertVendorBillLines(client, billId, lineItems);
 
-    if (debitAdjustment > 0) {
+    if (picked.applied.length) {
       await client.query(
         `UPDATE vendor_debit_notes
          SET adjusted_in_bill_id = $1, status = 'adjusted', updated_at = NOW()
-         WHERE vendor_id = $2 AND status = 'approved'
+         WHERE debit_note_id = ANY($2::int[]) AND status = 'approved'
            AND adjusted_in_bill_id IS NULL`,
-        [billId, vendorId]
+        [billId, picked.applied.map((n) => n.debit_note_id)]
       );
     }
+
+    await vendorBillEvent(client, {
+      billId,
+      billNumber: insertRes.rows[0].bill_number,
+      eventType: BILLING_EVENTS.BILL_GENERATED,
+      toState: 'generated',
+      payload: {
+        month, year, lines: lineItems.length, subtotal, gst_amount: gstAmount,
+        gst_type: gst.is_intra_state ? 'intra' : 'inter', place_of_supply: gst.place_of_supply,
+        place_of_supply_source: supply.source,
+        debit_notes: picked.applied.map((n) => n.debit_note_number), debit_note_adjustment: debitAdjustment,
+      },
+      actor,
+      source: 'billingSchedulerService.generateVendorBill',
+    });
 
     await client.query('COMMIT');
     billingLog.info({ billNumber, vendorId }, 'Generated vendor bill');

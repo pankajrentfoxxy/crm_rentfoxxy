@@ -14,6 +14,8 @@ router.get(
   ctrl.listBillableVendors
 );
 router.get('/bills', cp('vendor_billing_mgmt', 'view'), ctrl.listVendorBills);
+// Every vendor payment across bills (the ledger only had per-bill reads).
+router.get('/payments', cp('vendor_billing_mgmt', 'view'), ctrl.listVendorPayments);
 router.get('/bills/:billId/payments', cp('vendor_billing_mgmt', 'view'), ctrl.listBillPayments);
 router.post('/bills/:id/payments', cp('vendor_billing_mgmt', 'edit'), ctrl.recordBillPayment);
 router.get('/bills/:billId/pdf', cp('vendor_billing_mgmt', 'view'), ctrl.downloadVendorBillPdf);
@@ -27,6 +29,11 @@ router.get('/bills/:billId/timeline', cp('vendor_billing_mgmt', 'view'), ctrl.ge
 
 router.get('/debit-notes', cp('debit_notes', 'view'), ctrl.listDebitNotes);
 router.post('/debit-notes', cp('debit_notes', 'create'), ctrl.createDebitNote);
+router.get('/debit-notes/:id', cp('debit_notes', 'view'), ctrl.getDebitNote);
+// MD6: completing a draft (setting its amount) is the maker's step, so it takes
+// the same right as raising one; approving and cancelling are the checker's.
+router.patch('/debit-notes/:id', cp('debit_notes', 'create'), ctrl.updateDebitNote);
 router.patch('/debit-notes/:id/approve', cp('debit_notes', 'edit'), ctrl.approveDebitNote);
+router.patch('/debit-notes/:id/cancel', cp('debit_notes', 'edit'), ctrl.cancelDebitNote);
 
 module.exports = router;

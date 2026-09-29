@@ -51,8 +51,17 @@ async function buildVendorBillHtml(bill, company) {
 
   const totalsRows = [
     `<tr><td>Subtotal (${deviceCount} unit${deviceCount === 1 ? '' : 's'})</td><td>${fmtMoneyInr(bill.subtotal)}</td></tr>`,
-    `<tr><td>GST 18%</td><td>${fmtMoneyInr(gst)}</td></tr>`,
   ];
+  // MD5 — print the heads the bill was classified with; a bill raised before
+  // the split existed (is_intra_state NULL) keeps the single GST line.
+  if (bill.is_intra_state === true) {
+    totalsRows.push(`<tr><td>CGST 9%</td><td>${fmtMoneyInr(bill.cgst_amount)}</td></tr>`);
+    totalsRows.push(`<tr><td>SGST 9%</td><td>${fmtMoneyInr(bill.sgst_amount)}</td></tr>`);
+  } else if (bill.is_intra_state === false) {
+    totalsRows.push(`<tr><td>IGST 18%</td><td>${fmtMoneyInr(bill.igst_amount)}</td></tr>`);
+  } else {
+    totalsRows.push(`<tr><td>GST 18%</td><td>${fmtMoneyInr(gst)}</td></tr>`);
+  }
   if (debit > 0) {
     totalsRows.push(`<tr class="credit"><td>Debit adjustments</td><td>- ${fmtMoneyPlain(debit)}</td></tr>`);
   }

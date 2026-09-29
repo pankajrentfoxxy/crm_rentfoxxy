@@ -2,11 +2,7 @@ const path = require('path');
 const pool = require('../config/db');
 const { generateVendorBill } = require('../services/billingSchedulerService');
 const { generateVendorBillPdf, vendorBillPdfDownloadName } = require('../services/vendorBillPdfService');
-const {
-  recordPayment,
-  recordFullPayment,
-  listPayments,
-} = require('../services/paymentLedgerService');
+const { listPayments } = require('../services/paymentLedgerService');
 const {
   BillingActionError,
   approveVendorBill: approveVendorBillChecked,
@@ -14,6 +10,8 @@ const {
 } = require('../services/invoiceLifecycleService');
 const { timelineFor } = require('../services/eventService');
 const { VENDOR_BILL } = require('../services/billingEventService');
+const vendorBills = require('../services/vendorBillService');
+const { nextDebitNoteNumber: nextDebitNoteNumberIn } = require('../services/vendorDebitNoteService');
 
 function respondBillingError(res, err) {
   if (err instanceof BillingActionError) {
@@ -22,14 +20,9 @@ function respondBillingError(res, err) {
   return res.status(500).json({ success: false, message: err.message });
 }
 
-async function nextDebitNoteNumber() {
-  const res = await pool.query(
-    `UPDATE sm_document_sequences
-     SET last_value = last_value + 1
-     WHERE doc_type = 'vendor_debit_note'
-     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
-  );
-  return res.rows[0].number;
+/** Run a lifecycle function on one client inside one transaction. */
+function inTransaction(fn) {
+  return vendorBills.withTransaction(fn);
 }
 
 function parseMonthList(raw) {
@@ -153,7 +146,11 @@ exports.listVendorBills = async (req, res) => {
            COUNT(*) FILTER (WHERE vb.status = 'approved')::int AS approved_count,
            COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'approved'), 0) AS approved_total,
            COUNT(*) FILTER (WHERE vb.status = 'paid')::int AS paid_count,
-           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'paid'), 0) AS paid_total
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'paid'), 0) AS paid_total,
+           COUNT(*) FILTER (WHERE vb.status = 'partially_paid')::int AS partially_paid_count,
+           COUNT(*) FILTER (WHERE vb.status = 'cancelled')::int AS cancelled_count,
+           COALESCE(SUM(GREATEST(vb.total_payable - COALESCE(vb.amount_paid, 0), 0))
+             FILTER (WHERE vb.status IN ('approved', 'partially_paid')), 0) AS outstanding_total
          FROM vendor_monthly_bills vb
          LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
          WHERE ${whereSql}`,
@@ -186,17 +183,32 @@ exports.getVendorBill = async (req, res) => {
       `SELECT vb.*,
               COALESCE(v.business_name, v.first_name) AS vendor_name,
               v.gst_number,
+              v.state AS vendor_state,
               v.email AS vendor_email,
-              v.address AS vendor_address
+              v.address AS vendor_address,
+              ug.name AS generated_by_name,
+              ua.name AS approved_by_name,
+              ux.name AS cancelled_by_name
        FROM vendor_monthly_bills vb
        LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+       LEFT JOIN users ug ON ug.user_id = vb.generated_by
+       LEFT JOIN users ua ON ua.user_id = vb.approved_by
+       LEFT JOIN users ux ON ux.user_id = vb.cancelled_by
        WHERE vb.bill_id = $1`,
       [billId]
     );
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
-    res.json({ success: true, bill: result.rows[0] });
+    // The debit notes this bill deducted, so the record can show them.
+    const dn = await pool.query(
+      `SELECT debit_note_id, debit_note_number, reason, description, amount, status, created_at, ttspl_ids
+         FROM vendor_debit_notes
+        WHERE adjusted_in_bill_id = $1
+        ORDER BY created_at, debit_note_id`,
+      [billId]
+    );
+    res.json({ success: true, bill: result.rows[0], debit_notes: dn.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -208,7 +220,16 @@ exports.generateVendorBill = async (req, res) => {
     if (!vendor_id || !month || !year) {
       return res.status(400).json({ success: false, message: 'vendor_id, month, year required' });
     }
-    const result = await generateVendorBill(Number(vendor_id), Number(month), Number(year));
+    const m = Number(month);
+    const y = Number(year);
+    if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(y) || y < 2000 || y > 2100) {
+      return res.status(400).json({ success: false, message: 'month must be 1-12 and year a four-digit year' });
+    }
+    const now = new Date();
+    if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) {
+      return res.status(400).json({ success: false, message: 'A vendor bill cannot be generated for a future month' });
+    }
+    const result = await generateVendorBill(Number(vendor_id), m, y, { actor: req.user || null });
     if (result.skipped && !result.bill_id) {
       return res.status(422).json({
         success: false,
@@ -251,11 +272,11 @@ exports.generateVendorBill = async (req, res) => {
  */
 exports.approveVendorBill = async (req, res) => {
   try {
-    const bill = await approveVendorBillChecked(pool, {
+    const bill = await inTransaction((client) => approveVendorBillChecked(client, {
       billId: Number(req.params.id),
       actor: req.user,
       correlationId: req.correlationId || null,
-    });
+    }));
     res.json({ success: true, bill });
   } catch (err) {
     respondBillingError(res, err);
@@ -265,12 +286,12 @@ exports.approveVendorBill = async (req, res) => {
 /** BL13 — cancel a vendor bill with a reason and a trail. */
 exports.cancelVendorBill = async (req, res) => {
   try {
-    const bill = await cancelVendorBillChecked(pool, {
+    const bill = await inTransaction((client) => cancelVendorBillChecked(client, {
       billId: Number(req.params.id),
       reason: req.body?.reason,
       actor: req.user,
       correlationId: req.correlationId || null,
-    });
+    }));
     res.json({ success: true, bill, message: `Bill ${bill.bill_number} cancelled` });
   } catch (err) {
     respondBillingError(res, err);
@@ -287,28 +308,28 @@ exports.getVendorBillTimeline = async (req, res) => {
   }
 };
 
+/**
+ * "Mark paid" — pays whatever is still owed. Same guarded path as a partial
+ * payment: bill locked, approved bills only, never more than is owed.
+ */
 exports.markVendorBillPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference, payment_date, method } = req.body || {};
-    const result = await recordFullPayment(pool, {
-      partyType: 'vendor',
+    const { payment_reference, payment_date, method, reference, notes } = req.body || {};
+    const result = await vendorBills.recordVendorBillPayment({
       billId: Number(id),
-      reference: payment_reference || null,
-      method: method || 'adjustment',
-      recordedBy: req.user?.user_id || null,
+      full: true,
+      paymentDate: payment_date || null,
+      method: method || null,
+      reference: payment_reference || reference || null,
+      notes: notes || null,
+      actor: req.user || null,
+      correlationId: req.correlationId || null,
     });
-    if (result.skipped) {
-      const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
-      if (!bill.rows.length) {
-        return res.status(404).json({ success: false, message: 'Bill not found' });
-      }
-      return res.json({ success: true, bill: bill.rows[0], message: result.reason });
-    }
     const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
     res.json({ success: true, bill: bill.rows[0], payment: result.payment });
   } catch (err) {
-    res.status(err.message === 'Bill not found' ? 404 : 500).json({ success: false, message: err.message });
+    respondBillingError(res, err);
   }
 };
 
@@ -316,18 +337,18 @@ exports.recordBillPayment = async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, payment_date, method, reference, notes } = req.body || {};
-    if (!amount) {
+    if (amount === undefined || amount === null || amount === '') {
       return res.status(400).json({ success: false, message: 'amount is required' });
     }
-    const result = await recordPayment(pool, {
-      partyType: 'vendor',
+    const result = await vendorBills.recordVendorBillPayment({
       billId: Number(id),
       amount,
-      paymentDate: payment_date,
-      method,
-      reference,
-      notes,
-      recordedBy: req.user?.user_id || null,
+      paymentDate: payment_date || null,
+      method: method || null,
+      reference: reference || null,
+      notes: notes || null,
+      actor: req.user || null,
+      correlationId: req.correlationId || null,
     });
     const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
     res.status(201).json({
@@ -338,8 +359,20 @@ exports.recordBillPayment = async (req, res) => {
       bill: bill.rows[0],
     });
   } catch (err) {
-    const code = err.message === 'Bill not found' ? 404 : 500;
-    res.status(code).json({ success: false, message: err.message });
+    respondBillingError(res, err);
+  }
+};
+
+/** Every vendor payment across bills, newest first. */
+exports.listVendorPayments = async (req, res) => {
+  try {
+    const { vendor_id, search, from, to, page, limit } = req.query;
+    const out = await vendorBills.listVendorPayments(pool, {
+      vendorId: vendor_id || null, search, from, to, page, limit,
+    });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    respondBillingError(res, err);
   }
 };
 
@@ -361,30 +394,63 @@ exports.listBillPayments = async (req, res) => {
   }
 };
 
+const DN_STATUSES = new Set(['pending', 'approved', 'adjusted', 'cancelled']);
+
 exports.listDebitNotes = async (req, res) => {
   try {
-    const { vendor_id, status } = req.query;
+    const { vendor_id, status, search, bill_id, draft } = req.query;
     const params = [];
     const where = ['1=1'];
     if (vendor_id) {
-      params.push(vendor_id);
+      params.push(Number(vendor_id));
       where.push(`dn.vendor_id = $${params.length}`);
     }
-    if (status) {
-      params.push(status);
+    if (status && DN_STATUSES.has(String(status))) {
+      params.push(String(status));
       where.push(`dn.status = $${params.length}`);
     }
+    if (bill_id) {
+      params.push(Number(bill_id));
+      where.push(`dn.adjusted_in_bill_id = $${params.length}`);
+    }
+    if (String(draft || '') === '1') {
+      where.push(`dn.status = 'pending' AND COALESCE(dn.amount, 0) = 0`);
+    }
+    const q = String(search || '').trim();
+    if (q) {
+      params.push(`%${q}%`);
+      const n = params.length;
+      where.push(`(dn.debit_note_number ILIKE $${n} OR COALESCE(dn.reason, '') ILIKE $${n}
+                   OR COALESCE(dn.description, '') ILIKE $${n} OR COALESCE(dn.ttspl_ids::text, '') ILIKE $${n}
+                   OR COALESCE(v.business_name, v.first_name, '') ILIKE $${n})`);
+    }
     const result = await pool.query(
-      `SELECT dn.*, COALESCE(v.business_name, v.first_name) AS vendor_name
+      `SELECT dn.*, COALESCE(NULLIF(v.business_name, ''), v.first_name) AS vendor_name,
+              vb.bill_number AS adjusted_in_bill_number,
+              vpo.purchase_order_number AS po_number
        FROM vendor_debit_notes dn
        LEFT JOIN vendors v ON v.vendor_id = dn.vendor_id
+       LEFT JOIN vendor_monthly_bills vb ON vb.bill_id = dn.adjusted_in_bill_id
+       LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = dn.po_id
        WHERE ${where.join(' AND ')}
-       ORDER BY dn.created_at DESC`,
+       ORDER BY dn.created_at DESC, dn.debit_note_id DESC
+       LIMIT 500`,
       params
     );
     res.json({ success: true, debit_notes: result.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getDebitNote = async (req, res) => {
+  try {
+    const note = await vendorBills.getDebitNote(pool, Number(req.params.id));
+    if (!note) return res.status(404).json({ success: false, message: 'Debit note not found' });
+    const events = await timelineFor(vendorBills.DEBIT_NOTE, note.debit_note_id, { db: pool });
+    res.json({ success: true, debit_note: note, events });
+  } catch (err) {
+    respondBillingError(res, err);
   }
 };
 
@@ -416,7 +482,7 @@ async function createReturnDebitNote(db, { ticket, reason, actorUserId = null })
   if (!vp.rows.length || !vp.rows[0].vendor_id) return null;
   const { vendor_id, po_id, ttspl_id } = vp.rows[0];
 
-  const dnNumber = await nextDebitNoteNumber();
+  const dnNumber = await nextDebitNoteNumberIn(client);
   const ins = await client.query(
     `INSERT INTO vendor_debit_notes
       (debit_note_number, vendor_id, po_id, reason, description, amount,
@@ -437,36 +503,33 @@ async function createReturnDebitNote(db, { ticket, reason, actorUserId = null })
 }
 exports.createReturnDebitNote = createReturnDebitNote;
 
+/** MD6 — number allocated inside the insert's transaction. */
 exports.createDebitNote = async (req, res) => {
   try {
-    const body = req.body || {};
-    if (!body.vendor_id || !body.reason) {
-      return res.status(400).json({ success: false, message: 'vendor_id and reason required' });
-    }
-    const dnNumber = await nextDebitNoteNumber();
-    const amount = parseFloat(body.amount || 0);
-    const result = await pool.query(
-      `INSERT INTO vendor_debit_notes
-        (debit_note_number, vendor_id, po_id, reason, description, amount,
-         quantity, unit_rate, ttspl_ids, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
-       RETURNING *`,
-      [
-        dnNumber,
-        body.vendor_id,
-        body.po_id || null,
-        body.reason,
-        body.description || null,
-        amount,
-        body.quantity || 0,
-        body.unit_rate || 0,
-        JSON.stringify(body.ttspl_ids || []),
-        req.user?.user_id || null,
-      ]
-    );
-    res.status(201).json({ success: true, debit_note: result.rows[0] });
+    const note = await vendorBills.createDebitNote(req.body || {}, req.user || null);
+    res.status(201).json({ success: true, debit_note: note });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    respondBillingError(res, err);
+  }
+};
+
+/** MD6 — set the amount on a pending (usually Rs 0 draft) note. */
+exports.updateDebitNote = async (req, res) => {
+  try {
+    const note = await vendorBills.setDebitNoteAmount(Number(req.params.id), req.body || {}, req.user || null);
+    res.json({ success: true, debit_note: note });
+  } catch (err) {
+    respondBillingError(res, err);
+  }
+};
+
+/** MD6 — cancel a pending note, or an approved one not yet deducted. */
+exports.cancelDebitNote = async (req, res) => {
+  try {
+    const note = await vendorBills.cancelDebitNote(Number(req.params.id), req.body?.reason, req.user || null);
+    res.json({ success: true, debit_note: note, message: `${note.debit_note_number} cancelled` });
+  } catch (err) {
+    respondBillingError(res, err);
   }
 };
 
@@ -498,21 +561,12 @@ exports.downloadVendorBillPdf = async (req, res) => {
   }
 };
 
+/** MD6 — locked, pending only, and never at Rs 0. */
 exports.approveDebitNote = async (req, res) => {
   try {
-    const { id } = req.params;
-    const result = await pool.query(
-      `UPDATE vendor_debit_notes
-       SET status = 'approved', approved_by = $1, updated_at = NOW()
-       WHERE debit_note_id = $2 AND status = 'pending'
-       RETURNING *`,
-      [req.user?.user_id || null, id]
-    );
-    if (!result.rows.length) {
-      return res.status(404).json({ success: false, message: 'Debit note not found or not pending' });
-    }
-    res.json({ success: true, debit_note: result.rows[0] });
+    const note = await vendorBills.approveDebitNote(Number(req.params.id), req.user || null);
+    res.json({ success: true, debit_note: note });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    respondBillingError(res, err);
   }
 };
