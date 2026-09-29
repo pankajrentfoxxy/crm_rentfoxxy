@@ -16,6 +16,8 @@ export {
 } from '../../../inventory-management/partVendorRepairApi';
 export { fetchCascadeBrands, fetchCascadeModels } from '../../../../utils/assetConfigurationApi';
 
+export const cancelPartVendorReturnDc = (dcNumber, reason) => api.post(`/part-vendor-repair/dc/${encodeURIComponent(dcNumber)}/cancel`, { reason });
+
 export const fetchParts = () => api.get('/parts', { params: { limit: 2000 } });
 export const createPart = (body) => api.post('/parts', body);
 export const updatePart = (id, body) => api.put(`/parts/${id}`, body);
@@ -125,5 +127,22 @@ export const labelUnit = (u, partName) => ({
 export const PART_UNIT_WRITE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin'];
 /** services/partVendorRepairService.js WAREHOUSE_ROLES — the repair-DC write fallback. */
 export const PART_REPAIR_WRITE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead', 'procurement'];
+
+/** Part repair challan (VRDC, item_domain 'part') header states. */
+export const REPAIR_DC_STATUS = {
+  draft: { chip: 'draft', label: 'Draft — not sent' },
+  dispatched: { chip: 'dispatched', label: 'With vendor' },
+  partially_returned: { chip: 'partial', label: 'Part back' },
+  returned: { chip: 'completed', label: 'All back' },
+  cancelled: { chip: 'cancelled', label: 'Cancelled' },
+};
+export const REPAIR_LINE_STATUS = {
+  draft: { chip: 'draft', label: 'Not sent' },
+  dispatched: { chip: 'dispatched', label: 'With vendor' },
+  received: { chip: 'received', label: 'Back — repaired' },
+  replacement_received: { chip: 'received', label: 'Back — replaced' },
+  cancelled: { chip: 'cancelled', label: 'Cancelled' },
+};
+export const repairDcPath = (dc) => `/carret/stock/part-repairs/${encodeURIComponent(dc)}`;
 
 export const splitSerials = (text) => String(text || '').split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
