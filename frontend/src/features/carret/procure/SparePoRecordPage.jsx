@@ -17,7 +17,7 @@ import { SPO_BASE, poQty, poStatus, spareLineName } from './poShared';
  * Procure → Spare-parts order record. Same flow and rules as a laptop PO
  * (D13): draft → waiting approval (a manager other than the person who raised
  * it) → with vendor → receiving → received; cancel or short-close with a
- * reason. Receiving still happens on the parts receive screen.
+ * reason. Receiving: /carret/procure/spare-parts-orders/:spoId/receive.
  *
  * No "Amend" here yet: spare orders have no edit form (the parts order form
  * only creates), so an amendment would be stuck in draft. To change an
@@ -86,7 +86,7 @@ export default function SparePoRecordPage() {
         </Notice>
       );
     } else if (st === 'rejected') next = <Notice tone="serious" title="Sent back">{po.rejection_reason || 'No reason recorded.'}</Notice>;
-    else if (st === 'approved') next = <Notice tone="info" title="With the vendor">Receive the parts on the parts receive screen when they arrive.</Notice>;
+    else if (st === 'approved') next = <Notice tone="info" title="With the vendor">When the parts arrive, use “Receive parts” above.</Notice>;
     else if (st === 'processing') next = <Notice tone="info" title={`Receiving — ${qty.received} of ${qty.ordered} in`}>If nothing more is coming, a manager can short-close it.</Notice>;
     else if (st === 'completed') next = <Notice tone="good" title="Fully received" />;
     else if (st === 'closed') next = <Notice tone="info" title={`Short-closed with ${qty.received} of ${qty.ordered} received`}>{po.close_reason}</Notice>;
@@ -95,7 +95,11 @@ export default function SparePoRecordPage() {
 
   const actions = po && (
     <>
-      {canEdit && OPEN.includes(st) && <Button onClick={() => navigate(`/vendor-management/spare-parts-po/${spoId}/receive`)}>Receive parts</Button>}
+      {(OPEN.includes(st) || st === 'completed') && (
+        <Button variant={canEdit && OPEN.includes(st) ? 'primary' : 'secondary'} onClick={() => navigate(`/carret/procure/spare-parts-orders/${spoId}/receive`)}>
+          {canEdit && OPEN.includes(st) ? 'Receive parts' : 'Received parts'}
+        </Button>
+      )}
       {manager && canEdit && OPEN.includes(st) && qty.received > 0 && <Button variant="quiet" onClick={() => setReasonFor('close')}>Short-close</Button>}
       {canEdit && !['cancelled', 'completed', 'closed', 'processing'].includes(st) && qty.received === 0 && (!OPEN.includes(st) || manager) && (
         <Button variant="quiet" onClick={() => setReasonFor('cancel')}>Cancel order</Button>
