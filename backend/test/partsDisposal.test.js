@@ -183,4 +183,37 @@ describe('dead parts — in & out', () => {
     const all = await h.call(searchPartUnits, { query: { status: 'discarded', scrap_challan: 'any', limit: 200 } });
     assert.ok(all.body.units.every((u) => u.scrap_challan_number));
   });
+
+  it('one scrap challan carries a discarded part and a scrapped laptop; the part then leaves the list', async () => {
+    const scrapSvc = require('../services/scrapChallanService');
+    const unit = (await db.query(
+      `SELECT instance_id FROM part_instances WHERE scrap_challan_number IS NULL ORDER BY instance_id DESC LIMIT 1`
+    )).rows[0];
+    const lap = (await db.query(
+      `SELECT serial_id FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL AND scrap_challan_number IS NULL ORDER BY serial_id DESC LIMIT 1`
+    )).rows[0];
+    assert.ok(unit && lap, 'needs one part unit and one laptop');
+    // Fixtures only (rolled back).
+    await db.query(`UPDATE part_instances SET status = 'discarded' WHERE instance_id = $1`, [unit.instance_id]);
+    await db.query(`UPDATE vendor_serial_numbers SET inventory_status = 'scrapped' WHERE serial_id = $1`, [lap.serial_id]);
+    const before = await h.call(searchPartUnits, { query: { status: 'discarded', scrap_challan: 'none', limit: 200 } });
+    assert.ok(before.body.units.some((u) => u.instance_id === unit.instance_id));
+    const out = await scrapSvc.createScrapChallan(db, {
+      instanceIds: [unit.instance_id],
+      serialIds: [lap.serial_id],
+      saleValues: { [`part:${unit.instance_id}`]: '120.005', [`laptop:${lap.serial_id}`]: 900 },
+      recipientName: 'Test recycler',
+      recipientAddress: 'Somewhere',
+    });
+    assert.equal(out.item_count, 2);
+    const c = await scrapSvc.getScrapChallan(out.challan_number);
+    assert.equal(Number(c.sale_total), 1020.01);
+    const after = await h.call(searchPartUnits, { query: { status: 'discarded', scrap_challan: 'none', limit: 200 } });
+    assert.ok(!after.body.units.some((u) => u.instance_id === unit.instance_id));
+    await assert.rejects(
+      () => scrapSvc.createScrapChallan(db, { instanceIds: [unit.instance_id], recipientName: 'X', recipientAddress: 'Y' }),
+      /already on scrap challan/
+    );
+  });
 });
