@@ -75,6 +75,13 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     production assign / reassign to anyone (new permission "Assign floor tickets", reassign keeps the stage).
     Migrations 406–410 on QA. Waiting: click-through.
 
+12e. **New UI clean-up (29 Sep night, commit f7e4f7cd)** — BUILT on QA: no old components or browser pop-ups left in
+    the new UI; six list pages on the standard layout; Finance gaps (invoice e-way + QR, row PDF / mark paid / approve,
+    ageing statement, credit-note laptop links); 7 report charts; Deployed Fleet history drawer; Service Parts
+    Challans full register; vendor return / repair / scrap list PDFs + filters. Six Finance routes and /carret/home
+    were unguarded — fixed. Open question: Deployed-Fleet-only users can't load laptop history (backend needs
+    ttspl_history / floor view) — widen or not? Waiting: click-through.
+
 ## C. Waiting on the user / Accounts
 13. First month the CRM makes vendor bills (earlier months settled outside).
 14. Accounts to confirm `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
