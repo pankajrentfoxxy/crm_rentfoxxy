@@ -26,7 +26,10 @@ const { computeGstBreakdown } = require('./salesManagementService');
 async function customerPlaceOfSupply(db, customerId) {
   if (!customerId) return null;
   const { rows } = await (db || pool).query(
-    `SELECT NULLIF(TRIM(COALESCE(shipping_state, billing_state)), '') AS state
+    // An EMPTY shipping state ('' — 44 customers on QA) must fall back to the
+    // billing state, not blank it out: before 29 Sep 2026 it made the place of
+    // supply "unknown" and those customers were billed CGST+SGST by default.
+    `SELECT COALESCE(NULLIF(TRIM(shipping_state), ''), NULLIF(TRIM(billing_state), '')) AS state
        FROM customers WHERE customer_id = $1`,
     [customerId]
   );
@@ -37,7 +40,7 @@ async function customerPlaceOfSupply(db, customerId) {
 async function vendorPlaceOfSupply(db, vendorId) {
   if (!vendorId) return null;
   const { rows } = await (db || pool).query(
-    `SELECT NULLIF(TRIM(COALESCE(state, shipping_state)), '') AS state
+    `SELECT COALESCE(NULLIF(TRIM(state), ''), NULLIF(TRIM(shipping_state), '')) AS state
        FROM vendors WHERE vendor_id = $1`,
     [vendorId]
   );
