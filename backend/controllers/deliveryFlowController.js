@@ -19,6 +19,8 @@ const { getDeliveryChallanLines } = require('../services/salesManagementService'
 const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 const sm = require('./salesManagementController');
 const vrtdcFlow = require('../services/vendorReturnDeliveryFlow');
+const vrdcFlow = require('../services/vendorRepairDeliveryFlow');
+const { matchScans } = require('../services/fieldScanMatch');
 
 function latestActivityMs(row) {
   const times = [row?.updated_at, row?.reached_at, row?.serial_verified_at, row?.dispatched_at, row?.created_at];
@@ -436,6 +438,94 @@ async function resolveTechnicianId(userId) {
   return r.rows[0]?.technician_id || null;
 }
 
+/** Roles that may act on a field step for someone else (V5's list, unchanged). */
+const FIELD_SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'dispatch', 'support_lead', 'warehouse']);
+/** Whitelisted challan tables by kind — never built from input. */
+const ASSIGNMENT_TABLES = {
+  dc: 'delivery_challan_lines',
+  vrtdc: 'vendor_return_delivery_challans',
+  vrdc: 'vendor_repair_delivery_challans',
+};
+
+function challanKind(dcNumber) {
+  if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) return 'vrtdc';
+  if (vrdcFlow.isVendorRepairDcNumber(dcNumber)) return 'vrdc';
+  return 'dc';
+}
+
+/**
+ * V5, extended to every field step (reached, scan / OTP, deliver, refused) and
+ * to vendor challans: only the technician the challan is out with may act on
+ * it, or a supervisor role (V5's role list — deliberately not a matrix grant:
+ * support_tech holds delivery_challans:edit, so a grant would let every
+ * technician act on every challan). Returns null when allowed, else
+ * { status, message }.
+ */
+async function fieldAssignmentRefusal(req, dcNumber, kind = challanKind(dcNumber)) {
+  const role = String(req.user?.role || '').toLowerCase();
+  if (FIELD_SUPERVISORS.has(role)) return null;
+  const table = ASSIGNMENT_TABLES[kind];
+  const techId = await resolveTechnicianId(req.user.user_id);
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE delivery_person_id = $2 OR delivery_person_id = $3)::int AS mine
+       FROM ${table} WHERE dc_number = $1`,
+    [dcNumber, techId || -1, req.user.user_id]
+  );
+  if (!r.rows[0].total) return { status: 404, message: 'Challan not found' };
+  if (r.rows[0].mine) return null;
+  return { status: 403, message: 'This challan is assigned to someone else' };
+}
+
+function refuse(res, refusal) {
+  return res.status(refusal.status).json({ success: false, message: refusal.message });
+}
+
+/**
+ * Return pickups this technician collected that the warehouse has not received
+ * yet — "hand these in at the gate". Rent keeps running until the warehouse
+ * receives them (RT1), so they stay on the technician's list until then.
+ */
+async function listHandIn(techId, userId) {
+  const r = await pool.query(
+    `SELECT d.dc_number,
+            MAX(d.customer_name) AS customer_name,
+            MAX(d.delivered_at) AS picked_up_at,
+            MAX(d.dc_purpose) AS dc_purpose
+       FROM delivery_challan_lines d
+      WHERE d.movement_type = 'return'
+        AND d.status = 'delivered'
+        AND d.delivered_at > NOW() - INTERVAL '30 days'
+        AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2)
+      GROUP BY d.dc_number
+      ORDER BY MAX(d.delivered_at) DESC`,
+    [techId || -1, userId]
+  );
+  if (!r.rows.length) return [];
+  const items = await pool.query(
+    `SELECT return_dc_number, id, COALESCE(ttspl_id, unique_serial_number) AS ttspl, serial_number,
+            gate_inward_at, warehouse_received_at
+       FROM support_ticket_items
+      WHERE item_type = 'pickup'
+        AND return_dc_number = ANY($1::text[])
+        AND COALESCE(status, '') <> 'cancelled'
+      ORDER BY id`,
+    [r.rows.map((x) => x.dc_number)]
+  );
+  return r.rows
+    .map((x) => ({
+      ...x,
+      laptops: items.rows.filter((i) => i.return_dc_number === x.dc_number).map((i) => ({
+        id: i.id,
+        ttspl: i.ttspl,
+        serial_number: i.serial_number,
+        gate_inward_at: i.gate_inward_at,
+        warehouse_received_at: i.warehouse_received_at,
+      })),
+    }))
+    .filter((x) => x.laptops.some((l) => !l.warehouse_received_at));
+}
+
 // GET /my-deliveries — the logged-in dispatch technician's active DCs.
 exports.getMyDeliveries = async (req, res) => {
   try {
@@ -454,8 +544,15 @@ exports.getMyDeliveries = async (req, res) => {
       technicianId: techId,
       userId: req.user.user_id,
     });
-    const merged = [...items, ...vendorReturns].sort((a, b) => latestActivityMs(b) - latestActivityMs(a));
-    res.json({ success: true, technician_id: techId, items: merged });
+    const vendorRepairs = await vrdcFlow.listBucketVendorRepairs({
+      technicianId: techId,
+      userId: req.user.user_id,
+    });
+    const merged = [...items, ...vendorReturns, ...vendorRepairs]
+      .sort((a, b) => latestActivityMs(b) - latestActivityMs(a));
+    // hand_in is a separate key so the classic screen's list is unchanged.
+    const handIn = await listHandIn(techId, req.user.user_id);
+    res.json({ success: true, technician_id: techId, items: merged, hand_in: handIn });
   } catch (error) {
     console.error('getMyDeliveries:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -466,24 +563,18 @@ exports.getMyDeliveries = async (req, res) => {
 exports.markTechReached = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
-    if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
-      const { latitude, longitude } = req.body || {};
+    const kind = challanKind(dcNumber);
+    const { latitude, longitude } = req.body || {};
+    // V5: only the person the challan is out with (or a supervisor) marks it reached.
+    const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
+    if (refusal) return refuse(res, refusal);
+    if (kind === 'vrtdc') {
       await vrtdcFlow.markReached(dcNumber, { latitude, longitude });
       return res.json({ success: true, otp_generated: false });
     }
-    const { latitude, longitude } = req.body || {};
-    // V5: only the person the DC is out with (or a supervisor) marks it reached.
-    const SUPERVISORS = new Set(['super_admin', 'admin', 'manager', 'dispatch', 'support_lead', 'warehouse']);
-    if (!SUPERVISORS.has(String(req.user?.role || '').toLowerCase())) {
-      const techId = await resolveTechnicianId(req.user.user_id);
-      const own = await pool.query(
-        `SELECT 1 FROM delivery_challan_lines
-          WHERE dc_number = $1 AND (delivery_person_id = $2 OR delivery_person_id = $3) LIMIT 1`,
-        [dcNumber, techId || -1, req.user.user_id]
-      );
-      if (!own.rows.length) {
-        return res.status(403).json({ success: false, message: 'This delivery is assigned to someone else' });
-      }
+    if (kind === 'vrdc') {
+      await vrdcFlow.markReached(dcNumber, { latitude, longitude });
+      return res.json({ success: true, otp_generated: false });
     }
     const upd = await pool.query(
       `UPDATE delivery_challan_lines
@@ -498,7 +589,7 @@ exports.markTechReached = async (req, res) => {
     res.json({ success: true, otp_generated: false });
   } catch (error) {
     console.error('markTechReached:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -506,11 +597,22 @@ exports.markTechReached = async (req, res) => {
 exports.verifySerialAndGenerateOtp = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
-    if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
+    const kind = challanKind(dcNumber);
+    const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
+    if (refusal) return refuse(res, refusal);
+    if (kind === 'vrtdc') {
       const result = await vrtdcFlow.verifySerial(dcNumber, req.body?.serial_number);
       return res.json(result);
     }
-    const input = String(req.body?.serial_number || '').trim();
+    if (kind === 'vrdc') {
+      return res.status(400).json({ success: false, message: 'A repair challan is signed for by the vendor — no scan or OTP' });
+    }
+    // serial_numbers: every laptop the technician scanned (new My Deliveries);
+    // serial_number: the classic screen's single scan.
+    const scans = Array.isArray(req.body?.serial_numbers) && req.body.serial_numbers.length
+      ? req.body.serial_numbers
+      : [req.body?.serial_number];
+    const input = String(scans.find((x) => String(x || '').trim()) || '').trim();
     if (!input) {
       return res.status(400).json({ success: false, message: 'serial_number is required' });
     }
@@ -523,24 +625,44 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     const first = linesRes.rows[0];
-
-    // Match input against any serial / ttspl in the DC.
-    const entries = linesRes.rows.flatMap(serialEntriesForLine);
-    const specs = await resolveSpecs(entries);
-    const norm = (v) => String(v || '').trim().toLowerCase();
-    const matched = entries.find((e) =>
-      norm(e.serialNumber) === norm(input)
-      || norm(e.ttsplId) === norm(input)
-      || specs.some((s) =>
-        (e.serialId && s.serial_id === e.serialId)
-        && (norm(s.serial_number) === norm(input) || norm(s.inventory_asset_code) === norm(input))));
-
-    if (!matched) {
-      return res.status(400).json({
+    const lineStatuses = new Set(linesRes.rows.map((l) => String(l.status || '').toLowerCase()));
+    if (!lineStatuses.has('reached')) {
+      return res.status(409).json({
         success: false,
-        message: 'Serial does not match any laptop on this delivery challan',
+        message: lineStatuses.has('in_transit')
+          ? 'Mark that you have reached the customer first'
+          : 'This challan is not out for delivery',
       });
     }
+
+    // Every scan must be a laptop on this DC (a stray code is refused, not
+    // ignored); a pickup must scan every laptop it collects.
+    const entries = linesRes.rows.flatMap(serialEntriesForLine);
+    const specs = await resolveSpecs(entries);
+    const specFor = (e) => specs.find((s) =>
+      (e.serialId && s.serial_id === e.serialId)
+      || (e.serialNumber && s.serial_number === e.serialNumber)
+      || (e.ttsplId && s.inventory_asset_code === e.ttsplId)) || null;
+    const laptops = entries.map((e, i) => {
+      const s = specFor(e);
+      return { key: String(i), entry: e, codes: [e.serialNumber, e.ttsplId, s?.serial_number, s?.inventory_asset_code] };
+    });
+    const isPickup = String(first.movement_type || '').toLowerCase() === 'return';
+    const check = matchScans(laptops, scans, { requireAll: isPickup });
+    if (!check.ok) {
+      return res.status(400).json({
+        success: false,
+        code: check.unknown.length ? 'SCAN_NOT_ON_CHALLAN' : (check.duplicates.length ? 'SCAN_DUPLICATE' : 'SCAN_INCOMPLETE'),
+        message: check.unknown.length && scans.length === 1
+          ? 'Serial does not match any laptop on this delivery challan'
+          : check.message,
+        missing: check.missing.length,
+      });
+    }
+    const matched = laptops.find((l) => l.key === check.matched[0].key).entry;
+    const verifiedNo = check.matched
+      .map((m) => { const e = laptops.find((l) => l.key === m.key).entry; return e.ttsplId || e.serialNumber; })
+      .join(', ');
 
     // Part 3.4: one hashed, 15-minute, 5-attempt code for the whole challan.
     const issued = await issueOtpCommitted({
@@ -555,7 +677,7 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       `UPDATE delivery_challan_lines
           SET serial_verified_at = NOW(), serial_verified_no = $1, updated_at = NOW()
         WHERE dc_number = $2`,
-      [matched.serialNumber || matched.ttsplId || input, dcNumber]
+      [String(verifiedNo || matched.serialNumber || matched.ttsplId || input).slice(0, 255), dcNumber]
     );
 
     const spec = specs.find((s) =>
@@ -622,14 +744,23 @@ function saveEsign(dcNumber, dataUrl) {
 // POST /delivery-challans/:dcNumber/deliver  (multipart: otp, pod_type, pod_photo|esign_data, notes)
 exports.submitDeliveryWithPod = async (req, res) => {
   const dcNumber = req.params.dcNumber;
-  if (vrtdcFlow.isVendorReturnDcNumber(dcNumber)) {
+  const kind = challanKind(dcNumber);
+  try {
+    const refusal = await fieldAssignmentRefusal(req, dcNumber, kind);
+    if (refusal) return refuse(res, refusal);
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+  if (kind === 'vrtdc' || kind === 'vrdc') {
     try {
       const body = req.body || {};
-      const result = await vrtdcFlow.deliverWithPod(dcNumber, {
+      const flow = kind === 'vrtdc' ? vrtdcFlow : vrdcFlow;
+      const result = await flow.deliverWithPod(dcNumber, {
         actorUserId: req.user?.user_id,
         actorName: req.user?.name || req.user?.email,
         podPhotoPath: req.file ? `pod/${req.file.filename}` : null,
         esignData: body.esign_data,
+        signerName: body.receiver_name,
         notes: body.notes,
         podType: body.pod_type,
       });
@@ -642,6 +773,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
   try {
     const body = req.body || {};
     const otp = String(body.otp || '').trim();
+    let notes = body.notes || null;
 
     // Aggregate across all DC lines: only "already delivered" when every line is
     // delivered. Pull the OTP from a line that still needs delivering.
@@ -659,6 +791,33 @@ exports.submitDeliveryWithPod = async (req, res) => {
     }
     if (!otp) {
       return res.status(400).json({ success: false, message: 'Enter the OTP the customer received' });
+    }
+
+    // A return pickup brings back the charger we sent (support pickups scan it
+    // on My work; this is the same check for the Return DC). Checked before
+    // the OTP so a refusal here does not use up the customer's code. A charger
+    // the customer no longer has is declared with a reason, not skipped.
+    const moveRes = await client.query(
+      `SELECT movement_type FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
+    if (String(moveRes.rows[0]?.movement_type || '') === 'return') {
+      const chargerSvc = require('../services/dispatchChargerService');
+      const state = await chargerSvc.getReturnDcChargerState(pool, dcNumber);
+      const unscanned = (state.units || []).filter((u) => u.required && !u.scanned);
+      if (unscanned.length) {
+        const why = String(body.charger_missing_reason || '').trim();
+        const list = unscanned.map((u) => u.ttspl_id || `item ${u.pickup_item_id}`).join(', ');
+        if (why.length < 3) {
+          return res.status(409).json({
+            success: false,
+            code: 'CHARGER_NOT_SCANNED',
+            message: `Scan the charger we sent with ${list} — or say why it is not coming back`,
+            units: unscanned.map((u) => u.ttspl_id),
+          });
+        }
+        notes = [notes, `Charger not collected (${list}): ${why}`].filter(Boolean).join(' — ');
+      }
     }
     // Part 3.4: hashed compare, 15-minute expiry, 5 attempts. Committed on its
     // own so a wrong attempt is counted even if the delivery below fails.
@@ -704,7 +863,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
         podPhotoUrl,
         esignUrl,
         podType: podType === 'none' ? null : podType,
-        notes: body.notes || null,
+        notes,
       },
       actor: req.user,
       correlationId: req.correlationId,
@@ -939,6 +1098,11 @@ exports.markCustomerRejected = async (req, res) => {
   try {
     await rejectionSvc.ensureDeliveryRejectionSchema();
     const dcNumber = req.params.dcNumber;
+    if (challanKind(dcNumber) !== 'dc') {
+      return res.status(400).json({ success: false, message: 'A vendor challan cannot be refused here — call your lead' });
+    }
+    const refusal = await fieldAssignmentRefusal(req, dcNumber, 'dc');
+    if (refusal) return refuse(res, refusal);
     const reason = req.body?.rejection_reason || req.body?.reason;
     const remarks = req.body?.rejection_remarks || req.body?.remarks;
     const source = req.body?.source || (WAREHOUSE_ROLES.includes(req.user.role) ? 'warehouse' : 'technician');

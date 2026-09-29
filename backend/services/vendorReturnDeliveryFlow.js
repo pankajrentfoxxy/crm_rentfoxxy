@@ -233,6 +233,7 @@ async function deliverWithPod(dcNumber, {
   esignData,
   notes,
   podType,
+  signerName,
 }) {
   const client = await pool.connect();
   try {
@@ -275,9 +276,12 @@ async function deliverWithPod(dcNumber, {
           SET delivery_pod_path = $2,
               delivery_pod_type = $3,
               delivery_notes = $4,
+              -- Migration 405: the optional handover photo used to be dropped.
+              delivery_photo_path = COALESCE($5, delivery_photo_path),
+              delivery_signer_name = COALESCE($6, delivery_signer_name),
               updated_at = NOW()
         WHERE dc_number = $1`,
-      [dcNumber, storedPath, storedType, notes || null]
+      [dcNumber, storedPath, storedType, notes || null, podPhotoPath || null, String(signerName || '').trim() || null]
     );
     const dc = await completeVendorReturn(client, { dcNumber, actorUserId, actorName });
     await client.query('COMMIT');
