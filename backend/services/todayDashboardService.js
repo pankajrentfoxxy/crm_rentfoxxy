@@ -295,9 +295,7 @@ async function stockBlock(req, { isToday, can, counts, board }) {
     out.in_repair = by('in_repair');
     out.returned = by('returned');
     out.qc_failed = by('qc_failed');
-    out.moving = past ? { unavailable: NOT_KEPT } : (counts.unavailable ? counts : {
-      count: num(counts.by_status?.reserved) + num(counts.by_status?.dispatch_ready) + num(counts.by_status?.in_transit),
-    });
+    out.reserved = by('reserved');
   }
   if (board) {
     out.floor = past ? { unavailable: NOT_KEPT } : board.stages();

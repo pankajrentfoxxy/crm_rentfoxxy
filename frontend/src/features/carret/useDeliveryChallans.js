@@ -6,15 +6,16 @@ import api from '../../utils/api';
  * Outbound challans: GET /delivery-challans → { delivery_challans, stats, pagination }.
  * Return challans live on their own endpoint: GET /return-dc → { return_dcs, pagination }.
  */
-export function useChallans({ status = '', movement = 'outbound', search = '', page = 1, limit = 25, refreshKey = 0 }) {
+export function useChallans({ status = '', movement = 'outbound', search = '', page = 1, limit = 25, refreshKey = 0, deliveredOn = '' }) {
   const [state, setState] = useState({ loading: true, error: null, rows: [], total: 0, pages: 1, stats: null });
 
   const query = useMemo(() => {
     const p = new URLSearchParams({ limit: String(limit), page: String(page) });
     if (status) p.set('status', status);
     if (search) p.set('search', search);
+    if (deliveredOn) { p.set('delivered_from', deliveredOn); p.set('delivered_to', deliveredOn); }
     return p.toString();
-  }, [status, search, page, limit]);
+  }, [status, search, page, limit, deliveredOn]);
 
   useEffect(() => {
     let cancelled = false;

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, EmptyState, Input, Money, Segmented, Select, StatusChip,
+  Button, DataTable, DateTime, DocNumber, EmptyState, Input, Money, Notice, Segmented, Select, StatusChip,
 } from '../../components/carret';
 import { ASSET_STATUSES } from '../../config/statuses';
 import { errMsg, fetchAssetCounts, fetchAssets, TAG_OPTIONS } from './stock/stockApi';
@@ -27,7 +27,11 @@ export default function AssetsListPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [view, setView] = useState(VIEWS.some((v) => v.value === params.get('view')) ? params.get('view') : '');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(ASSET_STATUSES.some((s) => s.value === params.get('status')) ? params.get('status') : '');
+  // From the Today dashboard: laptops that moved into a state on an IST day
+  // (?moved_to=rented&moved_on=YYYY-MM-DD), read from the status audit.
+  const [moved, setMoved] = useState(params.get('moved_to') && params.get('moved_on')
+    ? { to: params.get('moved_to'), on: params.get('moved_on') } : null);
   const [tag, setTag] = useState('');
   const [q, setQ] = useState('');
   const [search, setSearch] = useState('');
@@ -39,10 +43,13 @@ export default function AssetsListPage() {
   useEffect(() => { fetchAssetCounts().then(({ data }) => setCounts(data.data)).catch(() => {}); }, []);
   const load = useCallback(() => {
     setRes(null);
-    fetchAssets({ view: view || undefined, status: status || undefined, tag: tag || undefined, search: search || undefined, page, limit: LIMIT })
+    fetchAssets({
+      view: view || undefined, status: status || undefined, tag: tag || undefined, search: search || undefined,
+      moved_to: moved?.to, moved_on: moved?.on, page, limit: LIMIT,
+    })
       .then(({ data }) => setRes(data))
       .catch((e) => { setRes({ data: [], total: 0 }); toast.error(errMsg(e)); });
-  }, [view, status, tag, search, page]);
+  }, [view, status, tag, search, page, moved]);
   useEffect(() => { load(); }, [load]);
 
   const cols = [
@@ -68,6 +75,14 @@ export default function AssetsListPage() {
             {' '}{counts.ready} ready · {(by.in_stock || 0) - counts.ready} in stock not ready · {by.in_repair || 0} in repair ·
             {' '}{by.returned || 0} returned · {by.scrapped || 0} scrapped
           </p>
+        )}
+        {moved && (
+          <Notice
+            tone="info"
+            action={<Button variant="quiet" onClick={() => { setMoved(null); setPage(1); }}>Show all</Button>}
+          >
+            Laptops that became “{ASSET_STATUSES.find((s) => s.value === moved.to)?.label || moved.to}” on {moved.on} (IST), from the status history.
+          </Notice>
         )}
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
           <Segmented label="View" value={view} onChange={(v) => { setView(v); setPage(1); }} options={VIEWS} />

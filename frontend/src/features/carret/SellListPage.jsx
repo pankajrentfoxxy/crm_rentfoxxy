@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented, Tabs,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented, Tabs, Notice,
 } from '../../components/carret';
 import { usePermission } from '../../hooks/usePermission';
 import { SO_SECTIONS } from './sell/sellShared';
@@ -100,20 +100,27 @@ export default function SellListPage({ kind = 'sales-orders' }) {
   const config = RESOURCES[kind] || RESOURCES['sales-orders'];
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
-  const [entity, setEntity] = useState('');
+  // Deep links (the Today dashboard): ?entity=rentfoxxy|gorefurbo and
+  // ?created_from=&created_to= (IST days, the list API's date_from / date_to).
+  const [params] = useSearchParams();
+  const urlEntity = Object.values(ENTITIES).some((e) => e.code === params.get('entity')) ? params.get('entity') : '';
+  const [entity, setEntity] = useState(urlEntity);
   const [filters, setFilters] = useState({});
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
+  const [created, setCreated] = useState({ from: params.get('created_from') || '', to: params.get('created_to') || '' });
 
   const { loading, error, rows, total, pages } = useSellList(config.resource, {
     entity,
     status,
     search: filters.search || '',
     page,
+    dateFrom: created.from,
+    dateTo: created.to,
   });
 
   const onFilter = useCallback((k, v) => { setFilters((f) => ({ ...f, [k]: v })); setPage(1); }, []);
-  const onClear = useCallback(() => { setFilters({}); setEntity(''); setStatus(''); setPage(1); }, []);
+  const onClear = useCallback(() => { setFilters({}); setEntity(''); setStatus(''); setCreated({ from: '', to: '' }); setPage(1); }, []);
   const canCreate = config.create && config.create.section.some((s) => hasPermission(s, 'create'));
 
   const filterDefs = useMemo(
@@ -158,6 +165,15 @@ export default function SellListPage({ kind = 'sales-orders' }) {
             ]}
           />
         </div>
+
+        {(created.from || created.to) && (
+          <Notice
+            tone="info"
+            action={<Button variant="quiet" onClick={() => { setCreated({ from: '', to: '' }); setPage(1); }}>Show all dates</Button>}
+          >
+            Created {created.from === created.to ? `on ${created.from}` : `from ${created.from || '…'} to ${created.to || 'today'}`} (IST), all statuses.
+          </Notice>
+        )}
 
         <Panel
           entity={Object.values(ENTITIES).find((e) => e.code === entity)?.key}
