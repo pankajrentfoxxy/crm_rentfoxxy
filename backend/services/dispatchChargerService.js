@@ -1180,8 +1180,12 @@ async function recordReturnScanForRdc(db, rdcNumber, user, body) {
   );
   if (!items.rows.length) throw httpError('Return DC pickup not found', 404);
   const scannedTtspl = normalizeTtspl(body.ttspl_scan);
-  const match = items.rows.find((i) => ttsplMatchesScan(i.ttspl_id || i.unique_serial_number, scannedTtspl))
-    || items.rows[0];
+  // A laptop that is not on this Return DC is refused by name. It used to fall
+  // back to the first laptop, so the error blamed the wrong unit.
+  const match = items.rows.find((i) => ttsplMatchesScan(i.ttspl_id || i.unique_serial_number, scannedTtspl));
+  if (!match) {
+    throw httpError(`${String(body.ttspl_scan || '').trim() || 'That laptop'} is not on ${rdcNumber}. Scan the TTSPL of a laptop on this pickup.`);
+  }
   return recordReturnScan(db, match.id, user, body);
 }
 

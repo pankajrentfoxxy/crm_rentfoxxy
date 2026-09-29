@@ -496,8 +496,17 @@ async function markDeliveryRejectedByCustomer(client, {
   source,
   actorUserId,
 }) {
+  // Lock every line first: two refusals (or a refusal racing the delivery)
+  // must not both release the SO allocation and reverse billing.
+  await client.query('SELECT 1 FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE', [dcNumber]);
   const head = await getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
+  // A pickup is not a delivery: "refused" would send the customer's laptops
+  // through the refused-return branch (back to stock) while they are still at
+  // the customer's. A pickup that cannot happen goes back to the lead.
+  if (String(head.movement_type || '').toLowerCase() === 'return') {
+    throw new Error('A return pickup cannot be marked refused — the laptops are still with the customer. Tell your lead to reschedule or cancel the pickup.');
+  }
   if (head.status === 'rejected' && !head.return_to_warehouse_at) {
     return { already_rejected: true, sales_order_numbers: await dcSalesOrderNumbers(client, dcNumber) };
   }
