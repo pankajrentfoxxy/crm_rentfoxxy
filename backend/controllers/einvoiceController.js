@@ -106,9 +106,26 @@ exports.generateDcEWayBill = async (req, res) => {
   try {
     const { dcNumber } = req.params;
     const body = req.body || {};
-    const dcRes = await pool.query('SELECT irn FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1', [dcNumber]);
+    const dcRes = await pool.query(
+      `SELECT irn,
+              (SELECT NULLIF(TRIM(x.eway_bill_number), '') FROM delivery_challan_lines x
+                WHERE x.dc_number = $1 AND NULLIF(TRIM(x.eway_bill_number), '') IS NOT NULL LIMIT 1) AS eway_bill_number
+         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
     if (!dcRes.rows.length) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    // MD7: the GSP call below writes eway_bill_number unconditionally, so a DC
+    // that already has one would lose it silently. The GSP call itself is not
+    // changed (MD8); this refuses before it is made.
+    if (dcRes.rows[0].eway_bill_number) {
+      return res.status(409).json({
+        success: false,
+        code: 'REPLACE_REQUIRED',
+        message: `${dcNumber} already has e-way bill ${dcRes.rows[0].eway_bill_number}. `
+          + 'Generating another would overwrite it — replace it from the Invoice & e-way queue with a reason instead.',
+      });
     }
     const ewbData = {
       transporterName: body.transporter_name || body.transporterName,

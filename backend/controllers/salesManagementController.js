@@ -7645,21 +7645,60 @@ exports.uploadSaleInvoice = async (req, res) => {
     const file = req.file || (Array.isArray(req.files) ? req.files[0] : null);
     const pdfPath = file ? `private-uploads/sale-order-invoices/${path.basename(path.dirname(file.path))}/${file.filename}` : null;
 
-    const upd = await pool.query(
-      `UPDATE sales_order_lines
-          SET sale_invoice_number = $2,
-              sale_invoice_pdf_path = COALESCE($3, sale_invoice_pdf_path),
-              sale_invoice_uploaded_at = NOW(),
-              sale_invoice_uploaded_by = $4,
-              updated_at = NOW()
-        WHERE sales_order_number = $1
-        RETURNING id`,
-      [soNumber, invoiceNumber, pdfPath, req.user?.user_id || null]
-    );
+    // MD7: a different invoice number than the one on file needs replace + reason;
+    // a number on another customer's document is refused; checked under lock.
+    const gstNo = require('../services/gstDocumentNumberService');
+    const request = gstNo.replaceRequest(req.body || {});
+    let upd;
+    let action = 'none';
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT sale_invoice_number, customer_id FROM sales_order_lines
+          WHERE sales_order_number = $1 ORDER BY id FOR UPDATE`,
+        [soNumber]
+      );
+      const current = gstNo.firstNonEmpty(locked.rows.map((r) => r.sale_invoice_number));
+      const customerId = locked.rows.find((r) => r.customer_id != null)?.customer_id ?? null;
+      action = gstNo.checkOverwrite({
+        label: 'invoice number', docNumber: soNumber, current, next: invoiceNumber, request,
+      });
+      if (action !== 'none') {
+        await gstNo.lockNumber(client, invoiceNumber);
+        await gstNo.assertInvoiceNumberFree(client, invoiceNumber, { customerId, exceptSo: soNumber, request });
+      }
+      upd = await client.query(
+        `UPDATE sales_order_lines
+            SET sale_invoice_number = $2,
+                sale_invoice_pdf_path = COALESCE($3, sale_invoice_pdf_path),
+                sale_invoice_uploaded_at = NOW(),
+                sale_invoice_uploaded_by = $4,
+                updated_at = NOW()
+          WHERE sales_order_number = $1
+          RETURNING id`,
+        [soNumber, action === 'none' ? (current || invoiceNumber) : invoiceNumber, pdfPath, req.user?.user_id || null]
+      );
+      await gstNo.recordNumberChange(client, {
+        docType: 'sales_order', docNumber: soNumber, field: 'sale_invoice_number', action,
+        oldValue: current, newValue: invoiceNumber, reason: request.reason, userId: req.user?.user_id || null,
+      });
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (file?.path) fs.promises.unlink(file.path).catch(() => {});
+      if (gstNo.sendGstNumberError(res, txErr)) return undefined;
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     res.json({
       success: true,
-      message: 'Sale invoice attached to the sales order',
+      action,
+      message: action === 'replace'
+        ? 'Sale invoice number replaced on the sales order'
+        : 'Sale invoice attached to the sales order',
       data: {
         sales_order_number: soNumber,
         sale_invoice_number: invoiceNumber,

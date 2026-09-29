@@ -2060,29 +2060,25 @@ exports.getPipelineLaptops = async (req, res) => {
     }
 };
 
-exports.generateInvoice = async (req, res) => {
-    const { id } = req.params;
-    try {
-        const invoiceNumber = await ensureInvoiceNumber(id);
-        if (!invoiceNumber) return res.status(404).json({ message: 'Order not found' });
-        res.json({ success: true, invoice_number: invoiceNumber, message: 'Invoice generated' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Failed to generate invoice' });
-    }
+/*
+ * MD8 (29 Sep 2026): these two made up an invoice number (INV-<year>-<order id>)
+ * and an e-way bill number (EWB-<timestamp>-<order id>) and stored them on the
+ * order as if they were real. Neither number exists at the GST portal. Nothing
+ * in frontend/src, customer-portal/src or vendor-portal/src calls them, so they
+ * are closed. Real numbers are attached by Accounts on the challan (Finance →
+ * GST & e-way) or generated through the Zoho GSP (/api/einvoice).
+ */
+const LEGACY_NUMBER_GONE = {
+    success: false,
+    code: 'GONE',
+    message: 'This endpoint invented invoice / e-way bill numbers and has been retired. '
+        + 'Attach the real Zoho invoice or e-way bill number on the delivery challan '
+        + '(Finance → GST & e-way → Invoice & e-way queue).',
 };
 
-exports.generateEwayBill = async (req, res) => {
-    const { id } = req.params;
-    try {
-        const ewayBillNumber = await ensureEwayNumber(id);
-        if (!ewayBillNumber) return res.status(404).json({ message: 'Order not found' });
-        res.json({ success: true, eway_bill_number: ewayBillNumber, message: 'E-way bill generated' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Failed to generate e-way bill' });
-    }
-};
+exports.generateInvoice = async (req, res) => res.status(410).json(LEGACY_NUMBER_GONE);
+
+exports.generateEwayBill = async (req, res) => res.status(410).json(LEGACY_NUMBER_GONE);
 
 exports.downloadInvoicePdf = async (req, res) => {
     const { id } = req.params;
