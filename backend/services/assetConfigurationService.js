@@ -195,6 +195,20 @@ async function assertUnique(entityKey, cfg, { name, parentId, excludeId }) {
   }
 }
 
+/**
+ * The partial unique indexes (lower(trim(name)) WHERE deleted_at IS NULL) are
+ * the backstop when two saves race past assertUnique; report them as the same
+ * 409 instead of a 500 with the raw Postgres text.
+ */
+function asDuplicateError(e, cfg) {
+  if (e && e.code === '23505') {
+    const err = new Error(`${cfg.label} name must be unique`);
+    err.status = 409;
+    return err;
+  }
+  return e;
+}
+
 async function listEntity(entityKey, {
   page = 1, limit = 20, search = '', status = '', parentId = null, includeInactive = true,
 } = {}) {
@@ -287,7 +301,7 @@ async function createEntity(entityKey, body, userId) {
   const r = await pool.query(
     `INSERT INTO ${cfg.table} (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`,
     vals
-  );
+  ).catch((e) => { throw asDuplicateError(e, cfg); });
   await invalidateAssetConfigCaches(entityKey);
   return r.rows[0];
 }
@@ -330,7 +344,7 @@ async function updateEntity(entityKey, id, body, userId) {
               updated_by = $5, updated_at = NOW()
         WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
       [id, name, parentId, status, userId]
-    );
+    ).catch((e) => { throw asDuplicateError(e, cfg); });
     await invalidateAssetConfigCaches(entityKey);
     return r.rows[0];
   }
@@ -339,7 +353,7 @@ async function updateEntity(entityKey, id, body, userId) {
     `UPDATE ${cfg.table} SET name = $2, status = $3, updated_by = $4, updated_at = NOW()
       WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
     [id, name, status, userId]
-  );
+  ).catch((e) => { throw asDuplicateError(e, cfg); });
   await invalidateAssetConfigCaches(entityKey);
   return r.rows[0];
 }
@@ -1661,6 +1675,7 @@ async function ensureAssetConfigurationSchema() {
 }
 
 module.exports = {
+  asDuplicateError,
   ENTITIES,
   getEntity,
   listEntity,

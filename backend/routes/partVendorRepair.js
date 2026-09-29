@@ -39,6 +39,8 @@ router.post('/qc-pending/:instanceId/fail', ctrl.requireWarehouse, ctrl.failQc);
 
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireWarehouse, ctrl.dispatchPartVendorReturn));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receivePartsFromVendor));
+// A draft raised by mistake held its units at with_vendor_repair for good.
+router.post(...vrdcRoute('/cancel', ctrl.requireWarehouse, ctrl.cancelPartVendorReturn));
 router.get(...vrdcRoute('/pdf', viewAny, ctrl.downloadPdf));
 router.get(...vrdcRoute('', viewAny, ctrl.getPartVendorReturnDc));
 

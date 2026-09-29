@@ -593,8 +593,14 @@ async function customerAssets(req, res) {
               s.current_dc_number, s.current_entity, s.dispatch_mode, s.dispatched_at,
               s.delivered_at, s.rent_start_date, s.rent_monthly_rate, s.extra,
               c.customer_id, c.name AS customer_name, c.company_name,
-              p.purchase_order_type
-       ${fromSql}
+              p.purchase_order_type, s.status_changed_at,
+              dcl.sales_order_number
+       ${fromSql.replace('WHERE s.deleted_at IS NULL', `LEFT JOIN LATERAL (
+         SELECT l.sales_order_number FROM delivery_challan_lines l
+          WHERE l.dc_number = s.current_dc_number AND l.sales_order_number IS NOT NULL
+          LIMIT 1
+       ) dcl ON TRUE
+      WHERE s.deleted_at IS NULL`)}
        ORDER BY s.status_changed_at DESC NULLS LAST, s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
       listParams
@@ -623,7 +629,10 @@ async function customerAssets(req, res) {
         delivered_at: r.delivered_at,
         rent_start_date: r.rent_start_date,
         rent_monthly_rate: r.rent_monthly_rate,
-        purchase_order_type: r.purchase_order_type
+        purchase_order_type: r.purchase_order_type,
+        // The order behind the challan, and since when it is in this state.
+        sales_order_number: r.sales_order_number || null,
+        status_changed_at: r.status_changed_at
       };
     });
 

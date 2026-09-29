@@ -377,6 +377,83 @@ async function dispatchPartVendorReturnDc(client, {
   return { dc_number: dcNumber, status: 'dispatched' };
 }
 
+/**
+ * Cancel a part repair challan that has not gone out (draft). Its units go
+ * back to "defective" so they can go on another challan. Without this a
+ * challan raised by mistake held its units at "with vendor repair" for good.
+ */
+async function cancelPartVendorReturnDc(client, {
+  dcNumber, reason, actorUserId, actorName,
+}) {
+  const why = String(reason || '').trim();
+  if (why.length < 3) {
+    const err = new Error('Give a reason for cancelling');
+    err.status = 400;
+    throw err;
+  }
+  const head = (await client.query(
+    `SELECT * FROM vendor_repair_delivery_challans
+      WHERE dc_number = $1 AND COALESCE(item_domain, 'laptop') = 'part'
+      FOR UPDATE`,
+    [dcNumber]
+  )).rows[0];
+  if (!head) {
+    const err = new Error('Part vendor repair DC not found');
+    err.status = 404;
+    throw err;
+  }
+  if (head.status !== 'draft') {
+    const err = new Error(`This challan is ${head.status} — only a draft that has not gone out can be cancelled`);
+    err.status = 409;
+    throw err;
+  }
+  const items = (await client.query(
+    `SELECT i.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.unit_cost, pi.status, pi.vendor_repair_dc_number,
+            p.part_name, p.category
+       FROM vendor_repair_dc_part_items i
+       JOIN part_instances pi ON pi.instance_id = i.instance_id
+       JOIN parts p ON p.part_id = pi.part_id
+      WHERE i.dc_number = $1
+      FOR UPDATE OF pi`,
+    [dcNumber]
+  )).rows;
+  for (const it of items) {
+    // Only a unit this challan still holds goes back to defective.
+    if (it.vendor_repair_dc_number === dcNumber && it.status === 'with_vendor_repair') {
+      await client.query(
+        `UPDATE part_instances SET status = 'defective', vendor_repair_dc_number = NULL, updated_at = NOW()
+          WHERE instance_id = $1`,
+        [it.instance_id]
+      );
+      await recordMovement(client, {
+        type: MOVEMENT.ADJUSTED,
+        partId: it.part_id,
+        instanceId: it.instance_id,
+        prtId: it.prt_id,
+        serialNumber: it.serial_number,
+        category: it.category,
+        partName: it.part_name,
+        unitCost: it.unit_cost,
+        condition: 'defective',
+        notes: `Repair challan ${dcNumber} cancelled — ${why}`,
+        actorUserId,
+        actorName,
+      });
+    }
+  }
+  await client.query(
+    `UPDATE vendor_repair_dc_part_items SET item_status = 'cancelled' WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  await client.query(
+    `UPDATE vendor_repair_delivery_challans
+        SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, cancel_reason = $3, updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber, actorUserId || null, why]
+  );
+  return { dc_number: dcNumber, status: 'cancelled', parts: items.length };
+}
+
 async function recomputePartDcHeaderStatus(client, dcNumber) {
   const counts = await client.query(
     `SELECT
@@ -823,9 +900,19 @@ async function listQcPendingPartInstances({ page = 1, limit = 50, search } = {})
   const listR = await pool.query(
     `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.status, pi.unit_cost,
             pi.vendor_repair_dc_number, pi.notes, pi.updated_at,
-            p.part_id, p.part_name, p.category
+            p.part_id, p.part_name, p.category,
+            -- Receive clears vendor_repair_dc_number, so QC could not see which
+            -- challan (and vendor) the unit came back on.
+            src.dc_number AS from_dc_number, src.receive_mode, src.vendor_name
        FROM part_instances pi
        JOIN parts p ON p.part_id = pi.part_id
+       LEFT JOIN LATERAL (
+         SELECT i.dc_number, i.receive_mode, d.vendor_name
+           FROM vendor_repair_dc_part_items i
+           JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
+          WHERE i.instance_id = pi.instance_id OR i.replacement_instance_id = pi.instance_id
+          ORDER BY i.id DESC LIMIT 1
+       ) src ON TRUE
       WHERE ${where}
       ORDER BY pi.updated_at DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -886,6 +973,7 @@ async function listDefectiveEligibleForVendorReturn({ search, limit = 200 } = {}
 }
 
 module.exports = {
+  cancelPartVendorReturnDc,
   WAREHOUSE_ROLES,
   createPartVendorReturnDc,
   dispatchPartVendorReturnDc,

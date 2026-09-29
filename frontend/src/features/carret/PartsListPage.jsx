@@ -1,155 +1,122 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
+import { Button, Tabs } from '../../components/carret';
+import { usePermission } from '../../hooks/usePermission';
+import PartLabelPrintModal from '../inventory-management/components/PartLabelPrintModal';
+import PartUnitsTab from './stock/setup/PartUnitsTab';
+import PartCatalogueTab from './stock/setup/PartCatalogueTab';
+import PartFormDrawer from './stock/setup/PartFormDrawer';
+import AddUnitsDrawer from './stock/setup/AddUnitsDrawer';
+import PartRecordDrawer from './stock/setup/PartRecordDrawer';
 import {
-  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, StatTile,
-} from '../../components/carret';
-import { usePartInstances } from './useProduce';
+  PART_REPAIR_WRITE_ROLES, PART_UNIT_WRITE_ROLES, errMsg, fetchParts, labelUnit,
+} from './stock/setup/partsApi';
 
 /**
- * Parts (Part 5.7).
+ * Parts catalogue (Production → Parts). The old Parts Inventory page
+ * (/inventory-management/parts) and the read-only new parts list were two
+ * screens for one job; this is both:
+ *   Units      — every tracked spare unit (shelf, fitted, which PO), labels.
+ *   Catalogue  — the part master with stock, minimum and value.
+ * A part opens its record: units and their actions, fitment tagging, usage,
+ * consumable count. Add part / Add units / Print labels are on the page.
  *
- * Every tracked spare unit, with the brand and model the spare chain now
- * carries. Before the Brand → Model master, "model" on a received spare was the
- * part name wearing a model's label, so this list could not answer "which 65W
- * adapters, and which model" — the question a technician actually has.
- *
- * The brand and model dropdowns are built from the whole of stock, not from the
- * rows currently shown. A filter list that narrows as you filter tells you what
- * you have already excluded, which is the opposite of useful.
+ * Buttons follow what the API lets through: part add/edit = parts_inventory
+ * create/edit; units = warehouse/admin/manager or parts_inventory/parts_approval
+ * edit (routes/partRequests.js); send to vendor = part_vendor_repair
+ * create/edit or the warehouse role list (partVendorRepairController).
  */
-
-const STATUSES = ['in_stock', 'reserved', 'installed', 'scrapped', 'returned'];
-
 export default function PartsListPage() {
-  const [filters, setFilters] = useState({});
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'catalogue' ? 'catalogue' : 'units';
+  const { hasPermission, user } = usePermission();
+  const canCreatePart = hasPermission('parts_inventory', 'create');
+  const canEditPart = hasPermission('parts_inventory', 'edit');
+  const canWriteUnits = PART_UNIT_WRITE_ROLES.includes(user?.role)
+    || hasPermission('parts_inventory', 'edit') || hasPermission('parts_approval', 'edit');
+  const canSendToVendor = PART_REPAIR_WRITE_ROLES.includes(user?.role)
+    || hasPermission('part_vendor_repair', 'edit') || hasPermission('part_vendor_repair', 'create');
 
-  const { loading, error, rows, filterOptions } = usePartInstances({
-    status: filters.status || undefined,
-    brand: filters.brand || undefined,
-    model: filters.model || undefined,
-    category: filters.category || undefined,
-    search: filters.search || undefined,
-    limit: 300,
-  });
+  const [parts, setParts] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [form, setForm] = useState(null); // { part } | {} for new
+  const [addFor, setAddFor] = useState(null); // part | {} for any
+  const [labels, setLabels] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const onFilter = useCallback((k, v) => setFilters((f) => {
-    // Changing the brand invalidates a model chosen under the previous one.
-    if (k === 'brand') return { ...f, brand: v, model: '' };
-    return { ...f, [k]: v };
-  }), []);
-  const onClear = useCallback(() => setFilters({}), []);
+  const loadParts = useCallback(() => {
+    fetchParts().then(({ data }) => setParts(data.parts || [])).catch((e) => { setParts([]); toast.error(errMsg(e)); });
+  }, []);
+  useEffect(() => { loadParts(); }, [loadParts]);
+  const changed = useCallback(() => { loadParts(); setRefreshKey((k) => k + 1); }, [loadParts]);
 
-  const modelsForBrand = useMemo(() => {
-    const byBrand = filterOptions.models_by_brand || {};
-    if (filters.brand && byBrand[filters.brand]) return byBrand[filters.brand];
-    return filterOptions.models || [];
-  }, [filterOptions, filters.brand]);
-
-  const filterDefs = useMemo(() => ([
-    { key: 'search', label: 'Search', type: 'search', placeholder: 'PRT, serial, part or TTSPL' },
-    {
-      key: 'brand',
-      label: 'Brand',
-      options: (filterOptions.brands || []).map((b) => ({ value: b, label: b })),
-    },
-    {
-      key: 'model',
-      label: 'Model',
-      options: modelsForBrand.map((m) => ({ value: m, label: m })),
-    },
-    {
-      key: 'category',
-      label: 'Category',
-      options: (filterOptions.categories || []).map((c) => ({ value: c, label: c })),
-    },
-    { key: 'status', label: 'Status', options: STATUSES.map((s) => ({ value: s, label: s.replace(/_/g, ' ') })) },
-  ]), [filterOptions, modelsForBrand]);
-
-  const columns = useMemo(() => [
-    { key: 'prt_id', header: 'Part ID', render: (r) => <DocNumber value={r.prt_id} /> },
-    { key: 'part_name', header: 'Part' },
-    {
-      key: 'brand_model',
-      header: 'Brand / Model',
-      render: (r) => {
-        const b = r.brand_name || r.brand;
-        const m = r.model_name || r.model;
-        if (!b && !m) return <span className="text-ink-3">unmapped</span>;
-        return <span>{[b, m].filter(Boolean).join(' · ')}</span>;
-      },
-    },
-    { key: 'serial_number', header: 'Serial', render: (r) => r.serial_number || <span className="text-ink-3">—</span> },
-    { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
-    {
-      key: 'installed_ttspl_id',
-      header: 'Fitted to',
-      render: (r) => (r.installed_ttspl_id
-        ? <DocNumber value={r.installed_ttspl_id} />
-        : <span className="text-ink-3">—</span>),
-    },
-    { key: 'location_code', header: 'Location', render: (r) => r.location_code || <span className="text-ink-3">—</span> },
-    { key: 'unit_cost', header: 'Cost', numeric: true, render: (r) => <Money value={r.unit_cost} showZero={false} /> },
-    { key: 'received_at', header: 'Received', render: (r) => <DateTime value={r.received_at || r.created_at} /> },
-  ], []);
-
-  const inStock = rows.filter((r) => r.status === 'in_stock').length;
-  const installed = rows.filter((r) => r.status === 'installed').length;
-  const unmapped = rows.filter((r) => !(r.brand_name || r.brand)).length;
+  // The record reads the live row, so a count or edit shows at once.
+  const openPart = useMemo(() => (parts || []).find((p) => p.part_id === openId) || null, [parts, openId]);
+  const print = useCallback((units, partName) => setLabels(units.map((u) => labelUnit(u, partName))), []);
 
   return (
     <DeskShell
-      title="Parts"
+      title="Parts catalogue"
       breadcrumb="Produce"
-      subtitle="Spare-part units: what is on the shelf, what is fitted, and into which laptop."
-    >
-      <div style={{ display: 'grid', gap: '16px' }}>
-        <div
-          style={{
-            display: 'grid',
-            gap: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          }}
-        >
-          <StatTile label="Shown" value={loading ? null : rows.length} />
-          <StatTile label="In stock" value={loading ? null : inStock} family="idle" />
-          <StatTile label="Fitted" value={loading ? null : installed} family="earning" />
-          <StatTile
-            label="No brand on record"
-            value={loading ? null : unmapped}
-            family={unmapped ? 'offcycle' : undefined}
-            delta="received before the brand/model master"
-          />
+      subtitle="Spare parts: the catalogue, every unit on the shelf or fitted, and its QR label."
+      actions={(
+        <div className="flex flex-wrap" style={{ gap: '8px' }}>
+          {canWriteUnits && <Button onClick={() => setAddFor({})}>Add units</Button>}
+          {canCreatePart && <Button variant="primary" onClick={() => setForm({})}>Add part</Button>}
         </div>
-
-        <Panel
-          toolbar={(
-            <FilterBar
-              filters={filterDefs}
-              values={filters}
-              onChange={onFilter}
-              onClear={onClear}
-              count={`${rows.length} shown`}
-            />
-          )}
-        >
-          {loading && <EmptyState title="Loading…" />}
-          {error && <EmptyState title="Could not load parts" body={error} />}
-          {!loading && !error && (
-            <DataTable
-              columns={columns}
-              rows={rows}
-              rowKey={(r) => r.instance_id}
-              empty={(
-                <EmptyState
-                  title="No parts match"
-                  body="Filters combine, so clearing one at a time will show what is excluding them."
-                  action={<Button variant="quiet" onClick={onClear}>Clear filters</Button>}
-                />
-              )}
-            />
-          )}
-        </Panel>
+      )}
+    >
+      <div className="c-stack">
+        <Tabs
+          value={tab}
+          onChange={(t) => setParams(t === 'units' ? {} : { tab: t }, { replace: true })}
+          tabs={[
+            { key: 'units', label: 'Units' },
+            { key: 'catalogue', label: 'Catalogue', count: parts ? parts.filter((p) => !p.archived).length : null },
+          ]}
+        />
+        {tab === 'units'
+          ? <PartUnitsTab onOpenPart={setOpenId} onPrint={print} refreshKey={refreshKey} />
+          : <PartCatalogueTab parts={parts} loading={parts === null} onOpenPart={setOpenId} canEditPart={canEditPart} />}
       </div>
+
+      {/* Hidden, not closed, while its edit / add-units drawer is up: two
+          dialogs would both take Esc and the focus trap. */}
+      <PartRecordDrawer
+        part={form || addFor ? null : openPart}
+        onClose={() => setOpenId(null)}
+        onChanged={changed}
+        onEdit={(p) => setForm({ part: p })}
+        onAddUnits={(p) => setAddFor(p)}
+        onPrint={print}
+        canEditPart={canEditPart}
+        canWriteUnits={canWriteUnits}
+        canSendToVendor={canSendToVendor}
+      />
+      <PartFormDrawer
+        open={Boolean(form)}
+        part={form?.part}
+        onClose={() => setForm(null)}
+        onSaved={(p, units) => {
+          changed();
+          if (units?.length) print(units, p.part_name);
+        }}
+      />
+      <AddUnitsDrawer
+        open={Boolean(addFor)}
+        part={addFor?.part_id ? addFor : null}
+        parts={parts || []}
+        onClose={() => setAddFor(null)}
+        onAdded={(created, p) => { changed(); if (created.length) print(created, p.part_name); }}
+      />
+      <PartLabelPrintModal
+        open={Boolean(labels && labels.length)}
+        units={labels || []}
+        onClose={() => setLabels(null)}
+        title={labels && labels.length === 1 ? 'Print QR label' : `Print ${labels ? labels.length : 0} QR labels`}
+      />
     </DeskShell>
   );
 }
