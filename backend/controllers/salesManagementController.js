@@ -1228,7 +1228,7 @@ exports.storeSalesOrder = async (req, res) => {
 
     if (customerId) {
       const customerExists = await pool.query(
-        `SELECT customer_id, customer_type, customer_type_source, status FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type, customer_type_source, status, gst_no FROM customers WHERE customer_id = $1 LIMIT 1`,
         [customerId]
       );
       if (!customerExists.rows.length) {
@@ -1256,6 +1256,21 @@ exports.storeSalesOrder = async (req, res) => {
           message: 'Access denied: customer is outside your Customer Access scope',
         });
       }
+      // A rental order needs the customer's own GSTIN, from the customer record
+      // (adding it there updates the billing address too). It is printed as-is.
+      if (String(soQuotationType).toLowerCase() === 'rental') {
+        const custGstin = String(customerExists.rows[0].gst_no || '').trim().toUpperCase();
+        if (!isValidGstin(custGstin)) {
+          return res.status(400).json({
+            success: false,
+            code: 'RENTAL_GSTIN_REQUIRED',
+            message: 'A rental order needs the customer\u2019s GSTIN. Add it on the customer record first, then place the order.',
+          });
+        }
+        body.GST_number = custGstin;
+      }
+    } else if (String(body.quotation_type || 'rental').toLowerCase() === 'rental') {
+      return res.status(400).json({ success: false, message: 'Choose the customer for a rental order.' });
     }
 
     await client.query('BEGIN');

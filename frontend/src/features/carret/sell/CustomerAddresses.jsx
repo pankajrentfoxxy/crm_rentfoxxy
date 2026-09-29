@@ -9,9 +9,10 @@ import { Field, Input, Select, Textarea, FormGrid } from '../../../components/ca
 
 /**
  * A customer's detail, billing address and shipping choices, loaded once per
- * customer. Uses the same two customer-management endpoints as the old forms.
+ * customer (and again when `refresh` changes). Uses the same two
+ * customer-management endpoints as the old forms.
  */
-export function useCustomerAddresses(customerId) {
+export function useCustomerAddresses(customerId, refresh = 0) {
   const [state, setState] = useState({ loading: false, customer: null, billing: null, options: [], error: null });
 
   useEffect(() => {
@@ -43,7 +44,7 @@ export function useCustomerAddresses(customerId) {
         }
       });
     return () => { cancelled = true; };
-  }, [customerId]);
+  }, [customerId, refresh]);
 
   return state;
 }

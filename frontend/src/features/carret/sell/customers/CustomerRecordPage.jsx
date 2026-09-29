@@ -177,7 +177,8 @@ export default function CustomerRecordPage() {
   const canSaleInPlace = hasPermission('sale_in_place', 'create');
   const [c, setC] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [tab, setTab] = useState('rented');
+  // ?tab=profile — the SO form sends people here to add a missing GSTIN.
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'rented');
   const [counts, setCounts] = useState(null);
   const [tagEdit, setTagEdit] = useState(null);
   const [busy, setBusy] = useState(false);

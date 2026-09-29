@@ -40,10 +40,16 @@ import GstinField from './GstinField';
  * Processor, generation, RAM and storage are required on every line because
  * the attach step matches stock on exactly those four.
  *
- * Work from home: the ship-to contact IS the employee (one name and phone, not
- * two), shipping defaults to Rs 799 with GST on it, and the server keeps the
+ * Work from home (rental and demo only — a sale has no WFH, its shipping is
+ * optional): the ship-to contact IS the employee (one name and phone, not
+ * two), shipping is Rs 799 per laptop with GST on it — it follows the laptop
+ * count until someone types their own figure — and the server keeps the
  * address on the customer as a WFH address so a later pickup from it is seen
  * to be chargeable.
+ *
+ * A rental order needs the customer's GSTIN, taken from the customer record
+ * only. Missing → the order is blocked; it is added on the customer (where the
+ * GSTIN lookup also fills the billing address) and then rechecked here.
  *
  * Save as draft (migration 406) keeps the form without taking an SO number;
  * ?draft=<id> reopens it, and creating the order deletes the draft.
@@ -112,6 +118,9 @@ export default function SalesOrderFormPage() {
   const [shipping, setShipping] = useState('');
   const [inPlace, setInPlace] = useState(false);
   const [wfh, setWfh] = useState({ on: false });
+  // WFH shipping follows 799 x laptops until someone types their own amount.
+  const [shipAuto, setShipAuto] = useState(false);
+  const [metaTick, setMetaTick] = useState(0);
   const [shipChoice, setShipChoice] = useState({ key: 'billing', manual: null });
   const [advance, setAdvance] = useState({ on: false, amount: '', due: '' });
   const [errors, setErrors] = useState({});
@@ -124,7 +133,7 @@ export default function SalesOrderFormPage() {
     getSalesOrderMeta({ entity_scope: scope })
       .then(({ data }) => setMeta(data))
       .catch((e) => setLoadError(e?.response?.data?.message || 'Could not load customers.'));
-  }, [scope]);
+  }, [scope, metaTick]);
   useEffect(() => {
     if (editSo) return;
     listQuotations({ status: 'accepted', limit: 100 })
@@ -176,6 +185,7 @@ export default function SalesOrderFormPage() {
       setShipping(d.shipping ?? '');
       setInPlace(Boolean(d.inPlace));
       setWfh({ on: Boolean(d.wfh?.on) });
+      setShipAuto(Boolean(d.shipAuto));
       setShipChoice(d.shipChoice || { key: 'billing', manual: null });
       setAdvance(d.advance || { on: false, amount: '', due: '' });
       setDraftId(String(data.draft.draft_id));
@@ -219,7 +229,7 @@ export default function SalesOrderFormPage() {
     return qt === type || (type === 'demo' && qt === 'demo');
   }), [quotes, type]);
 
-  const addr = useCustomerAddresses(customerId);
+  const addr = useCustomerAddresses(customerId, metaTick);
   const shipAddress = resolveShipping(addr.options, shipChoice);
   const supplyState = useMemo(() => resolveSupplyStateFromShipping(shipAddress), [shipAddress]);
 
@@ -231,30 +241,47 @@ export default function SalesOrderFormPage() {
     subtotal, shipping: shippingCharge, security, supplyState, gstOnShipping: wfh.on,
   });
 
+  const laptopCount = lines.reduce((n, l) => n + (Number(l.quantity) || 0), 0);
+  const wfhShipping = WFH_SHIPPING * Math.max(laptopCount, 1);
+  useEffect(() => {
+    if (wfh.on && shipAuto) setShipping(String(wfhShipping));
+  }, [wfh.on, shipAuto, wfhShipping]);
+
   const onType = (t) => {
     setType(t);
     if (t !== 'sale') setInPlace(false);
-    if (t === 'sale') setSecurityType('none');
+    if (t === 'sale') {
+      setSecurityType('none');
+      // No work-from-home on a sale; its shipping is optional.
+      if (wfh.on) { setWfh({ on: false }); if (shipAuto) setShipping(''); setShipAuto(false); }
+    }
     setQuotationNumber('');
   };
 
   const selectedCustomer = (meta?.customers || []).find((x) => String(x.customer_id) === String(customerId));
-  const gstLocked = Boolean(gst) && gst === customerGstin(selectedCustomer);
+  const isRental = type === 'rental';
+  const gstLocked = isRental || (Boolean(gst) && gst === customerGstin(selectedCustomer));
+  const rentalGstMissing = isRental && Boolean(selectedCustomer) && !customerGstin(selectedCustomer);
+  // Rental: the GSTIN is always the customer's own (refreshed after a recheck).
+  useEffect(() => {
+    if (isRental && selectedCustomer) setGst(customerGstin(selectedCustomer));
+  }, [isRental, selectedCustomer]);
 
   const shipOption = addr.options.find((o) => o.value === shipChoice.key);
 
   const onWfh = (on) => {
     setWfh({ on });
     if (on) {
-      if (!(Number(shipping) > 0)) setShipping(String(WFH_SHIPPING));
+      setShipAuto(true);
       // An employee's home is never the billing / office address: start from a
       // saved WFH address or a blank one.
       if (!String(shipChoice.key).startsWith('saved_') && shipChoice.key !== 'manual') {
         const saved = addr.options.find((o) => o.is_wfh);
         setShipChoice(saved ? { key: saved.value, manual: null } : { key: 'manual', manual: shipChoice.manual || null });
       }
-    } else if (Number(shipping) === WFH_SHIPPING) {
-      setShipping('');
+    } else {
+      if (shipAuto) setShipping('');
+      setShipAuto(false);
     }
   };
 
@@ -274,6 +301,7 @@ export default function SalesOrderFormPage() {
     const miss = firstMissing(lines, REQUIRED);
     if (miss) e.line = miss;
     if (gstinError(gst)) e.gst = gstinError(gst);
+    if (rentalGstMissing) e.gst = 'A rental order needs the customer’s GSTIN — add it on the customer record, then recheck';
     if (!inPlace) {
       if (!shipAddress) e.ship = { address: 'Choose where this order ships' };
       else if (shipChoice.key === 'manual' || wfh.on) {
@@ -285,7 +313,7 @@ export default function SalesOrderFormPage() {
     if (advance.on && !(Number(advance.amount) > 0)) e.advance = 'Enter the advance amount, or untick it';
     setErrors(e);
     if (Object.keys(e).length) {
-      toast.error(e.advance || e.customer || (e.gst && `GSTIN: ${e.gst}`) || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
+      toast.error(e.advance || e.customer || (e.gst && (rentalGstMissing ? e.gst : `GSTIN: ${e.gst}`)) || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
       return;
     }
 
@@ -340,7 +368,7 @@ export default function SalesOrderFormPage() {
   const saveDraft = async () => {
     const c = selectedCustomer;
     const body = {
-      payload: { type, demoBook, quotationNumber, customerId, gst, lines, securityType, shipping, inPlace, wfh, shipChoice, advance },
+      payload: { type, demoBook, quotationNumber, customerId, gst, lines, securityType, shipping, shipAuto, inPlace, wfh, shipChoice, advance },
       customer_id: customerId || null,
       customer_name: c ? (c.company_name || c.name) : '',
       quotation_type: type,
@@ -439,6 +467,22 @@ export default function SalesOrderFormPage() {
               </Field>
               <GstinField value={gst} onChange={setGst} locked={gstLocked} error={errors.gst} />
             </FormGrid>
+            {rentalGstMissing && (
+              <div style={{ marginTop: '12px' }}>
+                <Notice
+                  tone="crit"
+                  title="GSTIN required for a rental order"
+                  action={(
+                    <div className="flex flex-wrap" style={{ gap: '8px' }}>
+                      <Button onClick={() => window.open(`/carret/sell/customers/${encodeURIComponent(customerId)}?tab=profile`, '_blank', 'noopener')}>Add GSTIN on the customer</Button>
+                      <Button variant="quiet" onClick={() => setMetaTick((t) => t + 1)}>Recheck</Button>
+                    </div>
+                  )}
+                >
+                  {selectedCustomer.company_name || selectedCustomer.name} has no GSTIN. Add it on the customer’s Profile (Look up GSTIN also updates the billing address), then press Recheck. You can save this as a draft meanwhile.
+                </Notice>
+              </div>
+            )}
           </Section>
 
           <Section title="Laptops">
@@ -456,11 +500,13 @@ export default function SalesOrderFormPage() {
               )}
               {!inPlace && (
                 <>
+                  {(!isSale || wfh.on) && (
                   <Checkbox
-                    label={`Work-from-home delivery to an employee (₹${WFH_SHIPPING} shipping + GST)`}
+                    label={`Work-from-home delivery to an employee (₹${WFH_SHIPPING} per laptop shipping + GST)`}
                     checked={wfh.on}
                     onChange={(e) => onWfh(e.target.checked)}
                   />
+                  )}
                   {customerId ? (
                     <div className="c-form-grid" style={{ '--c-cols': 2 }}>
                       <div>
@@ -482,9 +528,9 @@ export default function SalesOrderFormPage() {
                     <p className="font-ui text-ink-3 m-0">Choose the customer to pick a delivery address.</p>
                   )}
                   {errors.ship?.address && shipChoice.key !== 'manual' && <Notice tone="crit">{errors.ship.address}</Notice>}
-                  {!wfh.on && shipOption?.is_wfh && (
+                  {!isSale && !wfh.on && shipOption?.is_wfh && (
                     <Notice tone="warn" action={<Button onClick={() => onWfh(true)}>Make it WFH</Button>}>
-                      This is a saved work-from-home address. Tick work-from-home delivery so the ₹{WFH_SHIPPING} shipping and GST apply.
+                      This is a saved work-from-home address. Tick work-from-home delivery so the ₹{WFH_SHIPPING}-per-laptop shipping and GST apply.
                     </Notice>
                   )}
                   <p className="font-ui text-ink-3 m-0" style={{ fontSize: 'var(--d-sm)' }}>
@@ -507,8 +553,8 @@ export default function SalesOrderFormPage() {
                 </Field>
               )}
               {!inPlace && (
-                <Field label="Shipping charges (₹)" required={wfh.on} error={errors.shipping} hint={wfh.on ? `Work from home: ₹${WFH_SHIPPING} by default, GST added` : undefined}>
-                  <Input type="number" min="0" step="0.01" value={shipping} onChange={(e) => setShipping(e.target.value)} />
+                <Field label="Shipping charges (₹)" required={wfh.on} error={errors.shipping} hint={wfh.on ? `Work from home: ₹${WFH_SHIPPING} × ${laptopCount || 1} laptop${laptopCount === 1 ? '' : 's'}${shipAuto ? '' : ' (edited by hand)'}, GST added` : (isSale ? 'Optional' : undefined)}>
+                  <Input type="number" min="0" step="0.01" value={shipping} onChange={(e) => { setShipAuto(false); setShipping(e.target.value); }} />
                 </Field>
               )}
             </FormGrid>
