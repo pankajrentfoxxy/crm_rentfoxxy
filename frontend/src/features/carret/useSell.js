@@ -18,7 +18,7 @@ const URLS = { customers: '/customer-management/customers' };
 const CUSTOMER_TYPE = { rentfoxxy: 'rental', gorefurbo: 'sales' };
 
 export function useSellList(resource, {
-  entity = '', status = '', search = '', page = 1, limit = 50, refreshKey = 0,
+  entity = '', status = '', search = '', page = 1, limit = 50, refreshKey = 0, dateFrom = '', dateTo = '',
 } = {}) {
   const [state, setState] = useState({ loading: true, error: null, rows: [], total: 0, pages: 1, stats: null });
 
@@ -31,8 +31,10 @@ export function useSellList(resource, {
     }
     if (status) p.set('status', status);
     if (search) p.set('search', search);
+    if (dateFrom) p.set('date_from', dateFrom);
+    if (dateTo) p.set('date_to', dateTo);
     return p.toString();
-  }, [resource, entity, status, search, page, limit]);
+  }, [resource, entity, status, search, page, limit, dateFrom, dateTo]);
 
   useEffect(() => {
     let cancelled = false;

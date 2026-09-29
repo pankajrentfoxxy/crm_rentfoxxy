@@ -31,7 +31,7 @@ const wrap = (where, fn) => async (req, res) => {
 exports.listAssets = wrap('stock.listAssets', async (req, res) => {
   const out = await svc.listAssets({
     search: req.query.search, status: req.query.status, view: req.query.view, tag: req.query.tag,
-    page: req.query.page, limit: req.query.limit,
+    movedTo: req.query.moved_to, movedOn: req.query.moved_on, page: req.query.page, limit: req.query.limit,
   });
   res.json({ success: true, ...out });
 });

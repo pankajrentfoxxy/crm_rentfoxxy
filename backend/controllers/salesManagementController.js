@@ -466,6 +466,8 @@ exports.listQuotations = async (req, res) => {
       status: req.query.status,
       source_lead_id: req.query.source_lead_id,
       entity_code: req.query.entity_code,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -1857,6 +1859,8 @@ exports.listDeliveryChallans = async (req, res) => {
       assignedUserId,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      deliveredFrom: req.query.delivered_from,
+      deliveredTo: req.query.delivered_to,
       hidePendingEway: !canSeeLockedEway,
     });
     res.json({ success: true, ...data });

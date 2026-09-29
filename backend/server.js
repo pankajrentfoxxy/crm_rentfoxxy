@@ -183,6 +183,7 @@ app.use('/api/customer-billing', require('./routes/customerBilling'));
 app.use('/api/vendor-billing', require('./routes/vendorBilling'));
 app.use('/api/einvoice', require('./routes/einvoice'));
 app.use('/api/finance-overview', require('./routes/financeOverview'));
+app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/demo', require('./routes/demo'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/asset-configuration', require('./routes/assetConfiguration'));

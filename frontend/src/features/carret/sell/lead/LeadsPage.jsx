@@ -133,9 +133,12 @@ export default function LeadsPage() {
   const [win, setWin] = useState(null); // { lead, status }
 
   const cameIn = params.get('came_in') || '';
+  // Exact IST days from the Today dashboard (?created_from=&created_to=).
+  const createdFrom = params.get('created_from') || '';
+  const createdTo = params.get('created_to') || '';
   const load = useCallback(() => {
     setLeads(null);
-    const from = cameIn === 'today' ? todayIst() : cameIn ? addDaysIst(-Number(cameIn)) : undefined;
+    const from = createdFrom || (cameIn === 'today' ? todayIst() : cameIn ? addDaysIst(-Number(cameIn)) : undefined);
     fetchLeads({
       search: params.get('search') || undefined,
       status: ALL_STATUSES.join(','),
@@ -144,11 +147,12 @@ export default function LeadsPage() {
       follow_up: params.get('follow_up') || undefined,
       inquiry_type: params.get('inquiry') || undefined,
       date_from: from,
+      date_to: createdTo || undefined,
       limit: 3000,
       page: 1,
     }).then(({ data }) => { setLeads(data.leads || []); setTruncated(Boolean(data.truncated) || Number(data.total) > 3000); })
       .catch((e) => { toast.error(leadErr(e, 'Could not load leads')); setLeads([]); });
-  }, [params, cameIn]);
+  }, [params, cameIn, createdFrom, createdTo]);
   useEffect(() => { load(); }, [load]);
   const loadBoard = useCallback(() => fetchFollowUpBoard().then(({ data }) => setBoard(data)).catch(() => setBoard(null)), []);
   useEffect(() => {
@@ -224,7 +228,7 @@ export default function LeadsPage() {
     { key: 'a', header: 'Last activity', render: (l) => <DateTime value={l.lastActivityAt || l.updatedAt} />, sub: (l) => (l.createdAt ? `Came in ${istDate(l.createdAt)}` : null) },
   ];
 
-  const filtersSet = ['search', 'owner', 'source', 'inquiry', 'follow_up', 'came_in'].some((k) => params.get(k));
+  const filtersSet = ['search', 'owner', 'source', 'inquiry', 'follow_up', 'came_in', 'created_from', 'created_to'].some((k) => params.get(k));
   const clearFilters = () => {
     const p = new URLSearchParams();
     ['view', 'stage', 'sort'].forEach((k) => { if (params.get(k)) p.set(k, params.get(k)); });
@@ -307,6 +311,11 @@ export default function LeadsPage() {
             </>
           )}
         >
+          {(createdFrom || createdTo) && (
+            <Notice tone="info">
+              Came in {createdFrom === createdTo ? `on ${createdFrom}` : `from ${createdFrom || '…'} to ${createdTo || 'today'}`} (IST).
+            </Notice>
+          )}
           {truncated && <Notice tone="info">Showing the first {leads?.length} — narrow the filters to see the rest.</Notice>}
           {leads === null ? <EmptyState title="Loading leads…" /> : view === 'list' ? (
             <>

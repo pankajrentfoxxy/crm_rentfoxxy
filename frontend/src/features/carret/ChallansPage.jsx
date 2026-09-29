@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import DeskShell from '../../shells/DeskShell';
 import {
-  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, EmptyState, Button, Tabs,
+  DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, EmptyState, Button, Tabs, Notice,
 } from '../../components/carret';
 import { usePermission } from '../../hooks/usePermission';
 import { useChallans } from './useDeliveryChallans';
@@ -44,14 +44,17 @@ export default function ChallansPage({ movement = 'outbound' }) {
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
   const isReturn = movement === 'return';
+  // Deep links (the Today dashboard): ?status=<tab> and ?delivered_on=YYYY-MM-DD.
+  const [params] = useSearchParams();
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(() => ((isReturn ? RET_TABS : OUT_TABS).some((t) => t.key === params.get('status')) ? params.get('status') : ''));
+  const [deliveredOn, setDeliveredOn] = useState(isReturn ? '' : (params.get('delivered_on') || ''));
   const [page, setPage] = useState(1);
 
-  const { loading, error, rows, total, pages, stats } = useChallans({ movement, status, search, page });
+  const { loading, error, rows, total, pages, stats } = useChallans({ movement, status, search, page, deliveredOn });
 
   const onFilter = useCallback((k, v) => { if (k === 'search') { setSearch(v); setPage(1); } }, []);
-  const onClear = useCallback(() => { setSearch(''); setStatus(''); setPage(1); }, []);
+  const onClear = useCallback(() => { setSearch(''); setStatus(''); setDeliveredOn(''); setPage(1); }, []);
 
   const tabs = useMemo(() => (isReturn ? RET_TABS : OUT_TABS.map((t) => ({
     ...t,
@@ -96,6 +99,15 @@ export default function ChallansPage({ movement = 'outbound' }) {
         <Button variant="primary" onClick={() => navigate('/carret/move/challans/new')}><Plus size={16} aria-hidden="true" /> New challan</Button>
       )}
     >
+      {deliveredOn && (
+        <Notice
+          tone="info"
+          className="mb-3"
+          action={<Button variant="quiet" onClick={() => { setDeliveredOn(''); setPage(1); }}>Any day</Button>}
+        >
+          Delivered on {deliveredOn} (IST).
+        </Notice>
+      )}
       <Panel
         toolbar={(
           <>

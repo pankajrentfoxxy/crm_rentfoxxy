@@ -223,8 +223,11 @@ function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
 
   if (date_from || date_to) {
     const createdAtFilter = {};
-    if (date_from) createdAtFilter.gte = new Date(`${date_from}T00:00:00.000Z`);
-    if (date_to) createdAtFilter.lte = new Date(`${date_to}T23:59:59.999Z`);
+    // IST calendar days, like the follow-up filter below. These were UTC days,
+    // so "came in today" missed every lead created between 00:00 and 05:30 IST
+    // (Today dashboard, 29 Sep 2026).
+    if (date_from) createdAtFilter.gte = new Date(`${date_from}T00:00:00.000+05:30`);
+    if (date_to) createdAtFilter.lte = new Date(`${date_to}T23:59:59.999+05:30`);
     andConditions.push({ createdAt: createdAtFilter });
   }
 
