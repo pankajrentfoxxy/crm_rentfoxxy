@@ -63,6 +63,16 @@ function laptopRowsFromItems(items = []) {
 }
 
 /** Accounts / dc_eway_bill holders — not warehouse via sale-DC dispatch permissions. */
+/**
+ * Who may mail Accounts for a repair challan's e-way bill. The screen has always
+ * shown the button to these roles only; the route used to accept any repair-DC
+ * viewer, so a view grant could send the mail (a write). One rule for both.
+ */
+const VRDC_EWAY_REQUEST_ROLES = new Set(['super_admin', 'warehouse', 'admin', 'manager', 'floor_manager', 'dispatch']);
+function canRequestVrdcEway(user) {
+  return Boolean(user && VRDC_EWAY_REQUEST_ROLES.has(user.role));
+}
+
 async function canUploadVrdcEwayBill(user, permissionCache = {}) {
   if (!user) return false;
   if (user.role === 'super_admin') return true;
@@ -105,12 +115,7 @@ async function buildVrdcEwayCompliance(head, items, user, permissionCache = {}) 
     eway_status: !needsEway ? 'not_required' : (ewayComplete ? 'uploaded' : 'pending'),
     can_download_pdf: canDownload,
     can_upload_eway: canUpload,
-    can_request_eway: isSuperAdmin
-    || user?.role === 'warehouse'
-    || user?.role === 'admin'
-    || user?.role === 'manager'
-    || user?.role === 'floor_manager'
-    || user?.role === 'dispatch',
+    can_request_eway: canRequestVrdcEway(user),
     request_sent: Boolean(head?.accounts_notified_at),
     accounts_notified_at: head?.accounts_notified_at || null,
     accounts_email: ACCOUNTS_EMAIL,
@@ -500,6 +505,8 @@ module.exports = {
   describeRepairTransport,
   saveVrdcEwayBill,
   canUploadVrdcEwayBill,
+  canRequestVrdcEway,
+  VRDC_EWAY_REQUEST_ROLES,
   laptopRowsFromItems,
   requiresVrdcEway,
   isVrdcEwayComplete,

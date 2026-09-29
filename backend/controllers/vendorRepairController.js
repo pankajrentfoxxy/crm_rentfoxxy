@@ -866,6 +866,11 @@ exports.markVendorKept = async (req, res) => {
   if (out !== undefined) res.json({ success: true, message: 'Mailed the vendor and recorded the laptop as returned to them', ...out });
 };
 
+exports.requireVrdcEwayRequest = (req, res, next) => {
+  if (vrdcEway.canRequestVrdcEway(req.user)) return next();
+  return res.status(403).json({ success: false, message: 'Only the warehouse, dispatch or a manager can ask Accounts for the e-way bill' });
+};
+
 exports.requireReplacementApprover = (req, res, next) => {
   if (rentSvc.canApproveReplacement(req.user)) return next();
   return res.status(403).json({ success: false, message: 'Only Accounts or the named approver can decide a replacement' });

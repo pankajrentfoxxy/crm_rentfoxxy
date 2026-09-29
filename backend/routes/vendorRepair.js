@@ -60,7 +60,7 @@ router.post(...vrdcRoute('/mark-delivered-to-vendor', ctrl.requireVendorRepairDi
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireVendorRepairDispatch, ctrl.signDispatch));
 router.post(...vrdcRoute('/cancel', ctrl.requireVendorRepairDispatch, ctrl.cancelDc));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));
-router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.sendAccountsVrdcEwayMail));
+router.post(...vrdcRoute('/send-accounts-eway-mail', vendorRepairView, ctrl.requireVrdcEwayRequest, ctrl.sendAccountsVrdcEwayMail));
 router.post(...vrdcRoute('/vrdc-eway', ctrl.requireVrdcEwayUpload, wrapMulter(uploadVrdcEwayDoc.single('eway_bill_pdf')), ctrl.uploadVrdcEway));
 // Repair request, rent pause, replacement, vendor keeps it (claude/carret-vendor-repair.md)
 // Accounts / the named approver may not hold the repair sections — they still see what waits for them.

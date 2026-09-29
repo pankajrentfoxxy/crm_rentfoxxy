@@ -13,6 +13,7 @@ import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-manag
 import VrtdcEwayPanel from '../../vendor-management/components/VrtdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { errMsg } from './procureShared';
+import { uploadUrl } from './repairShared';
 
 /**
  * Procure → Vendor returns → return challan (VRTDC).
@@ -39,6 +40,7 @@ export default function ReturnChallanRecordPage() {
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
   const canEdit = ['vendor_return_to_vendor', 'vendor_management'].some((s) => hasPermission(s, 'edit'));
+  const canGate = hasPermission('guard_gate_checking', 'view');
 
   const [dc, setDc] = useState(null);
   const [error, setError] = useState(null);
@@ -103,7 +105,7 @@ export default function ReturnChallanRecordPage() {
   if (st === 'draft') next = <Notice tone="info" title="Draft">Enter each laptop’s value and how it travels, then send it to the gate.</Notice>;
   else if (st === 'dispatch_ready') {
     next = (
-      <Notice tone="warn" title="At the gate">
+      <Notice tone="warn" title="At the gate" action={canGate && <Button variant="primary" onClick={() => navigate(`/carret/move/gate?dir=outward&dc=${encodeURIComponent(dcNumber)}`)}>Open at the gate</Button>}>
         The guard scans it out. At ₹50,000 or more it can’t leave until Accounts adds the e-way bill.
         {dc.ship_by === 'by_hand' && ' Once scanned out it appears in the delivery person’s technician bucket.'}
         {dc.eway_auto_mail_error && !dc.accounts_notified_at && <><br /><strong>The automatic mail to Accounts failed:</strong> {dc.eway_auto_mail_error} — use “Send for E-way bill” below.</>}
@@ -114,6 +116,7 @@ export default function ReturnChallanRecordPage() {
     next = (
       <Notice tone="info" title="On its way to the vendor" action={canEdit && <Button variant="primary" disabled={busy === 'complete'} onClick={() => setConfirm({ title: 'The vendor has these laptops?', body: 'Marks the return complete.', label: 'Vendor received', tone: 'good', go: () => run('complete', () => completeReturnToVendorDc(dcNumber), 'Marked received by the vendor') })}>Vendor received</Button>}>
         Left <DateTime value={dc.dispatched_at} />. The laptops are recorded as returned to the vendor, and each has a draft debit note for accounts.
+        {dc.ship_by === 'by_hand' && ' Our delivery person marks it delivered in My Deliveries (reached → vendor signs); use the button only if the warehouse is confirming instead.'}
       </Notice>
     );
   } else if (st === 'completed') next = <Notice tone="good" title="The vendor has them">Received <DateTime value={dc.vendor_received_at} />.</Notice>;
@@ -202,6 +205,10 @@ export default function ReturnChallanRecordPage() {
             { label: 'From (warehouse)', value: <span style={{ whiteSpace: 'pre-line' }}>{dc.warehouse_address}</span> },
             { label: 'Vendor contact', value: [dc.contact_person, dc.contact_mobile].filter(Boolean).join(' · ') },
             { label: 'Transport', value: [SHIP_LABEL[dc.ship_by], transportLine(dc)].filter(Boolean).join(' — ') || '—' },
+            ...(dc.delivery_pod_path ? [{
+              label: dc.delivery_pod_type === 'esign' ? 'Vendor / receiver signature' : 'Proof of delivery',
+              value: <a href={uploadUrl(dc.delivery_pod_path)} target="_blank" rel="noreferrer"><img src={uploadUrl(dc.delivery_pod_path)} alt="Proof of delivery" style={{ maxHeight: '112px', objectFit: 'contain', background: 'var(--surface)' }} /></a>,
+            }] : []),
           ]}
           />
         </Section>
