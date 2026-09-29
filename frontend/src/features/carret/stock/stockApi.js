@@ -28,6 +28,20 @@ export const SCRAP_WAREHOUSE_ROLES = ['warehouse', 'admin', 'manager', 'super_ad
 /** Who may view scrap challans (backend viewAny). */
 export const SCRAP_VIEW_SECTIONS = ['scrap_challans', 'parts_discarded', 'parts_procurement', 'parts_inventory', 'part_vendor_repair', 'inventory_management'];
 
+/**
+ * Discarded catalogue parts (part_instances.status = 'discarded') not yet on a
+ * scrap challan — Stock → Scrap → Discarded parts. Same list the old
+ * Discarded Parts screen used (GET /parts/units), filtered server side.
+ */
+export const fetchDiscardedParts = (search) => api.get('/parts/units', {
+  params: { status: 'discarded', scrap_challan: 'none', search: search || undefined, limit: 200 },
+});
+/** Sections GET /parts/units accepts (backend routes/parts.js partsCatalogView). */
+export const PART_UNITS_VIEW_SECTIONS = [
+  'parts_inventory', 'parts_approval', 'parts', 'floor_tickets', 'floor_pipeline', 'tickets', 'parts_requests',
+  'support_tickets', 'support_part_requests', 'support_part_challan', 'support_technician',
+];
+
 export const fetchNotEarning = (days) => api.get('/stock/not-earning', { params: { days } });
 
 export const TAG_OPTIONS = [

@@ -15,6 +15,28 @@ const STATUSES = new Set(['available', 'pending', 'out']);
 const OUTWARD_STATUSES = new Set(['draft', 'dispatch_ready', 'dispatched', 'cancelled']);
 const RECEIVER_TYPES = new Set(['scrap_buyer', 'vendor', 'technician', 'warehouse', 'other']);
 const CONDITIONS = new Set(['dead', 'damaged', 'unusable', 'unknown']);
+// Who may approve (generate the Part DC) or cancel an outward request — the
+// same set the old screen showed the buttons to; physical_dead_parts edit
+// also qualifies (routes/physicalDeadParts.js requireWarehouse).
+const WAREHOUSE_ROLES = new Set([
+  'warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead', 'procurement',
+]);
+
+/** A validation failure: 400, not a 500 with a stack trace in the log. */
+function bad(message, status = 400) {
+  return Object.assign(new Error(message), { status });
+}
+
+// One advisory lock per series: plain MAX()+1 let two saves at the same moment
+// take the same PIN / POUT / DP number and the second failed on the unique key.
+const NUMBER_LOCK = {
+  physical_part_inwards: 'physical_part_inward_number',
+  physical_part_outwards: 'physical_part_outward_number',
+  physical_dead_parts: 'physical_dead_part_dp_number',
+};
+async function lockSeries(client, table) {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [NUMBER_LOCK[table]]);
+}
 
 function actorFrom(user) {
   return {
@@ -25,6 +47,7 @@ function actorFrom(user) {
 
 function nextSeq(prefixLike, col, table) {
   return async function nextNumber(client) {
+    await lockSeries(client, table);
     const fy = currentFinancialYearLabel();
     const r = await client.query(
       `SELECT COALESCE(MAX((regexp_match(${col}, '/([0-9]+)$'))[1]::int), 0) + 1 AS n
@@ -41,6 +64,7 @@ const nextInwardNumber = nextSeq('PIN', 'inward_number', 'physical_part_inwards'
 const nextOutwardNumber = nextSeq('POUT', 'outward_number', 'physical_part_outwards');
 
 async function nextDpNumber(client) {
+  await lockSeries(client, 'physical_dead_parts');
   const r = await client.query(
     `SELECT COALESCE(MAX((regexp_match(dp_number, 'DP-([0-9]+)$'))[1]::int), 0) + 1 AS n
        FROM physical_dead_parts`
@@ -60,13 +84,13 @@ function resolvePhotoAbs(rel) {
 
 function assertPhotoPath(rel, label) {
   const raw = String(rel || '').trim();
-  if (!raw) throw new Error(`${label} photo is required`);
+  if (!raw) throw bad(`${label} photo is required`);
   const clean = raw.replace(/^\/?uploads\//, '');
   if (!clean.startsWith('physical-parts/')) {
-    throw new Error(`${label} photo must be uploaded through Part Inward / Outward`);
+    throw bad(`${label} photo must be uploaded through Part Inward / Outward`);
   }
   if (!resolvePhotoAbs(clean)) {
-    throw new Error(`${label} photo file is missing — upload again`);
+    throw bad(`${label} photo file is missing — upload again`);
   }
   return clean;
 }
@@ -82,8 +106,8 @@ function collectPhotoInputs(...sources) {
 
 function assertPhotoList(rawList, label, { min = 1, max = 12 } = {}) {
   const list = collectPhotoInputs(rawList);
-  if (list.length < min) throw new Error(`${label}: at least ${min} photo${min === 1 ? '' : 's'} required`);
-  if (list.length > max) throw new Error(`${label}: maximum ${max} photos`);
+  if (list.length < min) throw bad(`${label}: at least ${min} photo${min === 1 ? '' : 's'} required`);
+  if (list.length > max) throw bad(`${label}: maximum ${max} photos`);
   return list.map((p, i) => assertPhotoPath(p, `${label} photo ${i + 1}`));
 }
 
@@ -102,9 +126,9 @@ function normalizeUnit(u, idx) {
   const serial = String(u?.serial_number || '').trim() || null;
   const condition = String(u?.condition || 'dead').trim().toLowerCase();
   const remarks = String(u?.remarks || '').trim() || null;
-  if (!partName) throw new Error(`Part ${idx + 1}: part name is required`);
-  if (!category) throw new Error(`Part ${idx + 1}: category is required`);
-  if (!CONDITIONS.has(condition)) throw new Error(`Part ${idx + 1}: invalid condition`);
+  if (!partName) throw bad(`Part ${idx + 1}: part name is required`);
+  if (!category) throw bad(`Part ${idx + 1}: category is required`);
+  if (!CONDITIONS.has(condition)) throw bad(`Part ${idx + 1}: invalid condition`);
   const photos = assertPhotoList(
     collectPhotoInputs(u?.inward_photo_paths, u?.photos, u?.inward_photo_path, u?.photo_path),
     `Part ${idx + 1}`
@@ -186,10 +210,10 @@ async function createInward(client, { warehouse, inwardDate, inwardReason, remar
   const wh = String(warehouse || '').trim();
   const reason = String(inwardReason || '').trim();
   const date = inwardDate || new Date().toISOString().slice(0, 10);
-  if (!wh) throw new Error('Warehouse is required');
-  if (!reason) throw new Error('Inward reason is required');
-  if (!Array.isArray(units) || !units.length) throw new Error('Add at least one physical part');
-  if (units.length > 50) throw new Error('Maximum 50 parts per inward');
+  if (!wh) throw bad('Warehouse is required');
+  if (!reason) throw bad('Inward reason is required');
+  if (!Array.isArray(units) || !units.length) throw bad('Add at least one physical part');
+  if (units.length > 50) throw bad('Maximum 50 parts per inward');
 
   const normalized = units.map(normalizeUnit);
   const inwardNumber = await nextInwardNumber(client);
@@ -353,13 +377,14 @@ async function createOutward(client, {
   actor,
 }) {
   const ids = [...new Set((partIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n)))];
-  if (!ids.length) throw new Error('Select at least one available part');
+  if (!ids.length) throw bad('Select at least one available part');
+  if (ids.length > 200) throw bad('Maximum 200 parts per outward');
   const type = String(receiverType || '').trim();
   const name = String(receiverName || '').trim();
   const reason = String(purpose || '').trim();
-  if (!RECEIVER_TYPES.has(type)) throw new Error('Receiver type is required');
-  if (!name) throw new Error('Receiver name is required');
-  if (!reason) throw new Error('Purpose / reason is required');
+  if (!RECEIVER_TYPES.has(type)) throw bad('Receiver type is required');
+  if (!name) throw bad('Receiver name is required');
+  if (!reason) throw bad('Purpose / reason is required');
   const mobile = normalizeMobile(receiverContact);
   const photos = assertPhotoList(collectPhotoInputs(photoPaths, photoPath), 'Outward');
   const photo = photos[0];
@@ -472,11 +497,22 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
   if (head.status !== 'draft') {
     throw Object.assign(new Error('Only an awaiting-approval request can generate a Part DC'), { status: 409 });
   }
+  const onIt = await client.query(
+    `SELECT COUNT(*)::int AS n FROM physical_dead_parts WHERE outward_id = $1 AND status = 'pending'`,
+    [head.outward_id]
+  );
+  if (!onIt.rows[0]?.n) {
+    throw Object.assign(new Error('No parts are left on this request — cancel it and raise a new one'), { status: 409 });
+  }
 
   const body = dispatchBody || {};
   let dispatch;
   if (body.ship_by || body.shipBy || body.dispatch_mode) {
-    dispatch = dispatchPayloadFromBody(body);
+    try {
+      dispatch = dispatchPayloadFromBody(body);
+    } catch (e) {
+      throw bad(e.message);
+    }
   } else if (head.ship_by || head.dispatch_mode) {
     dispatch = {
       ship_by: head.ship_by,
@@ -488,15 +524,18 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
       porter_order_id: head.porter_order_id,
       porter_booking_url: head.porter_booking_url,
       delivery_person_id: head.delivery_person_id,
+      vehicle_number: head.vehicle_number || null,
+      vendor_pickup_person: head.vendor_pickup_person || null,
+      vendor_pickup_mobile: head.vendor_pickup_mobile || null,
     };
   } else {
-    throw new Error('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
+    throw bad('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
   }
 
   const whUrl = warehouseEsign
     ? saveEsign('pout_dispatch', outwardNumber, warehouseEsign)
     : head.warehouse_dispatch_esign_url;
-  if (!whUrl) throw new Error('Warehouse dispatch e-signature is required');
+  if (!whUrl) throw bad('Warehouse dispatch e-signature is required');
 
   const recipientUrl = recipientEsign
     ? saveEsign('pout_recipient', outwardNumber, recipientEsign)
@@ -523,6 +562,8 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
     actor?.name || whSignerName || null,
   ];
   try {
+    // Savepoint so a missing-column fallback does not abort the caller's transaction.
+    await client.query('SAVEPOINT pout_dispatch');
     await client.query(
       `UPDATE physical_part_outwards SET
           warehouse_dispatch_esign_url = $2,
@@ -542,12 +583,17 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
           approved_at = COALESCE(approved_at, NOW()),
           approved_by = COALESCE(approved_by, $15),
           approved_by_name = COALESCE(approved_by_name, $16),
+          vehicle_number = $17,
+          vendor_pickup_person = $18,
+          vendor_pickup_mobile = $19,
           updated_at = NOW()
         WHERE outward_number = $1`,
-      dispatchParams
+      [...dispatchParams, dispatch.vehicle_number || null, dispatch.vendor_pickup_person || null, dispatch.vendor_pickup_mobile || null]
     );
+    await client.query('RELEASE SAVEPOINT pout_dispatch');
   } catch (err) {
     if (err.code !== '42703') throw err;
+    await client.query('ROLLBACK TO SAVEPOINT pout_dispatch');
     await client.query(
       `UPDATE physical_part_outwards SET
           warehouse_dispatch_esign_url = $2,
@@ -589,23 +635,41 @@ async function dispatchOutward(client, { outwardNumber, warehouseEsign, recipien
   return { outward_number: outwardNumber, status: 'dispatch_ready' };
 }
 
-async function cancelDraftOutward(client, { outwardNumber, actor }) {
+async function cancelDraftOutward(client, { outwardNumber, reason, actor }) {
   const headRes = await client.query(
     `SELECT * FROM physical_part_outwards WHERE outward_number = $1 FOR UPDATE`,
     [outwardNumber]
   );
   const head = headRes.rows[0];
   if (!head) throw Object.assign(new Error('Outward not found'), { status: 404 });
+  if (head.status === 'cancelled') return { already: true, outward_number: outwardNumber, status: 'cancelled' };
   if (head.status !== 'draft') {
     throw Object.assign(new Error('Only a draft outward can be cancelled'), { status: 409 });
   }
+  const why = String(reason || '').trim() || null;
 
-  await client.query(
+  // Each released part gets its own movement row, so the cancelled request
+  // still shows which parts were on it (the item rows are removed because a
+  // part may sit on only one outward at a time).
+  const released = await client.query(
     `UPDATE physical_dead_parts
         SET status = 'available', outward_id = NULL, updated_at = NOW()
-      WHERE outward_id = $1 AND status = 'pending'`,
+      WHERE outward_id = $1 AND status = 'pending'
+      RETURNING part_id, dp_number`,
     [head.outward_id]
   );
+  for (const row of released.rows) {
+    await logPartMovement(client, {
+      outwardId: head.outward_id,
+      partId: row.part_id,
+      dpNumber: row.dp_number,
+      eventType: 'released',
+      fromStatus: 'pending',
+      toStatus: 'available',
+      remarks: `Back in the warehouse — ${outwardNumber} cancelled${why ? `: ${why}` : ''}`,
+      actor,
+    });
+  }
   await client.query(
     `DELETE FROM physical_part_outward_items WHERE outward_id = $1`,
     [head.outward_id]
@@ -616,12 +680,25 @@ async function cancelDraftOutward(client, { outwardNumber, actor }) {
       WHERE outward_id = $1`,
     [head.outward_id]
   );
+  try {
+    await client.query('SAVEPOINT pout_cancel');
+    await client.query(
+      `UPDATE physical_part_outwards
+          SET cancelled_at = NOW(), cancelled_by = $2, cancel_reason = $3
+        WHERE outward_id = $1`,
+      [head.outward_id, actor?.userId || null, why]
+    );
+    await client.query('RELEASE SAVEPOINT pout_cancel');
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    await client.query('ROLLBACK TO SAVEPOINT pout_cancel');
+  }
   await logPartMovement(client, {
     outwardId: head.outward_id,
     eventType: 'cancelled',
     fromStatus: head.status,
     toStatus: 'cancelled',
-    remarks: `Part outward request ${outwardNumber} cancelled`,
+    remarks: `Part outward request ${outwardNumber} cancelled${why ? `: ${why}` : ''}`,
     actor,
   });
   return { outward_number: outwardNumber, status: 'cancelled' };
@@ -736,9 +813,28 @@ async function getOutward(outwardNumber) {
     || items.rows.map((p) => p.warehouse).filter(Boolean)[0]
     || null;
 
+  // A cancelled request no longer owns its parts; list the ones it released.
+  let releasedParts = [];
+  if (head.rows[0].status === 'cancelled') {
+    const ids = [...new Set(movements.filter((m) => m.event_type === 'released' || m.event_type === 'requested')
+      .map((m) => m.part_id).filter(Boolean))];
+    if (ids.length) {
+      const r = await pool.query(
+        `SELECT p.*, i.inward_number, i.inward_date
+           FROM physical_dead_parts p
+           JOIN physical_part_inwards i ON i.inward_id = p.inward_id
+          WHERE p.part_id = ANY($1::int[])
+          ORDER BY p.dp_number`,
+        [ids]
+      );
+      releasedParts = r.rows.map(partRow);
+    }
+  }
+
   return {
     outward: wrapOutward({ ...head.rows[0], warehouse }),
     parts: items.rows.map(partRow),
+    released_parts: releasedParts,
     movements,
   };
 }
@@ -778,5 +874,6 @@ module.exports = {
   getCounts,
   RECEIVER_TYPES,
   CONDITIONS,
+  WAREHOUSE_ROLES,
   OUTWARD_STATUSES,
 };

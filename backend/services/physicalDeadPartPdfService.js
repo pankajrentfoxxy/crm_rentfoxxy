@@ -162,6 +162,9 @@ async function generatePhysicalOutwardPdf(outwardNumber) {
     courier_name: outward.courier_name,
     awb_number: outward.awb_number,
     porter_tracking_id: outward.porter_tracking_id,
+    vehicle_number: outward.vehicle_number,
+    vendor_pickup_person: outward.vendor_pickup_person,
+    vendor_pickup_mobile: outward.vendor_pickup_mobile,
     delivery_person_first_name: outward.delivery_person_first_name,
     delivery_person_last_name: outward.delivery_person_last_name,
   };
