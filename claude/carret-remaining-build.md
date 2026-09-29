@@ -50,3 +50,18 @@ Rules for every builder: existing APIs first (no parallel API; a new endpoint ne
 declares (section, action) = the section its API enforces; no hex; tests with the fix; migrations applied
 one file at a time on QA (never `run-all-migrations.js`); no pm2 restart, no frontend build (lead does it);
 do not edit `config/navigation.js` / `routes/carretRoutes.jsx` — report the entries to add.
+
+## Wave 2 (29 Sep 2026) — the last old-screen gaps + part naming
+User: "Fix all this, and I want that Part Name and type should be redesigned if required, so they will not be confused."
+Found on QA: parts.category = 'general' for 96 of 119 parts (batteries, SSDs, RAM, screws…); parts.part_type
+repeats the category, or holds a laptop model ('7490', 'E7470') or junk ('Assets', 'CH CSK'); names follow no
+pattern ('4GB' / '4 GB DDR4 RAM' / '32 GB'; 'battery' / 'Laptop Battery' / '5402 battery'); model_number empty.
+
+| # | Area | Migrations |
+|---|---|---|
+| 7 | Spare-parts PO receiving in the new UI (SparePoRecordPage → receive) | 393–395 |
+| 8 | Part naming redesign: category + category specs + fits → generated name; "type" retired from the UI; clean-up proposal (report + dry-run script, applied only after the user reviews) | 396–398 |
+| 9 | Dead / physical parts outward challan + discarded parts → scrap challan, inside Part Inward / Stock → Scrap | 399–401 |
+| 10 | Customer profile / documents / portal access in the new customer record | 402–404 |
+| 11 | My Deliveries: return pickup and vendor pickup steps in the new UI | 405–407 |
+Same rules: claude/builder-brief.md. Worktree must be reset onto the current new_stagging_crm head first.
