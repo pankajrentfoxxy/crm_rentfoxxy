@@ -39,3 +39,11 @@ export const moveStage = (id, body) => api.post(`${T}/${id}/move-stage`, body);
 export const startWork = (id, body) => api.post(`${T}/${id}/work/start`, body);
 export const endWork = (id, body = {}) => api.post(`${T}/${id}/work/end`, body);
 export const activeWork = (id) => api.get(`${T}/${id}/work/active`);
+
+/**
+ * A part request that still counts on the ticket: waiting, being bought,
+ * ready, or fitted. Cancelled, refused and returned requests are history —
+ * they must not inflate the Parts count (ticket 5334 showed 2 for 1 part).
+ */
+export const ACTIVE_PART_STATUSES = ['pending', 'escalated', 'ordered', 'received', 'approved', 'attached'];
+export const activePartRequests = (list) => (list || []).filter((r) => ACTIVE_PART_STATUSES.includes(r.status));

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Button, EmptyState, Field, FormGrid, Input, Notice, Segmented, Textarea } from '../../../../components/carret';
 import api from '../../../../utils/api';
-import { Choice, QuestionSection, StepHead, errText, useFloorChecklists } from './workShared';
+import { Choice, QuestionSection, StepHead, errText, useFloorChecklists, TtsplInput } from './workShared';
 
 /**
  * Diagnosis — find out what is wrong with the laptop.
@@ -139,7 +139,7 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
 
       <StepHead n={3} of={3}>Scan the laptop and submit</StepHead>
       <FormGrid cols={2}>
-        <Field label="TTSPL" required><Input value={ttspl} onChange={(e) => setTtspl(e.target.value)} className="font-mono" placeholder={ticket.ttspl_id ? 'Scan the TTSPL label' : ''} /></Field>
+        <Field label="TTSPL" required><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket.ttspl_id} placeholder="Scan the TTSPL label" /></Field>
         <Field label="Serial" required={needSerial} hint={needSerial ? undefined : "Optional — it doesn't power on"}><Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" /></Field>
       </FormGrid>
       <div className="c-actions-bar" style={{ alignItems: 'center' }}>

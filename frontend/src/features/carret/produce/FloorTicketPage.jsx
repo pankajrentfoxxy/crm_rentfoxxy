@@ -13,9 +13,10 @@ import StageWork from './work/StageWork';
 import QcWork from './work/QcWork';
 import PartsWork from './work/PartsWork';
 import AssignDrawer from './work/AssignDrawer';
+import { TtsplInput } from './work/workShared';
 import {
   FLOW, activeWork, claimTicket, configText, dismantleTicket, endWork, errMsg, fetchTicket, holdTicket, isFloorLead, moveStage,
-  releaseTicket, stageLabel, startWork,
+  releaseTicket, stageLabel, startWork, activePartRequests,
 } from './produceShared';
 
 /**
@@ -142,8 +143,8 @@ export default function FloorTicketPage() {
             { key: 'work', label: `Work — ${stageLabel(stage)}` },
             // A laptop reaches Dispatch QC fully ready: no part requests there.
             // Earlier requests stay visible (read-only) if there are any.
-            ...(stage !== 'Dispatch QC' || (data.part_requests || []).length
-              ? [{ key: 'parts', label: 'Parts', count: (data.part_requests || []).length }] : []),
+            ...(stage !== 'Dispatch QC' || activePartRequests(data.part_requests).length
+              ? [{ key: 'parts', label: 'Parts', count: activePartRequests(data.part_requests).length }] : []),
             { key: 'laptop', label: 'Laptop' },
             { key: 'history', label: 'History', count: acts.length },
           ]}
@@ -242,7 +243,7 @@ export default function FloorTicketPage() {
       <Drawer open={drawer === 'start'} onClose={() => setDrawer(null)} title="Start work" footer={<Button variant="primary" disabled={busy === 'start' || !String(form.ttspl || '').trim() || (t.received_condition !== 'not_on' && !String(form.serial || '').trim())} onClick={() => run('start', () => startWork(t.ticket_id, { verify_ttspl: form.ttspl, verify_serial: form.serial }), 'Timer started — the task is open')}>Start</Button>}>
         <div className="c-stack">
           <p>Scan the labels on the laptop in front of you.</p>
-          <Field label="TTSPL" required><Input autoFocus value={form.ttspl || ''} onChange={setF('ttspl')} className="font-mono" /></Field>
+          <Field label="TTSPL" required><TtsplInput autoFocus value={form.ttspl || ''} onChange={setF('ttspl')} expected={t.ttspl_id} /></Field>
           <Field label="Serial" required={t.received_condition !== 'not_on'} hint={t.received_condition === 'not_on' ? "Optional — this laptop doesn't power on" : undefined}><Input value={form.serial || ''} onChange={setF('serial')} className="font-mono" /></Field>
         </div>
       </Drawer>

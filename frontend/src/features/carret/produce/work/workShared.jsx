@@ -7,6 +7,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import api from '../../../../utils/api';
+import { Input } from '../../../../components/carret';
 
 let cached = null;
 export function useFloorChecklists() {
@@ -96,3 +97,27 @@ export const errText = (e, fallback = 'That did not work.') => {
   const d = e?.response?.data;
   return d?.message || e?.message || fallback;
 };
+
+/**
+ * TTSPL scan box. Asset codes are TTSPL + 4 digits (TTSPL7708, 9 characters)
+ * or TTSPLGR + 4 digits for gorefurbo (11). The box takes at most 11 — or the
+ * length of this laptop's own code when an older one is longer
+ * (TTSPL6271_OLD_3380) — upper-cased, no spaces, so a scanner that sends
+ * extra characters cannot overflow it.
+ */
+export const TTSPL_MAX = 11;
+export function TtsplInput({ value, onChange, expected, className = '', ...rest }) {
+  const max = Math.max(TTSPL_MAX, String(expected || '').length);
+  return (
+    <Input
+      {...rest}
+      value={value}
+      maxLength={max}
+      onChange={(e) => onChange(String(e.target.value || '').toUpperCase().replace(/\s+/g, '').slice(0, max))}
+      className={`font-mono ${className}`}
+      placeholder={rest.placeholder || 'TTSPL0000'}
+      autoComplete="off"
+      spellCheck={false}
+    />
+  );
+}

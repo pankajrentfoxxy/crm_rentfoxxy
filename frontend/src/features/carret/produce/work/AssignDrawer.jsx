@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Button, Drawer, EmptyState, Field, FormGrid, Input, Segmented } from '../../../../components/carret';
 import { assignTicket, getTeamMembers } from '../../../floor-pipeline/floorPipelineApi';
-import { errText } from './workShared';
+import { errText, TtsplInput } from './workShared';
 
 /**
  * Triage (a new laptop at Floor Manager) or reassign (any other stage).
@@ -81,7 +81,7 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
               <Segmented value={powers} onChange={setPowers} label="Powers on" options={[{ value: 'on', label: 'Yes' }, { value: 'not_on', label: "No, it won't power on" }]} />
             </Field>
             <FormGrid cols={2}>
-              <Field label="TTSPL" required><Input value={ttspl} onChange={(e) => setTtspl(e.target.value)} className="font-mono" /></Field>
+              <Field label="TTSPL" required><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket?.ttspl_id} /></Field>
               <Field label="Serial" required={powers === 'on'} hint={powers === 'not_on' ? 'Optional while it will not power on' : undefined}><Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" /></Field>
             </FormGrid>
           </>

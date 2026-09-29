@@ -6,6 +6,7 @@ import {
 import { searchParts } from '../../../floor-pipeline/floorPipelineApi';
 import { attachPartToRequest, cancelPartRequest, createPartRequest, uploadPartRequestPhotos } from '../../../floor-pipeline/partRequestsApi';
 import { errText } from './workShared';
+import { activePartRequests } from '../produceShared';
 
 /**
  * Parts for this laptop, the technician's side (PD7, PD8).
@@ -39,7 +40,8 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e?.target ? e.target.value : e }));
 
-  const live = (partRequests || []).filter((r) => r.status !== 'cancelled');
+  const live = activePartRequests(partRequests);
+  const history = (partRequests || []).filter((r) => !live.includes(r));
   const run = async (fn, ok) => {
     setBusy(true);
     try { await fn(); toast.success(ok); setDrawer(null); setF({}); onChanged?.(); } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
@@ -113,6 +115,20 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
           <Notice tone="info" title="The laptop waits for these parts" className="mt-3">It can't move to the next stage until each part asked for is fitted (or the request is cancelled).</Notice>
         )}
       </Section>
+
+      {history.length > 0 && (
+        <Section title={`Cancelled or refused · ${history.length}`}>
+          <DataTable
+            rows={history}
+            rowKey={(r) => r.request_id}
+            columns={[
+              { key: 'n', header: 'Request', render: (r) => r.request_number || `#${r.request_id}`, sub: (r) => r.part_name },
+              { key: 's', header: 'Status', render: (r) => <StatusChip status={(STATUS[r.status] || {}).chip || 'cancelled'} label={(STATUS[r.status] || {}).text || r.status} /> },
+              { key: 'w', header: 'Asked', render: (r) => <DateTime value={r.created_at} />, sub: (r) => r.requested_by_name || null },
+            ]}
+          />
+        </Section>
+      )}
 
       {parts.length > 0 && (
         <Section title="Fitted on this ticket">
