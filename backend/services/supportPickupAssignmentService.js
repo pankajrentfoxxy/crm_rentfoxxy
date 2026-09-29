@@ -108,7 +108,26 @@ function isPickupAssignmentEditable(item, dcStatus) {
  * Ticket-list assign to a field technician is the pickup dispatch.
  * Courier/porter pickups and already-started pickups are left alone.
  */
-async function applyTechnicianPickupOnClient(client, { ticketId, technicianUserId }) {
+/**
+ * The Return DC a lead acts on. A ticket can hold more than one ("Collect
+ * later" moves a kept laptop to its own RDC); the one named must be this
+ * ticket's. Without a name it is the ticket's own (first) Return DC.
+ */
+async function resolveTicketRdc(client, ticket, requested) {
+  const want = String(requested || '').trim();
+  if (!want || want === ticket.return_dc_number) return ticket.return_dc_number || null;
+  const r = await client.query(
+    `SELECT 1 FROM delivery_challan_lines
+      WHERE dc_number = $1 AND movement_type = 'return'
+        AND (support_ticket_id = $2 OR EXISTS (
+          SELECT 1 FROM support_ticket_items WHERE ticket_id = $2 AND return_dc_number = $1))
+      LIMIT 1`,
+    [want, ticket.id]
+  );
+  return r.rows.length ? want : false;
+}
+
+async function applyTechnicianPickupOnClient(client, { ticketId, technicianUserId, returnDcNumber = null }) {
   const techId = parseInt(technicianUserId, 10);
   if (!Number.isFinite(techId) || techId <= 0) return { applied: false };
 
@@ -124,11 +143,13 @@ async function applyTechnicianPickupOnClient(client, { ticketId, technicianUserI
   );
   const ticket = ticketRes.rows[0];
   if (!ticket?.return_dc_number) return { applied: false };
+  const rdcNumber = await resolveTicketRdc(client, ticket, returnDcNumber);
+  if (!rdcNumber) return { applied: false };
 
   const itemsRes = await client.query(
     `SELECT * FROM support_ticket_items
       WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
-    [ticketId, ticket.return_dc_number]
+    [ticketId, rdcNumber]
   );
   const pending = itemsRes.rows.filter((p) => {
     if (pickupStarted(p)) return false;
@@ -164,10 +185,10 @@ async function applyTechnicianPickupOnClient(client, { ticketId, technicianUserI
         dispatched_at = COALESCE(dispatched_at, NOW()),
         updated_at = NOW()
      WHERE dc_number = $1 AND movement_type = 'return'`,
-    [ticket.return_dc_number, deliveryPersonId]
+    [rdcNumber, deliveryPersonId]
   );
 
-  return { applied: true, return_dc_number: ticket.return_dc_number };
+  return { applied: true, return_dc_number: rdcNumber };
 }
 
 /**
@@ -194,6 +215,11 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
       await client.query('ROLLBACK');
       return { ok: false, status: 400, message: 'No Return DC on this ticket' };
     }
+    const rdcNumber = await resolveTicketRdc(client, ticket, body.return_dc_number);
+    if (!rdcNumber) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, message: `Return DC ${body.return_dc_number} is not on this ticket` };
+    }
 
     const dcRes = await client.query(
       `SELECT dc_number, status, dispatch_mode, delivery_person_id,
@@ -201,7 +227,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
          FROM delivery_challan_lines
         WHERE dc_number = $1 AND movement_type = 'return'
         LIMIT 1`,
-      [ticket.return_dc_number]
+      [rdcNumber]
     );
     if (!dcRes.rows.length) {
       await client.query('ROLLBACK');
@@ -212,7 +238,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
     const itemsRes = await client.query(
       `SELECT * FROM support_ticket_items
         WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
-      [ticketId, ticket.return_dc_number]
+      [ticketId, rdcNumber]
     );
     if (!itemsRes.rows.length) {
       await client.query('ROLLBACK');
@@ -270,7 +296,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
        WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
       [
         ticketId,
-        ticket.return_dc_number,
+        rdcNumber,
         techId,
         nextMeta.pickup_method,
         nextMeta.courier_name,
@@ -294,7 +320,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
           updated_at = NOW()
        WHERE dc_number = $1 AND movement_type = 'return'`,
       [
-        ticket.return_dc_number,
+        rdcNumber,
         nextMeta.dc_dispatch_mode,
         nextMeta.ship_by,
         deliveryPersonId,
@@ -312,7 +338,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
       ok: true,
       isInitialAssign,
       data: {
-        return_dc_number: ticket.return_dc_number,
+        return_dc_number: rdcNumber,
         previous_assignee: previousLabel,
         new_assignee: newLabel,
         dispatch_mode: nextMeta.dispatch_mode,
@@ -324,7 +350,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
         previousMeta,
         nextMeta,
         reason,
-        return_dc_number: ticket.return_dc_number,
+        return_dc_number: rdcNumber,
       },
     };
   } catch (err) {

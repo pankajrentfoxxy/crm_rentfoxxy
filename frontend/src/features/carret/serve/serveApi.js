@@ -17,6 +17,8 @@ export const workDone = (id) => api.post(item(id, '/work-done'), {});
 export const sendOtp = (id) => api.post(item(id, '/send-otp'), {});
 export const verifyVisitOtp = (id, otp) => api.post(item(id, '/verify-otp'), { otp });
 export const verifyPickupOtp = (id, otp) => api.post(item(id, '/verify-pickup-otp'), { otp });
+/** The customer keeps this laptop: it moves to a new Return DC with its own OTP. */
+export const collectLater = (id, body) => api.post(item(id, '/collect-later'), body);
 export const fetchMyParts = () => api.get('/support-parts/bucket');
 export const markPartFitted = (reqId, body) => api.patch(`/support-parts/requests/${reqId}/mark-used`, body);
 

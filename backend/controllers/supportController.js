@@ -975,6 +975,54 @@ const mapItemRow = (row, { showOtp, showWarehouseOtp }) => {
     return base;
 };
 
+/**
+ * The ticket's Return DCs with their laptops and where each one is — for the
+ * ticket record (one card per RDC). Laptops come from the items already
+ * loaded; the RDC rows give number, status and who collects.
+ */
+async function returnDcsForTicketView(ticket, items) {
+    const fromItems = items.filter((i) => i.item_type === 'pickup' && i.return_dc_number).map((i) => i.return_dc_number);
+    const r = await pool.query(
+        `SELECT d.dc_number, MAX(d.status) AS status, MIN(d.created_at) AS created_at,
+                MAX(d.dispatch_mode) AS dispatch_mode, MAX(d.delivery_person_id) AS delivery_person_id,
+                MAX(d.remarks) AS remarks, MIN(d.id) AS first_id
+           FROM delivery_challan_lines d
+          WHERE d.movement_type = 'return'
+            AND (d.support_ticket_id = $1 OR d.dc_number = ANY($2::text[]))
+          GROUP BY d.dc_number
+          ORDER BY MIN(d.id) ASC`,
+        [ticket.id, [...new Set([ticket.return_dc_number, ...fromItems].filter(Boolean))]]
+    );
+    return r.rows.map((d) => {
+        const laptops = items
+            .filter((i) => i.item_type === 'pickup' && i.return_dc_number === d.dc_number && i.status !== 'cancelled')
+            .map((i) => ({
+                item_id: i.id,
+                ttspl_id: i.ttspl_id || i.unique_serial_number || null,
+                serial_number: i.serial_number || null,
+                status: i.status,
+                step: i.effective_current_step || i.current_step || null,
+                collected: Boolean(i.customer_otp_verified_at || i.picked_up_at),
+                gate_inward_at: i.gate_inward_at || null,
+                warehouse_received_at: i.warehouse_received_at || null,
+                pickup_scheduled_at: i.pickup_scheduled_at || null,
+                assigned_to: i.pickup_assigned_to || i.assigned_to || null,
+                pickup_method: i.pickup_method || null,
+            }));
+        return {
+            return_dc_number: d.dc_number,
+            status: d.status,
+            created_at: d.created_at,
+            dispatch_mode: d.dispatch_mode,
+            remarks: d.remarks || null,
+            is_primary: d.dc_number === ticket.return_dc_number,
+            laptops,
+            collected_count: laptops.filter((l) => l.collected).length,
+            received_count: laptops.filter((l) => l.warehouse_received_at).length,
+        };
+    });
+}
+
 const getTicketWithItems = async (ticketId, user) => {
     const leadView = isSupportLead(user);
     const warehouseLeadView = !leadView && hasSupportTicketAssigneeGrant(user);
@@ -1182,12 +1230,17 @@ const getTicketWithItems = async (ticketId, user) => {
         }
     }
 
+    const returnDcs = await returnDcsForTicketView(ticket, items);
+
     return {
         ticket: {
             ...ticket,
             display_phone: ticket.ticket_phone_override || ticket.customer_phone
         },
         items: items.map((i) => ({ ...i, comments: commentsByItem[i.id] || [] })),
+        // Every Return DC of the ticket (a "Collect later" split adds one per
+        // kept laptop); ticket.return_dc_number stays the first.
+        return_dcs: returnDcs,
         audit: auditRows,
         assignment_history: buildAssignmentHistory(auditRows),
         replacement_orders: replacementRows,
@@ -1814,6 +1867,12 @@ exports.cancelTicket = async (req, res) => {
         );
 
         if (req.body?.force_inventory_revert) {
+            // Every Return DC of the ticket (a "Collect later" split adds more
+            // than the one on the ticket row) — read before the items lose it.
+            const ticketRdcs = [...new Set([
+                ticketRow.return_dc_number,
+                ...(await liveReturnDcsForTicket(client, ticketId)),
+            ].filter(Boolean))];
             await client.query(
                 `UPDATE support_ticket_items
                     SET status = 'cancelled',
@@ -1822,13 +1881,13 @@ exports.cancelTicket = async (req, res) => {
                   WHERE ticket_id = $1 AND status <> 'cancelled'`,
                 [ticketId]
             );
-            if (ticketRow.return_dc_number) {
+            if (ticketRdcs.length) {
                 await client.query(
                     `UPDATE delivery_challan_lines
                         SET status = 'cancelled', updated_at = NOW()
-                      WHERE dc_number = $1 AND movement_type = 'return'
+                      WHERE dc_number = ANY($1::text[]) AND movement_type = 'return'
                         AND COALESCE(status, '') NOT IN ('cancelled')`,
-                    [ticketRow.return_dc_number]
+                    [ticketRdcs]
                 );
             }
         } else {
@@ -2323,6 +2382,9 @@ exports.assignItem = async (req, res) => {
             await applyTechnicianPickupOnClient(client, {
                 ticketId: item.ticket_id,
                 technicianUserId: assignedTo,
+                // A pickup laptop dispatches its own Return DC (a ticket can
+                // hold more than one after "Collect later").
+                returnDcNumber: item.item_type === 'pickup' ? item.return_dc_number : null,
             });
         }
         const isReassign = item.assigned_to && assignedTo && item.assigned_to !== assignedTo;
@@ -2908,8 +2970,11 @@ exports.updatePickupAddress = async (req, res) => {
         });
         await client.query('COMMIT');
 
-        if (ticket.return_dc_number) {
-            try { await regenerateReturnDcPdfByRdc(pool, ticket.return_dc_number); }
+        const addrRdcs = ticket.return_dc_number
+            ? [...new Set([ticket.return_dc_number, ...(await liveReturnDcsForTicket(pool, ticketId))])]
+            : [];
+        for (const rdcNo of addrRdcs) {
+            try { await regenerateReturnDcPdfByRdc(pool, rdcNo); }
             catch (pdfErr) { console.warn('pickup address return DC pdf:', pdfErr.message); }
         }
 
@@ -3527,6 +3592,10 @@ exports.technicianSignPickup = async (req, res) => {
                   AND return_dc_number = $4
                   AND item_type = 'pickup'
                   AND technician_esign_url IS NULL
+                  -- Only siblings actually collected. Stamping an uncollected
+                  -- laptop made it look ready for the gate (the customer kept it).
+                  AND (customer_otp_verified_at IS NOT NULL OR picked_up_at IS NOT NULL)
+                  AND COALESCE(status, '') NOT IN ('cancelled', 'removed')
                 )`,
             [itemId, esignUrl, req.user.user_id, it.return_dc_number, signerLabel]
         );
@@ -3666,6 +3735,77 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     }));
     const data = await getTicketWithItems(it.ticket_id, req.user);
     res.json({ success: true, message: 'OTP verified. Laptop picked up successfully.', ...data });
+};
+
+/**
+ * POST /items/:itemId/collect-later { reason, pickup_date, technician_user_id?, unassigned? }
+ * The customer keeps this laptop for now: it leaves its Return DC and goes onto
+ * a new Return DC on the same ticket with its own customer OTP
+ * (services/supportCollectLaterService.js). The assigned technician (their own
+ * laptop) or the ticket's lead; only the lead may pick another technician or
+ * leave it unassigned.
+ */
+exports.collectLaterPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const body = req.body || {};
+    const itemRes = await pool.query('SELECT id, ticket_id, item_type, assigned_to, pickup_assigned_to FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
+    const it = itemRes.rows[0];
+    const isMine = it.assigned_to === req.user.user_id || it.pickup_assigned_to === req.user.user_id;
+    const asLead = await canLeadThisTicket(req.user, it.ticket_id);
+    if (!isMine && !asLead) {
+        return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
+    }
+    if (!asLead && (body.technician_user_id || body.unassigned)) {
+        return res.status(403).json({ success: false, message: 'Only the support lead can choose who collects it' });
+    }
+
+    const { collectLater } = require('../services/supportCollectLaterService');
+    const client = await pool.connect();
+    let result;
+    try {
+        await client.query('BEGIN');
+        result = await collectLater(client, {
+            itemId,
+            reason: body.reason,
+            pickupDate: body.pickup_date,
+            technicianUserId: body.technician_user_id || null,
+            unassigned: Boolean(body.unassigned),
+            asLead,
+            actor: { user_id: req.user.user_id, name: req.user.name },
+        });
+        await recomputeTicketStatus(client, it.ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        if (!e.status) console.error('collectLaterPickup:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not move the laptop to a later pickup' });
+    } finally {
+        client.release();
+    }
+
+    for (const rdc of [result.from_return_dc_number, result.return_dc_number]) {
+        try { await regenerateReturnDcPdfByRdc(pool, rdc); } catch (pdfErr) {
+            console.error('[support] return DC pdf (collect later):', pdfErr.message);
+        }
+    }
+    // Same customer message as a new pickup: the new Return DC, qty and who comes.
+    if (result.technician_user_id) {
+        fireSupportWa(() => supportWa.notifySupportPickupScheduledAsync({
+            ticketId: result.ticket_id,
+            rdcNumber: result.return_dc_number,
+        }));
+    }
+    const { customer_otp: otp, ...rest } = result;
+    const data = await getTicketWithItems(it.ticket_id, req.user);
+    return res.json({
+        success: true,
+        message: `${result.ttspl_id || 'The laptop'} moved to ${result.return_dc_number} for ${result.pickup_date}. `
+            + `${result.from_return_dc_number} now has ${result.staying_count} laptop(s) and can go through the gate.`,
+        ...rest,
+        customer_otp_visible: isSupportLead(req.user) ? otp : undefined,
+        ...data,
+    });
 };
 
 /** Send / resend the customer OTP on WhatsApp (reuses Interakt otp_verification). */
@@ -5108,7 +5248,9 @@ exports.editReturnPickupMachines = async (req, res) => {
             throw Object.assign(new Error('Ticket not found'), { status: 404 });
         }
         const ticket = ticketRes.rows[0];
-        const rdc = String(ticket.return_dc_number || req.body?.return_dc_number || '').trim();
+        // A ticket can hold more than one Return DC ("Collect later"): the one
+        // named in the body wins; its laptops must be on this ticket (below).
+        const rdc = String(req.body?.return_dc_number || ticket.return_dc_number || '').trim();
         if (!rdc) {
             throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
         }
@@ -5288,6 +5430,28 @@ exports.editReturnPickupMachines = async (req, res) => {
     }
 };
 
+/** The ticket's other Return DCs that are neither cancelled nor received, oldest first. */
+async function liveReturnDcsForTicket(db, ticketId, exceptRdc = null) {
+    const r = await db.query(
+        `SELECT d.dc_number, MIN(d.id) AS first_id
+           FROM delivery_challan_lines d
+          WHERE d.movement_type = 'return'
+            AND LOWER(COALESCE(d.status, '')) NOT IN ('cancelled', 'delivered')
+            AND ($2::text IS NULL OR d.dc_number <> $2)
+            AND (
+              d.support_ticket_id = $1
+              OR d.dc_number IN (
+                SELECT return_dc_number FROM support_ticket_items
+                 WHERE ticket_id = $1 AND return_dc_number IS NOT NULL
+              )
+            )
+          GROUP BY d.dc_number
+          ORDER BY MIN(d.id) ASC`,
+        [ticketId, exceptRdc]
+    );
+    return r.rows.map((x) => x.dc_number);
+}
+
 exports.cancelReturnPickup = async (req, res) => {
     if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can cancel return pickup' });
@@ -5296,7 +5460,7 @@ exports.cancelReturnPickup = async (req, res) => {
     const reason = String(req.body?.reason || req.body?.cancellation_remark || '').trim()
         || 'Return pickup cancelled — will recreate';
     const requestedRdc = String(req.body?.return_dc_number || '').trim() || null;
-    const cancelReplacementOrder = req.body?.cancel_replacement_order !== false;
+    let cancelReplacementOrder = req.body?.cancel_replacement_order !== false;
     const force = !!req.body?.force;
 
     const client = await pool.connect();
@@ -5313,6 +5477,27 @@ exports.cancelReturnPickup = async (req, res) => {
         const rdc = requestedRdc || ticket.return_dc_number;
         if (!rdc) {
             throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
+        }
+        // A ticket can hold more than one Return DC ("Collect later"). The one
+        // named must belong to this ticket.
+        const otherLiveRdcs = await liveReturnDcsForTicket(client, ticketId, rdc);
+        if (requestedRdc && requestedRdc !== ticket.return_dc_number) {
+            const own = await client.query(
+                `SELECT 1 FROM delivery_challan_lines
+                  WHERE dc_number = $1 AND movement_type = 'return'
+                    AND (support_ticket_id = $2 OR EXISTS (
+                      SELECT 1 FROM support_ticket_items WHERE ticket_id = $2 AND return_dc_number = $1))
+                  LIMIT 1`,
+                [requestedRdc, ticketId]
+            );
+            if (!own.rows.length) {
+                throw Object.assign(new Error(`Return DC ${requestedRdc} is not on ticket #${ticketId}`), { status: 400 });
+            }
+        }
+        // Another Return DC of this ticket is still live: cancelling this one is
+        // not the end of the ticket's pickup, so the replacement stays unless asked.
+        if (otherLiveRdcs.length && req.body?.cancel_replacement_order !== true) {
+            cancelReplacementOrder = false;
         }
 
         const dcRes = await client.query(
@@ -5336,7 +5521,8 @@ exports.cancelReturnPickup = async (req, res) => {
                     floor_ticket_id, ttspl_id, unique_serial_number, serial_number, customer_inventory_id
                FROM support_ticket_items
               WHERE ticket_id = $1 AND item_type = 'pickup'
-                AND ($2::text IS NULL OR return_dc_number = $2 OR return_dc_number IS NULL)`,
+                AND ($2::text IS NULL OR return_dc_number = $2 OR return_dc_number IS NULL)
+                AND COALESCE(status, '') NOT IN ('cancelled', 'removed')`,
             [ticketId, rdc]
         );
         if (!force) {
@@ -5458,16 +5644,22 @@ exports.cancelReturnPickup = async (req, res) => {
             }
         }
 
+        // ticket.return_dc_number is the ticket's first live Return DC: when that
+        // one is cancelled and a split one ("Collect later") is still live, it
+        // points at the live one; otherwise it is cleared as before.
         await client.query(
             `UPDATE support_tickets
-                SET return_dc_number = NULL,
+                SET return_dc_number = CASE
+                      WHEN return_dc_number IS DISTINCT FROM $3 THEN return_dc_number
+                      ELSE $4
+                    END,
                     sales_order_number = CASE WHEN $2 THEN NULL ELSE sales_order_number END,
                     updated_at = NOW()
               WHERE id = $1`,
-            [ticketId, cancelReplacementOrder]
+            [ticketId, cancelReplacementOrder, rdc, otherLiveRdcs[0] || null]
         );
 
-        if (force) {
+        if (force && !otherLiveRdcs.length) {
             const nonPickupRes = await client.query(
                 `SELECT COUNT(*)::int AS n FROM support_ticket_items
                   WHERE ticket_id = $1 AND item_type <> 'pickup' AND status <> 'cancelled'`,
@@ -6299,6 +6491,7 @@ exports.ensureSupportSchema = async () => {
 
 // Exported for unit tests (see test/supportOtp.test.js).
 exports.otpMatches = otpMatches;
+exports.recomputeTicketStatus = recomputeTicketStatus;
 
 /** GET /tickets/:ticketId/wfh — each laptop on the ticket: work-from-home? charged? */
 exports.getTicketWfh = async (req, res) => {

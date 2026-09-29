@@ -17,6 +17,7 @@ import TicketPartsPanel from './TicketPartsPanel';
 import ServiceChargesPanel from './ServiceChargesPanel';
 import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
+import TicketReturnDcsPanel from './TicketReturnDcsPanel';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -161,7 +162,7 @@ export default function TicketRecordPage() {
             { label: 'Phone', value: tk.display_phone || '—' },
             { label: 'Priority', value: tk.priority },
             { label: 'Raised', value: <DateTime value={tk.created_at} /> },
-            { label: 'Return DC', value: tk.return_dc_number || '—' },
+            { label: (t.return_dcs || []).length > 1 ? 'Return DCs' : 'Return DC', value: (t.return_dcs || []).length ? t.return_dcs.map((d) => d.return_dc_number).join(', ') : (tk.return_dc_number || '—') },
           ]}
         />
         <TicketNextStep data={t} canLead={canLead} onAssign={(i) => setAssignFor(i)} onClose={() => setCloseOpen(true)} />
@@ -183,6 +184,7 @@ export default function TicketRecordPage() {
         <Section title={`Laptops · ${items.length}`}>
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
         </Section>
+        <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
         <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
         <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
         <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />

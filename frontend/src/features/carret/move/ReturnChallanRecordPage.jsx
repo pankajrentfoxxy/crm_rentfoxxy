@@ -116,6 +116,20 @@ export default function ReturnChallanRecordPage() {
         <Panel title={`Laptops · ${items.length}`}>
           <DataTable columns={cols} rows={items} rowKey={(i) => i.id} empty={<EmptyState title="No laptops on this challan" />} />
         </Panel>
+        {(d.sibling_rdcs || []).length > 0 && (
+          <Panel title="Other return challans on this ticket">
+            <DataTable
+              columns={[
+                { key: 'n', header: 'Return DC', render: (x) => <Link to={`/carret/move/return-challans/${encodeURIComponent(x.dc_number)}`}><DocNumber value={x.dc_number} /></Link>, sub: (x) => <DateTime value={x.created_at} /> },
+                { key: 'l', header: 'Laptops', render: (x) => x.codes || '—', sub: (x) => `${x.laptops} laptop(s) · ${x.received} received` },
+                { key: 's', header: 'Status', render: (x) => <StatusChip status={x.status === 'in_transit' ? 'dispatched' : x.status} label={({ pending: 'To collect', in_transit: 'On the way', shipped: 'On the way', reached: 'Reached', delivered: 'Received', cancelled: 'Cancelled' })[x.status]} /> },
+              ]}
+              rows={d.sibling_rdcs}
+              rowKey={(x) => x.dc_number}
+            />
+            <p className="text-ink-3" style={{ padding: '8px 12px' }}>A laptop the customer kept is moved to its own Return DC (Collect later); each challan goes through the gate and the warehouse on its own.</p>
+          </Panel>
+        )}
         {damage.length > 0 && (
           <Panel title="Damage found">
             <DataTable columns={damageCols} rows={damage} rowKey={(c) => c.id} />

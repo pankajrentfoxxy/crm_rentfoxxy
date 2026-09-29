@@ -13,6 +13,7 @@ import {
 } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
 import DamageReportDrawer from './DamageReportDrawer';
+import CollectLaterDrawer from './CollectLaterDrawer';
 import { FindingFields, emptyFinding, findingBody, findingError, useIssueCatalog } from './IssueFields';
 
 /**
@@ -66,6 +67,7 @@ export default function JobPage() {
   const catalog = useIssueCatalog();
   const [finding, setFinding] = useState(null);
   const [damageOpen, setDamageOpen] = useState(false);
+  const [laterOpen, setLaterOpen] = useState(false);
 
   const load = useCallback(() => {
     fetchMyWork()
@@ -241,6 +243,20 @@ export default function JobPage() {
           </div>
         )}
 
+        {/* The customer keeps this laptop: it moves to its own Return DC (own OTP)
+            so the laptops already collected can go through the gate today. */}
+        {isPickup && !job.collected && ['arrive', 'pickup_photo', 'otp'].includes(k) && job.return_dc_number && (
+          job.rdc_laptops > 1 ? (
+            <Button variant="quiet" onClick={() => setLaterOpen(true)} style={{ width: '100%' }}>
+              Customer keeps this laptop — collect later
+            </Button>
+          ) : (
+            <p className="text-ink-3" style={{ fontSize: 'var(--d-sm)', textAlign: 'center' }}>
+              Customer keeps it? This is the only laptop on {job.return_dc_number} — ask your lead to move the visit slot.
+            </p>
+          )
+        )}
+
         {k === 'drop' && (
           <Notice tone="info" title="Take it to the warehouse gate">
             Hand the laptop in at the gate with Return DC <strong className="font-mono">{job.return_dc_number || '—'}</strong>. The guard scans it in and the job leaves your list.
@@ -249,6 +265,12 @@ export default function JobPage() {
 
         {/* DM1: damage found at the visit / pickup — part, issue and photo; the warehouse prices it. */}
         <Button variant="quiet" onClick={() => setDamageOpen(true)} style={{ width: '100%', marginTop: '12px' }}>Report damage on this laptop</Button>
+        <CollectLaterDrawer
+          open={laterOpen}
+          onClose={() => setLaterOpen(false)}
+          onDone={() => { setLaterOpen(false); load(); }}
+          item={{ id: job.item_id, code: job.laptop?.ttspl || job.laptop?.serial, rdc: job.return_dc_number }}
+        />
         <DamageReportDrawer
           open={damageOpen}
           onClose={() => setDamageOpen(false)}

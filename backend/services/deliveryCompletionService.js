@@ -149,6 +149,35 @@ async function completeDelivery(client, {
     return { ok: false, statusCode: 409, message: 'This delivery challan is already marked delivered.' };
   }
 
+  // A support Return DC is collected laptop by laptop (Support → My work, each
+  // with the customer's OTP). Completing the challan while a laptop is still
+  // with the customer returned EVERY serial on it (processReturnedSerials) and
+  // resolved the ticket's pickups — the kept laptop left the customer's books.
+  const uncollected = await client.query(
+    `SELECT COALESCE(s.ttspl_id, s.unique_serial_number, s.serial_number) AS code
+       FROM support_ticket_items s
+       JOIN delivery_challan_lines d
+         ON d.dc_number = s.return_dc_number AND d.movement_type = 'return'
+      WHERE s.return_dc_number = $1
+        AND s.item_type = 'pickup'
+        AND COALESCE(s.status, '') NOT IN ('cancelled', 'removed')
+        AND s.customer_otp_verified_at IS NULL
+        AND s.picked_up_at IS NULL
+        AND s.warehouse_received_at IS NULL
+        AND LOWER(COALESCE(s.pickup_method, '')) NOT IN ('courier', 'porter')
+      GROUP BY 1`,
+    [dcNumber]
+  );
+  if (uncollected.rows.length) {
+    const codes = uncollected.rows.map((r) => r.code).filter(Boolean).join(', ');
+    return {
+      ok: false,
+      statusCode: 409,
+      message: `${uncollected.rows.length} laptop(s) on ${dcNumber} have not been collected${codes ? ` (${codes})` : ''}. `
+        + 'Collect each laptop from Support → My work with the customer OTP; if the customer keeps one, use Collect later.',
+    };
+  }
+
   const writesRegister = deliveredSerialNumbers !== null || rejectedSerialNumbers !== null;
   const upd = await client.query(
     `UPDATE delivery_challan_lines SET

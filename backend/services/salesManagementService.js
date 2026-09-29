@@ -2234,9 +2234,31 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     }
   }
 
+  // Other Return DCs of the same ticket ("Collect later" moves a laptop the
+  // customer kept onto its own RDC) — so this page can point at them.
+  let siblingRdcs = [];
+  if (dcl.support_ticket_id) {
+    const sib = await pool.query(
+      `SELECT d.dc_number, MAX(d.status) AS status, MIN(d.created_at) AS created_at,
+              COUNT(s.id) FILTER (WHERE COALESCE(s.status, '') <> 'cancelled')::int AS laptops,
+              COUNT(s.id) FILTER (WHERE s.warehouse_received_at IS NOT NULL)::int AS received,
+              STRING_AGG(DISTINCT COALESCE(s.ttspl_id, s.unique_serial_number, s.serial_number), ', ')
+                FILTER (WHERE COALESCE(s.status, '') <> 'cancelled') AS codes
+         FROM delivery_challan_lines d
+         LEFT JOIN support_ticket_items s
+           ON s.return_dc_number = d.dc_number AND s.item_type = 'pickup'
+        WHERE d.movement_type = 'return' AND d.support_ticket_id = $1 AND d.dc_number <> $2
+        GROUP BY d.dc_number
+        ORDER BY MIN(d.id) ASC`,
+      [dcl.support_ticket_id, rdcNumber]
+    ).catch(() => ({ rows: [] }));
+    siblingRdcs = sib.rows;
+  }
+
   return {
     return_dc_number: rdcNumber,
     ticket_id: dcl.support_ticket_id,
+    sibling_rdcs: siblingRdcs,
     customer_id: dcl.customer_id,
     customer_name: dcl.customer_name,
     customer_email: dcl.email,
