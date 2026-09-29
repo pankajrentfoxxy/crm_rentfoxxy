@@ -20,7 +20,7 @@ let spo;
 const tag = `ZZREPAIR-${Date.now()}`;
 
 async function defectiveUnits(n) {
-  const r = await h.call(partCtrl.createPart, { user, body: { part_name: `${tag} ${Math.random()}`, category: 'power', cost: 900, quantity: n } });
+  const r = await h.call(partCtrl.createPart, { user, body: { category: 'general', kind: 'other', specs: { detail: `${tag} ${Math.random()}` }, cost: 900, quantity: n } });
   assert.equal(r.code, 201, JSON.stringify(r.body));
   const ids = r.body.units.map((u) => u.instance_id);
   await db.query(

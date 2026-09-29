@@ -23,6 +23,18 @@ export const PART_CATEGORIES = [
   { value: 'general', label: 'General / Other' },
 ];
 
+/**
+ * Parts catalogue categories: the laptop-part list above plus three that are
+ * never "missing from a laptop" at GRN. Same list in
+ * backend/constants/laptopConditions.js CATALOGUE_PART_CATEGORIES.
+ */
+export const CATALOGUE_PART_CATEGORIES = [
+  ...PART_CATEGORIES,
+  { value: 'consumable', label: 'Consumables' },
+  { value: 'tools', label: 'Tools & equipment' },
+  { value: 'accessory', label: 'Accessories' },
+];
+
 export const DEFAULT_CONDITION = 'on';
 
 /**
@@ -49,7 +61,7 @@ export function conditionLabel(value) {
 
 export function partCategoryLabel(value) {
   const key = String(value ?? '').trim().toLowerCase();
-  return PART_CATEGORIES.find((c) => c.value === key)?.label || key;
+  return CATALOGUE_PART_CATEGORIES.find((c) => c.value === key)?.label || key;
 }
 
 export function partCategoryLabels(values) {

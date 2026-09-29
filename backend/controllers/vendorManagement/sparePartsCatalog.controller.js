@@ -4,7 +4,7 @@ const {
   listActiveSpareBrandsForDropdown,
   resolveSpareBrandModelPair,
 } = require('../../services/assetConfigurationService');
-const { PART_CATEGORIES: CATEGORIES } = require('../../constants/laptopConditions');
+const { CATALOGUE_PART_CATEGORIES: CATEGORIES } = require('../../constants/laptopConditions');
 
 function toBrandArray(val) {
   if (val == null || val === '') return null;
@@ -232,20 +232,37 @@ async function updateCatalogItem(req, res) {
     }
 
     let floorPartId = row.floor_part_id;
+    // A part with a structure (category + kind + specs + fits, part naming
+    // redesign) owns its name: it is edited in the Parts catalogue, and this
+    // row follows it instead of renaming it.
+    let savedName = name;
+    let savedCategory = category;
+    let savedType = part_type;
     if (!floorPartId) {
       floorPartId = await ensureFloorPart(client, {
         name, category, part_type, specifications, default_brand, default_model,
       });
     } else {
-      await client.query(
-        `UPDATE parts SET part_name = $2, category = $3, part_type = $4, description = COALESCE($5, description),
+      const upd = await client.query(
+        `UPDATE parts SET
+                part_name = CASE WHEN spec_key IS NULL THEN $2 ELSE part_name END,
+                category  = CASE WHEN spec_key IS NULL THEN $3 ELSE category END,
+                part_type = CASE WHEN spec_key IS NULL THEN $4 ELSE part_type END,
+                description = COALESCE($5, description),
                 default_brand = $6, default_model = $7
-          WHERE part_id = $1`,
+          WHERE part_id = $1
+          RETURNING part_name, category, part_type, spec_key`,
         [
           floorPartId, name, category, part_type || category, specifications,
           default_brand || null, default_model || null,
         ]
       );
+      const fp = upd.rows[0];
+      if (fp && fp.spec_key) {
+        savedName = fp.part_name;
+        savedCategory = fp.category;
+        savedType = fp.part_type;
+      }
     }
 
     await client.query(
@@ -253,9 +270,9 @@ async function updateCatalogItem(req, res) {
           name = $2, category = $3, part_type = $4, default_brand = $5, default_model = $6,
           specifications = $7, floor_part_id = $8, active = $9, updated_at = NOW()
        WHERE part_id = $1`,
-      [id, name, category, part_type, default_brand, default_model, specifications, floorPartId, active]
+      [id, savedName, savedCategory, savedType, default_brand, default_model, specifications, floorPartId, active]
     );
-    await syncSparePartsMirror(client, id, name, active);
+    await syncSparePartsMirror(client, id, savedName, active);
     await client.query('COMMIT');
 
     const full = await pool.query(

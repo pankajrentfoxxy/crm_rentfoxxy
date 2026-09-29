@@ -15,8 +15,11 @@ let db;
 let user;
 const tag = `ZZTEST-${Date.now()}`;
 
+// A part is category + kind + specs (part naming redesign); "Other component"
+// with a unique detail gives every test its own part.
+const other = (detail) => ({ category: 'general', kind: 'other', specs: { detail } });
 async function newPart(extra = {}) {
-  const r = await h.call(partCtrl.createPart, { user, body: { part_name: `${tag} ${Math.random()}`, category: 'ram', cost: 1200, ...extra } });
+  const r = await h.call(partCtrl.createPart, { user, body: { ...other(`${tag} ${Math.random()}`), cost: 1200, ...extra } });
   assert.equal(r.code, 201, JSON.stringify(r.body));
   return r.body;
 }
@@ -60,15 +63,17 @@ describe('parts catalogue — part master and hand-added units', () => {
 
   it('refuses a blank name, a bad opening quantity and a duplicate part', async () => {
     assert.equal((await h.call(partCtrl.createPart, { user, body: { part_name: '  ' } })).code, 400);
-    assert.equal((await h.call(partCtrl.createPart, { user, body: { part_name: `${tag} q`, quantity: -1 } })).code, 400);
-    assert.equal((await h.call(partCtrl.createPart, { user, body: { part_name: `${tag} q`, quantity: 1.5 } })).code, 400);
-    assert.equal((await h.call(partCtrl.createPart, { user, body: { part_name: `${tag} c`, cost: -5 } })).code, 400);
-    await newPart({ part_name: `${tag} DUP`, model_number: 'M1' });
-    const dup = await h.call(partCtrl.createPart, { user, body: { part_name: ` ${tag} dup `, category: 'RAM', model_number: 'm1' } });
+    assert.equal((await h.call(partCtrl.createPart, { user, body: other('  ') })).code, 400);
+    assert.equal((await h.call(partCtrl.createPart, { user, body: { ...other(`${tag} q`), quantity: -1 } })).code, 400);
+    assert.equal((await h.call(partCtrl.createPart, { user, body: { ...other(`${tag} q`), quantity: 1.5 } })).code, 400);
+    assert.equal((await h.call(partCtrl.createPart, { user, body: { ...other(`${tag} c`), cost: -5 } })).code, 400);
+    await newPart({ ...other(`${tag} DUP`), model_number: 'M1' });
+    const dup = await h.call(partCtrl.createPart, { user, body: { ...other(` ${tag}  dup `), category: 'GENERAL', model_number: 'm1' } });
     assert.equal(dup.code, 409);
     assert.ok(dup.body.part_id);
-    // Same name, different model number is a different part.
-    await newPart({ part_name: `${tag} DUP`, model_number: 'M2' });
+    // Same category + kind + specs + fits is the same part, whatever its model number.
+    const dup2 = await h.call(partCtrl.createPart, { user, body: { ...other(`${tag} DUP`), model_number: 'M2' } });
+    assert.equal(dup2.code, 409);
   });
 
   it('add units by hand: serials, source manual, ledger, count; duplicates and archived refused', async () => {
