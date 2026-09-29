@@ -30,7 +30,7 @@ export const SECTIONS = [
     // view" until the process is signed off (hard rule 6). Three old links
     // (/grn, /vendor-return, /vendor-repair) pointed at routes that do not
     // exist and are gone (B26).
-    groups: ['Procure to stock', 'Old view'],
+    groups: ['Procure to stock'],
     items: [
       { group: 'Procure to stock', to: '/carret/procure/to-buy', label: 'To buy', section: 'vendor_management', action: 'view' },
       { group: 'Procure to stock', to: '/carret/procure/purchase-orders', label: 'Purchase Orders', section: 'vendor_management', action: 'view' },
@@ -40,12 +40,6 @@ export const SECTIONS = [
       { group: 'Procure to stock', to: '/carret/procure/vendors', label: 'Vendors', section: 'vendor_management', action: 'view' },
       { group: 'Procure to stock', to: '/carret/procure/vendor-rentals', label: 'Vendor Rentals', sections: ['vendor_management', 'vendor_billing_mgmt', 'vendor_repair_dc'], section: 'vendor_management', action: 'view' },
       { group: 'Procure to stock', to: '/carret/procure/replacement-approvals', label: 'Replacement Approvals', sections: ['vendor_repair_dc', 'vendor_management', 'vendor_billing_mgmt'], section: 'vendor_repair_dc', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/purchase-orders', label: 'Purchase Orders (old)', section: 'vendor_management', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/spare-parts-po', label: 'Spare Parts PO (old)', section: 'parts_procurement', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/vendors', label: 'Vendors (old)', section: 'vendor_management', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/return-to-vendor', label: 'Return to Vendor (old)', section: 'vendor_return_to_vendor', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/return-ticket', label: 'Vendor Return Tickets (old)', section: 'vendor_return_ticket', action: 'view' },
-      { group: 'Old view', to: '/vendor-management/vendor-repair-dc', label: 'Vendor Repair DCs (old)', section: 'vendor_repair_dc', action: 'view' },
     ],
   },
   {
@@ -54,18 +48,14 @@ export const SECTIONS = [
     // Production in Carret (26 Sep 2026): the floor board, a laptop's ticket,
     // the parts desk and into-stock. The old screens stay under "Old view"
     // until the process is signed off (hard rule 6).
-    groups: ['Production', 'Old view'],
+    groups: ['Production'],
     items: [
       { group: 'Production', to: '/carret/produce/floor', label: 'Floor', sections: ['floor_pipeline', 'floor_tickets'], section: 'floor_pipeline', action: 'view' },
       { group: 'Production', to: '/carret/produce/parts-desk', label: 'Parts Desk', sections: ['parts_approval', 'parts_inventory'], section: 'parts_approval', action: 'view' },
       { group: 'Production', to: '/carret/produce/into-stock', label: 'Into Stock', section: 'pending_inventory', action: 'view' },
       { group: 'Production', to: '/carret/produce/parts', label: 'Parts Stock', section: 'parts_inventory', action: 'view' },
       { group: 'Production', to: '/inventory-management/part-vendor-repair', label: 'Part Repairs', section: 'part_vendor_repair', action: 'view' },
-      { group: 'Old view', to: '/floor-pipeline/tickets', label: 'Floor Pipeline (old)', section: 'floor_pipeline', action: 'view' },
-      { group: 'Old view', to: '/floor-pipeline/pending-inventory', label: 'Pending Inventory (old)', section: 'pending_inventory', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/parts-approval', label: 'Parts Approval (old)', section: 'parts_approval', action: 'view' },
-      { group: 'Old view', to: '/qc-management/orders', label: 'QC Management (old)', section: 'qc_management', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/parts', label: 'Parts (old)', section: 'parts_inventory', action: 'view' },
+      { group: 'Production', to: '/inventory-management/parts', label: 'Parts Catalogue', section: 'parts_inventory', action: 'view' },
     ],
   },
   {
@@ -75,7 +65,7 @@ export const SECTIONS = [
     // now "Not earning"; "Scrapped" opened the PARTS scrap challan and is now
     // Scrap (laptop requests, approval, challans). Old screens stay under
     // "Old view" until Stock is signed off (hard rule 6).
-    groups: ['Stock', 'Reports & setup', 'Old view'],
+    groups: ['Stock', 'Reports & setup'],
     items: [
       { group: 'Stock', to: '/carret/stock/assets', label: 'Assets', section: 'inventory_management', action: 'view' },
       { group: 'Stock', to: '/carret/stock/ready', label: 'Ready Stock', sections: ['inventory_management', 'ready_to_rent_location'], section: 'inventory_management', action: 'view' },
@@ -85,10 +75,6 @@ export const SECTIONS = [
       { group: 'Reports & setup', to: '/inventory-management/master-data', label: 'Master Data', section: 'inventory_master_data', action: 'view' },
       { group: 'Reports & setup', to: '/inventory-management/customer-assets', label: 'Deployed Fleet', section: 'customer_inventory', action: 'view' },
       { group: 'Reports & setup', to: '/asset-configuration', label: 'Asset Configuration', section: 'asset_configuration', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/universal-search', label: 'Search (old)', section: 'inventory_management', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/ready-to-rent-or-sell', label: 'Ready to Rent or Sell (old)', section: 'inventory_management', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/asset-movement', label: 'Asset Movements (old)', section: 'inventory_asset_movement', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/scrap-challans', label: 'Scrap Challans (old)', section: 'scrap_challans', action: 'view' },
     ],
   },
   {
@@ -97,7 +83,7 @@ export const SECTIONS = [
     // Order to delivery is complete in Carret (25 Sep 2026): these open the new
     // screens. The old ones stay under "Old view" until the process is signed
     // off (hard rule 6), then they go.
-    groups: ['Leads', 'Order to delivery', 'Customers & more', 'Old view'],
+    groups: ['Leads', 'Order to delivery', 'Customers & more'],
     items: [
       { group: 'Order to delivery', to: '/carret/sell/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
       { group: 'Order to delivery', to: '/carret/sell/sales-orders', label: 'Sales Orders', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
@@ -107,10 +93,6 @@ export const SECTIONS = [
       { group: 'Customers & more', to: '/sales-pipeline/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
       { group: 'Customers & more', to: '/sales-pipeline/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
       { group: 'Customers & more', to: '/carret/sell/early-returns', label: 'Early Returns (lock-in)', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
-      { group: 'Old view', to: '/lead-crm/leads', label: 'Leads (old)', section: 'leads', action: 'view' },
-      { group: 'Old view', to: '/lead-crm/customers', label: 'Customers (old)', section: 'customers', action: 'view' },
-      { group: 'Old view', to: '/sales-pipeline/quotations', label: 'Quotations (old)', section: 'sales_quotations', action: 'view' },
-      { group: 'Old view', to: '/sales-pipeline/sales-orders', label: 'Sales Orders (old)', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
     ],
   },
   {
@@ -122,7 +104,7 @@ export const SECTIONS = [
     // controller wrote it". The four families that live in other sections
     // (vendor return, vendor repair, scrap, service parts) are linked here as
     // well as there — one document, two ways to reach it, no second flow.
-    groups: ['Outward', 'Inward', 'Gate & tracking', 'Old view'],
+    groups: ['Outward', 'Inward', 'Gate & tracking'],
     items: [
       // ---- Outward: leaving the warehouse ----
       { group: 'Outward', to: '/carret/move/orders-to-accept', label: 'Orders to accept', section: 'dispatch_pending_orders', action: 'view' },
@@ -135,7 +117,6 @@ export const SECTIONS = [
 
       // ---- Inward: coming back in ----
       { group: 'Inward', to: '/carret/procure/arrivals', label: 'Vendor Arrivals', sections: ['guard_gate_checking', 'vendor_management'], section: 'vendor_management', action: 'view' },
-      { group: 'Inward', to: '/sales-pipeline/return-dc', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/carret/move/return-challans', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/vendor-management/vendor-repair-dc?direction=inward', label: 'Vendor Repair Receive', section: 'vendor_repair_dc', action: 'view' },
       { group: 'Inward', to: '/vendor-management/return-ticket', label: 'Vendor Return Ticket', section: 'vendor_return_ticket', action: 'view' },
@@ -149,18 +130,6 @@ export const SECTIONS = [
       { group: 'Gate & tracking', to: '/carret/move/technicians', label: 'Delivery Technicians', section: 'technician_bucket', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
 
-      // ---- Old view: kept until Order to delivery is signed off ----
-      { group: 'Old view', to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans (old)', section: 'delivery_challans', action: 'view' },
-      { group: 'Old view', to: '/guard', label: 'Guard Gate (old)', section: 'guard_gate_checking', action: 'view' },
-      { group: 'Old view', to: '/guard/scanner', label: 'Gate Scanner (old)', section: 'gate_dashboard', action: 'view' },
-      { group: 'Old view', to: '/sales-pipeline/delivery-register', label: 'Delivery Register (old)', section: 'delivery_register_management', action: 'view' },
-      { group: 'Old view', to: '/sales-pipeline/my-deliveries', label: 'My Deliveries (old)', section: 'technician_bucket', action: 'view' },
-      { group: 'Old view', to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking (old)', section: 'bluedart_awb_tracking', action: 'view' },
-      { group: 'Old view', to: '/dispatch/pending-orders', label: 'Pending Dispatch (old)', section: 'dispatch_pending_orders', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers (old)', section: 'dispatch_charger_warehouse', action: 'view' },
-      { group: 'Old view', to: '/inventory-management/physical-parts', label: 'Dead / Physical Parts (old)', section: 'physical_dead_parts', action: 'view' },
-      { group: 'Old view', to: '/delivery-register-management/technicians', label: 'Delivery Technicians (old)', section: 'delivery_technicians', action: 'view' },
-      { group: 'Old view', to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC (old)', section: 'dispatch_qc', action: 'view' },
     ],
   },
   {
@@ -170,7 +139,7 @@ export const SECTIONS = [
     // and the technician's phone open the new screens. The v1 pages stay under
     // "Old view" (pickup / replacement / Service DC / parts still run there)
     // until Support is signed off.
-    groups: ['Support desk', 'Technician', 'Old view'],
+    groups: ['Support desk', 'Technician'],
     items: [
       { group: 'Support desk', to: '/carret/serve/queue', label: 'Queue', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/requests', label: 'Customer requests', section: 'support_tickets', action: 'view' },
@@ -185,13 +154,6 @@ export const SECTIONS = [
       { group: 'Technician', to: '/carret/serve/my-work', label: 'My work', section: 'support_tickets', action: 'view' },
       { group: 'Technician', to: '/carret/serve/my-parts', label: 'My parts', sections: ['support_part_requests', 'support_tickets'], section: 'support_part_requests', action: 'view' },
       { group: 'Technician', to: '/carret/move/my-deliveries', label: 'My deliveries', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
-      { group: 'Old view', to: '/support/requests', label: 'Customer requests (old)', section: 'support_tickets', action: 'view' },
-      { group: 'Old view', to: '/support/tickets', label: 'Support Queue (old)', section: 'support_tickets', action: 'view' },
-      { group: 'Old view', to: '/support/parts-queue', label: 'Parts Requests', section: 'support_part_requests', action: 'view' },
-      { group: 'Old view', to: '/support-parts/queue', label: 'Parts Challans', section: 'support_part_challan', action: 'view' },
-      { group: 'Old view', to: '/support/tech-bucket', label: 'Technician Bucket (old)', section: 'technician_bucket', action: 'view' },
-      { group: 'Old view', to: '/support/technicians', label: 'Technicians (old)', section: 'support_technician', action: 'view' },
-      { group: 'Old view', to: '/support/settings', label: 'Support Settings (old)', section: 'support_settings', action: 'view' },
     ],
   },
   {
@@ -228,7 +190,7 @@ export const SECTIONS = [
     // sections, so each link shows on its section grant; the page routes also
     // accept the backend's role lists (CT1). Old screens stay under "Old view"
     // until Control is signed off (hard rule 6).
-    groups: ['Overview', 'Access', 'Settings', 'Old view'],
+    groups: ['Overview', 'Access', 'Settings'],
     items: [
       { group: 'Overview', to: '/dashboard', label: 'Overview', section: 'dashboard', action: 'view' },
       { group: 'Overview', to: '/carret', label: 'Operations (Carret)', section: 'dashboard', action: 'view' },
@@ -240,11 +202,6 @@ export const SECTIONS = [
       { group: 'Settings', to: '/teams', label: 'Teams', section: 'teams', action: 'view' },
       { group: 'Settings', to: '/settings/companies', label: 'Settings', section: 'company_settings', action: 'view' },
       { group: 'Settings', to: '/reports', label: 'Reports', section: 'reports_access', action: 'view' },
-      { group: 'Old view', to: '/settings/users', label: 'Users (old)', section: 'users', action: 'view' },
-      { group: 'Old view', to: '/settings/roles', label: 'Roles & Permissions (old)', section: 'roles', action: 'view' },
-      { group: 'Old view', to: '/settings/role-permissions', label: 'Role Permissions (old)', section: 'role_permissions', action: 'view' },
-      { group: 'Old view', to: '/settings/user-permissions', label: 'User Permissions (old)', section: 'user_permissions', action: 'view' },
-      { group: 'Old view', to: '/settings/role-reference', label: 'Role Reference (old)', section: 'roles', action: 'view' },
     ],
   },
 ];
@@ -256,6 +213,20 @@ export const SECTIONS = [
  * legacy menu could not reach.
  */
 export const UNREACHABLE_BY_DESIGN = [
+  // New-UI create forms and aliases, reached from the buttons on their list pages.
+  '/carret/home', '/carret/move/challans/new', '/carret/sell/leads/new', '/carret/sell/quotations/new',
+  '/carret/sell/sales-orders/new', '/carret/procure/purchase-orders/new', '/carret/procure/vendors/new',
+  '/carret/procure/return-requests/new', '/carret/procure/vendor-returns', '/carret/procure/vendor-repair',
+  '/carret/produce/pipeline',
+
+  // "Old view" removed from the new menu (29 Sep 2026) so teams test only the
+  // new screens. These old screens stay routed and are reached from the Old UI
+  // sidebar (menuConfig.js) until each process is signed off.
+  '/customer-management/customers', '/delivery-register-management/technicians', '/dispatch/pending-orders',
+  '/guard', '/guard/scanner', '/tickets', '/lead-crm/*',
+  '/settings/users', '/settings/roles', '/settings/role-permissions', '/settings/user-permissions', '/settings/role-reference',
+  '/customer-inventory', '/floor-pipeline/*',
+
   // Public, unauthenticated capture links (server.js mounts six families).
   '/', '/login', '/access', '/auth/impersonate',
   '/register/customer', '/register/vendor',

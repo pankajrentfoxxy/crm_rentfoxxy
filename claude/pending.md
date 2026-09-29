@@ -45,7 +45,12 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     refuses too), Orders to accept (pending dispatch), Delivery technicians, Part inward (old
     link was broken), Dispatch QC → new floor board. Waiting: click-through.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
-12. **Hide the old screens** of each process after its sign-off (the "Old view" links).
+12. **Hide the old screens** — DONE 29 Sep for the new UI menu: every "Old view" group removed so teams
+    test only the new screens (old screens stay routed, reachable from the Old UI sidebar). Kept:
+    "Parts Catalogue" (old Parts page — only place to add parts / units / print labels) until rebuilt.
+    Still old-styled screens linked from the new menu: Finance (item 8), Demo Agreements, Sale in Place,
+    Vendor Return / Repair DC + receive + return ticket, Scrap Challans, Service Parts Challans, Part Repairs,
+    Master Data, Deployed Fleet, Asset Configuration, Teams, Settings, Reports, Overview dashboard.
 
 ## C. Waiting on the user / Accounts
 13. First month the CRM makes vendor bills (earlier months settled outside).
