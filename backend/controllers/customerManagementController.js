@@ -3648,6 +3648,11 @@ exports.listSaleInPlaceCases = async (req, res) => {
     if (!Number.isInteger(customerId)) {
       return res.status(400).json({ success: false, message: 'Invalid customer id' });
     }
+    // Same Customer Access scope as the other /customers/:id sub-resources.
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const { rows } = await pool.query(
       `SELECT e.*, COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
               vsn.serial_number, vsn.inventory_status, vsn.rent_monthly_rate,
@@ -3665,6 +3670,88 @@ exports.listSaleInPlaceCases = async (req, res) => {
     res.json({ success: true, data: rows });
   } catch (err) {
     console.error('listSaleInPlaceCases:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /sale-in-place — every sale-in-place case across customers, newest first.
+ * The Sell → Sale in Place worklist; the per-customer list above only serves one
+ * customer's page. Stage (derived, whitelisted):
+ *   rent_stopped    rent stopped, no sale order yet
+ *   vendor_buyout   vendor-rented unit waiting for the vendor's buyout bill
+ *   to_confirm      on an in-place order, not sold yet
+ *   sold            the laptop is sold to the customer
+ */
+const SALE_IN_PLACE_STAGES = Object.freeze(['rent_stopped', 'vendor_buyout', 'to_confirm', 'sold']);
+exports.SALE_IN_PLACE_STAGES = SALE_IN_PLACE_STAGES;
+
+exports.listAllSaleInPlaceCases = async (req, res) => {
+  try {
+    const stage = SALE_IN_PLACE_STAGES.includes(req.query.stage) ? req.query.stage : null;
+    const search = String(req.query.search || '').trim().slice(0, 100);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+    const conditions = [];
+    const params = [];
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      conditions.push(`(COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id', '') ILIKE $${i}
+        OR COALESCE(vsn.serial_number, '') ILIKE $${i}
+        OR COALESCE(c.company_name, '') ILIKE $${i}
+        OR COALESCE(c.name, '') ILIKE $${i}
+        OR COALESCE(x.so_number, '') ILIKE $${i})`);
+    }
+    appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params);
+    const STAGE_SQL = `CASE
+        WHEN vsn.inventory_status = 'sold' AND x.so_number IS NOT NULL THEN 'sold'
+        WHEN e.vendor_id IS NOT NULL AND NOT e.vendor_settled THEN 'vendor_buyout'
+        WHEN x.so_number IS NOT NULL THEN 'to_confirm'
+        ELSE 'rent_stopped' END`;
+    if (stage) {
+      params.push(stage);
+      conditions.push(`${STAGE_SQL} = $${params.length}`);
+    }
+    params.push(limit);
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(
+      `SELECT e.event_id, e.serial_id, e.customer_id, e.reason, e.reported_on, e.rent_stopped_on,
+              e.vendor_id, e.vendor_settled, e.notes, e.created_at,
+              x.so_number AS sales_order_number,
+              ${STAGE_SQL} AS stage,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+              vsn.serial_number, vsn.inventory_status, vsn.rent_monthly_rate,
+              COALESCE(NULLIF(TRIM(vsn.extra->>'brand'), ''), NULLIF(TRIM(vsn.grn_received_config->>'brand'), '')) AS brand,
+              COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+                       NULLIF(TRIM(vsn.grn_received_config->>'model'), '')) AS model_name,
+              COALESCE(NULLIF(c.company_name, ''), c.name) AS customer_name, c.customer_type,
+              cn.credit_note_number,
+              COALESCE(v.business_name, NULLIF(TRIM(CONCAT_WS(' ', v.first_name, v.last_name)), '')) AS vendor_name,
+              u.name AS created_by_name
+         FROM sale_in_place_events e
+         JOIN vendor_serial_numbers vsn ON vsn.serial_id = e.serial_id
+         JOIN customers c ON c.customer_id = e.customer_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(e.sales_order_number, (
+             SELECT sos.sales_order_number
+               FROM sales_order_serials sos
+               JOIN sales_order_lines sol ON sol.id = sos.line_id
+              WHERE sos.serial_id = e.serial_id AND sos.status = 'attached'
+                AND sol.fulfillment_mode = 'in_place'
+                AND LOWER(COALESCE(sol.status, 'pending')) <> 'cancelled'
+              ORDER BY sos.allocation_id DESC LIMIT 1)) AS so_number
+         ) x ON TRUE
+         LEFT JOIN customer_credit_notes cn ON cn.credit_note_id = e.credit_note_id
+         LEFT JOIN vendors v ON v.vendor_id = e.vendor_id
+         LEFT JOIN users u ON u.user_id = e.created_by
+         ${where}
+        ORDER BY e.created_at DESC, e.event_id DESC
+        LIMIT $${params.length}`,
+      params
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('listAllSaleInPlaceCases:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
