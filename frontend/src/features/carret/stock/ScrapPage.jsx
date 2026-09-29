@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
@@ -16,8 +16,9 @@ import {
  *     did not ask approves or rejects.
  *   To hand over — approved (scrapped) laptops not yet on a scrap challan:
  *     pick them, enter what the buyer pays for each, raise the challan.
- *   Challans — every scrap challan (laptops and parts); dispatch, e-sign and
- *     PDF are on the challan page.
+ *   Challans — every scrap challan (laptops and parts): search, status, dates;
+ *     dispatch, e-sign, e-way, cancel and PDF are on the Carret challan record
+ *     (/carret/stock/scrap/challans/:no — replaces the old Scrap Challans screens).
  * Discarded spare parts are put on challans from Parts → Discarded (old view).
  */
 const WAREHOUSE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead', 'procurement'];
@@ -27,7 +28,13 @@ export default function ScrapPage() {
   const { hasPermission, user } = usePermission();
   const canApprove = hasPermission('scrap_approval', 'edit');
   const canChallan = WAREHOUSE_ROLES.includes(user?.role) || hasPermission('scrap_challans', 'edit');
-  const [tab, setTab] = useState('requests');
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab = ['requests', 'handover', 'challans'].includes(params.get('tab')) ? params.get('tab') : 'requests';
+  const setTab = (t) => setParams((p) => { const n = new URLSearchParams(p); n.set('tab', t); return n; }, { replace: true });
+  const [cf, setCf] = useState({ search: '', status: '', from: '', to: '' });
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
   const [reqStatus, setReqStatus] = useState('pending');
   const [rows, setRows] = useState(null);
   const [decide, setDecide] = useState(null);
@@ -40,10 +47,16 @@ export default function ScrapPage() {
     setRows(null);
     const req = tab === 'requests' ? fetchScrapRequests(reqStatus)
       : tab === 'handover' ? fetchScrappedAwaitingChallan()
-        : fetchScrapChallans({ limit: 100 });
-    req.then(({ data }) => setRows(data.data || [])).catch((e) => { setRows([]); toast.error(errMsg(e)); });
-  }, [tab, reqStatus]);
-  useEffect(() => { load(); setPicked({}); }, [load]);
+        : fetchScrapChallans({
+          limit: 50, page, search: cf.search.trim() || undefined, status: cf.status || undefined, date_from: cf.from || undefined, date_to: cf.to || undefined,
+        });
+    req.then(({ data }) => { setRows(data.data || []); setPages(data.pagination?.totalPages || 1); }).catch((e) => { setRows([]); toast.error(errMsg(e)); });
+  }, [tab, reqStatus, page, cf]);
+  useEffect(() => {
+    const t = setTimeout(() => { load(); setPicked({}); }, tab === 'challans' && cf.search ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [load, tab, cf.search]);
+  useEffect(() => { setPage(1); }, [cf]);
 
   const submitDecision = async () => {
     setBusy(true);
@@ -75,7 +88,7 @@ export default function ScrapPage() {
       });
       toast.success(`Scrap challan ${data.challan_number} raised — dispatch it from the challan page`);
       setChallan(null);
-      setTab('challans');
+      navigate(`/carret/stock/scrap/challans/${encodeURIComponent(data.challan_number)}`);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
@@ -110,7 +123,7 @@ export default function ScrapPage() {
     },
   ];
   const challanCols = [
-    { key: 'n', header: 'Scrap challan', render: (c) => <Link to={`/inventory-management/scrap-challans/${encodeURIComponent(c.challan_number)}`}><DocNumber value={c.challan_number} /></Link> },
+    { key: 'n', header: 'Scrap challan', render: (c) => <DocNumber value={c.challan_number} />, sub: (c) => c.remarks || null },
     { key: 'b', header: 'Buyer', render: (c) => c.recipient_name, sub: (c) => c.contact_mobile },
     { key: 'i', header: 'Items', numeric: true, render: (c) => c.item_count },
     { key: 'v', header: 'Sale value', numeric: true, render: (c) => (c.sale_total != null ? `₹${Number(c.sale_total).toLocaleString('en-IN')}` : '—') },
@@ -131,14 +144,31 @@ export default function ScrapPage() {
           )}
           {tab === 'challans' && <Link to="/inventory-management/discarded-parts" className="text-ink-3">Discarded parts → scrap challan (old view)</Link>}
         </div>
+        {tab === 'challans' && (
+          <div className="flex flex-wrap items-end" style={{ gap: '8px' }}>
+            <Input type="search" placeholder="Challan, buyer, TTSPL, PRT-ID, serial" value={cf.search} onChange={(e) => setCf({ ...cf, search: e.target.value })} style={{ width: '18rem' }} aria-label="Search scrap challans" />
+            <Segmented label="Status" value={cf.status} onChange={(v) => setCf({ ...cf, status: v })} options={[{ value: '', label: 'All' }, { value: 'draft', label: 'Draft' }, { value: 'dispatched', label: 'Dispatched' }, { value: 'cancelled', label: 'Cancelled' }]} />
+            <Field label="From"><Input type="date" value={cf.from} onChange={(e) => setCf({ ...cf, from: e.target.value })} /></Field>
+            <Field label="To"><Input type="date" value={cf.to} onChange={(e) => setCf({ ...cf, to: e.target.value })} /></Field>
+            {(cf.search || cf.status || cf.from || cf.to) && <Button variant="quiet" onClick={() => setCf({ search: '', status: '', from: '', to: '' })}>Clear</Button>}
+          </div>
+        )}
         {tab === 'requests' && <Notice tone="info">Raise a scrap request from the laptop&apos;s page (Stock → Assets → the laptop → Scrap…). Someone other than the requester approves.</Notice>}
         {rows === null ? <EmptyState title="Loading…" /> : (
           <DataTable
             columns={tab === 'requests' ? reqCols : tab === 'handover' ? handoverCols : challanCols}
             rows={rows}
             rowKey={(r) => r.id || r.serial_id || r.challan_number}
+            onRowClick={tab === 'challans' ? (c) => navigate(`/carret/stock/scrap/challans/${encodeURIComponent(c.challan_number)}`) : undefined}
             empty={<EmptyState title="Nothing here" />}
           />
+        )}
+        {tab === 'challans' && pages > 1 && (
+          <div className="flex items-center justify-end" style={{ gap: '8px' }}>
+            <Button variant="quiet" disabled={page <= 1} onClick={() => setPage(page - 1)}>Newer</Button>
+            <span className="text-ink-3">Page {page} of {pages}</span>
+            <Button variant="quiet" disabled={page >= pages} onClick={() => setPage(page + 1)}>Older</Button>
+          </div>
         )}
       </div>
 

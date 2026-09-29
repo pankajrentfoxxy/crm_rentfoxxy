@@ -64,7 +64,12 @@ export const changeServiceDcTechnician = (sdc, body) => api.patch(`/support/serv
 
 /* Parts desk (warehouse) — the same /support-parts endpoints the old queue uses. */
 const sp = '/support-parts';
-export const fetchPartsQueue = () => api.get(`${sp}/warehouse-queue`);
+export const fetchPartsQueue = (params) => api.get(`${sp}/warehouse-queue`, { params });
+export const fetchReservedUnits = (partId) => api.get(`${sp}/parts/${encodeURIComponent(partId)}/reserved`);
+export const fetchPartChallan = (challanId) => api.get(`${sp}/challans/${encodeURIComponent(challanId)}`);
+export const fetchPartDc = (dc) => api.get(`${sp}/part-dcs/${encodeURIComponent(dc)}`);
+export const fetchPartReturnDc = (dc) => api.get(`${sp}/part-return-dcs/${encodeURIComponent(dc)}`);
+export const setPartReturnDcCourier = (dc, body) => api.patch(`${sp}/part-return-dcs/${encodeURIComponent(dc)}/courier`, body);
 export const fetchPartUnits = (r, showAll) => api.get('/part-requests/instances', {
   params: { part_id: r.part_id, status: 'in_stock', limit: 500, for_request_id: r.id, for_request_kind: 'support', include_incompatible: showAll ? 'true' : undefined },
 });
