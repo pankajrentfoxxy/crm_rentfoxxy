@@ -70,7 +70,7 @@ const STATUS_FILTERS = new Set([
   'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor', 'at_gate',
 ]);
 
-async function listAssets({ search = '', status = '', view = '', tag = '', page = 1, limit = 50 } = {}) {
+async function listAssets({ search = '', status = '', view = '', tag = '', movedTo = '', movedOn = '', page = 1, limit = 50 } = {}) {
   const params = [];
   const where = [IS_LAPTOP];
   const q = String(search || '').trim();
@@ -85,6 +85,14 @@ async function listAssets({ search = '', status = '', view = '', tag = '', page 
   if (view === 'ready') where.push(READY_SQL);
   if (view === 'with_customer') where.push(`v.inventory_status IN ('rented','on_demo','sold')`);
   if (view === 'on_floor') where.push(`v.inventory_status IN ('in_repair','returned','qc_failed','at_gate') OR (v.inventory_status = 'in_stock' AND NOT ${READY_SQL})`);
+  // Moved into a state on an IST day, from the status audit (the Today
+  // dashboard's "went on rent" / "came back" tiles link here).
+  if (STATUS_FILTERS.has(movedTo) && /^\d{4}-\d{2}-\d{2}$/.test(String(movedOn || ''))) {
+    params.push(movedTo, movedOn);
+    where.push(`EXISTS (SELECT 1 FROM inventory_status_transitions ist
+      WHERE ist.serial_id = v.serial_id AND ist.to_status = $${params.length - 1}
+        AND (ist.created_at AT TIME ZONE 'Asia/Kolkata')::date = $${params.length}::date)`);
+  }
   if (tag === 'none') where.push(`${TAG_SQL} IS NULL`);
   else if (TAGS[tag]) { params.push(tag); where.push(`${TAG_SQL} = $${params.length}`); }
 

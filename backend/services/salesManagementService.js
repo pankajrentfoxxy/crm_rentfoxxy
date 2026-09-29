@@ -11,6 +11,14 @@ const {
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
+
+// Sell / Move list date filters are IST calendar days (the business's day).
+const IST_TZ = 'Asia/Kolkata';
+/** A YYYY-MM-DD string, or null — anything else is ignored rather than cast. */
+const isoDateOrNull = (v) => {
+  const s = String(v || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) ? s : null;
+};
 const { secureOtp } = require('../utils/secureRandom');
 const {
   appendColumnFilters: appendReturnDcColumnFilters,
@@ -633,7 +641,9 @@ async function tableColumnExists(tableName, columnName) {
   return exists;
 }
 
-async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status, source_lead_id, entity_code }) {
+async function listQuotationsGrouped({
+  page = 1, limit = 20, search = '', status, source_lead_id, entity_code, dateFrom, dateTo,
+}) {
   const params = [];
   const conditions = [];
   if (search) {
@@ -653,6 +663,10 @@ async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status
     params.push(entity_code);
     conditions.push(`COALESCE(entity_code, 'rentfoxxy') = $${params.length}`);
   }
+  // Created on (IST calendar days) — the Today dashboard links here with a date.
+  conditions.push(...appendDateRangeClauses({
+    column: 'created_at', dateFrom: isoDateOrNull(dateFrom), dateTo: isoDateOrNull(dateTo), params, timezone: IST_TZ,
+  }));
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const countResult = await pool.query(
@@ -758,7 +772,11 @@ function buildSalesOrderListWhere({
   }
   where = appendDateRangeToWhere(
     where,
-    appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params })
+    // IST calendar days (were UTC days, which put 00:00–05:30 IST orders on the
+    // previous day). Same days as the Today dashboard's order counts.
+    appendDateRangeClauses({
+      column: 'created_at', dateFrom: isoDateOrNull(dateFrom), dateTo: isoDateOrNull(dateTo), params, timezone: IST_TZ,
+    })
   );
   const scopeSql = salesOrderScopeWhere(entityScope);
   if (scopeSql) {
@@ -1088,6 +1106,8 @@ function buildDeliveryChallanListWhere({
   assignedUserId = null,
   dateFrom,
   dateTo,
+  deliveredFrom,
+  deliveredTo,
   hidePendingEway = false,
 } = {}) {
   const params = [];
@@ -1127,6 +1147,13 @@ function buildDeliveryChallanListWhere({
     where,
     appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params, tableAlias: 'd' })
   );
+  // Delivered on (IST calendar days) — the Today dashboard's "delivered" tile.
+  where = appendDateRangeToWhere(
+    where,
+    appendDateRangeClauses({
+      column: 'delivered_at', dateFrom: isoDateOrNull(deliveredFrom), dateTo: isoDateOrNull(deliveredTo), params, tableAlias: 'd', timezone: IST_TZ,
+    })
+  );
   if (hidePendingEway) {
     where += ` AND NOT (
       COALESCE(d.eway_required, FALSE) = TRUE
@@ -1139,10 +1166,10 @@ function buildDeliveryChallanListWhere({
 
 async function listDeliveryChallansGrouped({
   page = 1, limit = 20, search = '', status = '', dcPurpose = '', orderType = '', assignedUserId = null, dateFrom, dateTo,
-  hidePendingEway = false,
+  deliveredFrom, deliveredTo, hidePendingEway = false,
 } = {}) {
   const { where, params } = buildDeliveryChallanListWhere({
-    search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo, hidePendingEway,
+    search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo, deliveredFrom, deliveredTo, hidePendingEway,
   });
   const fromSql = `FROM delivery_challan_lines d ${DC_SO_TYPE_JOIN}`;
   // A DC can have several line items; list/count one row per DC (not per line)
@@ -3262,6 +3289,7 @@ module.exports = {
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
+  buildSalesOrderListWhere,
   listSalesOrdersExportRows,
   getSalesOrderLines,
   getSalesOrderSupportMeta,
