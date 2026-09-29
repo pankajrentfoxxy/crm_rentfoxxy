@@ -61,6 +61,11 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     user: `sync-spare-po-receive-status.js --apply` (57 spare POs), part-naming clean-up CSV review
     (`claude/reports/part-naming-cleanup-QA-2026-09-29.csv`, 56 confident / 63 REVIEW) then `apply-part-naming-cleanup.js`.
 
+12c. **Partial pickup — "Collect later" (29 Sep)** — BUILT on QA: a laptop the customer keeps moves to a new
+    RDC on the same ticket (reason + date, own OTP); guard gates in / warehouse receives the collected ones,
+    rent stops for them only; ticket closes when all are in. Support RDCs are worked in My work only (not My
+    Deliveries). Needs promotion to reach crm.rentfoxxy.com; until then use Edit pickup before gate-in.
+
 ## C. Waiting on the user / Accounts
 13. First month the CRM makes vendor bills (earlier months settled outside).
 14. Accounts to confirm `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
