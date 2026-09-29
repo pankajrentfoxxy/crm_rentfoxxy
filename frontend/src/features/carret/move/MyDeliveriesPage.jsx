@@ -1,57 +1,64 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 import FieldShell from '../../../shells/FieldShell';
 import {
-  Button, DocNumber, EmptyState, Field, Input, Notice, Segmented, Textarea,
+  Button, EmptyState, Field, FlowSteps, Input, Notice, Segmented, Textarea,
 } from '../../../components/carret';
+import ScanField from '../../../components/ScanField';
+import { usePermission } from '../../../hooks/usePermission';
 import {
   getMyDeliveries, markCustomerRejected, markReached, sendWarehouseReturnOtp, submitDeliveryWithPod,
   verifySerialAndGenerateOtp, verifyWarehouseReturnOtp,
 } from '../../sales-pipeline/salesPipelineApi';
-import { formatDeliveryAddressLine, deliveryAddressPhone } from '../../sales-pipeline/salesPipelineUtils';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
+import {
+  BIG, CardHead, LaptopList, ProofCapture, emptyProof, errMsg, proofForm, useRunner, withGps,
+} from './fieldDeliveryShared';
+import { HandInCard, PickupCard, VendorCard } from './MyPickupCards';
+import { TECH_TABS } from '../serve/serveShared';
 
 /**
- * Field → My deliveries (the delivery technician's phone).
+ * Field → My deliveries (the delivery technician's phone; also Support →
+ * Technician). Every job assigned to me, one card each, and the card only
+ * offers the next step:
  *
- * One card per challan, and the card only ever offers the next step:
- * on the way → reached → scan the laptop (the customer gets an OTP) → OTP plus a
- * photo or signature → delivered. Refused at the door is one tap away at every
- * step, and a refused challan then walks the technician through handing the
- * laptops back to the warehouse.
+ *   Delivery   on the way → reached → scan the laptop (customer gets an OTP)
+ *              → OTP + photo or signature → delivered. Refused at the door is
+ *              one tap away; a refused challan walks the laptops back to the
+ *              warehouse with the warehouse OTP.
+ *   Pickup     reached → scan every laptop + the charger we sent → OTP + proof
+ *              → collected → "Hand in" until the warehouse receives them.
+ *   Vendor     return (VRTDC) or repair (VRDC) by hand: reached → the vendor
+ *              signs → handed over.
  *
- * Same endpoints as the old My Deliveries page. Return pickups and vendor
- * returns belong to later processes and still open the old page.
+ * Same endpoints as the classic My Deliveries (which stays routed); warehouse
+ * receive stays on the Return challan record. ?show=pickups opens on pickups
+ * (Support's "My pickups").
  */
-function Card({ dc, onChanged }) {
+const kindOf = (dc) => {
+  if (['vendor_return', 'vendor_repair'].includes(dc.dc_purpose)) return 'vendor';
+  if (dc.movement_type === 'return') return 'pickup';
+  return 'delivery';
+};
+
+function DeliveryCard({ dc, onChanged }) {
+  const { hasPermission } = usePermission();
+  const canAct = hasPermission('technician_bucket', 'edit');
   const [serial, setSerial] = useState('');
   const [otp, setOtp] = useState('');
-  const [proof, setProof] = useState({ type: 'photo', file: null, esign: null, preview: null });
+  const [proof, setProof] = useState(emptyProof());
   const [notes, setNotes] = useState('');
   const [refuse, setRefuse] = useState(null);
   const [whOtp, setWhOtp] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [whAsked, setWhAsked] = useState(Boolean(dc.warehouse_return_otp_sent));
+  const { busy, run } = useRunner(onChanged);
 
   const status = String(dc.status || '').toLowerCase();
-  const otherFlow = ['vendor_return', 'return_pickup'].includes(dc.dc_purpose) || dc.movement_type === 'return' || /^VRTDC|^RDC/i.test(dc.dc_number || '');
-  const addr = formatDeliveryAddressLine(dc.delivery_address);
-  const phone = deliveryAddressPhone(dc.delivery_address, dc.customer_phone);
-  const maps = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr || dc.customer_name || '')}`;
+  const stage = status === 'in_transit' ? 0 : status === 'reached' ? (dc.otp_pending ? 2 : 1) : 3;
+  const steps = status === 'rejected' ? null : [['Reached'], ['Scan laptop'], ['OTP + proof']].map(([label], i) => ({
+    key: label, label, state: i < stage ? 'done' : i === stage ? 'current' : 'todo',
+  }));
 
-  const run = async (fn, ok) => {
-    setBusy(true);
-    try { await fn(); if (ok) toast.success(ok); onChanged(); } catch (e) { toast.error(e?.response?.data?.message || e.message || 'That did not work.'); } finally { setBusy(false); }
-  };
-
-  const reached = () => {
-    const send = (lat, lng) => run(() => markReached(dc.dc_number, { latitude: lat, longitude: lng }), 'Marked reached — scan the laptop next');
-    if (!navigator.geolocation) { send(null, null); return; }
-    navigator.geolocation.getCurrentPosition(
-      (p) => send(String(p.coords.latitude), String(p.coords.longitude)),
-      () => send(null, null),
-      { timeout: 10000, maximumAge: 60000 }
-    );
-  };
+  const reached = () => withGps((lat, lng) => run(() => markReached(dc.dc_number, { latitude: lat, longitude: lng }), 'Marked reached — scan the laptop next'));
   const verify = () => run(async () => {
     if (!serial.trim()) throw new Error('Scan or type the laptop’s TTSPL or serial');
     await verifySerialAndGenerateOtp(dc.dc_number, { serial_number: serial.trim() });
@@ -60,83 +67,54 @@ function Card({ dc, onChanged }) {
     if (!/^\d{4,8}$/.test(otp.trim())) throw new Error('Enter the OTP from the customer');
     if (proof.type === 'photo' && !proof.file) throw new Error('Take a photo');
     if (proof.type === 'esign' && !proof.esign) throw new Error('Take the customer’s signature');
-    const fd = new FormData();
-    fd.append('otp', otp.trim());
-    fd.append('pod_type', proof.type);
-    fd.append('notes', notes);
-    if (proof.file) fd.append('pod_photo', proof.file);
-    if (proof.esign) fd.append('esign_data', proof.esign);
-    await submitDeliveryWithPod(dc.dc_number, fd);
+    await submitDeliveryWithPod(dc.dc_number, proofForm(proof, { otp: otp.trim(), pod_type: proof.type, notes }));
   }, 'Delivered ✓');
   const doRefuse = () => run(async () => {
     if ((refuse?.reason || '').trim().length < 3) throw new Error('Why did the customer refuse?');
     await markCustomerRejected(dc.dc_number, { rejection_reason: refuse.reason.trim(), rejection_remarks: refuse.remarks?.trim() || undefined, source: 'technician' });
     setRefuse(null);
   }, 'Refusal recorded — bring the laptops back to the gate');
-  const askWhOtp = () => run(async () => { await sendWarehouseReturnOtp(dc.dc_number); }, 'The warehouse lead has the OTP');
+  const askWhOtp = () => run(async () => { await sendWarehouseReturnOtp(dc.dc_number); setWhAsked(true); }, 'The warehouse lead has the OTP');
   const giveBack = () => run(async () => { await verifyWarehouseReturnOtp(dc.dc_number, { otp: whOtp.trim() }); }, 'Handed back to the warehouse');
-
-  const onPhoto = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const r = new FileReader();
-    r.onload = (ev) => setProof((p) => ({ ...p, file, preview: ev.target.result }));
-    r.readAsDataURL(file);
-  };
 
   return (
     <article className="c-card" style={{ padding: 'var(--d-pad-x)' }}>
-      <div className="flex items-baseline flex-wrap" style={{ gap: '8px' }}>
-        <DocNumber value={dc.dc_number} />
-        <span className="ml-auto font-ui text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{status.replace(/_/g, ' ')}</span>
-      </div>
-      <div className="font-ui text-ink" style={{ fontWeight: 600, marginTop: '6px' }}>{dc.customer_name}</div>
-      {addr && <div className="font-ui text-ink-2" style={{ fontSize: 'var(--d-sm)' }}>{addr}</div>}
-      <div className="flex flex-wrap" style={{ gap: '8px', marginTop: '10px' }}>
-        {phone && <a className="c-btn" href={`tel:${phone}`}>Call {phone}</a>}
-        <a className="c-btn" href={maps} target="_blank" rel="noreferrer">Map</a>
-      </div>
-      {(dc.serials || []).length > 0 && (
-        <ul className="list-none p-0 m-0 font-mono text-ink-2" style={{ marginTop: '10px', fontSize: 'var(--d-sm)', display: 'grid', gap: '2px' }}>
-          {dc.serials.map((s) => <li key={s.ttspl || s.serial_number}>{s.ttspl} · {s.serial_number} · {[s.brand, s.model].filter(Boolean).join(' ')}</li>)}
-        </ul>
-      )}
+      <CardHead dc={dc} kindLabel="Delivery" />
+      {steps && <div style={{ marginTop: '12px' }}><FlowSteps steps={steps} /></div>}
+      <LaptopList serials={dc.serials || []} />
 
       <div className="c-stack" style={{ marginTop: '14px', gap: '10px' }}>
-        {otherFlow && <Notice tone="info" title="Return or vendor pickup">This one is handled on the classic screen. <a href="/sales-pipeline/my-deliveries">Open it there</a>.</Notice>}
+        {!canAct && <Notice tone="info">View only — you cannot record deliveries.</Notice>}
 
-        {!otherFlow && status === 'in_transit' && (
-          <Button variant="primary" onClick={reached} disabled={busy}>I have reached the customer</Button>
+        {canAct && status === 'in_transit' && (
+          <Button variant="primary" onClick={reached} disabled={busy} style={BIG}>I have reached the customer</Button>
         )}
 
-        {!otherFlow && status === 'reached' && !dc.otp_pending && (
+        {canAct && status === 'reached' && !dc.otp_pending && (
           <>
             <Field label="Scan the laptop you are handing over">
-              <Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" placeholder="TTSPL or serial" autoComplete="off" />
+              <ScanField value={serial} onChange={setSerial} placeholder="TTSPL or serial" aria-label="Scan the laptop" disabled={busy} />
             </Field>
-            <Button variant="primary" onClick={verify} disabled={busy}>Match laptop and send OTP</Button>
+            <Button variant="primary" onClick={verify} disabled={busy || !serial.trim()} style={BIG}>Match laptop and send OTP</Button>
           </>
         )}
 
-        {!otherFlow && status === 'reached' && dc.otp_pending && (
+        {canAct && status === 'reached' && dc.otp_pending && (
           <>
-            <Field label="OTP from the customer"><Input value={otp} inputMode="numeric" maxLength={8} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" /></Field>
-            <Segmented label="Proof" value={proof.type} onChange={(type) => setProof({ type, file: null, esign: null, preview: null })} options={[{ value: 'photo', label: 'Photo' }, { value: 'esign', label: 'Signature' }]} />
-            {proof.type === 'photo' ? (
-              <>
-                <Input type="file" accept="image/*" capture="environment" onChange={onPhoto} />
-                {proof.preview && <img src={proof.preview} alt="Proof of delivery" style={{ maxHeight: 160, borderRadius: 'var(--d-radius)', border: '1px solid var(--rule)' }} />}
-              </>
-            ) : proof.esign
-              ? <img src={proof.esign} alt="Customer signature" style={{ height: 80, background: 'var(--surface)', border: '1px solid var(--rule)', borderRadius: 'var(--d-radius)' }} />
-              : <SignaturePadComponent onSave={(esign) => setProof((p) => ({ ...p, esign }))} onCancel={() => setProof({ type: 'photo', file: null, esign: null, preview: null })} />}
+            <Field label="OTP from the customer" required>
+              <Input value={otp} inputMode="numeric" maxLength={8} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" style={{ fontSize: '24px', letterSpacing: '6px', textAlign: 'center' }} />
+            </Field>
+            <ProofCapture value={proof} onChange={setProof} />
             <Field label="Notes"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-            <Button variant="primary" onClick={deliver} disabled={busy}>{busy ? 'Saving…' : 'Confirm delivery'}</Button>
-            <Button variant="quiet" onClick={verify} disabled={busy || !serial.trim()}>Resend OTP (scan again first)</Button>
+            <Button variant="primary" onClick={deliver} disabled={busy} style={BIG}>{busy ? 'Saving…' : 'Confirm delivery'}</Button>
+            <Field label="Customer did not get the OTP? Scan the laptop again">
+              <ScanField value={serial} onChange={setSerial} placeholder="TTSPL or serial" aria-label="Scan the laptop again" disabled={busy} />
+            </Field>
+            <Button variant="quiet" onClick={verify} disabled={busy || !serial.trim()}>Send the OTP again</Button>
           </>
         )}
 
-        {!otherFlow && ['in_transit', 'reached'].includes(status) && (
+        {canAct && ['in_transit', 'reached'].includes(status) && (
           refuse ? (
             <div className="c-stack" style={{ gap: '8px' }}>
               <Field label="Why did the customer refuse?" required><Textarea rows={2} value={refuse.reason || ''} onChange={(e) => setRefuse((r) => ({ ...r, reason: e.target.value }))} /></Field>
@@ -149,14 +127,20 @@ function Card({ dc, onChanged }) {
           ) : <Button variant="quiet" onClick={() => setRefuse({})}>Customer refused</Button>
         )}
 
-        {!otherFlow && status === 'rejected' && dc.warehouse_return_pending && (
+        {status === 'rejected' && dc.warehouse_return_pending && (
           <>
             <Notice tone="warn" title="Refused — bring the laptops back">
+              {dc.rejection_reason ? `Reason: ${dc.rejection_reason}. ` : ''}
               {dc.refusal_stage_label || 'Hand them to the guard at the gate, then to the warehouse.'}
             </Notice>
-            <Button onClick={askWhOtp} disabled={busy}>Ask the warehouse lead for the OTP</Button>
-            <Field label="Warehouse OTP"><Input value={whOtp} inputMode="numeric" onChange={(e) => setWhOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" /></Field>
-            <Button variant="primary" onClick={giveBack} disabled={busy || !whOtp.trim()}>Handed back to the warehouse</Button>
+            {canAct && (
+              <>
+                {!whAsked && <Button onClick={askWhOtp} disabled={busy} style={{ minHeight: '48px' }}>Ask the warehouse lead for the OTP</Button>}
+                <Field label="Warehouse OTP"><Input value={whOtp} inputMode="numeric" onChange={(e) => setWhOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" /></Field>
+                <Button variant="primary" onClick={giveBack} disabled={busy || !whOtp.trim()} style={BIG}>Handed back to the warehouse</Button>
+                {whAsked && <Button variant="quiet" onClick={askWhOtp} disabled={busy}>Ask for the OTP again</Button>}
+              </>
+            )}
           </>
         )}
       </div>
@@ -164,22 +148,58 @@ function Card({ dc, onChanged }) {
   );
 }
 
+const SHOW = ['all', 'deliveries', 'pickups', 'vendor'];
+const SHOW_KIND = { deliveries: 'delivery', pickups: 'pickup', vendor: 'vendor' };
+
 export default function MyDeliveriesPage() {
-  const [state, setState] = useState({ loading: true, rows: [], error: null });
+  const { hasPermission } = usePermission();
+  // A support technician keeps the My work / Deliveries / My parts tabs.
+  const tabs = hasPermission('support_tickets', 'view') ? TECH_TABS : [];
+  const [params, setParams] = useSearchParams();
+  const show = SHOW.includes(params.get('show')) ? params.get('show') : 'all';
+  const [state, setState] = useState({ loading: true, rows: [], handIn: [], error: null });
   const load = useCallback(() => {
     getMyDeliveries()
-      .then(({ data }) => setState({ loading: false, rows: data?.items || [], error: null }))
-      .catch((e) => setState({ loading: false, rows: [], error: e?.response?.data?.message || 'Could not load your deliveries.' }));
+      .then(({ data }) => setState({ loading: false, rows: data?.items || [], handIn: data?.hand_in || [], error: null }))
+      .catch((e) => setState((s) => ({ ...s, loading: false, error: errMsg(e) || 'Could not load your deliveries.' })));
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
+  const count = (k) => state.rows.filter((dc) => kindOf(dc) === k).length;
+  const rows = show === 'all' ? state.rows : state.rows.filter((dc) => kindOf(dc) === SHOW_KIND[show]);
+  const showHandIn = (show === 'all' || show === 'pickups') && state.handIn.length > 0;
+  const options = [
+    { value: 'all', label: `All ${state.rows.length}` },
+    { value: 'deliveries', label: `Deliveries ${count('delivery')}` },
+    { value: 'pickups', label: `Pickups ${count('pickup') + state.handIn.length}` },
+    { value: 'vendor', label: `Vendor ${count('vendor')}` },
+  ];
+
   return (
-    <FieldShell title={`My deliveries${state.rows.length ? ` · ${state.rows.length}` : ''}`}>
+    <FieldShell title={`My deliveries${state.rows.length ? ` · ${state.rows.length}` : ''}`} tabs={tabs}>
       <div className="c-stack" style={{ maxWidth: '40rem', margin: '0 auto' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <Segmented label="Show" value={show} onChange={(v) => setParams(v === 'all' ? {} : { show: v }, { replace: true })} options={options} />
+        </div>
         {state.loading && <EmptyState title="Loading…" />}
         {state.error && <Notice tone="crit">{state.error}</Notice>}
-        {!state.loading && !state.error && !state.rows.length && <EmptyState title="Nothing to deliver right now" body="Challans assigned to you appear here once the gate lets them out." />}
-        {state.rows.map((dc) => <Card key={dc.dc_number} dc={dc} onChanged={load} />)}
+        {!state.loading && !state.error && !rows.length && !showHandIn && (
+          <EmptyState title="Nothing here right now" body="Challans assigned to you appear once the gate lets them out; pickups once they are assigned to you." />
+        )}
+        {rows.map((dc) => {
+          const k = kindOf(dc);
+          if (k === 'pickup') return <PickupCard key={dc.dc_number} dc={dc} onChanged={load} />;
+          if (k === 'vendor') return <VendorCard key={dc.dc_number} dc={dc} onChanged={load} />;
+          return <DeliveryCard key={dc.dc_number} dc={dc} onChanged={load} />;
+        })}
+        {showHandIn && (
+          <>
+            <Notice tone="info" title="Hand in at the warehouse gate">
+              The guard scans each laptop in, then the warehouse receives it. Rent stops only when the warehouse receives it — hand them in the same day.
+            </Notice>
+            {state.handIn.map((row) => <HandInCard key={row.dc_number} row={row} />)}
+          </>
+        )}
       </div>
     </FieldShell>
   );
