@@ -41,3 +41,12 @@ Mark as Deal (the old Convert button still works for leads already at Deal).
 New lead → Log follow-up (spoke, next date) → Change status Warm / Price Negotiation → Send quotation
 (check CGST+SGST vs IGST by state) → Mark as Deal (GST, billing, contact) → customer created → raise a
 sales order for that customer → the lead shows Deal "moved automatically". Follow-ups page → Log.
+
+## Leads page redesign (29 Sep 2026)
+User: "Lead page is not looks good and filter is not looks proper… status can be updated from outside."
+- Pipeline tabs with counts (All open · New · Call back / on hold · Interested · Proposal / demo · Deal · Lost · Everything) replace the status dropdown (its default value matched no option).
+- One FilterBar: search, owner, source, enquiry type, next call (overdue / today / 7 days / not set), came in (today / 7 / 30 / 90 days), sort (newest, follow-up due, recently active, oldest, company), List / Board.
+- API: `follow_up` and `inquiry_type` were sent by the page but ignored by GET /api/leads — now filtered (IST days).
+- Status pill (LeadStatusChip) on every row and card opens the existing StatusDrawer in place; Deal / Demo loads the full lead and opens WinDrawer (customer creation) as on the record.
+- Colours: one per pipeline group from theme tokens (GROUP_TONE in leadShared) — no hex; used for tabs' board columns, card edges, pills, record and follow-ups pages.
+- Clickable summary tiles (calls overdue / today / next 7 days, new, proposal, deals); list shows contact + city, needs + enquiry + budget, status + stage, next call (red overdue, amber today), owner initials + source, last activity + came-in date; select-all + searchable bulk assign.

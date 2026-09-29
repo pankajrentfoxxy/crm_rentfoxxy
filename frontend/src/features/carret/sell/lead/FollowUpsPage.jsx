@@ -7,7 +7,8 @@ import {
 } from '../../../../components/carret';
 import { fetchAssignableUsers, fetchFollowUpBoard } from './leadApi';
 import { FollowUpDrawer } from './LeadDrawers';
-import { OUTCOMES, STATUS_TONE, istDate, leadErr } from './leadShared';
+import { OUTCOMES, istDate, leadErr } from './leadShared';
+import LeadStatusChip from './LeadStatusChip';
 
 /**
  * Sell → Follow-ups (claude/carret-lead.md). The calls to make: overdue first,
@@ -37,7 +38,7 @@ export default function FollowUpsPage() {
     { key: 'd', header: 'When', render: (r) => `${istDate(r.follow_up_date)}${r.follow_up_time ? ` ${String(r.follow_up_time).slice(0, 5)}` : ''}`, sub: (r) => (r.days_from_today < 0 ? `${-r.days_from_today} day(s) late` : null) },
     { key: 'c', header: 'Lead', render: (r) => r.company_name || r.name, sub: (r) => [r.company_name ? r.name : null, r.phone].filter(Boolean).join(' · ') },
     { key: 'n', header: 'Needs', render: (r) => [r.quantity_required ? `${r.quantity_required} laptops` : null, r.rental_duration ? `${r.rental_duration} months` : null, [r.brand, r.processor, r.ram].filter(Boolean).join(' ')].filter(Boolean).join(' · ') || '—' },
-    { key: 's', header: 'Status', render: (r) => <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATUS_TONE[r.status], marginRight: 6 }} />{r.status}</span>, sub: (r) => (r.last_outcome ? `Last: ${outcomeLabel[r.last_outcome] || r.last_outcome}` : r.lead_stage) },
+    { key: 's', header: 'Status', render: (r) => <LeadStatusChip status={r.status} compact />, sub: (r) => (r.last_outcome ? `Last: ${outcomeLabel[r.last_outcome] || r.last_outcome}` : r.lead_stage) },
     { key: 'o', header: 'Owner', render: (r) => r.owner_name || '—' },
     {
       key: 'a',

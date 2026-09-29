@@ -13,9 +13,10 @@ import {
 } from './leadApi';
 import { FollowUpDrawer, StatusDrawer, WinDrawer } from './LeadDrawers';
 import {
-  BRANDS, CLOSED_STATUSES, GENERATIONS, INQUIRY, OUTCOMES, PROCESSORS, RAMS, SOURCES, STATUS_HINT, STATUS_TONE, STORAGES,
+  BRANDS, CLOSED_STATUSES, GENERATIONS, INQUIRY, OUTCOMES, PROCESSORS, RAMS, SOURCES, STATUS_HINT, STORAGES,
   istDate, leadErr, need, todayIst,
 } from './leadShared';
+import LeadStatusChip from './LeadStatusChip';
 
 /**
  * Sell → a lead (claude/carret-lead.md). One page: what they need, where the
@@ -161,9 +162,9 @@ export default function LeadRecordPage() {
             </>
           )}
           meta={[
-            { label: 'Status', value: <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATUS_TONE[lead.status], marginRight: 6 }} />{lead.status}{lead.leadStage && lead.leadStage !== lead.status ? ` · ${lead.leadStage}` : ''}</span> },
+            { label: 'Status', value: <LeadStatusChip status={lead.status} stage={lead.leadStage} /> },
             { label: 'Owner', value: <button type="button" className="c-link" onClick={() => canEdit && setDrawer('owner')} style={{ background: 'none', border: 0, padding: 0, cursor: canEdit ? 'pointer' : 'default', textDecoration: canEdit ? 'underline dotted' : 'none' }}>{lead.assignedUser?.name || 'Unassigned'}</button> },
-            { label: 'Next follow-up', value: fuDate ? <span style={{ color: overdue ? 'var(--alert-bad, #b91c1c)' : undefined, fontWeight: overdue ? 600 : 400 }}>{fuDate}{lead.followUpTime ? ` ${String(lead.followUpTime).slice(0, 5)}` : ''}{overdue ? ' (overdue)' : ''}</span> : '—' },
+            { label: 'Next follow-up', value: fuDate ? <span style={{ color: overdue ? 'var(--alert-crit)' : undefined, fontWeight: overdue ? 600 : 400 }}>{fuDate}{lead.followUpTime ? ` ${String(lead.followUpTime).slice(0, 5)}` : ''}{overdue ? ' (overdue)' : ''}</span> : '—' },
             { label: 'Came in', value: <DateTime value={lead.createdAt} /> },
             { label: 'Customer', value: lead.customerId ? <button type="button" onClick={() => navigate(`/carret/sell/customers/${lead.customerId}`)} style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>#{lead.customerId}</button> : '—' },
           ]}

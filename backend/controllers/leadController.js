@@ -163,7 +163,7 @@ const csvEscape = (value) => {
 
 /** Shared Prisma where for list + CSV export */
 function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
-  const { status, assigned_to, source, date_from, date_to, search, include_duplicates } = req.query;
+  const { status, assigned_to, source, date_from, date_to, search, include_duplicates, follow_up, inquiry_type } = req.query;
   const andConditions = [];
 
   if (!include_duplicates || include_duplicates === 'false') {
@@ -226,6 +226,26 @@ function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
     if (date_from) createdAtFilter.gte = new Date(`${date_from}T00:00:00.000Z`);
     if (date_to) createdAtFilter.lte = new Date(`${date_to}T23:59:59.999Z`);
     andConditions.push({ createdAt: createdAtFilter });
+  }
+
+  // Enquiry type (rental / sales / both) and follow-up — the lead page sent
+  // these for months and the API ignored them (29 Sep 2026).
+  if (inquiry_type) {
+    const types = normalizeArrayField(inquiry_type).map((t) => String(t).toLowerCase()).filter((t) => ['rental', 'sales', 'both'].includes(t));
+    if (types.length) andConditions.push({ inquiryType: { in: types } });
+  }
+  if (follow_up) {
+    // Days are IST days: midnight IST is 18:30 UTC the day before.
+    const IST_MS = 330 * 60000;
+    const istMidnight = (offsetDays) => {
+      const now = new Date(Date.now() + IST_MS);
+      return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offsetDays) - IST_MS);
+    };
+    const f = String(follow_up).toLowerCase();
+    if (f === 'overdue') andConditions.push({ followUpDate: { lt: istMidnight(0) } });
+    else if (f === 'today') andConditions.push({ followUpDate: { gte: istMidnight(0), lt: istMidnight(1) } });
+    else if (f === 'this_week') andConditions.push({ followUpDate: { gte: istMidnight(0), lt: istMidnight(7) } });
+    else if (f === 'none') andConditions.push({ followUpDate: null });
   }
 
   if (search) {

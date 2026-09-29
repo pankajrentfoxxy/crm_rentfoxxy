@@ -29,10 +29,22 @@ export const STATUS_HINT = {
   Gone: 'Lost — went elsewhere / cancelled',
 };
 
-export const STATUS_TONE = {
-  Pending: '#64748b', 'Call Back': '#0891b2', Hold: '#a16207', Cold: '#2563eb', Warm: '#d97706',
-  Hot: '#ea580c', Demo: '#7c3aed', Deal: '#16a34a', Repeat: '#0d9488', Rejected: '#be123c', Gone: '#b91c1c',
+/**
+ * One colour per pipeline group, from the theme tokens (so dark mode works and
+ * there is no hex in the app): New neutral, Call back amber, Interested blue,
+ * Proposal / demo orange, Deal green, Lost red.
+ */
+export const GROUP_TONE = {
+  new: { fg: 'var(--lc-closed)', bg: 'var(--lc-closed-soft)' },
+  callback: { fg: 'var(--lc-moving)', bg: 'var(--lc-moving-soft)' },
+  interested: { fg: 'var(--lc-idle)', bg: 'var(--lc-idle-soft)' },
+  proposal: { fg: 'var(--alert-serious)', bg: 'var(--lc-offcycle-soft)' },
+  deal: { fg: 'var(--lc-earning)', bg: 'var(--lc-earning-soft)' },
+  closed: { fg: 'var(--alert-crit)', bg: 'var(--alert-crit-soft)' },
 };
+export const toneOf = (status) => GROUP_TONE[columnOf(status)] || GROUP_TONE.new;
+/** A status's colour as a CSS value. */
+export const STATUS_TONE = Object.fromEntries(COLUMNS.flatMap((c) => c.statuses.map((st) => [st, GROUP_TONE[c.key].fg])));
 
 export const SOURCES = ['Google', 'Apollo', 'Email', 'Website', 'Reference', 'LinkedIn', 'Cold Call', 'WhatsApp', 'Just Dial', 'IndiaMART', 'Team', 'Walk-in', 'Other'];
 export const INQUIRY = [{ value: 'rental', label: 'Rental' }, { value: 'sales', label: 'Purchase' }, { value: 'both', label: 'Both' }];
