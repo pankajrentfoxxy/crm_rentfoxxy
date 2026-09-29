@@ -8,6 +8,7 @@ import {
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import { errMsg } from './produceShared';
+import PartName from '../stock/setup/PartName';
 
 /**
  * Production → Parts desk (warehouse).
@@ -89,7 +90,7 @@ export default function PartsDeskPage() {
 
   const reqCols = [
     { key: 'n', header: 'Request', render: (r) => <DocNumber value={r.request_number} />, sub: (r) => r.requester_name },
-    { key: 'p', header: 'Part', render: (r) => `${r.quantity || 1}× ${r.part_name}`, sub: (r) => (r.request_type === 'upgrade' ? `Upgrade ${r.config_field || ''}: ${r.old_value || '?'} → ${r.new_value || '?'}` : r.category) },
+    { key: 'p', header: 'Part', render: (r) => <PartName name={`${r.quantity || 1}× ${r.part_name}`} category={r.category} />, sub: (r) => (r.request_type === 'upgrade' ? `Upgrade ${r.config_field || ''}: ${r.old_value || '?'} → ${r.new_value || '?'}` : null) },
     { key: 'l', header: 'For laptop', render: (r) => (r.ttspl_id ? <DocNumber value={r.ttspl_id} /> : '—'), sub: (r) => [r.brand, r.model].filter(Boolean).join(' ') || r.stage_name },
     { key: 's', header: 'On shelf', numeric: true, render: (r) => r.stock_qty ?? '—' },
     { key: 'st', header: 'Status', render: (r) => <StatusChip status={r.status === 'approved' ? 'approved' : 'pending'} label={r.status === 'approved' ? `Reserved ${r.prt_id || ''}` : r.status === 'received' ? 'Arrived — give a unit' : 'Waiting'} /> },

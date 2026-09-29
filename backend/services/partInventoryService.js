@@ -17,9 +17,9 @@ const {
   fits,
   FITMENT,
 } = require('./partFitmentService');
-const { PART_CATEGORIES } = require('../constants/laptopConditions');
+const { CATALOGUE_PART_CATEGORIES } = require('../constants/laptopConditions');
 
-const VALID_CATEGORIES = new Set(PART_CATEGORIES.map((c) => c.value));
+const VALID_CATEGORIES = new Set(CATALOGUE_PART_CATEGORIES.map((c) => c.value));
 
 function normalizeCategory(raw) {
   const v = String(raw || '').trim().toLowerCase();

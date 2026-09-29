@@ -13,6 +13,7 @@ import {
   setPartDcCourier, setPartPrice, signPartChallan,
 } from './serveApi';
 import { errMsg } from './serveShared';
+import PartName from '../stock/setup/PartName';
 
 /**
  * Serve → Parts desk (warehouse, claude/carret-support.md).
@@ -131,7 +132,7 @@ export default function PartsDeskPage() {
   const reqCols = [
     { key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.request_number}`} checked={sel.has(r.id)} onChange={() => toggle(r.id)} onClick={(e) => e.stopPropagation()} /> },
     { key: 'n', header: 'Request', render: (r) => <DocNumber value={r.request_number} />, sub: (r) => <DateTime value={r.created_at} /> },
-    { key: 'p', header: 'Part', render: (r) => `${r.part_name}${r.quantity > 1 ? ` × ${r.quantity}` : ''}`, sub: (r) => (
+    { key: 'p', header: 'Part', render: (r) => <PartName name={r.part_name} category={r.category} suffix={r.quantity > 1 ? ` × ${r.quantity}` : ''} />, sub: (r) => (
         <>
           {`${r.available} in stock${r.location_code ? ` · ${r.location_code}` : ''}`}
           {Number(r.instances_reserved) > 0 && (
@@ -165,13 +166,13 @@ export default function PartsDeskPage() {
   ];
   const retCols = [
     { key: 'n', header: 'Request', render: (r) => <DocNumber value={r.request_number} />, sub: (r) => <DateTime value={r.return_requested_at || r.created_at} /> },
-    { key: 'p', header: 'Part', render: (r) => r.part_name },
+    { key: 'p', header: 'Part', render: (r) => <PartName name={r.part_name} category={r.category} /> },
     { key: 'w', header: 'Technician', render: (r) => r.tech_name, sub: (r) => r.ticket_number },
     { key: 'a', header: '', render: (r) => canEdit && <Button onClick={() => setDrawer({ kind: 'return', r, signer: '', esign: null })}>Receive + sign</Button> },
   ];
   const moveCols = [
     { key: 'n', header: 'Request', render: (r) => <DocNumber value={r.request_number} />, sub: (r) => <DateTime value={r.reassign_requested_at} /> },
-    { key: 'p', header: 'Part', render: (r) => r.part_name, sub: (r) => r.prt_id || null },
+    { key: 'p', header: 'Part', render: (r) => <PartName name={r.part_name} category={r.category} />, sub: (r) => r.prt_id || null },
     { key: 'f', header: 'From', render: (r) => r.from_ticket_number, sub: (r) => [r.from_ttspl_id, r.from_customer].filter(Boolean).join(' · ') },
     { key: 't', header: 'To', render: (r) => r.to_ticket_number || '—', sub: (r) => [r.reassign_to_ttspl_id || r.reassign_to_serial, r.to_customer].filter(Boolean).join(' · ') },
     { key: 'w', header: 'Technician', render: (r) => r.tech_name, sub: (r) => r.reassign_reason || null },

@@ -6,6 +6,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits } = require('../../config/uploadLimits');
 const pool = require('../../config/db');
+const { CATALOGUE_PART_CATEGORIES } = require('../../constants/laptopConditions');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
 const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
@@ -357,29 +358,28 @@ async function formMeta(req, res) {
     );
 
     // Parts have their own category system — they are NOT laptop brands.
-    const categories = [
-      { value: 'ram', label: 'RAM' },
-      { value: 'storage', label: 'Storage / SSD' },
-      { value: 'display', label: 'Display' },
-      { value: 'battery', label: 'Battery' },
-      { value: 'keyboard', label: 'Keyboard' },
-      { value: 'motherboard', label: 'Motherboard / Chip Level' },
-      { value: 'cooling', label: 'Cooling / Thermal' },
-      { value: 'power', label: 'Power / Charger' },
-      { value: 'body', label: 'Body / Casing' },
-      { value: 'general', label: 'General / Other' }
-    ];
+    // Same list as the Parts catalogue (constants/laptopConditions.js).
+    const categories = CATALOGUE_PART_CATEGORIES;
 
     let parts = [];
     try {
       const pr = await pool.query(
-        `SELECT v.part_id AS id, v.name, v.category, v.part_type, v.default_brand, v.default_model, v.specifications,
-                v.floor_part_id, p.quantity AS stock_qty, p.cost AS unit_cost,
-                p.location_code, v.compatible_brands
-         FROM vendor_spare_parts_catalog v
-         LEFT JOIN parts p ON p.part_id = v.floor_part_id
-         WHERE v.active = TRUE
-         ORDER BY v.category ASC NULLS LAST, v.name ASC
+        // The linked catalogue part's (generated) name and category win, so the
+        // PO line reads the same as the Parts catalogue; one row per part
+        // (the catalogue holds several rows for some parts).
+        `SELECT * FROM (
+           SELECT DISTINCT ON (COALESCE(v.floor_part_id, -v.part_id))
+                  v.part_id AS id, COALESCE(p.part_name, v.name) AS name,
+                  COALESCE(p.category, v.category) AS category, COALESCE(p.part_type, v.part_type) AS part_type,
+                  v.default_brand, v.default_model, v.specifications,
+                  v.floor_part_id, p.quantity AS stock_qty, p.cost AS unit_cost,
+                  p.location_code, v.compatible_brands
+             FROM vendor_spare_parts_catalog v
+             LEFT JOIN parts p ON p.part_id = v.floor_part_id
+            WHERE v.active = TRUE AND p.archived IS NOT TRUE
+            ORDER BY COALESCE(v.floor_part_id, -v.part_id), v.part_id
+         ) x
+         ORDER BY category ASC NULLS LAST, name ASC
          LIMIT 1000`
       );
       parts = pr.rows;

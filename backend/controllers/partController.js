@@ -1,13 +1,34 @@
 const pool = require('../config/db');
 const { recordMovement, MOVEMENT } = require('../services/partMovementService');
+const { normalizePartStructure } = require('../constants/partNaming');
+const { CATALOGUE_PART_CATEGORY_VALUES } = require('../constants/laptopConditions');
 
 function isBatteryPart(part) {
+  // Structured parts (part naming redesign): only a laptop battery, not a CMOS
+  // battery or a battery connector, needs the battery model number + photo.
+  const kind = String(part?.part_type || '').toLowerCase().trim();
+  if (String(part?.category || '').toLowerCase().trim() === 'battery'
+    && ['battery', 'cmos_battery', 'battery_connector'].includes(kind)) return kind === 'battery';
   const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
   const name = String(part?.part_name || '').toLowerCase();
   return cat === 'battery' || cat.includes('battery') || name.includes('battery');
 }
 
-// Get All Parts — optional ?search= filters by part_name (case-insensitive)
+/**
+ * Search words → ILIKE patterns. "8gb" also matches "8 GB" (a digit run and
+ * the unit after it may be split by a space). At most six words.
+ */
+function searchWords(search) {
+  return String(search || '')
+    .toLowerCase()
+    .replace(/[%_\\]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((w) => `%${w.replace(/(\d)([a-z])/g, '$1%$2')}%`);
+}
+
+// Get All Parts — optional ?search= (every word must match)
 exports.getAllParts = async (req, res) => {
   try {
     const search = String(req.query.search || req.query.q || '').trim();
@@ -15,16 +36,24 @@ exports.getAllParts = async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 2000);
     const params = [];
     let where = 'WHERE 1=1';
-    if (search) {
-      params.push(`%${search}%`);
-      where += ` AND p.part_name ILIKE $${params.length}`;
+    // Every word must match somewhere: name, category, kind, specs, fits,
+    // part number. "8gb ddr4" finds "RAM 8 GB DDR4 SODIMM"; "battery 5420"
+    // finds "Battery · Dell Latitude 5420".
+    for (const word of searchWords(search)) {
+      params.push(word);
+      const i = params.length;
+      where += ` AND (p.part_name ILIKE $${i} OR p.category ILIKE $${i} OR COALESCE(p.part_type, '') ILIKE $${i}
+                  OR COALESCE(p.specs::text, '') ILIKE $${i} OR COALESCE(p.model_number, '') ILIKE $${i}
+                  OR COALESCE(p.part_sku, '') ILIKE $${i}
+                  OR COALESCE(array_to_string(p.compatible_models, ' '), '') ILIKE $${i}
+                  OR COALESCE(array_to_string(p.compatible_brands, ' '), '') ILIKE $${i})`;
     }
     params.push(limit);
     const result = await pool.query(
       `SELECT p.part_id, p.part_name, p.part_type, p.category, p.quantity, p.vendor, p.cost,
               p.location_code, p.model_number, p.pin_size, p.part_sku, p.description,
               p.compatible_brands, p.compatible_models, p.default_fitment,
-              p.default_brand, p.default_model,
+              p.default_brand, p.default_model, p.specs, p.name_override, p.spec_key,
               -- The edit form needs these; without them saving a part reset its
               -- minimum to 5, warranty to 0 and consumable to false.
               p.min_threshold, p.is_consumable, p.warranty_months, p.notes, p.archived,
@@ -84,21 +113,61 @@ function normalizeDefaultFitment(val) {
 
 // Create Part
 //
+// A part is category + kind + specs + fits; its name is generated from them
+// (constants/partNaming.js) unless name_override is set. Two parts with the
+// same structure are the same part (spec_key) and the second is refused.
+//
 // "Initial quantity" used to set parts.quantity with no units behind it — stock
 // nobody could reserve, scan or label (P3). It now creates that many tracked
 // units (PRT ids, ledger rows) in the same transaction as the part.
-exports.createPart = async (req, res) => {
-  const {
-    part_name, part_type, quantity, vendor, cost, location_code,
-    category, description, part_sku, compatible_brands, compatible_models,
-    default_fitment, is_consumable,
-    warranty_months, notes, min_threshold, model_number, pin_size,
-  } = req.body || {};
 
-  const name = String(part_name || '').trim();
-  if (!name) {
-    return res.status(400).json({ success: false, message: 'Part name is required' });
-  }
+/** The structure fields of a request body, in the shape normalizePartStructure takes. */
+function structureFromBody(body, current = {}) {
+  const has = (k) => body[k] !== undefined;
+  return {
+    category: has('category') ? body.category : current.category,
+    kind: has('kind') ? body.kind : has('part_type') ? body.part_type : current.part_type,
+    specs: has('specs') ? body.specs : current.specs,
+    default_fitment: has('default_fitment') ? body.default_fitment : current.default_fitment,
+    compatible_brands: has('compatible_brands') ? toBrandArray(body.compatible_brands) || [] : current.compatible_brands || [],
+    compatible_models: has('compatible_models') ? toModelArray(body.compatible_models) || [] : current.compatible_models || [],
+    name_override: has('name_override') ? body.name_override === true || body.name_override === 'true' : Boolean(current.name_override),
+    part_name: has('part_name') ? body.part_name : current.part_name,
+  };
+}
+
+/** Another live part with the same structure (spec_key) or the same name. */
+async function findDuplicate(db, { specKey, name, category, modelNumber, excludeId }) {
+  const r = await db.query(
+    `SELECT part_id, part_name,
+            (spec_key IS NOT NULL AND spec_key = $1) AS same_structure
+       FROM parts
+      WHERE archived IS NOT TRUE
+        AND ($5::int IS NULL OR part_id <> $5)
+        AND ((spec_key IS NOT NULL AND spec_key = $1)
+          OR (LOWER(TRIM(part_name)) = LOWER($2)
+              AND LOWER(COALESCE(category, part_type, 'general')) = LOWER($3)
+              AND LOWER(COALESCE(TRIM(model_number), '')) = LOWER($4)))
+      ORDER BY same_structure DESC
+      LIMIT 1`,
+    [specKey || null, name, category, modelNumber || '', excludeId || null]
+  );
+  return r.rows[0] || null;
+}
+
+function duplicateMessage(dup) {
+  return dup.same_structure
+    ? `This part is already in the catalogue as "${dup.part_name}" (part #${dup.part_id}) — same category, details and fits. Add units to it instead.`
+    : `"${dup.part_name}" is already in the catalogue (part #${dup.part_id}) — add units to it instead`;
+}
+
+exports.createPart = async (req, res) => {
+  const body = req.body || {};
+  const {
+    quantity, vendor, cost, location_code, description, part_sku,
+    is_consumable, warranty_months, notes, min_threshold, model_number, pin_size,
+  } = body;
+
   if (cost != null && cost !== '' && !(Number(cost) >= 0)) {
     return res.status(400).json({ success: false, message: 'Unit cost must be zero or more' });
   }
@@ -106,49 +175,49 @@ exports.createPart = async (req, res) => {
   if (!Number.isInteger(opening) || opening < 0 || opening > 500) {
     return res.status(400).json({ success: false, message: 'Opening quantity must be a whole number from 0 to 500' });
   }
-  const cat = (category || part_type || 'general').toString().trim().toLowerCase() || 'general';
+  if (body.kind === undefined && body.specs === undefined) {
+    // Old Parts Inventory screens send a free-text name; the catalogue now
+    // needs the structure the name is generated from.
+    return res.status(400).json({
+      success: false,
+      message: 'Add parts from Stock → Parts catalogue: choose the category, what it is and its details — the name is made from them.',
+    });
+  }
+  const { ok, errors, value: st } = normalizePartStructure(structureFromBody(body));
+  if (!ok) {
+    return res.status(400).json({ success: false, message: `${errors.join('. ')}.`, errors });
+  }
+  const modelNo = model_number ? String(model_number).trim() : null;
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // Same name, category and model number is the same part: a second row splits
-    // its stock and its requests between two catalogue entries.
-    const dup = await client.query(
-      `SELECT part_id, part_name FROM parts
-        WHERE LOWER(TRIM(part_name)) = LOWER($1)
-          AND LOWER(COALESCE(category, part_type, 'general')) = LOWER($2)
-          AND LOWER(COALESCE(TRIM(model_number), '')) = LOWER($3)
-        LIMIT 1`,
-      [name, cat, model_number ? String(model_number).trim() : '']
-    );
-    if (dup.rows.length) {
+    const dup = await findDuplicate(client, {
+      specKey: st.spec_key, name: st.part_name, category: st.category, modelNumber: modelNo,
+    });
+    if (dup) {
       await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: `"${dup.rows[0].part_name}" is already in the catalogue (part #${dup.rows[0].part_id}) — add units to it instead`,
-        part_id: dup.rows[0].part_id,
-      });
+      return res.status(409).json({ success: false, message: duplicateMessage(dup), part_id: dup.part_id });
     }
-    const fitment = normalizeDefaultFitment(default_fitment);
-    const brands = toBrandArray(compatible_brands);
-    const models = toModelArray(compatible_models);
     const result = await client.query(
       `INSERT INTO parts
          (part_name, part_type, quantity, vendor, cost, location_code,
           category, description, part_sku, compatible_brands, compatible_models,
           default_fitment, is_consumable,
-          warranty_months, notes, min_threshold, model_number, pin_size)
-       VALUES ($1,$2,0,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          warranty_months, notes, min_threshold, model_number, pin_size,
+          specs, name_override, spec_key)
+       VALUES ($1,$2,0,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        RETURNING *`,
       [
-        name, (part_type && String(part_type).trim()) || cat, vendor || null, Number(cost) || 0, location_code || null,
-        cat, description || null, part_sku || null, brands, models,
-        fitment,
+        st.part_name, st.part_type, vendor || null, Number(cost) || 0, location_code || null,
+        st.category, description || null, part_sku || null, st.compatible_brands, st.compatible_models,
+        st.default_fitment,
         is_consumable === true || is_consumable === 'true',
         Number(warranty_months) || 0, notes || null,
         min_threshold != null && min_threshold !== '' && Number.isFinite(Number(min_threshold)) ? Number(min_threshold) : 5,
-        model_number ? String(model_number).trim() : null,
+        modelNo,
         pin_size ? String(pin_size).trim() : null,
+        JSON.stringify(st.specs), st.name_override, st.spec_key,
       ]
     );
     let part = result.rows[0];
@@ -172,10 +241,10 @@ exports.createPart = async (req, res) => {
     await client.query('SAVEPOINT catalog_sync');
     try {
       await client.query(
-        `INSERT INTO vendor_spare_parts_catalog (name, active, floor_part_id, category, model_number, pin_size)
-         SELECT $1, true, $2, $3, $4, $5
+        `INSERT INTO vendor_spare_parts_catalog (name, active, floor_part_id, category, part_type, model_number, pin_size)
+         SELECT $1, true, $2, $3, $4, $5, $6
           WHERE NOT EXISTS (SELECT 1 FROM vendor_spare_parts_catalog WHERE floor_part_id = $2)`,
-        [part.part_name, part.part_id, cat, part.model_number || null, part.pin_size || null]
+        [part.part_name, part.part_id, st.category, st.part_type, part.model_number || null, part.pin_size || null]
       );
       await client.query('RELEASE SAVEPOINT catalog_sync');
     } catch (e) {
@@ -186,12 +255,15 @@ exports.createPart = async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({
       success: true,
-      message: units.length ? `Part created with ${units.length} unit(s) in stock` : 'Part created successfully',
+      message: units.length ? `${part.part_name} added with ${units.length} unit(s) in stock` : `${part.part_name} added`,
       part,
       units,
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    if (error.code === '23505') {
+      return res.status(409).json({ success: false, message: 'This part is already in the catalogue — same category, details and fits.' });
+    }
     console.error('Create part error:', error);
     res.status(500).json({
       success: false,
@@ -202,22 +274,96 @@ exports.createPart = async (req, res) => {
   }
 };
 
+// Fields that make up a part's identity and name.
+const STRUCTURE_FIELDS = ['kind', 'specs', 'name_override', 'category', 'part_type', 'part_name', 'default_fitment', 'compatible_brands', 'compatible_models'];
+const sameList = (a, b) => JSON.stringify((a || []).map(String)) === JSON.stringify((b || []).map(String));
+
+/**
+ * Did a legacy (unstructured) request try to change a structured part's
+ * identity? Old screens resend every field unchanged, which is fine.
+ */
+function legacyIdentityChange(body, cur) {
+  const changed = [];
+  const str = (v) => String(v ?? '').trim().toLowerCase();
+  if (body.part_name !== undefined && str(body.part_name) !== str(cur.part_name)) changed.push('name');
+  if (body.category !== undefined && str(body.category) !== str(cur.category)) changed.push('category');
+  if (body.part_type !== undefined && str(body.part_type) !== str(cur.part_type) && str(body.part_type) !== str(cur.category)) changed.push('type');
+  if (body.default_fitment !== undefined && str(body.default_fitment) !== str(cur.default_fitment)) changed.push('fitment');
+  if (body.compatible_brands !== undefined && !sameList(toBrandArray(body.compatible_brands) || [], cur.compatible_brands || [])) changed.push('fits brand');
+  if (body.compatible_models !== undefined && !sameList(toModelArray(body.compatible_models) || [], cur.compatible_models || [])) changed.push('fits models');
+  return changed;
+}
+
 // Update Part Details
+//
+// With `kind` or `specs` in the body (the Parts catalogue form) the whole
+// structure is validated and the name regenerated. Without them (old screens,
+// or a price / minimum-stock edit) only the plain fields change; on a part
+// that already has a structure its name, category, kind and fits are refused
+// there, so a generated name never drifts from its details.
 exports.updatePart = async (req, res) => {
   const { id } = req.params;
+  const body = req.body || {};
   const {
-    part_name, part_type, vendor, cost, location_code,
-    category, description, part_sku, compatible_brands, compatible_models,
-    default_fitment, is_consumable,
+    vendor, cost, location_code, description, part_sku, is_consumable,
     warranty_months, notes, min_threshold, model_number, pin_size,
-  } = req.body;
+  } = body;
+  if (cost != null && cost !== '' && !(Number(cost) >= 0)) {
+    return res.status(400).json({ success: false, message: 'Unit cost must be zero or more' });
+  }
 
+  const client = await pool.connect();
   try {
-    const brands = compatible_brands === undefined ? null : toBrandArray(compatible_brands);
-    const models = compatible_models === undefined ? null : toModelArray(compatible_models);
-    const fitment = default_fitment === undefined ? null : normalizeDefaultFitment(default_fitment);
-    const result = await pool.query(
-      `UPDATE parts 
+    await client.query('BEGIN');
+    const cur = (await client.query('SELECT * FROM parts WHERE part_id = $1 FOR UPDATE', [id])).rows[0];
+    if (!cur) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+
+    const structured = body.kind !== undefined || body.specs !== undefined;
+    let st = null;
+    if (structured) {
+      const n = normalizePartStructure(structureFromBody(body, cur));
+      if (!n.ok) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: `${n.errors.join('. ')}.`, errors: n.errors });
+      }
+      st = n.value;
+      const modelNo = model_number !== undefined ? (model_number ? String(model_number).trim() : null) : cur.model_number;
+      const dup = await findDuplicate(client, {
+        specKey: st.spec_key, name: st.part_name, category: st.category, modelNumber: modelNo, excludeId: cur.part_id,
+      });
+      if (dup) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: duplicateMessage(dup), part_id: dup.part_id });
+      }
+    } else if (cur.spec_key) {
+      const changed = legacyIdentityChange(body, cur);
+      if (changed.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `This part's name comes from its details — change its ${changed.join(', ')} in Stock → Parts catalogue.`,
+        });
+      }
+    } else if (body.category !== undefined && body.category !== null && body.category !== ''
+      && !CATALOGUE_PART_CATEGORY_VALUES.includes(String(body.category).trim().toLowerCase())) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Category must be one of: ${CATALOGUE_PART_CATEGORY_VALUES.join(', ')}` });
+    }
+
+    // Legacy path on an unstructured part: the old behaviour (COALESCE keeps
+    // what is not sent). Structured path: the normalised structure wins.
+    const legacyOpen = !structured && !cur.spec_key;
+    const brands = st ? st.compatible_brands
+      : legacyOpen && body.compatible_brands !== undefined ? toBrandArray(body.compatible_brands) : null;
+    const models = st ? st.compatible_models
+      : legacyOpen && body.compatible_models !== undefined ? toModelArray(body.compatible_models) : null;
+    const fitment = st ? st.default_fitment
+      : legacyOpen && body.default_fitment !== undefined ? normalizeDefaultFitment(body.default_fitment) : null;
+    const result = await client.query(
+      `UPDATE parts
        SET part_name = COALESCE($1, part_name),
            part_type = COALESCE($2, part_type),
            vendor = COALESCE($3, vendor),
@@ -235,12 +381,18 @@ exports.updatePart = async (req, res) => {
            pin_size = COALESCE($16, pin_size),
            compatible_models = COALESCE($17, compatible_models),
            default_fitment = COALESCE($18, default_fitment),
+           specs = COALESCE($19::jsonb, specs),
+           name_override = COALESCE($20, name_override),
+           spec_key = COALESCE($21, spec_key),
            updated_at = NOW()
        WHERE part_id = $6
        RETURNING *`,
       [
-        part_name, part_type, vendor, cost, location_code, id,
-        category || null, description || null, part_sku || null, brands,
+        st ? st.part_name : legacyOpen && body.part_name ? String(body.part_name).trim() : null,
+        st ? st.part_type : legacyOpen && body.part_type ? String(body.part_type).trim() : null,
+        vendor, cost === '' ? null : cost, location_code, id,
+        st ? st.category : legacyOpen && body.category ? String(body.category).trim().toLowerCase() : null,
+        description || null, part_sku || null, brands,
         typeof is_consumable === 'boolean' ? is_consumable : null,
         warranty_months != null && warranty_months !== '' ? Number(warranty_months) : null,
         notes || null,
@@ -249,35 +401,47 @@ exports.updatePart = async (req, res) => {
         pin_size !== undefined ? (pin_size ? String(pin_size).trim() : null) : null,
         models,
         fitment,
+        st ? JSON.stringify(st.specs) : null,
+        st ? st.name_override : null,
+        st ? st.spec_key : null,
       ]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Part not found' });
-    }
-
     const part = result.rows[0];
+
+    await client.query('SAVEPOINT catalog_sync');
     try {
-      await pool.query(
+      await client.query(
         `UPDATE vendor_spare_parts_catalog
             SET name = COALESCE($2, name),
                 category = COALESCE($3, category),
+                part_type = COALESCE($6, part_type),
                 model_number = COALESCE($4, model_number),
                 pin_size = COALESCE($5, pin_size),
                 updated_at = NOW()
           WHERE floor_part_id = $1`,
-        [id, part.part_name, part.category, part.model_number, part.pin_size]
+        [id, part.part_name, part.category, part.model_number, part.pin_size, st ? st.part_type : null]
       );
-    } catch (_) { /* catalog sync optional */ }
+      await client.query('RELEASE SAVEPOINT catalog_sync');
+    } catch (e) {
+      await client.query('ROLLBACK TO SAVEPOINT catalog_sync');
+      console.warn('[updatePart] catalog sync (non-fatal):', e.message);
+    }
 
+    await client.query('COMMIT');
     res.json({
       success: true,
       message: 'Part updated successfully',
       part,
     });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.code === '23505') {
+      return res.status(409).json({ success: false, message: 'Another part already has this category, details and fits.' });
+    }
     console.error('Update part error:', error);
     res.status(500).json({ success: false, message: 'Server error updating part' });
+  } finally {
+    client.release();
   }
 };
 

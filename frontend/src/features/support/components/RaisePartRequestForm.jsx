@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Wrench, ChevronDown, PenLine, Check, RotateCcw, Truck, Search, X } from 'lucide-react';
 import api from '../../../utils/api';
+import { matchesPartSearch } from '../../../constants/partNaming';
+import { partCategoryLabel } from '../../../constants/laptopConditions';
 import { useAuth } from '../../../context/AuthContext';
 import {
   raiseSupportPartRequest,
@@ -12,6 +14,9 @@ import {
 } from '../supportPartsApi';
 import ESignChallanModal from './ESignChallanModal';
 import MarkPartUsedModal from './MarkPartUsedModal';
+
+/** Tracked parts count their in-stock units; consumables their counter. */
+const partStock = (p) => (p.is_consumable ? p.quantity : p.in_stock_count ?? p.quantity) ?? 0;
 
 const STATUS_LABEL = {
   pending: 'Awaiting warehouse',
@@ -209,13 +214,11 @@ export default function RaisePartRequestForm({ ticket, item }) {
   );
 
   const filteredParts = useMemo(() => {
-    const q = partSearch.trim().toLowerCase();
-    if (!q) return parts;
-    return parts.filter((p) =>
-      String(p.part_name || '').toLowerCase().includes(q) ||
-      String(p.part_sku || '').toLowerCase().includes(q) ||
-      String(p.category || p.part_type || '').toLowerCase().includes(q)
-    );
+    const q = partSearch.trim();
+    const live = parts.filter((p) => !p.archived);
+    if (!q) return live;
+    // Every word, anywhere in the name, category, details or fits ("battery 5420").
+    return live.filter((p) => matchesPartSearch(p, q));
   }, [parts, partSearch]);
 
   const ttsplId = item?.ttspl_id || item?.unique_serial_number || item?.serial_number || '';
@@ -234,7 +237,8 @@ export default function RaisePartRequestForm({ ticket, item }) {
   };
 
   useEffect(() => {
-    api.get('/parts').then((r) => setParts(r.data.parts || [])).catch(() => setParts([]));
+    // The list defaulted to 100 parts, so the rest of the catalogue could not be picked.
+    api.get('/parts', { params: { limit: 2000 } }).then((r) => setParts(r.data.parts || [])).catch(() => setParts([]));
   }, []);
 
   useEffect(() => {
@@ -321,7 +325,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
             <div className="flex items-center justify-between gap-2 w-full border rounded-xl px-3 py-3 min-h-[44px] bg-white">
               <span className="min-w-0 truncate text-base">
                 {selectedPart.part_name}
-                <span className="text-gray-400"> (Stock: {selectedPart.quantity ?? 0})</span>
+                <span className="text-gray-400"> · {partCategoryLabel(selectedPart.category)} (Stock: {partStock(selectedPart)})</span>
               </span>
               <button
                 type="button"
@@ -340,7 +344,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
                 onChange={(e) => { setPartSearch(e.target.value); setShowParts(true); }}
                 onFocus={() => setShowParts(true)}
                 onBlur={() => setTimeout(() => setShowParts(false), 150)}
-                placeholder="Search part needed…"
+                placeholder="Search part needed, e.g. battery 5420, 8gb ddr4…"
                 className="w-full border rounded-xl pl-9 pr-3 py-3 min-h-[44px] text-base bg-white"
               />
               {showParts && (
@@ -356,7 +360,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
                       className="w-full text-left px-3 py-2.5 text-sm hover:bg-amber-50 border-b border-amber-50 last:border-0"
                     >
                       {p.part_name}
-                      <span className="text-gray-400"> (Stock: {p.quantity ?? 0})</span>
+                      <span className="text-gray-400"> · {partCategoryLabel(p.category)} (Stock: {partStock(p)})</span>
                     </button>
                   ))}
                 </div>

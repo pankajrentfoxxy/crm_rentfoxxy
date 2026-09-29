@@ -26,8 +26,22 @@ const PART_CATEGORIES = [
   { value: 'general', label: 'General / Other' },
 ];
 
+/**
+ * The parts catalogue uses the same laptop-part categories plus three that are
+ * never "missing from a laptop" at GRN (so they stay out of PART_CATEGORIES,
+ * which drives the GRN missing-part checkboxes). Same list in
+ * frontend/src/constants/laptopConditions.js.
+ */
+const CATALOGUE_PART_CATEGORIES = [
+  ...PART_CATEGORIES,
+  { value: 'consumable', label: 'Consumables' },
+  { value: 'tools', label: 'Tools & equipment' },
+  { value: 'accessory', label: 'Accessories' },
+];
+
 const CONDITION_VALUES = LAPTOP_CONDITIONS.map((c) => c.value);
 const PART_CATEGORY_VALUES = PART_CATEGORIES.map((c) => c.value);
+const CATALOGUE_PART_CATEGORY_VALUES = CATALOGUE_PART_CATEGORIES.map((c) => c.value);
 
 const DEFAULT_CONDITION = 'on';
 
@@ -83,7 +97,7 @@ function conditionLabel(value) {
 
 function partCategoryLabel(value) {
   const key = String(value ?? '').trim().toLowerCase();
-  return PART_CATEGORIES.find((c) => c.value === key)?.label || key;
+  return CATALOGUE_PART_CATEGORIES.find((c) => c.value === key)?.label || key;
 }
 
 function partCategoryLabels(values) {
@@ -140,8 +154,10 @@ module.exports = {
   missingPartsBlockCheck,
   LAPTOP_CONDITIONS,
   PART_CATEGORIES,
+  CATALOGUE_PART_CATEGORIES,
   CONDITION_VALUES,
   PART_CATEGORY_VALUES,
+  CATALOGUE_PART_CATEGORY_VALUES,
   DEFAULT_CONDITION,
   normalizeAllowedConditions,
   normalizeCondition,

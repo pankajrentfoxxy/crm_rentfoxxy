@@ -6,6 +6,7 @@ import {
 import { searchParts } from '../../../floor-pipeline/floorPipelineApi';
 import { attachPartToRequest, cancelPartRequest, createPartRequest, uploadPartRequestPhotos } from '../../../floor-pipeline/partRequestsApi';
 import { errText } from './workShared';
+import PartName from '../../stock/setup/PartName';
 import { activePartRequests } from '../produceShared';
 
 /**
@@ -31,7 +32,17 @@ const TYPES = [
   { value: 'consumable', label: 'Consumable (paste, screws…)' },
 ];
 const UPGRADE_FIELDS = ['RAM', 'Storage', 'Processor', 'GPU', 'Screen', 'OS', 'Other'];
-const isBattery = (p) => /battery/i.test(`${p?.category || ''} ${p?.part_type || ''} ${p?.part_name || ''}`);
+/** Tracked parts count their in-stock units; consumables their counter. */
+const partStockText = (p) => {
+  const n = p.is_consumable ? p.quantity : p.in_stock_count ?? p.quantity;
+  return n != null ? `${n} in stock` : '';
+};
+// Same rule as the backend isBatteryPart: a structured part is a laptop
+// battery only when its kind is 'battery' (not a CMOS battery / connector).
+const isBattery = (p) => {
+  if (String(p?.category || '').toLowerCase() === 'battery' && ['battery', 'cmos_battery', 'battery_connector'].includes(p?.part_type)) return p.part_type === 'battery';
+  return /battery/i.test(`${p?.category || ''} ${p?.part_type || ''} ${p?.part_name || ''}`);
+};
 
 export default function PartsWork({ ticket, partRequests = [], parts = [], canWork, onChanged }) {
   const [drawer, setDrawer] = useState(null); // 'ask' | { fit: request }
@@ -99,7 +110,7 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
             rows={live}
             rowKey={(r) => r.request_id}
             columns={[
-              { key: 'p', header: 'Part', render: (r) => r.part_name, sub: (r) => [TYPES.find((t) => t.value === r.request_type)?.label, r.new_value && `→ ${r.new_value}`].filter(Boolean).join(' ') },
+              { key: 'p', header: 'Part', render: (r) => <PartName name={r.part_name} category={r.category || r.part_category} />, sub: (r) => [TYPES.find((t) => t.value === r.request_type)?.label, r.new_value && `→ ${r.new_value}`].filter(Boolean).join(' ') },
               { key: 's', header: 'Where it is', render: (r) => <StatusChip status={(STATUS[r.status] || {}).chip || 'pending'} label={(STATUS[r.status] || {}).text || r.status} />, sub: (r) => (r.prt_id ? `Unit ${r.prt_id}` : null) },
               { key: 'w', header: 'Asked', render: (r) => <DateTime value={r.created_at} />, sub: (r) => r.requested_by_name || null },
               {
@@ -136,7 +147,7 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
             rows={parts}
             rowKey={(p) => p.ticket_part_id || p.id}
             columns={[
-              { key: 'n', header: 'Part', render: (p) => p.part_name },
+              { key: 'n', header: 'Part', render: (p) => <PartName name={p.part_name} category={p.category} /> },
               { key: 'q', header: 'Qty', numeric: true, render: (p) => p.quantity_used || 1 },
               { key: 'd', header: 'When', render: (p) => <DateTime value={p.added_at} /> },
             ]}
@@ -160,15 +171,15 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
           <Field label="Why"><Segmented value={f.type || 'replacement'} onChange={set('type')} label="Request type" options={TYPES} /></Field>
           <Field label="Part" required hint="One unit per request — ask again for a second one.">
             {f.part ? (
-              <span style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><b style={{ fontWeight: 500 }}>{f.part.part_name}</b><Button variant="quiet" onClick={() => setF((x) => ({ ...x, part: null }))}>Change</Button></span>
-            ) : <Input placeholder="Type to search, e.g. 8GB DDR4, 14 inch screen" value={f.q || ''} onChange={(e) => search(e.target.value)} />}
+              <span style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><b style={{ fontWeight: 500 }}><PartName name={f.part.part_name} category={f.part.category} /></b><Button variant="quiet" onClick={() => setF((x) => ({ ...x, part: null }))}>Change</Button></span>
+            ) : <Input placeholder="Type any words, e.g. 8gb ddr4, battery 5420, d panel 7490" value={f.q || ''} onChange={(e) => search(e.target.value)} />}
           </Field>
           {!f.part && hits.length > 0 && (
             <div className="c-choice">
               {hits.map((p) => (
                 <label key={p.part_id}>
                   <input type="radio" name="part" onChange={() => { setF((x) => ({ ...x, part: p, q: '' })); setHits([]); }} />
-                  <span>{p.part_name}<small>{p.category || ''}{p.quantity != null ? ` · ${p.quantity} in stock` : ''}</small></span>
+                  <span><PartName name={p.part_name} category={p.category} /><small>{partStockText(p)}</small></span>
                 </label>
               ))}
             </div>

@@ -98,6 +98,7 @@ export default function PartsListPage() {
       <PartFormDrawer
         open={Boolean(form)}
         part={form?.part}
+        parts={parts || []}
         onClose={() => setForm(null)}
         onSaved={(p, units) => {
           changed();

@@ -5,6 +5,7 @@ import {
 } from '../../../components/carret';
 import { cancelPartRequest, fetchTicketParts, markPartChargeable } from './serveApi';
 import { errMsg } from './serveShared';
+import PartName from '../stock/setup/PartName';
 
 /**
  * Ticket record → Parts (claude/carret-support.md rework F).
@@ -49,7 +50,7 @@ export default function TicketPartsPanel({ ticketId, canLead }) {
     <Section title={`Parts · ${rows.length}`}>
       <DataTable
         columns={[
-          { key: 'p', header: 'Part', render: (r) => `${r.part_name}${r.quantity > 1 ? ` × ${r.quantity}` : ''}`, sub: (r) => [r.request_number, r.prt_id].filter(Boolean).join(' · ') },
+          { key: 'p', header: 'Part', render: (r) => <PartName name={r.part_name} category={r.category} suffix={r.quantity > 1 ? ` × ${r.quantity}` : ''} />, sub: (r) => [r.request_number, r.prt_id].filter(Boolean).join(' · ') },
           { key: 'l', header: 'Laptop', render: (r) => <span className="font-mono">{r.ttspl_id || '—'}</span>, sub: (r) => r.tech_name },
           { key: 's', header: 'Where it is', render: (r) => STATE[r.status] || String(r.status).replace(/_/g, ' '), sub: (r) => <DateTime value={r.updated_at || r.created_at} /> },
           {
