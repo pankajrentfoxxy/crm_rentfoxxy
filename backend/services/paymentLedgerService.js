@@ -126,8 +126,11 @@ async function recordPayment(db, {
     } else {
       await q.query(
         `UPDATE vendor_monthly_bills
-         SET amount_paid = $1, status = $2,
-             payment_date = CASE WHEN $2 = 'paid' THEN COALESCE($3::date, CURRENT_DATE) ELSE payment_date END,
+         SET amount_paid = $1, status = $2::varchar,
+             -- $2 typed once: varchar for status and text for the comparison
+             -- made Postgres refuse every vendor payment ("inconsistent types
+             -- deduced for parameter $2").
+             payment_date = CASE WHEN $2::varchar = 'paid' THEN COALESCE($3::date, CURRENT_DATE) ELSE payment_date END,
              payment_reference = COALESCE($4, payment_reference),
              updated_at = NOW()
          WHERE bill_id = $5`,
