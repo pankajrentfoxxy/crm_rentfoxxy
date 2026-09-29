@@ -381,11 +381,82 @@ async function createReturnedPartInstance(client, {
   return instance;
 }
 
+/**
+ * Units added by hand (Parts Catalogue "Add units", or a new part's opening
+ * stock). One implementation for both: each unit gets a PRT id, source
+ * 'manual' (it was stamped 'purchase', which it is not), a "received" row in
+ * the parts ledger (hand-added units had no history), and parts.quantity moves
+ * by the number created — all on the caller's transaction.
+ *
+ * serials: array (one entry per unit; null = no serial). fit: the result of
+ * validateFitment().
+ */
+async function addUnitsByHand(client, {
+  partId, serials, unitCost, locationCode, notes, fit, receivedBy, actorName,
+}) {
+  const part = await getPartMeta(client, partId);
+  if (!part) {
+    const e = new Error('Part not found');
+    e.status = 404;
+    throw e;
+  }
+  const cost = unitCost != null && unitCost !== '' ? Number(unitCost) : Number(part.cost || 0);
+  if (!Number.isFinite(cost) || cost < 0) {
+    const e = new Error('Unit cost must be zero or more');
+    e.status = 400;
+    throw e;
+  }
+  // No fitment chosen → the part's default fitment, as at GRN.
+  const f = resolveUnitFitment(part, fit && fit.fitment && fit.fitment !== FITMENT.UNSET ? fit : null);
+  const created = [];
+  const now = new Date();
+  for (const s of serials) {
+    const prtId = await generatePrtId(now, client);
+    const ins = await client.query(
+      `INSERT INTO part_instances
+         (prt_id, serial_number, part_id, unit_cost, location_code, status, notes, source,
+          fitment, fits_laptop_brand, fits_laptop_models,
+          received_by, received_at, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,'in_stock',$6,'manual',$7,$8,$9,$10,NOW(),NOW(),NOW())
+       RETURNING instance_id, prt_id, serial_number, status, location_code, unit_cost,
+                 fitment, fits_laptop_brand, fits_laptop_models`,
+      [
+        prtId, s || null, Number(partId), cost, locationCode || null, notes || null,
+        f.fitment || FITMENT.UNSET, f.fits_laptop_brand || null, f.fits_laptop_models || null,
+        receivedBy || null,
+      ]
+    );
+    const unit = ins.rows[0];
+    await recordMovement(client, {
+      type: MOVEMENT.RECEIVED,
+      partId,
+      instanceId: unit.instance_id,
+      prtId: unit.prt_id,
+      serialNumber: unit.serial_number,
+      category: part.category,
+      partName: part.part_name,
+      unitCost: cost,
+      notes: notes || 'Added by hand',
+      actorUserId: receivedBy,
+      actorName,
+    });
+    created.push(unit);
+  }
+  if (created.length) {
+    await client.query(
+      `UPDATE parts SET quantity = COALESCE(quantity, 0) + $1, updated_at = NOW() WHERE part_id = $2`,
+      [created.length, Number(partId)]
+    );
+  }
+  return { part, created };
+}
+
 module.exports = {
   normalizeCategory,
   resolveFloorPartId,
   resolveOrCreateFloorPartId,
   receiveUnitsIntoInventory,
+  addUnitsByHand,
   autoLinkOpenRequests,
   createReturnedPartInstance,
   getPartMeta,

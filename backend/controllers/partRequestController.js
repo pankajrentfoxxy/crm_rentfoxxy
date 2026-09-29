@@ -10,7 +10,7 @@ const pool = require('../config/db');
 const { generatePrqNumber, generatePrtId } = require('../services/partIdService');
 const { logTtsplEvent, logConfigChange, resolveTtsplAsset } = require('../services/ttsplAuditService');
 const { recordMovement, MOVEMENT } = require('../services/partMovementService');
-const { createReturnedPartInstance, normalizeCategory } = require('../services/partInventoryService');
+const { createReturnedPartInstance, normalizeCategory, addUnitsByHand } = require('../services/partInventoryService');
 const productionAssetService = require('../services/productionAssetService');
 const {
   resolvePartConfigUpdate,
@@ -1848,6 +1848,21 @@ exports.addPartInstances = async (req, res) => {
     if (!serials.length) {
       return res.status(400).json({ success: false, message: 'Provide at least one serial number or a quantity' });
     }
+    if (serials.length > 500) {
+      return res.status(400).json({ success: false, message: 'At most 500 units at a time' });
+    }
+    const seen = new Set();
+    for (const sn of (Array.isArray(serial_numbers) ? serials : [])) {
+      if (!sn) continue;
+      const k = sn.toLowerCase();
+      if (seen.has(k)) {
+        return res.status(400).json({ success: false, message: `Serial ${sn} is listed twice` });
+      }
+      seen.add(k);
+    }
+    if (unit_cost != null && unit_cost !== '' && !(Number(unit_cost) >= 0)) {
+      return res.status(400).json({ success: false, message: 'Unit cost must be zero or more' });
+    }
 
     let fit;
     try {
@@ -1862,7 +1877,7 @@ exports.addPartInstances = async (req, res) => {
     await client.query('BEGIN');
 
     const partRes = await client.query(
-      `SELECT part_id, part_name, cost FROM parts WHERE part_id = $1 FOR UPDATE`,
+      `SELECT part_id, part_name, cost, archived FROM parts WHERE part_id = $1 FOR UPDATE`,
       [Number(part_id)]
     );
     if (!partRes.rows.length) {
@@ -1870,32 +1885,20 @@ exports.addPartInstances = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Part not found' });
     }
     const part = partRes.rows[0];
-    const cost = unit_cost != null && unit_cost !== '' ? Number(unit_cost) : Number(part.cost || 0);
-
-    const created = [];
-    for (const s of serials) {
-      const prtId = await generatePrtId(new Date(), client);
-      const ins = await client.query(
-        `INSERT INTO part_instances
-           (prt_id, serial_number, part_id, unit_cost, location_code, status, notes,
-            fitment, fits_laptop_brand, fits_laptop_models,
-            received_by, received_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,'in_stock',$6,$7,$8,$9,$10,NOW(),NOW(),NOW())
-         RETURNING instance_id, prt_id, serial_number, status, location_code, unit_cost,
-                   fitment, fits_laptop_brand, fits_laptop_models`,
-        [
-          prtId, s || null, Number(part_id), cost, location_code || null, notes || null,
-          fit.fitment, fit.fits_laptop_brand, fit.fits_laptop_models,
-          req.user.user_id,
-        ]
-      );
-      created.push(ins.rows[0]);
+    if (part.archived) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: `${part.part_name} is archived — units cannot be added` });
     }
-
-    await client.query(
-      `UPDATE parts SET quantity = COALESCE(quantity,0) + $1, updated_at = NOW() WHERE part_id = $2`,
-      [created.length, Number(part_id)]
-    );
+    const { created } = await addUnitsByHand(client, {
+      partId: Number(part_id),
+      serials,
+      unitCost: unit_cost,
+      locationCode: location_code,
+      notes,
+      fit,
+      receivedBy: req.user.user_id,
+      actorName: req.user.name || req.user.email || null,
+    });
 
     await client.query('COMMIT');
     res.status(201).json({
@@ -1906,6 +1909,7 @@ exports.addPartInstances = async (req, res) => {
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ success: false, message: err.message });
     console.error('addPartInstances:', err);
     res.status(500).json({ success: false, message: err.message });
   } finally {
@@ -1979,6 +1983,26 @@ exports.updatePartInstance = async (req, res) => {
         Number(instanceId),
       ]
     );
+
+    // A status change by hand (defective / discarded / back to stock) had no
+    // ledger row, so the part's history could not explain its count.
+    if (nextStatus !== inst.status) {
+      const meta = await client.query('SELECT part_name, category FROM parts WHERE part_id = $1', [inst.part_id]);
+      await recordMovement(client, {
+        type: nextStatus === 'discarded' ? MOVEMENT.DISCARDED : MOVEMENT.ADJUSTED,
+        partId: inst.part_id,
+        instanceId: inst.instance_id,
+        prtId: inst.prt_id,
+        serialNumber: inst.serial_number,
+        category: meta.rows[0]?.category,
+        partName: meta.rows[0]?.part_name,
+        unitCost: inst.unit_cost,
+        condition: nextStatus === 'defective' ? 'defective' : null,
+        notes: `${inst.status} → ${nextStatus}${notes ? ` — ${notes}` : ''}`,
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name || req.user?.email || null,
+      });
+    }
 
     // Keep aggregate stock in sync when a unit enters/leaves in_stock.
     const wasInStock = inst.status === IN_STOCK_STATUS;
