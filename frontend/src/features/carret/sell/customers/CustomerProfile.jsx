@@ -28,7 +28,7 @@ const street = (c) => (typeof c?.billing_address === 'object' ? c?.billing_addre
 const stateValue = (s) => matchIndianState(s) || s || '';
 
 export function profileForm(c) {
-  return {
+  const form = {
     customer_name: c.contact_person_name || c.customer_name || c.name || '',
     company_name: c.company_name || '',
     trade_name: c.trade_name || '',
@@ -58,6 +58,28 @@ export function profileForm(c) {
     spock_person_mobile: normalizeIndianMobile(c.spock_person_mobile || ''),
     notes: c.notes || '',
   };
+  // "Same as contact person" starts ticked when the section already matches it.
+  const same = (name, mobile, email) => Boolean(form.customer_name)
+    && name === form.customer_name && mobile === form.customer_number && String(email).toLowerCase() === String(form.email).toLowerCase();
+  form.finance_same = same(form.finance_contact_name, form.finance_contact_mobile, form.finance_contact_email);
+  form.spock_same = same(form.spock_person_name, form.spock_person_mobile, form.spock_person_email);
+  return form;
+}
+
+/** Copy the contact person into Finance / Spoke while their "same as" box is ticked. */
+export function syncSameAsContact(x) {
+  const out = { ...x };
+  if (out.finance_same) {
+    out.finance_contact_name = out.customer_name;
+    out.finance_contact_mobile = out.customer_number;
+    out.finance_contact_email = out.email;
+  }
+  if (out.spock_same) {
+    out.spock_person_name = out.customer_name;
+    out.spock_person_mobile = out.customer_number;
+    out.spock_person_email = out.email;
+  }
+  return out;
 }
 
 /** Field errors. GSTIN / PAN / email are checked when they differ from what is on file (legacy values never block). */
@@ -171,8 +193,9 @@ export function ProfileDrawer({ open, customer, onClose, onSaved }) {
   if (!open || !f) return null;
   const errors = profileErrors(f, original);
   const shown = touched ? errors : {};
-  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
-  const setMobile = (k) => (e) => setF((x) => ({ ...x, [k]: formatIndianMobileInput(e.target.value) }));
+  const set = (k) => (e) => setF((x) => syncSameAsContact({ ...x, [k]: e.target.value }));
+  const setMobile = (k) => (e) => setF((x) => syncSameAsContact({ ...x, [k]: formatIndianMobileInput(e.target.value) }));
+  const setSame = (k) => (e) => setF((x) => syncSameAsContact({ ...x, [k]: e.target.checked }));
 
   const pin = (prefix) => async (e) => {
     const v = String(e.target.value || '').replace(/\D/g, '').slice(0, 6);
@@ -227,8 +250,9 @@ export function ProfileDrawer({ open, customer, onClose, onSaved }) {
     if (posChanges && !confirmState) { toast.error('Tick the GST state change to save it.'); return; }
     setBusy(true);
     try {
+      const { finance_same: _fs, spock_same: _ss, ...fields } = f;
       const body = {
-        ...f,
+        ...fields,
         customer_number: normalizeIndianMobile(f.customer_number),
         contact_person_name: f.customer_name,
         contact_person_number: normalizeIndianMobile(f.customer_number),
@@ -347,18 +371,24 @@ export function ProfileDrawer({ open, customer, onClose, onSaved }) {
         </Section>
 
         <Section title="Finance contact">
+          <div style={{ marginBottom: '12px' }}>
+            <Checkbox label="Same as contact person" checked={Boolean(f.finance_same)} onChange={setSame('finance_same')} />
+          </div>
           <FormGrid cols={3}>
-            <Field label="Name"><Input value={f.finance_contact_name} onChange={set('finance_contact_name')} /></Field>
-            <Field label="Mobile" error={shown.finance_contact_mobile}><Input inputMode="numeric" maxLength={10} value={f.finance_contact_mobile} onChange={setMobile('finance_contact_mobile')} /></Field>
-            <Field label="Email" error={shown.finance_contact_email}><Input type="email" value={f.finance_contact_email} onChange={set('finance_contact_email')} /></Field>
+            <Field label="Name"><Input readOnly={Boolean(f.finance_same)} value={f.finance_contact_name} onChange={set('finance_contact_name')} /></Field>
+            <Field label="Mobile" error={shown.finance_contact_mobile}><Input inputMode="numeric" maxLength={10} readOnly={Boolean(f.finance_same)} value={f.finance_contact_mobile} onChange={setMobile('finance_contact_mobile')} /></Field>
+            <Field label="Email" error={shown.finance_contact_email}><Input type="email" readOnly={Boolean(f.finance_same)} value={f.finance_contact_email} onChange={set('finance_contact_email')} /></Field>
           </FormGrid>
         </Section>
 
         <Section title="Spoke person">
+          <div style={{ marginBottom: '12px' }}>
+            <Checkbox label="Same as contact person" checked={Boolean(f.spock_same)} onChange={setSame('spock_same')} />
+          </div>
           <FormGrid cols={3}>
-            <Field label="Name" required error={shown.spock_person_name}><Input value={f.spock_person_name} onChange={set('spock_person_name')} /></Field>
-            <Field label="Mobile" required error={shown.spock_person_mobile}><Input inputMode="numeric" maxLength={10} value={f.spock_person_mobile} onChange={setMobile('spock_person_mobile')} /></Field>
-            <Field label="Email" required error={shown.spock_person_email}><Input type="email" value={f.spock_person_email} onChange={set('spock_person_email')} /></Field>
+            <Field label="Name" required error={shown.spock_person_name}><Input readOnly={Boolean(f.spock_same)} value={f.spock_person_name} onChange={set('spock_person_name')} /></Field>
+            <Field label="Mobile" required error={shown.spock_person_mobile}><Input inputMode="numeric" maxLength={10} readOnly={Boolean(f.spock_same)} value={f.spock_person_mobile} onChange={setMobile('spock_person_mobile')} /></Field>
+            <Field label="Email" required error={shown.spock_person_email}><Input type="email" readOnly={Boolean(f.spock_same)} value={f.spock_person_email} onChange={set('spock_person_email')} /></Field>
           </FormGrid>
         </Section>
 

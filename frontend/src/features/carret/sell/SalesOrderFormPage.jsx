@@ -47,7 +47,7 @@ import GstinField from './GstinField';
  * address on the customer as a WFH address so a later pickup from it is seen
  * to be chargeable.
  *
- * A rental order needs the customer's GSTIN, taken from the customer record
+ * A rental or demo order needs the customer's GSTIN, taken from the customer record
  * only. Missing → the order is blocked; it is added on the customer (where the
  * GSTIN lookup also fills the billing address) and then rechecked here.
  *
@@ -259,7 +259,8 @@ export default function SalesOrderFormPage() {
   };
 
   const selectedCustomer = (meta?.customers || []).find((x) => String(x.customer_id) === String(customerId));
-  const isRental = type === 'rental';
+  // Rental and demo orders both need the customer's GSTIN.
+  const isRental = type === 'rental' || type === 'demo';
   const gstLocked = isRental || (Boolean(gst) && gst === customerGstin(selectedCustomer));
   const rentalGstMissing = isRental && Boolean(selectedCustomer) && !customerGstin(selectedCustomer);
   // Rental: the GSTIN is always the customer's own (refreshed after a recheck).
@@ -301,7 +302,7 @@ export default function SalesOrderFormPage() {
     const miss = firstMissing(lines, REQUIRED);
     if (miss) e.line = miss;
     if (gstinError(gst)) e.gst = gstinError(gst);
-    if (rentalGstMissing) e.gst = 'A rental order needs the customer’s GSTIN — add it on the customer record, then recheck';
+    if (rentalGstMissing) e.gst = `A ${type} order needs the customer’s GSTIN — add it on the customer record, then recheck`;
     if (!inPlace) {
       if (!shipAddress) e.ship = { address: 'Choose where this order ships' };
       else if (shipChoice.key === 'manual' || wfh.on) {
@@ -471,7 +472,7 @@ export default function SalesOrderFormPage() {
               <div style={{ marginTop: '12px' }}>
                 <Notice
                   tone="crit"
-                  title="GSTIN required for a rental order"
+                  title={`GSTIN required for a ${type} order`}
                   action={(
                     <div className="flex flex-wrap" style={{ gap: '8px' }}>
                       <Button onClick={() => window.open(`/carret/sell/customers/${encodeURIComponent(customerId)}?tab=profile`, '_blank', 'noopener')}>Add GSTIN on the customer</Button>

@@ -1256,21 +1256,21 @@ exports.storeSalesOrder = async (req, res) => {
           message: 'Access denied: customer is outside your Customer Access scope',
         });
       }
-      // A rental order needs the customer's own GSTIN, from the customer record
-      // (adding it there updates the billing address too). It is printed as-is.
-      if (String(soQuotationType).toLowerCase() === 'rental') {
+      // A rental or demo order needs the customer's own GSTIN, from the customer
+      // record (adding it there updates the billing address too). Printed as-is.
+      if (['rental', 'demo'].includes(String(soQuotationType).toLowerCase())) {
         const custGstin = String(customerExists.rows[0].gst_no || '').trim().toUpperCase();
         if (!isValidGstin(custGstin)) {
           return res.status(400).json({
             success: false,
             code: 'RENTAL_GSTIN_REQUIRED',
-            message: 'A rental order needs the customer\u2019s GSTIN. Add it on the customer record first, then place the order.',
+            message: `A ${String(soQuotationType).toLowerCase()} order needs the customer\u2019s GSTIN. Add it on the customer record first, then place the order.`,
           });
         }
         body.GST_number = custGstin;
       }
-    } else if (String(body.quotation_type || 'rental').toLowerCase() === 'rental') {
-      return res.status(400).json({ success: false, message: 'Choose the customer for a rental order.' });
+    } else if (['rental', 'demo'].includes(String(body.quotation_type || 'rental').toLowerCase())) {
+      return res.status(400).json({ success: false, message: 'Choose the customer for this order.' });
     }
 
     await client.query('BEGIN');
