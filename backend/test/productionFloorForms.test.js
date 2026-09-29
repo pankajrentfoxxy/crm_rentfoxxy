@@ -89,10 +89,16 @@ describe('floor stage forms — real handlers (rolled back)', () => {
   let t;
   let mgr;
   const stageOf = async () => (await C.query('SELECT s.stage_name FROM tickets tt JOIN stages s ON s.stage_id = tt.current_stage_id WHERE tt.ticket_id = $1', [t.ticket_id])).rows[0].stage_name;
-  const putAt = async (name, assignee = mgr.user_id) => {
+  // Puts the laptop at a stage with the assignee's timer running — what
+  // "Start work" (TTSPL + serial scan) does; finishing needs it (29 Sep).
+  const putAt = async (name, assignee = mgr.user_id, { started = true } = {}) => {
     const s = (await C.query('SELECT stage_id, team_id FROM stages WHERE stage_name = $1 LIMIT 1', [name])).rows[0];
     await C.query('UPDATE tickets SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = $3, status = \'in_progress\', qc_fail_count = 0 WHERE ticket_id = $4', [s.stage_id, s.team_id, assignee, t.ticket_id]);
     await C.query("UPDATE part_requests SET status = 'cancelled' WHERE ticket_id = $1 AND status NOT IN ('attached', 'cancelled', 'rejected')", [t.ticket_id]);
+    await C.query('UPDATE work_logs SET end_time = CURRENT_TIMESTAMP WHERE ticket_id = $1 AND end_time IS NULL', [t.ticket_id]);
+    if (started && assignee > 0) {
+      await C.query('INSERT INTO work_logs (ticket_id, user_id, stage_id, start_time) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)', [t.ticket_id, assignee, s.stage_id]);
+    }
   };
 
   before(async () => {
@@ -143,6 +149,16 @@ describe('floor stage forms — real handlers (rolled back)', () => {
     const r = await h.call(fb.completeStageWork, { params: { id: t.ticket_id }, body: { outcome: 'done', checklist: Object.fromEntries(items.map((i) => [i.key, true])) }, user: mgr });
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.equal(await stageOf(), 'Diagnosis');
+  });
+
+  it('the assigned technician cannot finish a stage before Start work (29 Sep)', async () => {
+    const fb = require('../controllers/floorBoard.controller');
+    await putAt('Assembly & Software', mgr.user_id, { started: false });
+    const items = await fc.stageChecklistItems(C, 'Assembly & Software');
+    const r = await h.call(fb.completeStageWork, { params: { id: t.ticket_id }, body: { outcome: 'done', checklist: Object.fromEntries(items.map((i) => [i.key, true])) }, user: mgr });
+    assert.equal(r.code, 409);
+    assert.match(r.body.message, /Start work first/);
+    assert.equal(await stageOf(), 'Assembly & Software');
   });
 
   it('someone else\'s ticket: a technician cannot finish its stage', async () => {

@@ -41,7 +41,24 @@ async function closeOpenWorkLogsForTickets(db, ticketIds) {
   );
 }
 
+/**
+ * 29 Sep 2026: the technician a ticket is assigned to finishes a stage only
+ * after "Start work" — the scan of TTSPL + serial that opens their timer. A
+ * floor manager finishing it for them is the logged exception.
+ * @returns {string|null} why not, or null when fine
+ */
+async function workNotStartedReason(db, ticket, user) {
+  if (!ticket?.ticket_id || !user?.user_id) return null;
+  if (Number(ticket.assigned_user_id) !== Number(user.user_id)) return null;
+  const r = await db.query(
+    `SELECT 1 FROM work_logs WHERE ticket_id = $1 AND user_id = $2 AND end_time IS NULL LIMIT 1`,
+    [ticket.ticket_id, user.user_id]
+  );
+  return r.rows.length ? null : 'Start work first — scan the TTSPL and serial to start the timer, then finish the stage.';
+}
+
 module.exports = {
+  workNotStartedReason,
   closeOpenWorkLogs,
   startWorkLog,
   syncWorkLogForTicketState,

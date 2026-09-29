@@ -150,7 +150,15 @@ export default function FloorTicketPage() {
         />
         {tab === 'work' && (
           workForm
-            ? ((mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
+            // The assigned technician sees the task only after Start work
+            // (TTSPL + serial scanned, timer running) — the server insists too.
+            ? (mine && WORK_STAGES.includes(stage) && !work
+              ? (
+                <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
+                  Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the {stageLabel(stage)} task opens.
+                </Notice>
+              )
+              : (mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
             : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
         )}
         {tab === 'parts' && (
@@ -231,7 +239,7 @@ export default function FloorTicketPage() {
 
       <AssignDrawer ticket={t} open={assignOpen} onClose={() => setAssignOpen(false)} onDone={() => { setAssignOpen(false); load(); }} />
 
-      <Drawer open={drawer === 'start'} onClose={() => setDrawer(null)} title="Start work" footer={<Button variant="primary" disabled={busy === 'start'} onClick={() => run('start', () => startWork(t.ticket_id, { verify_ttspl: form.ttspl, verify_serial: form.serial }), 'Timer started')}>Start</Button>}>
+      <Drawer open={drawer === 'start'} onClose={() => setDrawer(null)} title="Start work" footer={<Button variant="primary" disabled={busy === 'start' || !String(form.ttspl || '').trim() || (t.received_condition !== 'not_on' && !String(form.serial || '').trim())} onClick={() => run('start', () => startWork(t.ticket_id, { verify_ttspl: form.ttspl, verify_serial: form.serial }), 'Timer started — the task is open')}>Start</Button>}>
         <div className="c-stack">
           <p>Scan the labels on the laptop in front of you.</p>
           <Field label="TTSPL" required><Input autoFocus value={form.ttspl || ''} onChange={setF('ttspl')} className="font-mono" /></Field>

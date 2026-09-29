@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
+const { syncWorkLogForTicketState, workNotStartedReason } = require('../services/ticketWorkLogService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
@@ -305,6 +305,8 @@ async function submitDiagnosisV2(client, req, res, ticketBefore) {
     if (Number(ticketBefore.assigned_user_id) !== Number(user.user_id) && !isManager(user)) {
         return fail(403, 'Only the technician it is assigned to (or a floor manager) submits its diagnosis.');
     }
+    const notStarted = await workNotStartedReason(client, ticketBefore, user);
+    if (notStarted) return fail(409, notStarted);
 
     const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
     const { missing, invalid } = floorChecklists.checkAnswers(floorChecklists.DIAGNOSIS_ITEMS, answers);

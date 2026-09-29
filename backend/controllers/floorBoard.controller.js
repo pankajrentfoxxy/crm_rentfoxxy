@@ -7,7 +7,7 @@ const { applyStageMove, StageTransitionRefused } = require('../services/stageTra
 const { transitionAsset } = require('../services/inventoryStateMachine');
 const { createReturnedPartInstance } = require('../services/partInventoryService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
-const { closeOpenWorkLogs } = require('../services/ticketWorkLogService');
+const { closeOpenWorkLogs, workNotStartedReason } = require('../services/ticketWorkLogService');
 const { inTransaction } = require('../utils/txHandler');
 
 const fail = (res, status, message) => res.status(status).json({ success: false, message });
@@ -215,6 +215,8 @@ exports.completeStageWork = (req, res) => inTransaction(res, async (db, out) => 
   if (Number(t.assigned_user_id) !== Number(req.user.user_id) && !isManager(req.user)) {
     return fail(out, 403, 'Only the technician it is assigned to (or a floor manager) finishes this stage.');
   }
+  const notStarted = await workNotStartedReason(db, t, req.user);
+  if (notStarted) return fail(out, 409, notStarted);
 
   const items = await floorChecklists.stageChecklistItems(db, t.stage_name);
   const checklist = req.body?.checklist && typeof req.body.checklist === 'object' ? req.body.checklist : {};

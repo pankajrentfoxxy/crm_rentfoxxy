@@ -6,7 +6,7 @@ const {
     fetchOrderedMemberIds,
     recordAssigneeForTeam
 } = require('../services/qcRoundRobinService');
-const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
+const { syncWorkLogForTicketState, workNotStartedReason } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
 const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
 const ttsplAuditService = require('../services/ttsplAuditService');
@@ -316,6 +316,11 @@ exports.submitQC = async (req, res) => {
                 success: false,
                 message: `This ticket is at "${qcStage || 'an unknown stage'}" — QC can only be submitted from ${QC_SUBMITTABLE_STAGES.join(', ')}.`,
             });
+        }
+        const notStarted = await workNotStartedReason(client, ticketBefore, req.user);
+        if (notStarted) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ success: false, message: notStarted });
         }
         const claimedStage = req.body.qcStage;
         if (claimedStage && String(claimedStage) !== qcStage) {
