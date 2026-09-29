@@ -44,6 +44,7 @@ const {
   invalidateCustomerLaptopsCache,
 } = require('../services/customerLaptopsCache');
 const { lookupGstin, sanitizeGstin, isValidGstin } = require('../services/gstinLookupService');
+const { canonicalState } = require('../utils/indianStateCodes');
 const { secureInt } = require('../utils/secureRandom');
 const {
   normalizeDeliveryAddress,
@@ -1057,6 +1058,10 @@ exports.updateCustomerAddress = async (req, res) => {
     const customerId = parseInt(req.params.customerId, 10);
     const addressId = parseInt(req.params.addressId, 10);
     const body = req.body || {};
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const check = await pool.query(
       'SELECT 1 FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
       [addressId, customerId]
@@ -1106,6 +1111,10 @@ exports.deleteCustomerAddress = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     const addressId = parseInt(req.params.addressId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const result = await pool.query(
       `DELETE FROM customer_addresses
        WHERE customer_address_id = $1 AND customer_id = $2
@@ -1125,6 +1134,10 @@ exports.setDefaultCustomerAddress = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     const addressId = parseInt(req.params.addressId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const check = await pool.query(
       'SELECT 1 FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
       [addressId, customerId]
@@ -1132,13 +1145,13 @@ exports.setDefaultCustomerAddress = async (req, res) => {
     if (!check.rows.length) {
       return res.status(404).json({ success: false, message: 'Address not found' });
     }
+    // One statement, so there is never a moment with no default (or two).
     await pool.query(
-      'UPDATE customer_addresses SET is_head_office = FALSE WHERE customer_id = $1',
-      [customerId]
-    );
-    await pool.query(
-      'UPDATE customer_addresses SET is_head_office = TRUE, updated_at = NOW() WHERE customer_address_id = $1',
-      [addressId]
+      `UPDATE customer_addresses
+          SET is_head_office = (customer_address_id = $2),
+              updated_at = CASE WHEN customer_address_id = $2 THEN NOW() ELSE updated_at END
+        WHERE customer_id = $1`,
+      [customerId, addressId]
     );
     const { rows } = await pool.query(
       `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
@@ -1342,40 +1355,121 @@ exports.storeCustomer = async (req, res) => {
   }
 };
 
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
+/**
+ * The state billing uses as the place of supply for this customer — exactly
+ * what services/billingGstService.customerPlaceOfSupply reads:
+ * NULLIF(TRIM(COALESCE(shipping_state, billing_state)), ''). COALESCE keeps an
+ * empty-string shipping_state, so '' there means "unknown", not "billing".
+ */
+function billingSupplyState(shippingState, billingState) {
+  const v = shippingState != null ? shippingState : billingState;
+  const t = String(v ?? '').trim();
+  return t || null;
+}
+
+/**
+ * Profile edit (PUT /customers/:id). Used by the new customer record and the
+ * old Lead CRM drawer. Only what the body carries is changed; identity fields
+ * (GSTIN, PAN, email) are format-checked when they change; a change to the
+ * state billing uses for GST needs `confirm_supply_state_change: true` (409
+ * SUPPLY_STATE_CHANGE otherwise) so it is never overwritten silently; all
+ * writes are one transaction.
+ */
 exports.updateCustomer = async (req, res) => {
+  const customerId = parseInt(req.params.customerId, 10);
+  if (!Number.isFinite(customerId) || customerId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid customer id' });
+  }
+  const client = await pool.connect();
+  let inTx = false;
+  const fail = async (status, message, extra = {}) => {
+    if (inTx) { await client.query('ROLLBACK').catch(() => {}); inTx = false; }
+    return res.status(status).json({ success: false, message, ...extra });
+  };
   try {
-    const customerId = parseInt(req.params.customerId, 10);
-    const existing = await pool.query('SELECT * FROM customers WHERE customer_id = $1', [customerId]);
-    if (!existing.rows.length) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
-    }
+    await client.query('BEGIN');
+    inTx = true;
+    const existing = await client.query('SELECT * FROM customers WHERE customer_id = $1 FOR UPDATE', [customerId]);
+    if (!existing.rows.length) return fail(404, 'Customer not found');
     const row = existing.rows[0];
     if (!isCustomerTypeAllowed(req.allowedCustomerTypes, row.customer_type)) {
-      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+      return fail(403, 'Access denied: customer is outside your Customer Access scope');
     }
     const body = req.body || {};
     const details = parseDetails(row.details);
 
-    const contactValidationErrors = validateFinanceSpockContactFields(body);
-    if (contactValidationErrors.length) {
-      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
+    // The finance / spoke contact block is checked when the edit carries it.
+    // A partial edit (the admin tag, a billing-address fix) used to fail here
+    // with "Spoke person name is required" because the body did not repeat it.
+    const contactTouched = [...FINANCE_SPOCK_DETAIL_KEYS, ...LEGACY_EXPOX_DETAIL_KEYS].some((k) => body[k] !== undefined);
+    if (contactTouched) {
+      const contactValidationErrors = validateFinanceSpockContactFields(body);
+      if (contactValidationErrors.length) return fail(400, contactValidationErrors[0]);
     }
     const phoneErrors = validateCustomerPhoneFields(body);
-    if (phoneErrors.length) {
-      return res.status(400).json({ success: false, message: phoneErrors[0] });
+    if (phoneErrors.length) return fail(400, phoneErrors[0]);
+
+    let billingType = null;
+    if (body.billing_type != null && String(body.billing_type).trim() !== '') {
+      billingType = String(body.billing_type).trim().toLowerCase();
+      if (!['prepaid', 'postpaid'].includes(billingType)) return fail(400, 'billing_type must be prepaid or postpaid');
+    }
+
+    // Identity fields: checked when they change, so a legacy value already on
+    // file does not block an unrelated edit.
+    const email = body.email !== undefined ? String(body.email || '').trim() : row.email;
+    const emailChanged = String(email || '').toLowerCase() !== String(row.email || '').trim().toLowerCase();
+    if (emailChanged) {
+      if (!email) return fail(400, 'Email is required');
+      if (!EMAIL_RE.test(email)) return fail(400, 'Email is invalid');
+    }
+    const gstNo = body.gst_number !== undefined ? sanitizeGstin(body.gst_number) : row.gst_no;
+    const gstChanged = sanitizeGstin(gstNo) !== sanitizeGstin(row.gst_no);
+    if (gstChanged && gstNo && !isValidGstin(gstNo)) {
+      return fail(400, gstNo.length !== 15
+        ? `GSTIN must be 15 characters — ${gstNo.length} entered`
+        : 'GSTIN is not valid (like 06AAHCT0310N1ZG)');
+    }
+    const panRaw = body.pan_number ?? body.pan_card_number;
+    const panNumber = panRaw !== undefined && String(panRaw || '').trim()
+      ? String(panRaw).trim().toUpperCase()
+      : row.pan_number;
+    if (String(panNumber || '') !== String(row.pan_number || '') && panNumber && !PAN_RE.test(panNumber)) {
+      return fail(400, 'PAN must be 5 letters, 4 digits, 1 letter (like ABCDE1234F)');
     }
 
     const name = body.customer_name || body.name || row.name;
     let companyName = body.company_name || row.company_name;
-    const email = body.email ?? row.email;
     const phone = body.customer_number != null || body.phone != null
       ? normalizeIndianMobile(body.customer_number ?? body.phone)
       : row.phone;
     const whatsappNumber = body.whatsapp_number != null
       ? (String(body.whatsapp_number).trim() ? normalizeIndianMobile(body.whatsapp_number) : null)
       : row.whatsapp_number;
-    const gstNo = body.gst_number ?? row.gst_no;
-    const gstChanged = sanitizeGstin(gstNo) !== sanitizeGstin(row.gst_no);
+
+    const billingState = body.billing_state ?? row.billing_state;
+    const shippingSame = body.shipping_same ?? row.shipping_same;
+    const shippingDiffers = shippingSame === false || shippingSame === 'false';
+    // "Same as billing" stores NULL shipping fields, as customer create does.
+    // An empty string there made billing read the place of supply as unknown.
+    const blankToNull = (v) => (v == null || String(v).trim() === '' ? null : v);
+    const shipField = (k) => (shippingDiffers
+      ? (body[k] ?? row[k])
+      : (body[k] !== undefined ? blankToNull(body[k]) : row[k]));
+    const shippingState = shipField('shipping_state');
+
+    const fromState = billingSupplyState(row.shipping_state, row.billing_state);
+    const toState = billingSupplyState(shippingState, billingState);
+    if (canonicalState(fromState) !== canonicalState(toState) && body.confirm_supply_state_change !== true) {
+      return fail(409, `Invoices for this customer are billed to ${fromState || 'an unknown state'} for GST. `
+        + `After this change they are billed to ${toState || 'an unknown state'} `
+        + `(${!toState ? 'no state: CGST + SGST by default' : 'CGST + SGST if Haryana, IGST otherwise'}). Confirm to save.`, {
+        code: 'SUPPLY_STATE_CHANGE', from_state: fromState, to_state: toState,
+      });
+    }
+
     let tradeName = row.trade_name || '';
     if (String(body.trade_name || '').trim()) {
       tradeName = String(body.trade_name).trim();
@@ -1386,72 +1480,74 @@ exports.updateCustomer = async (req, res) => {
         companyName = resolved;
       }
     }
-    const panNumber = body.pan_number || body.pan_card_number || row.pan_number;
 
-    await pool.query(
+    await client.query(
       `UPDATE customers SET
         name = $1, company_name = $2, trade_name = $3, email = $4, phone = $5, gst_no = $6,
         pan_number = $7, company_type = $8, company_size = $9, industry = $10,
         billing_address = $11, billing_city = $12, billing_state = $13, billing_pincode = $14,
         shipping_same = $15, shipping_address = $16, shipping_city = $17, shipping_state = $18, shipping_pincode = $19,
         whatsapp_number = $20, designation = $21, portal_enabled = COALESCE($22, portal_enabled),
-        notes = COALESCE($23, notes), updated_at = NOW()
-       WHERE customer_id = $24`,
+        notes = COALESCE($23, notes), billing_type = COALESCE($24, billing_type), updated_at = NOW()
+       WHERE customer_id = $25`,
       [
-        name, companyName, tradeName || null, email, phone, gstNo, panNumber,
+        name, companyName, tradeName || null, email, phone, gstChanged ? (gstNo || null) : row.gst_no, panNumber || null,
         body.company_type ?? row.company_type,
         body.company_size ?? row.company_size,
         body.industry ?? row.industry,
         body.billing_address ?? row.billing_address,
         body.billing_city ?? row.billing_city,
-        body.billing_state ?? row.billing_state,
+        billingState,
         body.billing_pincode ?? row.billing_pincode,
-        body.shipping_same ?? row.shipping_same,
-        body.shipping_address ?? row.shipping_address,
-        body.shipping_city ?? row.shipping_city,
-        body.shipping_state ?? row.shipping_state,
-        body.shipping_pincode ?? row.shipping_pincode,
+        shippingSame,
+        shipField('shipping_address'),
+        shipField('shipping_city'),
+        shippingState,
+        shipField('shipping_pincode'),
         whatsappNumber,
         body.designation ?? row.designation,
         body.portal_enabled !== undefined ? !!body.portal_enabled : null,
         body.notes ?? null,
+        billingType,
         customerId,
       ]
     );
 
-    if (body.billing_type != null && String(body.billing_type).trim() !== '') {
-      const billingType = String(body.billing_type).trim().toLowerCase();
-      if (!['prepaid', 'postpaid'].includes(billingType)) {
-        return res.status(400).json({ success: false, message: 'billing_type must be prepaid or postpaid' });
+    // The portal signs in by email: keep the credential on the new address.
+    if (emailChanged) {
+      try {
+        await client.query('SAVEPOINT cred_email');
+        await client.query(
+          `UPDATE auth_credentials SET email = $1, updated_at = NOW() WHERE portal = 'customer' AND entity_id = $2`,
+          [email, customerId]
+        );
+        await client.query('RELEASE SAVEPOINT cred_email');
+      } catch (credErr) {
+        await client.query('ROLLBACK TO SAVEPOINT cred_email').catch(() => {});
+        if (credErr.code === '23505') {
+          return fail(409, 'That email already signs in to another portal account. Use a different email.');
+        }
+        if (credErr.code !== '42P01') throw credErr;
       }
-      await pool.query(
-        `UPDATE customers SET billing_type = $1, updated_at = NOW() WHERE customer_id = $2`,
-        [billingType, customerId]
-      );
     }
 
     if (body.customer_type != null && String(body.customer_type).trim() !== '') {
       if (!canEditCustomerType(req.user)) {
         const requested = normalizeCustomerType(body.customer_type);
         const current = normalizeCustomerType(row.customer_type);
-        if (requested !== current) {
-          return res.status(403).json({
-            success: false,
-            message: 'Only Admin / Super Admin can update Customer Type',
-          });
-        }
+        if (requested !== current) return fail(403, 'Only Admin / Super Admin can update Customer Type');
       } else if (String(body.customer_type).trim().toLowerCase() === 'auto') {
         // Back to automatic: the tag follows orders / laptops again (migration 355).
-        await pool.query(
+        await client.query(
           `UPDATE customers SET customer_type_source = 'auto', customer_type_reason = NULL,
                   customer_type_set_by = $2, customer_type_set_at = NOW(), updated_at = NOW()
             WHERE customer_id = $1`,
           [customerId, req.user?.user_id || null]
         );
-        await pool.query('SELECT refresh_customer_type($1)', [customerId]);
+        await client.query('SELECT refresh_customer_type($1)', [customerId]);
       } else if (normalizeCustomerType(body.customer_type) !== normalizeCustomerType(row.customer_type)) {
         // An admin fixing the tag by hand: automatic refreshes leave it alone.
-        await pool.query(
+        await client.query(
           `UPDATE customers SET customer_type = $1, customer_type_source = 'manual', customer_type_reason = $3,
                   customer_type_set_by = $4, customer_type_set_at = NOW(), updated_at = NOW()
             WHERE customer_id = $2`,
@@ -1461,7 +1557,7 @@ exports.updateCustomer = async (req, res) => {
       }
     }
 
-    let detailsChanged = false;
+    let detailsChanged = contactTouched;
     if (body.contact_person_name !== undefined) {
       details.contact_person_name = body.contact_person_name || null;
       detailsChanged = true;
@@ -1476,18 +1572,15 @@ exports.updateCustomer = async (req, res) => {
       details.contact_person_number = phone || null;
       detailsChanged = true;
     }
-    for (const key of FINANCE_SPOCK_DETAIL_KEYS) {
-      if (body[key] !== undefined) detailsChanged = true;
-    }
     applyFinanceSpockDetails(details, body);
     if (detailsChanged) {
-      await pool.query('UPDATE customers SET details = $1 WHERE customer_id = $2', [
+      await client.query('UPDATE customers SET details = $1 WHERE customer_id = $2', [
         JSON.stringify(details),
         customerId,
       ]);
     }
 
-    const updated = await pool.query(
+    const updated = await client.query(
       `SELECT c.*, COALESCE((
           SELECT SUM(sd.amount - COALESCE(sd.refund_amount, 0))
             FROM customer_security_deposits sd
@@ -1497,10 +1590,14 @@ exports.updateCustomer = async (req, res) => {
        FROM customers c WHERE c.customer_id = $1`,
       [customerId]
     );
-    res.json({ success: true, customer: formatCustomerRow(updated.rows[0]) });
+    await client.query('COMMIT');
+    inTx = false;
+    return res.json({ success: true, customer: formatCustomerRow(updated.rows[0]) });
   } catch (error) {
     console.error('updateCustomer:', error);
-    res.status(500).json({ success: false, message: error.message });
+    return fail(500, error.message);
+  } finally {
+    client.release();
   }
 };
 
@@ -1612,6 +1709,10 @@ exports.bulkUpdateCustomerType = async (req, res) => {
 exports.verifyCustomerKyc = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const result = await pool.query(
       `UPDATE customers SET kyc_verified = TRUE, kyc_status = 'verified',
               kyc_verified_by = $1, kyc_verified_at = NOW(), updated_at = NOW()
@@ -3450,6 +3551,12 @@ exports.enableCustomerPortal = async (req, res) => {
         [customerId]
       );
       await pool.query(`DELETE FROM customer_portal_sessions WHERE customer_id = $1`, [customerId]);
+      try {
+        const { setEnabledByEntity } = require('../services/authCredentialsService');
+        await setEnabledByEntity('customer', customerId, false);
+      } catch (syncErr) {
+        console.warn('auth_credentials sync (customer disable):', syncErr.message);
+      }
       return res.json({ success: true, enabled: false });
     }
 
@@ -3479,6 +3586,8 @@ exports.enableCustomerPortal = async (req, res) => {
         `UPDATE customers SET portal_password_hash = $1, portal_enabled = COALESCE($2, portal_enabled, true), updated_at = NOW() WHERE customer_id = $3`,
         [hash, enabled === true ? true : null, customerId]
       );
+      // A new password ends every session signed in with the old one.
+      await pool.query(`DELETE FROM customer_portal_sessions WHERE customer_id = $1`, [customerId]);
       try {
         const { upsertCredential } = require('../services/authCredentialsService');
         await upsertCredential({
