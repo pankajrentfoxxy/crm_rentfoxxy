@@ -455,6 +455,8 @@ export default function GuardScannerPage() {
                 />
                 <DetailRow label="Purpose" value={movement.purpose || movement.document_details.purpose} />
               </>
+            ) : movement.purpose ? (
+              <DetailRow label="Note" value={movement.purpose} />
             ) : null}
           </dl>
         </div>

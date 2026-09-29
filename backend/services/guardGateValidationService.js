@@ -707,9 +707,12 @@ function isCourierOrPorterPickup(item) {
   return method === 'courier' || method === 'porter';
 }
 
+// The technician e-signs the Return DC on arrival, before collecting anything, and
+// that signature is copied to every line on the RDC — so it is not proof a laptop
+// was picked up. Only the customer OTP / picked_up_at are.
 function pickupReadyForGateInward(item) {
   if (isCourierOrPorterPickup(item)) return true;
-  return !!(item.customer_otp_verified_at || item.picked_up_at || item.technician_esign_at);
+  return !!(item.customer_otp_verified_at || item.picked_up_at);
 }
 
 async function loadReturnDc(db, rdcNumber) {
@@ -748,11 +751,18 @@ async function loadReturnDc(db, rdcNumber) {
   const source_type = pickupType === 'repair' ? 'repair_pickup' : 'customer_return';
   const source_label = pickupType === 'repair' ? 'Repair Pickup' : 'Customer Return';
 
-  let units = items.rows.map((row) => ({
+  // A multi-laptop pickup can be collected over several visits. The guard inwards
+  // only the laptops that were actually picked up and have not come through the
+  // gate yet; the rest stay on the RDC for a later scan.
+  const open = items.rows.filter((i) => !i.warehouse_received_at && !i.gate_inward_at);
+  const arriving = open.filter(pickupReadyForGateInward);
+  const withCustomer = open.length - arriving.length;
+
+  let units = arriving.map((row) => ({
     ttspl: row.ttspl_id || row.unique_serial_number,
     serial_number: row.serial_number,
   }));
-  if (!units.length) {
+  if (!items.rows.length) {
     units = r.rows.flatMap((row) => unitsFromSerialJson(row.serial_number));
   }
   const laptops = await require('./dispatchChargerService').attachChargersToLaptops(
@@ -763,8 +773,8 @@ async function loadReturnDc(db, rdcNumber) {
     ? items.rows.every((i) => i.warehouse_received_at)
     : r.rows.every((row) => row.warehouse_received_at);
   const cancelled = r.rows.every((row) => CANCELLED_DC.has(String(row.status || '').toLowerCase()));
-  const gateInwardDone = items.rows.length > 0 && items.rows.every((i) => i.gate_inward_at);
-  const pickupReady = items.rows.length === 0 || items.rows.every(pickupReadyForGateInward);
+  const gateInwardDone = items.rows.length > 0 && open.length === 0;
+  const pickupReady = items.rows.length === 0 || arriving.length > 0;
 
   let active = true;
   let inactive_reason = null;
@@ -779,7 +789,9 @@ async function loadReturnDc(db, rdcNumber) {
     inactive_reason = 'Guard inward already recorded. Warehouse can now e-sign.';
   } else if (!pickupReady) {
     active = false;
-    inactive_reason = 'Technician has not completed customer pickup yet. Guard inward is after pickup.';
+    inactive_reason = items.rows.length > open.length
+      ? `Guard inward already recorded for the laptops picked up so far. ${withCustomer} laptop(s) on this Return DC are still with the customer — scan again after the technician picks them up.`
+      : 'Technician has not completed customer pickup yet. Guard inward is after pickup.';
   }
 
   return {
@@ -795,6 +807,9 @@ async function loadReturnDc(db, rdcNumber) {
     allow_partial: false,
     active,
     inactive_reason,
+    purpose: active && withCustomer
+      ? `${arriving.length} laptop(s) picked up; ${withCustomer} still with the customer — inward these now, the rest on a later scan`
+      : null,
     laptops,
   };
 }
@@ -2537,6 +2552,15 @@ async function applyInwardReturnDcGate(client, { session, actor }) {
       WHERE return_dc_number = $1
         AND item_type = 'pickup'
         AND COALESCE(status, '') NOT IN ('cancelled')
+        AND gate_inward_at IS NULL
+        AND warehouse_received_at IS NULL
+        -- Only laptops actually picked up (see pickupReadyForGateInward); units the
+        -- customer has not handed over yet stay open for a later gate scan.
+        AND (
+          LOWER(COALESCE(pickup_method, '')) IN ('courier', 'porter')
+          OR customer_otp_verified_at IS NOT NULL
+          OR picked_up_at IS NOT NULL
+        )
       RETURNING id, ticket_id, gate_inward_at`,
     [rdc, actor.userId, session.session_id]
   );

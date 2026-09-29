@@ -1327,6 +1327,19 @@ function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
   return true;
 }
 
+/**
+ * A pickup line the technician has not collected yet (customer asked them to come
+ * back). A multi-laptop Return DC can be picked up over several visits: such lines
+ * are skipped by the guard inward and the warehouse e-sign until they are picked up.
+ * Mirrors pickupReadyForGateInward in guardGateValidationService.
+ */
+function isPickupStillWithCustomer(item) {
+  if (!item || item.warehouse_received_at || item.gate_inward_at) return false;
+  const method = String(item.pickup_method || '').toLowerCase();
+  if (method === 'courier' || method === 'porter') return false;
+  return !item.customer_otp_verified_at && !item.picked_up_at;
+}
+
 const RETURN_DC_WAREHOUSE_ROLES = [
   'warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin',
 ];
@@ -1340,8 +1353,10 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
   }
   const returnCustomerId = dcl?.customer_id ?? null;
+  const withCustomer = (pickupItems || []).filter(isPickupStillWithCustomer);
   const pendingItems = (pickupItems || []).filter(
-    (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId)
+    (i) => (!i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId))
+      && !isPickupStillWithCustomer(i)
   );
   const fullyDone = pickupItems.length > 0
     && pickupItems.every((i) => i.warehouse_received_at && !isIncompleteWarehouseReceive(i, returnCustomerId));
@@ -1352,7 +1367,14 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
   const hasUnits = (units || []).length > 0;
   const needsReceive = pendingItems.length > 0 || (pickupItems.length === 0 && hasUnits);
   if (!needsReceive) {
-    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+    return {
+      can_warehouse_confirm: false,
+      warehouse_block_reason: withCustomer.length
+        ? `${withCustomer.length} laptop(s) not picked up from the customer yet. Warehouse e-sign opens once they are picked up and guard-scanned.`
+        : null,
+      warehouse_receive_pending: withCustomer.length > 0,
+      units_with_customer: withCustomer.length,
+    };
   }
 
   const isDelivered = dcl.status === 'delivered' || !!dcl.delivered_at;
@@ -1384,6 +1406,8 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     can_warehouse_confirm: roleAllowed && !otpBlocked && !gateBlocked && !configBlocked && !serialBlocked,
     warehouse_block_reason,
     warehouse_receive_pending: true,
+    units_to_receive: pendingItems.length,
+    units_with_customer: withCustomer.length,
   };
 }
 
@@ -3191,6 +3215,7 @@ module.exports = {
   healReturnDcPickupLinks,
   ensureReturnDcPickupItems,
   evaluateReturnDcWarehouseConfirm,
+  isPickupStillWithCustomer,
   userCanConfirmReturnDcWarehouse,
   RETURN_DC_WAREHOUSE_ROLES,
   getOperationCounts,
