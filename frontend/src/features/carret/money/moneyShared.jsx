@@ -1,5 +1,5 @@
 import React from 'react';
-import { StatusChip } from '../../../components/carret';
+import { Button, StatusChip } from '../../../components/carret';
 
 /**
  * Money statuses on the shared chip. The chip knows document statuses; these
@@ -41,9 +41,9 @@ export function Pager({ page, totalPages, onPage }) {
   if (!totalPages || totalPages <= 1) return null;
   return (
     <div className="flex items-center justify-end font-ui text-ink-2" style={{ gap: '8px', padding: '10px 12px', fontSize: 'var(--d-sm)' }}>
-      <button type="button" className="c-btn c-btn--quiet" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
+      <Button variant="quiet" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</Button>
       <span>Page {page} of {totalPages}</span>
-      <button type="button" className="c-btn c-btn--quiet" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Next</button>
+      <Button variant="quiet" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Next</Button>
     </div>
   );
 }

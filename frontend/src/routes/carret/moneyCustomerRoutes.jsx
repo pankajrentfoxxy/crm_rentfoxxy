@@ -1,11 +1,12 @@
 import React from 'react';
+import ProtectedRoute from '../../router/ProtectedRoute';
 
 /**
  * Finance → customer money (Builder 1, claude/carret-remaining-build.md).
  *
  * Each entry declares the section/action its API enforces in
- * backend/routes/customerBilling.js; the lead wraps them with the same guard()
- * used in carretRoutes.jsx (ProtectedRoute + Suspense).
+ * backend/routes/customerBilling.js and is wrapped below with the same guard
+ * carretRoutes.jsx uses (ProtectedRoute + Suspense).
  *
  * /carret/money/invoices and /carret/money/invoices/:invoiceId are already in
  * carretRoutes.jsx and open features/carret/InvoicesListPage /
@@ -18,7 +19,18 @@ const CreditNoteRecordPage = React.lazy(() => import('../../features/carret/mone
 const SecurityDepositsPage = React.lazy(() => import('../../features/carret/money/SecurityDepositsPage'));
 const DeliveryChargesPage = React.lazy(() => import('../../features/carret/money/DeliveryChargesPage'));
 
-export const moneyCustomerRoutes = [
+const guarded = ({ path, section, action, element }) => ({
+  path,
+  section,
+  action,
+  element: (
+    <ProtectedRoute section={section} action={action}>
+      <React.Suspense fallback={null}>{element}</React.Suspense>
+    </ProtectedRoute>
+  ),
+});
+
+const moneyCustomerRouteDefs = [
   // GET /customer-billing/payments — cp('customer_billing', 'view')
   { path: '/carret/money/payments', section: 'customer_billing', action: 'view', element: <PaymentsReceivedPage /> },
   // GET /customer-billing/credit-notes — cp('credit_notes', 'view')
@@ -32,5 +44,9 @@ export const moneyCustomerRoutes = [
   // GET /customer-billing/delivery-charges — cp('customer_billing', 'view')
   { path: '/carret/money/delivery-charges', section: 'customer_billing', action: 'view', element: <DeliveryChargesPage /> },
 ];
+
+// Each page behind login + its section (the routes were spread unwrapped, so
+// these six pages had no guard and no Suspense for their lazy chunk).
+export const moneyCustomerRoutes = moneyCustomerRouteDefs.map(guarded);
 
 export default moneyCustomerRoutes;

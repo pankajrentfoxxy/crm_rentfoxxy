@@ -1,13 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, DataTable, DateTime, EmptyState, KeyValue, Money, Section, StatTile,
+  Button, DataTable, DateTime, EmptyState, KeyValue, Money, Section, Segmented, StatTile,
 } from '../../../components/carret';
+import ReportChart from './ReportChart';
 
 /**
  * Rendering for Control → Reports. A report (reportsCatalog.js) turns its API
- * response into plain "blocks" — stat groups and tables — and these components
- * draw them, so fourteen reports share one look and every table can be saved
+ * response into plain "blocks" — stat groups, charts and tables — and these
+ * components draw them, so fourteen reports share one look and every table can be saved
  * as CSV. Nothing here fetches; drills are specs the page opens in a drawer.
  */
 
@@ -91,9 +92,9 @@ export function ReportCell({ row, col, onDrill }) {
   const drill = col.drill && onDrill ? col.drill(row) : null;
   if (drill && raw !== 0 && raw !== '0' && shown !== '—') {
     return (
-      <button type="button" className="c-link bg-transparent border-0 cursor-pointer" style={{ padding: 0, color: 'var(--accent)', font: 'inherit' }} onClick={(e) => { e.stopPropagation(); onDrill(drill); }}>
+      <Button variant="quiet" className="c-btn--inline" onClick={(e) => { e.stopPropagation(); onDrill(drill); }}>
         {shown}
-      </button>
+      </Button>
     );
   }
   return shown;
@@ -130,9 +131,9 @@ function StatsBlock({ block, onDrill }) {
           const tile = <StatTile label={it.label} value={shown} />;
           if (it.drill && onDrill && Number(v) > 0) {
             return (
-              <button key={it.label} type="button" className="bg-transparent border-0 cursor-pointer" style={{ padding: 0, textAlign: 'left', font: 'inherit', color: 'inherit' }} onClick={() => onDrill(it.drill)} title="Show the list">
+              <Button key={it.label} variant="quiet" className="c-btn--tile" onClick={() => onDrill(it.drill)} title="Show the list">
                 {tile}
-              </button>
+              </Button>
             );
           }
           return <React.Fragment key={it.label}>{tile}</React.Fragment>;
@@ -177,12 +178,46 @@ function TableBlock({ block, onDrill, onPage }) {
   );
 }
 
+/**
+ * A chart and the same figures as a table, one toggle apart — the table is the
+ * accessible and exact reading, the chart the shape. Columns default to the
+ * category plus each series.
+ */
+function ChartBlock({ block }) {
+  const [view, setView] = useState('chart');
+  const columns = block.columns || [
+    { key: block.x, label: block.xLabel || humanise(block.x) },
+    ...(block.series || []).map((s) => ({ key: s.key, label: s.label, kind: block.money ? 'money' : 'num' })),
+  ];
+  return (
+    <Section
+      title={block.title}
+      actions={(
+        <Segmented
+          label={`${block.title}: show as`}
+          value={view}
+          onChange={setView}
+          options={[{ value: 'chart', label: 'Chart' }, { value: 'table', label: 'Table' }]}
+        />
+      )}
+    >
+      <div className="c-stack">
+        {block.note && <p className="text-ink-3">{block.note}</p>}
+        {view === 'chart' ? <ReportChart block={block} /> : <ReportTable rows={block.data} columns={columns} />}
+      </div>
+    </Section>
+  );
+}
+
 export function ReportBlocks({ blocks, onDrill, onPage }) {
   return (
     <div className="c-stack">
-      {(blocks || []).filter(Boolean).map((b) => (b.kind === 'stats'
-        ? <StatsBlock key={b.title} block={b} onDrill={onDrill} />
-        : <TableBlock key={b.title} block={b} onDrill={onDrill} onPage={onPage} />))}
+      {(blocks || []).filter(Boolean).map((b) => {
+        const key = `${b.kind}:${b.title}`;
+        if (b.kind === 'stats') return <StatsBlock key={key} block={b} onDrill={onDrill} />;
+        if (b.kind === 'chart') return <ChartBlock key={key} block={b} />;
+        return <TableBlock key={key} block={b} onDrill={onDrill} onPage={onPage} />;
+      })}
     </div>
   );
 }

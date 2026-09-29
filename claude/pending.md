@@ -49,11 +49,11 @@ the new interface with its own menu; "Old UI" in the new header goes back.
 11. **Daily dashboard + snapshot** — BUILT 29 Sep: Today at /carret/home (replaces Overview, Billing
     dashboard, Operations), past-day snapshot.
 12. **Hide the old screens** — DONE 29 Sep for the new UI menu: every "Old view" group removed so teams
-    test only the new screens (old screens stay routed, reachable from the Old UI sidebar). Kept:
-    "Parts Catalogue" (old Parts page — only place to add parts / units / print labels) until rebuilt.
-    Still old-styled screens linked from the new menu: Finance (item 8), Demo Agreements, Sale in Place,
-    Vendor Return / Repair DC + receive + return ticket, Scrap Challans, Service Parts Challans, Part Repairs,
-    Master Data, Deployed Fleet, Asset Configuration, Teams, Settings, Reports, Overview dashboard.
+    test only the new screens (old screens stay routed, reachable from the Old UI sidebar). Audit 29 Sep night:
+    every new-UI menu entry opens a new-UI page (Finance, Demo, Sale in Place, vendor return / repair DC, scrap,
+    service parts challans, part repairs, parts catalogue incl. add part / units / labels, deployed fleet, asset
+    configuration, teams, settings, reports). Last old pieces (signature pad, transport / e-way fields, label
+    print, browser pop-ups, list layouts, report charts) are being replaced — see 12e.
 
 12b. **Wave 2 (29 Sep)** — BUILT on QA: spare-parts PO receiving, part naming (category + details + fits →
     generated name), dead parts in & out + discarded parts → scrap, customer profile / documents / portal,

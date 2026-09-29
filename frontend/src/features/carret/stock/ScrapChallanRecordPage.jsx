@@ -3,10 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, KeyValue, Money, Notice, Section, Textarea,
+  Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, KeyValue, Money, Notice, Section,
+  SignaturePad, Textarea,
 } from '../../../components/carret';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import VrdcDispatchFields, { validateVrdcDispatch } from './VrdcDispatchFields';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { usePermission } from '../../../hooks/usePermission';
@@ -193,7 +193,7 @@ export default function ScrapChallanRecordPage() {
         {st === 'draft' && canAct && (
           <Section title="Dispatch">
             <div className="c-stack">
-              <VrdcDispatchFields shipBy={shipBy} onShipByChange={setShipBy} fields={fields} onFieldsChange={setFields} deliveryTechnicians={techs} />
+              <VrdcDispatchFields shipBy={shipBy} onShipByChange={setShipBy} fields={fields} onFieldsChange={setFields} deliveryTechnicians={techs} party="buyer" />
               <FormGrid cols={2}>
                 <Field label="E-way bill number" required={needsEway} hint={needsEway ? `Needed — worth ₹${total.toLocaleString('en-IN')}` : 'Only needed above ₹50,000'}>
                   <Input value={eway.number} onChange={(e) => setEway({ ...eway, number: e.target.value })} />
@@ -209,7 +209,7 @@ export default function ScrapChallanRecordPage() {
                   ) : <Button onClick={() => setSigning(true)}>Sign</Button>}
                 </Field>
               </FormGrid>
-              {signing && <SignaturePadComponent onSave={(d) => { setEsign(d); setSigning(false); }} onCancel={() => setSigning(false)} />}
+              {signing && <SignaturePad prompt="Warehouse signs for the handover" onSave={(d) => { setEsign(d); setSigning(false); }} onCancel={() => setSigning(false)} />}
               <div className="flex justify-end">
                 <Button variant="primary" disabled={busy === 'dispatch'} onClick={checkDispatch}>{busy === 'dispatch' ? 'Dispatching…' : 'Dispatch scrap challan'}</Button>
               </div>

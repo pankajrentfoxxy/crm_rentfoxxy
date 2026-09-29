@@ -11,7 +11,7 @@ import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import { BOOT_CRITICAL_PARTS, LAPTOP_CONDITIONS, PART_CATEGORIES, missingPartsBlockCheck } from '../../../constants/laptopConditions';
 import { isManagerUser } from '../../vendor-management/vendorMgmtUi';
-import PartLabelPrintModal from '../../inventory-management/components/PartLabelPrintModal';
+import PartLabelPrintDrawer from '../stock/setup/PartLabelPrintDrawer';
 import { errMsg } from './procureShared';
 import { lineConfig } from './poShared';
 
@@ -367,7 +367,7 @@ export default function DeliveryReceivePage() {
         </div>
       </Drawer>
 
-      <PartLabelPrintModal open={labelOpen} units={labels} defaultCopies={1} title="Print TTSPL labels" onClose={() => { setLabelOpen(false); setLabels([]); }} />
+      <PartLabelPrintDrawer open={labelOpen} units={labels} defaultCopies={1} title="Print TTSPL labels" onClose={() => { setLabelOpen(false); setLabels([]); }} />
     </DeskShell>
   );
 }

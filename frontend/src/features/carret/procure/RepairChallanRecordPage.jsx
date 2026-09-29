@@ -4,17 +4,16 @@ import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
   Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input,
-  KeyValue, Money, Notice, Section, StatusChip, Textarea,
+  KeyValue, Money, Notice, Section, SignaturePad, StatusChip, Textarea,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
 import {
   downloadVendorRepairPdf, downloadVendorRepairReceivePdf, fetchVendorRepairDc, markVendorRepairDeliveredToVendor,
   signVendorRepairDispatch, startReplacementCheck, updateVendorRepairCommercialDetails, updateVendorRepairDispatchDetails,
 } from '../../floor-pipeline/vendorRepairApi';
 import { DEFAULT_BILLING_ADDRESS, formatVrdcProductLines } from '../../floor-pipeline/vendorRepairUi';
 import { issueTypeLabel } from '../../floor-pipeline/repairIssueTypes';
-import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from './VrtdcTransportFields';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import api from '../../../utils/api';
 import { errMsg } from './procureShared';
@@ -436,7 +435,8 @@ export default function RepairChallanRecordPage() {
 
       <Drawer open={Boolean(padFor)} onClose={() => setPadFor(null)} title={padFor === 'vendor' ? 'Vendor signature' : 'Warehouse signature'}>
         {padFor && (
-          <SignaturePadComponent
+          <SignaturePad
+            prompt={padFor === 'vendor' ? 'The vendor signs in the box' : 'The warehouse signs in the box'}
             onSave={(sig) => { setSign((s) => ({ ...s, [padFor]: sig })); setPadFor(null); }}
             onCancel={() => setPadFor(null)}
           />

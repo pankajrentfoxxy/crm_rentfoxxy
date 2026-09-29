@@ -87,6 +87,8 @@ export const setPartDcCourier = (dc, body) => api.patch(`${sp}/part-dcs/${encode
 export const markPartDcDelivered = (dc) => api.patch(`${sp}/part-dcs/${encodeURIComponent(dc)}/delivered`);
 export const fetchPartReturnDcsPending = () => api.get(`${sp}/part-return-dcs-pending`);
 export const receivePartReturnDc = (dc) => api.patch(`${sp}/part-return-dcs/${encodeURIComponent(dc)}/receive`, {});
+/** Every part challan, Part DC and RPDC, open and closed: { type, status, search, from, to, limit, offset }. */
+export const fetchPartChallansRegister = (params) => api.get(`${sp}/challans-register`, { params });
 
 /* Issue process (rework A+B): Type > Subtype > Issue, root causes, fixes. */
 export const fetchIssueCatalog = () => api.get('/support/issue-catalog');

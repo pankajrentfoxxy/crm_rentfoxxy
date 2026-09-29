@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, DocumentHeader, EmptyState, Money, Notice, Section, StatTile,
+  Button, Checkbox, DataTable, DateTime, DocNumber, DocumentHeader, EmptyState, Money, Notice, Section, StatTile,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import {
@@ -15,7 +15,8 @@ import { CancelCreditNoteDrawer } from './CreditNoteDrawers';
 /**
  * Credit note record (Builder 1, MD2): its laptops, approve all or only the
  * ticked laptops (the rest stay on the draft), cancel, the PDF, and the other
- * notes raised for the same return in the same month.
+ * notes raised for the same return in the same month. Each TTSPL opens the
+ * asset record, which carries its history.
  */
 
 const lineKey = (line, idx) => {
@@ -106,9 +107,15 @@ export default function CreditNoteRecordPage() {
       key: 'pick',
       header: '',
       width: '36px',
-      render: (l) => <input type="checkbox" aria-label={`Select ${l.ttspl_id || l._key}`} checked={picked.has(l._key)} onChange={() => toggle(l._key)} />,
+      render: (l) => <Checkbox aria-label={`Select ${l.ttspl_id || l._key}`} checked={picked.has(l._key)} onChange={() => toggle(l._key)} />,
     }] : []),
-    { key: 't', header: 'Laptop', render: (l) => l.ttspl_id || '—', sub: (l) => (l.serial_number ? `SN ${l.serial_number}` : null) },
+    {
+      key: 't',
+      header: 'Laptop',
+      // The asset record carries the laptop's history (the old History modal).
+      render: (l) => (l.ttspl_id ? <Link to={`/carret/stock/assets/${encodeURIComponent(l.ttspl_id)}`}>{l.ttspl_id}</Link> : '—'),
+      sub: (l) => (l.serial_number ? `SN ${l.serial_number}` : null),
+    },
     { key: 'i', header: 'Item', render: (l) => [l.brand, l.model].filter(Boolean).join(' ') || '—', sub: (l) => l.return_dc_number || l.service_dc_number || null },
     { key: 'p', header: 'Credited days', render: (l) => <span><DateTime value={l.from_date || l.rent_start} /> – <DateTime value={l.to_date || l.rent_end} /></span>, sub: (l) => (l.days_in_month ? `${l.days_in_month} day(s)` : null) },
     { key: 'a', header: 'Amount', numeric: true, render: (l) => <Money value={l.amount} /> },

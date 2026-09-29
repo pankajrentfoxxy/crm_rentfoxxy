@@ -3,9 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, Checkbox, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select, Tabs,
+  Button, Checkbox, ConfirmDialog, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select,
+  SignaturePad, Tabs,
 } from '../../../components/carret';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
 import { usePermission } from '../../../hooks/usePermission';
 import {
   acceptPartReturn, approvePartsToCustomer, approvePartsToTechnician, cancelPartRequest, fetchMyParts, fetchPartDcsAwaitingCourier,
@@ -14,6 +14,7 @@ import {
 } from './serveApi';
 import { errMsg } from './serveShared';
 import PartName from '../stock/setup/PartName';
+import PartChallansRegister from './PartChallansRegister';
 
 /**
  * Serve → Parts desk (warehouse, claude/carret-support.md).
@@ -27,6 +28,8 @@ import PartName from '../stock/setup/PartName';
  *   Challans & DCs — technician challans still waiting for a signature, Part
  *               DCs to customers (courier / delivered) and old parts coming
  *               back on an RPDC; each opens its Carret record page (PDF there).
+ *               Below the open work, "All challans" is the full register (every
+ *               challan / DC / RPDC, open and closed) — PartChallansRegister.
  * Filters as the old queue: request/return/move date, technician, oldest or
  * newest first. "Reserved elsewhere" shows which requests hold the units.
  * This page replaces the old Service Parts Challans screen (/support-parts/queue).
@@ -59,6 +62,8 @@ export default function PartsDeskPage() {
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState(null);
+  // One confirm at a time: { title, body, label, tone, action }.
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(() => {
     const qp = { from: filters.from || undefined, to: filters.to || undefined, tech_id: filters.tech_id || undefined, sort: filters.sort };
@@ -138,9 +143,9 @@ export default function PartsDeskPage() {
           {Number(r.instances_reserved) > 0 && (
             <>
               {' · '}
-              <button type="button" className="bg-transparent border-0 cursor-pointer" style={{ padding: 0, color: 'var(--alert-warn)', textDecoration: 'underline' }} onClick={(e) => { e.stopPropagation(); openReserved(r); }}>
+              <Button variant="quiet" className="c-parts-reserved-link" onClick={(e) => { e.stopPropagation(); openReserved(r); }}>
                 {r.instances_reserved} reserved elsewhere
-              </button>
+              </Button>
             </>
           )}
         </>
@@ -159,7 +164,7 @@ export default function PartsDeskPage() {
       render: (r) => canEdit && (
         <div className="flex" style={{ gap: '6px' }} onClick={(e) => e.stopPropagation()} role="presentation">
           {chargeable(r) && <Button variant="quiet" onClick={() => setDrawer({ kind: 'price', r, amount: priced(r) ? String(r.charge_amount) : '' })}>{priced(r) ? 'Change price' : 'Set price'}</Button>}
-          <Button variant="quiet" onClick={() => { if (window.confirm(`Cancel ${r.request_number}?`)) run(() => cancelPartRequest(r.id), 'Request cancelled'); }}>Cancel</Button>
+          <Button variant="quiet" onClick={() => setConfirm({ title: `Cancel ${r.request_number}?`, body: `${r.part_name} for ${r.tech_name || 'the technician'} — the request is closed and nothing is reserved for it.`, label: 'Cancel request', tone: 'crit', action: () => run(() => cancelPartRequest(r.id), 'Request cancelled') })}>Cancel</Button>
         </div>
       ),
     },
@@ -209,7 +214,7 @@ export default function PartsDeskPage() {
       render: (d) => canEdit && (
         <div className="flex" style={{ gap: '6px' }}>
           <Button variant="quiet" onClick={() => setDrawer({ kind: 'courier', dc: d.dc_number, courier_name: d.courier_name || '', awb_number: d.awb_number || '' })}>Courier</Button>
-          <Button disabled={busy} onClick={() => { if (window.confirm(`Mark ${d.dc_number} delivered?`)) run(() => markPartDcDelivered(d.dc_number), 'Delivered'); }}>Delivered</Button>
+          <Button disabled={busy} onClick={() => setConfirm({ title: `Mark ${d.dc_number} delivered?`, body: `The parts reached ${d.customer_name || 'the customer'}. The DC closes.`, label: 'Mark delivered', tone: 'good', action: () => run(() => markPartDcDelivered(d.dc_number), 'Delivered') })}>Delivered</Button>
         </div>
       ),
     },
@@ -218,7 +223,7 @@ export default function PartsDeskPage() {
     { key: 'n', header: 'Old-part return DC', render: (d) => <DocNumber value={d.dc_number} />, sub: (d) => <DateTime value={d.created_at} /> },
     { key: 'c', header: 'From', render: (d) => d.customer_name, sub: (d) => d.ticket_number },
     { key: 'k', header: 'Courier', render: (d) => (d.courier_name ? `${d.courier_name}${d.awb_number ? ` · ${d.awb_number}` : ''}` : (d.ship_by === 'by_courier' ? <span style={{ color: 'var(--alert-warn)' }}>Not added — open to add</span> : '—')) },
-    { key: 'a', header: '', render: (d) => canEdit && <Button disabled={busy} onClick={() => { if (window.confirm(`Receive the old parts on ${d.dc_number}?`)) run(() => receivePartReturnDc(d.dc_number), 'Received'); }}>Received</Button> },
+    { key: 'a', header: '', render: (d) => canEdit && <Button disabled={busy} onClick={() => setConfirm({ title: `Receive the old parts on ${d.dc_number}?`, body: 'The old parts on this return DC are taken into the warehouse and the RPDC closes.', label: 'Receive', tone: 'good', action: () => run(() => receivePartReturnDc(d.dc_number), 'Received') })}>Received</Button> },
   ];
 
   const count = (a) => (a == null ? '…' : a.length);
@@ -285,6 +290,7 @@ export default function PartsDeskPage() {
                 <Section title="Old parts coming back (RPDC)">
                   {dcs.back === null ? <EmptyState title="Loading…" /> : <DataTable columns={dcBackCols} rows={dcs.back} rowKey={(x) => x.dc_number} onRowClick={(x) => navigate(`/carret/serve/part-return-dcs/${encodeURIComponent(x.dc_number)}`)} empty={<EmptyState title="None in transit" />} />}
                 </Section>
+                <PartChallansRegister />
               </>
             )}
           </>
@@ -357,7 +363,7 @@ export default function PartsDeskPage() {
             <Button variant="quiet" onClick={() => navigate(`/carret/serve/parts-challans/${d.challanId}`)}>Open the challan page</Button>
             <Field label="Technician's name" required><Input value={d.signer} onChange={(e) => setDrawer({ ...d, signer: e.target.value })} /></Field>
             {d.esign ? <Button variant="quiet" onClick={() => setDrawer({ ...d, esign: null })}>Sign again</Button>
-              : <SignaturePadComponent onSave={(esign) => setDrawer((x) => ({ ...x, esign }))} onCancel={() => setDrawer({ ...d, esign: null })} />}
+              : <SignaturePad onSave={(esign) => setDrawer((x) => ({ ...x, esign }))} onCancel={() => setDrawer({ ...d, esign: null })} />}
           </div>
         )}
       </Drawer>
@@ -373,7 +379,7 @@ export default function PartsDeskPage() {
             <p className="text-ink-3">{d.r.request_number} from {d.r.tech_name}. Check the part, then sign for the warehouse.</p>
             <Field label="Your name" required><Input value={d.signer} onChange={(e) => setDrawer({ ...d, signer: e.target.value })} /></Field>
             {d.esign ? <Button variant="quiet" onClick={() => setDrawer({ ...d, esign: null })}>Sign again</Button>
-              : <SignaturePadComponent onSave={(esign) => setDrawer((x) => ({ ...x, esign }))} onCancel={() => setDrawer({ ...d, esign: null })} />}
+              : <SignaturePad onSave={(esign) => setDrawer((x) => ({ ...x, esign }))} onCancel={() => setDrawer({ ...d, esign: null })} />}
           </div>
         )}
       </Drawer>
@@ -418,6 +424,16 @@ export default function PartsDeskPage() {
           </div>
         ))}
       </Drawer>
+
+      <ConfirmDialog
+        open={!!confirm}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.action()}
+        title={confirm?.title}
+        body={confirm?.body}
+        confirmLabel={confirm?.label}
+        tone={confirm?.tone}
+      />
     </DeskShell>
   );
 }

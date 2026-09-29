@@ -2,7 +2,8 @@
  * Control → Reports: every report the old /reports area offers, on the same
  * endpoints and the same section each endpoint enforces (backend/routes/reports.js,
  * routes/analytics.js). Each entry says how to fetch it, how to turn the answer
- * into blocks (reportsShared.jsx) and what can be downloaded:
+ * into blocks (reportsShared.jsx; charts in ReportChart.jsx, each above the
+ * table it pictures) and what can be downloaded:
  *   Excel — POST /reports/export (report's own section or reports_export)
  *   PDF   — Production QC (list and per attempt)
  *   CSV   — any table on screen, and the full list behind a paginated table.
@@ -17,6 +18,7 @@ const monthStart = () => { const d = new Date(); d.setDate(1); return iso(d); };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const monthLabel = (m, y) => `${MONTHS[(Number(m) || 1) - 1]} ${y || ''}`.trim();
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const num = (v) => Number(v) || 0;
 
 async function excel(reportType, filters, name) {
   const { data } = await reportExcel(reportType, filters);
@@ -118,6 +120,70 @@ const soColumns = (v, scope) => [
   })),
 ];
 
+// ------------------------------------------------------------------ charts
+// The old /reports pages' charts, fed from the same fields (features/reporting/pages/*).
+const monthlyChart = (title, rows, series, extra) => ({
+  kind: 'chart',
+  chart: 'bar',
+  title,
+  x: 'month',
+  xLabel: 'Month',
+  money: true,
+  series,
+  data: (rows || []).map((r) => ({ month: monthLabel(r.month, r.year), ...Object.fromEntries(series.map((s) => [s.key, num(s.from ? s.from(r) : r[s.key])])) })),
+  ...extra,
+});
+const leadChart = (title, rows) => ({
+  kind: 'chart', chart: 'hbar', title, x: 'status', xLabel: 'Status', series: [{ key: 'count', label: 'Leads' }],
+  data: (rows || []).map((r) => ({ status: r.status || '—', count: num(r.count) })),
+});
+// Stock slices are lifecycle states, so they wear their family's colour, not a series slot.
+const stockDonut = (title, slices) => ({
+  kind: 'chart', chart: 'donut', title, x: 'state', xLabel: 'State', series: [{ key: 'laptops', label: 'Laptops' }],
+  data: slices.map(([state, laptops, color]) => ({ state, laptops: num(laptops), color })),
+});
+// Old Revenue page: invoices on screen grouped by month; collected = paid in full.
+function revenueTrend(invoices) {
+  const byMonth = new Map();
+  (invoices || []).forEach((r) => {
+    const key = `${r.invoice_year}-${String(r.invoice_month).padStart(2, '0')}`;
+    const m = byMonth.get(key) || { key, month: monthLabel(r.invoice_month, r.invoice_year), invoiced: 0, collected: 0 };
+    m.invoiced += num(r.grand_total);
+    if (r.status === 'paid') m.collected += num(r.grand_total);
+    byMonth.set(key, m);
+  });
+  return {
+    kind: 'chart',
+    chart: 'area',
+    title: 'Monthly trend',
+    note: 'From the invoices on this page; collected counts invoices marked paid.',
+    x: 'month',
+    xLabel: 'Month',
+    money: true,
+    series: [{ key: 'invoiced', label: 'Invoiced' }, { key: 'collected', label: 'Collected' }],
+    data: [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key)),
+  };
+}
+// Old Lead conversion funnel: every lead → still open → hot → deal / demo.
+function leadFunnel(funnel) {
+  const by = Object.fromEntries((funnel || []).map((r) => [r.status, num(r.count)]));
+  const total = (funnel || []).reduce((t, r) => t + num(r.count), 0);
+  const pct = (n) => (total ? Math.round((n / total) * 1000) / 10 : 0);
+  const steps = [
+    ['All leads', total], ['Cold + warm + hot', (by.Cold || 0) + (by.Warm || 0) + (by.Hot || 0)],
+    ['Hot', by.Hot || 0], ['Deal / demo', (by.Deal || 0) + (by.Demo || 0)],
+  ];
+  return {
+    kind: 'chart',
+    chart: 'hbar',
+    title: 'Lead funnel',
+    x: 'step',
+    series: [{ key: 'count', label: 'Leads', labelKey: 'label' }],
+    data: steps.map(([step, count]) => ({ step, count, pct: pct(count), label: `${count.toLocaleString('en-IN')} · ${pct(count)}%` })),
+    columns: [{ key: 'step', label: 'Step' }, { key: 'count', label: 'Leads', kind: 'num' }, { key: 'pct', label: 'Of all leads', kind: 'pct' }],
+  };
+}
+
 // ------------------------------------------------------------------ catalogue
 export const REPORT_GROUPS = ['Dashboards', 'Money', 'Sales', 'Stock & floor', 'Support & movement'];
 
@@ -141,7 +207,13 @@ export const REPORTS = [
       return [
         { kind: 'stats', title: 'Revenue — this month', items: ['invoiced', 'collected', 'outstanding'].map((k) => ({ label: `${k[0].toUpperCase()}${k.slice(1)}`, value: rv.current_month?.[k], kind: 'money' })) },
         { kind: 'stats', title: 'Revenue — last month', items: ['invoiced', 'collected', 'outstanding'].map((k) => ({ label: `${k[0].toUpperCase()}${k.slice(1)}`, value: rv.last_month?.[k], kind: 'money' })) },
+        monthlyChart('Invoiced vs collected — last 6 months', rv.last_6_months, [{ key: 'invoiced', label: 'Invoiced' }, { key: 'collected', label: 'Collected' }]),
         { kind: 'table', title: 'Revenue — last 6 months', csv: 'revenue_6_months', rows: rv.last_6_months || [], columns: [{ key: 'm', label: 'Month', value: (r) => monthLabel(r.month, r.year) }, { key: 'invoiced', label: 'Invoiced', kind: 'money' }, { key: 'collected', label: 'Collected', kind: 'money' }] },
+        stockDonut('Stock by state', [
+          ['Ready (QC passed)', inv.qc_passed_available, 'var(--lc-idle)'], ['Rented', inv.currently_rented, 'var(--lc-earning)'],
+          ['In QC', inv.in_qc, 'var(--lc-moving)'], ['In repair / QC failed', num(inv.in_repair) + num(inv.qc_failed), 'var(--lc-offcycle)'],
+          ['Sold', inv.sold, 'var(--lc-closed)'],
+        ]),
         {
           kind: 'stats',
           title: 'Stock',
@@ -152,8 +224,13 @@ export const REPORTS = [
           ],
         },
         { kind: 'stats', title: 'Leads', items: [{ label: 'Active', value: ld.total_active }, { label: 'Converted this month', value: ld.converted_this_month }, { label: 'Follow-ups overdue', value: ld.follow_up_overdue }] },
+        leadChart('Lead pipeline', ld.by_status),
         { kind: 'table', title: 'Leads by status', csv: 'leads_by_status', rows: ld.by_status || [], columns: [{ key: 'status', label: 'Status' }, { key: 'count', label: 'Leads', kind: 'num' }] },
         { kind: 'stats', title: 'Floor', items: [{ label: 'Open tickets', value: fl.active_tickets }, { label: 'Highlighted', value: fl.highlighted }, { label: 'Avg. hours to finish', value: fl.avg_completion_hours }] },
+        {
+          kind: 'chart', chart: 'hbar', title: 'Floor — tickets by stage', x: 'stage', xLabel: 'Stage', catWidth: 160,
+          series: [{ key: 'count', label: 'Tickets' }], data: (fl.by_stage || []).map((r) => ({ stage: r.stage_name || '—', count: num(r.count) })),
+        },
         { kind: 'table', title: 'Floor by stage', csv: 'floor_by_stage', rows: fl.by_stage || [], columns: [{ key: 'stage_name', label: 'Stage' }, { key: 'count', label: 'Tickets', kind: 'num' }] },
         { kind: 'stats', title: 'Support', items: [{ label: 'Open', value: sp.open }, { label: 'In progress', value: sp.in_progress }, { label: 'Closed this month', value: sp.closed_this_month }] },
         { kind: 'stats', title: 'Vendors', items: [{ label: 'Active vendors', value: vd.total_active_vendors }, { label: 'Bills pending', value: vd.pending_bills }, { label: 'Pending amount', value: vd.pending_bills_amount, kind: 'money' }] },
@@ -173,6 +250,7 @@ export const REPORTS = [
     load: async () => (await get('/analytics/sales-dashboard')).data || {},
     blocks: (d) => [
       { kind: 'stats', title: 'My leads', items: [{ label: 'Leads', value: d.my_leads?.total }, { label: 'Follow-ups today', value: d.my_leads?.follow_up_today }, { label: 'Follow-ups overdue', value: d.my_leads?.follow_up_overdue }] },
+      leadChart('My lead pipeline', d.my_leads?.by_status),
       { kind: 'table', title: 'Leads by status', csv: 'my_leads_by_status', rows: d.my_leads?.by_status || [], columns: [{ key: 'status', label: 'Status' }, { key: 'count', label: 'Leads', kind: 'num' }] },
       { kind: 'stats', title: 'Quotations', items: [{ label: 'Sent this month', value: d.quotations?.sent_this_month }, { label: 'Approved this month', value: d.quotations?.approved_this_month }, { label: 'Hit rate', value: d.quotations?.hit_rate_pct, kind: 'pct' }] },
       { kind: 'stats', title: 'Conversions', items: [{ label: 'This month', value: d.conversions?.this_month }, { label: 'Last month', value: d.conversions?.last_month }] },
@@ -191,6 +269,7 @@ export const REPORTS = [
     load: (v, page) => get('/reports/revenue', { ...dateParams(v), type: v.type || undefined, page, limit: 100 }),
     blocks: (d, v) => [
       { kind: 'stats', title: 'Totals', items: [{ label: 'Invoiced', value: d.totals?.invoiced, kind: 'money' }, { label: 'Collected', value: d.totals?.collected, kind: 'money' }, { label: 'Outstanding', value: d.totals?.outstanding, kind: 'money' }, { label: 'Credit notes', value: d.totals?.credit_notes_applied, kind: 'money' }] },
+      revenueTrend(d.invoices),
       { kind: 'table', title: 'By entity', csv: 'revenue_by_entity', rows: d.by_entity || [], columns: [{ key: 'entity_code', label: 'Entity' }, { key: 'invoiced', label: 'Invoiced', kind: 'money' }, { key: 'collected', label: 'Collected', kind: 'money' }, { key: 'outstanding', label: 'Outstanding', kind: 'money' }] },
       {
         kind: 'table',
@@ -226,6 +305,10 @@ export const REPORTS = [
     blocks: (d) => [
       { kind: 'stats', title: 'Summary', items: [{ label: 'Invoiced', value: d.summary?.total_invoiced, kind: 'money' }, { label: 'Collected', value: d.summary?.total_collected, kind: 'money' }, { label: 'Outstanding', value: d.summary?.outstanding, kind: 'money' }, { label: 'Overdue', value: d.summary?.overdue, kind: 'money' }] },
       { kind: 'table', title: 'By customer', csv: 'collections_by_customer', rows: d.by_customer || [], columns: [{ key: 'customer_name', label: 'Customer' }, { key: 'invoiced', label: 'Invoiced', kind: 'money' }, { key: 'collected', label: 'Collected', kind: 'money' }, { key: 'outstanding', label: 'Outstanding', kind: 'money' }, { key: 'oldest_unpaid_date', label: 'Oldest unpaid', kind: 'date' }, { key: 'status', label: 'Status' }] },
+      monthlyChart('Collections trend', d.monthly_trend, [
+        { key: 'collected', label: 'Collected', color: 'var(--lc-earning)' },
+        { key: 'outstanding', label: 'Outstanding', color: 'var(--lc-moving)', from: (r) => Math.max(0, num(r.invoiced) - num(r.collected)) },
+      ], { stacked: true }),
       { kind: 'table', title: 'Monthly trend', csv: 'collections_trend', rows: d.monthly_trend || [], columns: [{ key: 'm', label: 'Month', value: (r) => monthLabel(r.month, r.year) }, { key: 'invoiced', label: 'Invoiced', kind: 'money' }, { key: 'collected', label: 'Collected', kind: 'money' }] },
     ],
     downloads: (v) => [{ label: 'Excel', run: () => excel('collections', { month: v.month || undefined, year: v.year || undefined }) }],
@@ -242,6 +325,7 @@ export const REPORTS = [
     blocks: (d) => [
       { kind: 'stats', title: 'Debit notes', items: [{ label: 'Debit notes in range', value: d.debit_notes_total, kind: 'money' }] },
       { kind: 'table', title: 'By vendor', csv: 'vendor_spend', rows: d.vendors || [], columns: [{ key: 'vendor_name', label: 'Vendor' }, { key: 'po_type', label: 'PO type' }, { key: 'total_bills', label: 'Bills', kind: 'num' }, { key: 'total_payable', label: 'Payable', kind: 'money' }, { key: 'total_paid', label: 'Paid', kind: 'money' }, { key: 'debit_adjustments', label: 'Debit adj.', kind: 'money' }, { key: 'net_payable', label: 'Net payable', kind: 'money' }] },
+      monthlyChart('Monthly vendor spend', d.monthly_trend, [{ key: 'payable', label: 'Payable', from: (r) => r.total_payable }]),
       { kind: 'table', title: 'Monthly trend', csv: 'vendor_spend_trend', rows: d.monthly_trend || [] },
     ],
     downloads: (v) => [{ label: 'Excel', run: () => excel('vendor_spend', dateParams(v)) }],
@@ -256,6 +340,7 @@ export const REPORTS = [
     defaults: last30,
     load: (v) => get('/reports/lead-conversion', dateParams(v)),
     blocks: (d) => [
+      leadFunnel(d.funnel),
       { kind: 'table', title: 'Funnel', csv: 'lead_funnel', rows: d.funnel || [], columns: [{ key: 'status', label: 'Status' }, { key: 'count', label: 'Leads', kind: 'num' }, { key: 'pct_of_total', label: 'Share', kind: 'pct' }] },
       { kind: 'table', title: 'By salesperson', csv: 'lead_conversion_salesperson', rows: d.by_salesperson || [], columns: [{ key: 'user_name', label: 'Salesperson' }, { key: 'total_leads', label: 'Leads', kind: 'num' }, { key: 'converted', label: 'Converted', kind: 'num' }, { key: 'lost', label: 'Lost', kind: 'num' }, { key: 'conversion_rate_pct', label: 'Conversion', kind: 'pct' }, { key: 'avg_days_to_convert', label: 'Avg. days', kind: 'num' }] },
       { kind: 'table', title: 'Days per stage', csv: 'lead_days_per_stage', rows: d.avg_days_per_stage || [], columns: [{ key: 'status', label: 'Status' }, { key: 'avg_days', label: 'Avg. days', kind: 'num' }] },
@@ -331,6 +416,11 @@ export const REPORTS = [
     load: () => get('/reports/inventory-utilisation'),
     blocks: (d) => [
       { kind: 'stats', title: 'Fleet', items: [{ label: 'Laptops', value: d.summary?.total_fleet }, { label: 'Utilised', value: d.summary?.avg_utilised_pct, kind: 'pct' }] },
+      stockDonut('Fleet by state', [
+        ['Available', (d.by_brand || []).reduce((t, r) => t + num(r.available), 0), 'var(--lc-idle)'],
+        ['Rented', (d.by_brand || []).reduce((t, r) => t + num(r.rented), 0), 'var(--lc-earning)'],
+        ['In repair', (d.by_brand || []).reduce((t, r) => t + num(r.in_repair), 0), 'var(--lc-offcycle)'],
+      ]),
       { kind: 'table', title: 'By brand', csv: 'inventory_by_brand', rows: d.by_brand || [], columns: [{ key: 'brand', label: 'Brand' }, { key: 'total', label: 'Total', kind: 'num' }, { key: 'available', label: 'Available', kind: 'num' }, { key: 'rented', label: 'Rented', kind: 'num' }, { key: 'in_repair', label: 'In repair', kind: 'num' }] },
       { kind: 'table', title: 'Top customers', csv: 'inventory_top_customers', rows: d.top_customers || [], columns: [{ key: 'customer_name', label: 'Customer' }, { key: 'laptop_count', label: 'Laptops', kind: 'num' }, { key: 'monthly_value', label: 'Monthly value', kind: 'money' }] },
     ],

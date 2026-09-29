@@ -8,7 +8,7 @@ import {
   adminDeliverOverride, getRefusedReturnUnits, markRejected, receiveRefusedReturn, sendDeliveryOtp,
   sendWarehouseReturnOtp, submitDeliveryWithPod, updateDcDeliveryDate, verifyWarehouseReturnOtp,
 } from '../../sales-pipeline/salesPipelineApi';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
+import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { pdfUrl } from '../sell/sellShared';
 import { modeOf } from './ChallanDispatch';

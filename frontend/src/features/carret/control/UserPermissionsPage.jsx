@@ -30,6 +30,7 @@ export default function UserPermissionsPage() {
   const [original, setOriginal] = useState({});
   const [showHidden, setShowHidden] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [discard, setDiscard] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -147,7 +148,7 @@ export default function UserPermissionsPage() {
     >
       <div className="c-stack">
         <div className="flex items-center" style={{ gap: '8px' }}>
-          <Button variant="quiet" onClick={() => { if (!dirty.length || window.confirm('Discard unsaved changes?')) navigate('/carret/control/user-permissions'); }}>← Another user</Button>
+          <Button variant="quiet" onClick={() => { if (!dirty.length) navigate('/carret/control/user-permissions'); else setDiscard(true); }}>← Another user</Button>
           {hiddenCount > 0 && (
             <label className="flex items-center" style={{ gap: '6px', marginLeft: 'auto' }}>
               <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
@@ -187,6 +188,14 @@ export default function UserPermissionsPage() {
         title="Reset to role?"
         body={`Removes all ${overrideCount} override${overrideCount === 1 ? '' : 's'} on ${u?.name || 'this user'}; they get exactly their role's permissions.`}
         confirmLabel="Reset"
+      />
+      <ConfirmDialog
+        open={discard}
+        onClose={() => setDiscard(false)}
+        onConfirm={() => navigate('/carret/control/user-permissions')}
+        title="Discard unsaved changes?"
+        confirmLabel="Discard"
+        tone="warn"
       />
     </DeskShell>
   );

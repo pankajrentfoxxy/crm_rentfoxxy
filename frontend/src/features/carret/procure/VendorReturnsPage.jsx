@@ -7,7 +7,9 @@ import {
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
-import { errMsg } from './procureShared';
+import { downloadReturnToVendorDcPdf, fetchVendors } from '../../vendor-management/vendorManagementApi';
+import { downloadVendorRepairPdf } from '../../floor-pipeline/vendorRepairApi';
+import { errMsg, vendorName } from './procureShared';
 import { REPAIR_WAREHOUSE_ROLES, VRDC_STATUS_LABEL, vrdcChip } from './repairShared';
 
 /**
@@ -83,9 +85,18 @@ export default function VendorReturnsPage() {
   const [busy, setBusy] = useState('');
   const [cancelFor, setCancelFor] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [vendorId, setVendorId] = useState(''); // return challans: server filter vendor_id
+  const [vendors, setVendors] = useState(null);
+  const [range, setRange] = useState({ from: '', to: '' }); // repair challans: sent (or made) between
+  const [pdfFor, setPdfFor] = useState('');
 
-  useEffect(() => { setStatus(''); setSearch(''); setPage(1); setPicked({}); setPickedRepair({}); }, [tab]);
-  useEffect(() => { setPage(1); }, [status, search, scope]);
+  useEffect(() => { setStatus(''); setSearch(''); setVendorId(''); setRange({ from: '', to: '' }); setPage(1); setPicked({}); setPickedRepair({}); }, [tab]);
+  useEffect(() => { setPage(1); }, [status, search, scope, vendorId, range]);
+  // The vendor list for the return-challan filter, fetched the first time it is needed.
+  useEffect(() => {
+    if (tab !== 'challans' || vendors) return;
+    fetchVendors({ page: 1, limit: 200 }).then(({ data }) => setVendors(data.data || [])).catch(() => setVendors([]));
+  }, [tab, vendors]);
   useEffect(() => { setPicked({}); }, [scope]);
 
   const load = useCallback(() => {
@@ -93,10 +104,14 @@ export default function VendorReturnsPage() {
     const paged = { page, limit: PAGE };
     const get = {
       send: () => api.get('/vendor-management/return-to-vendor/eligible-laptops', { params: { inventory_status: scope, search: search || undefined, limit: 200 } }),
-      challans: () => api.get('/vendor-management/return-to-vendor/dc', { params: { ...paged, status: status || undefined } }),
+      challans: () => api.get('/vendor-management/return-to-vendor/dc', { params: { ...paged, status: status || undefined, vendor_id: vendorId || undefined } }),
       tickets: () => api.get('/vendor-management/return-ticket', { params: { ...paged, status: status || undefined } }),
       to_repair: () => api.get('/vendor-repair/diagnosis-failed', { params: { search: search || undefined } }),
-      repairs: () => api.get('/vendor-repair/dc', { params: { ...paged, status: status || undefined, search: search || undefined } }),
+      repairs: () => api.get('/vendor-repair/dc', {
+        params: {
+          ...paged, status: status || undefined, search: search || undefined, date_from: range.from || undefined, date_to: range.to || undefined,
+        },
+      }),
       // Laptops still with the vendor: both "out" statuses, newest first.
       receive: () => Promise.all(['dispatched', 'partially_returned'].map((st) => api.get('/vendor-repair/dc', { params: { status: st, search: search || undefined, limit: 100 } })))
         .then((res) => ({ data: { data: res.flatMap((r) => r.data.data || []).filter((r) => Number(r.pending_count) > 0).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) } })),
@@ -109,7 +124,7 @@ export default function VendorReturnsPage() {
         setPages(data.pagination?.totalPages || 1);
       })
       .catch((e) => { setRows([]); toast.error(errMsg(e, 'Could not load')); });
-  }, [tab, scope, search, status, page]);
+  }, [tab, scope, search, status, page, vendorId, range]);
   useEffect(() => {
     const t = setTimeout(load, search ? 300 : 0);
     return () => clearTimeout(t);
@@ -167,6 +182,17 @@ export default function VendorReturnsPage() {
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(''); }
   };
 
+  // Row PDF buttons sit inside a clickable row: stop the click so the row
+  // does not also open the record.
+  const pdf = async (e, number, fn) => {
+    e.stopPropagation();
+    setPdfFor(number);
+    try { await fn(number); } catch (err) { toast.error(err.message || 'PDF download failed'); } finally { setPdfFor(''); }
+  };
+  const pdfButton = (number, fn) => (
+    <Button variant="quiet" disabled={pdfFor === number} onClick={(e) => pdf(e, number, fn)}>{pdfFor === number ? 'PDF…' : 'PDF'}</Button>
+  );
+
   const columns = useMemo(() => {
     if (tab === 'send') {
       return [
@@ -193,6 +219,7 @@ export default function VendorReturnsPage() {
         { key: 'c', header: 'Laptops', numeric: true, render: (r) => r.item_count },
         { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status === 'completed' ? 'completed' : r.status === 'dispatch_ready' ? 'pending' : r.status} label={DC_LABEL[r.status] || r.status} /> },
         { key: 'd', header: 'Created', render: (r) => <DateTime value={r.created_at} />, sub: (r) => (r.dispatched_at ? <>out <DateTime value={r.dispatched_at} /></> : null) },
+        { key: 'a', header: '', render: (r) => pdfButton(r.dc_number, downloadReturnToVendorDcPdf) },
       ];
     }
     if (tab === 'tickets') {
@@ -227,8 +254,13 @@ export default function VendorReturnsPage() {
         {
           key: 'a',
           header: '',
-          render: (r) => (tab === 'repairs' && canRepairDispatch && ['draft', 'dispatch_ready'].includes(r.status) && (
-            <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setCancelFor(r); }}>Cancel</Button>
+          render: (r) => (tab === 'repairs' && (
+            <div className="flex justify-end" style={{ gap: '6px' }}>
+              {pdfButton(r.dc_number, downloadVendorRepairPdf)}
+              {canRepairDispatch && ['draft', 'dispatch_ready'].includes(r.status) && (
+                <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setCancelFor(r); }}>Cancel</Button>
+              )}
+            </div>
           )),
         },
       ];
@@ -241,7 +273,7 @@ export default function VendorReturnsPage() {
       { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status === 'pending' ? 'draft' : r.status} label={r.status === 'pending' ? 'Draft — for accounts' : r.status} /> },
     ];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, picked, pickedRepair, canCreate, canRepairDispatch, canMakeRepair]);
+  }, [tab, picked, pickedRepair, canCreate, canRepairDispatch, canMakeRepair, pdfFor]);
 
   const onRow = {
     send: canCreate ? toggle : undefined,
@@ -256,8 +288,23 @@ export default function VendorReturnsPage() {
   const statusOptions = STATUS_FILTERS[tab];
   const filters = [
     ...(tab !== 'send' ? [{ key: 'search', type: 'search', label: 'Search', placeholder: { to_repair: 'TTSPL, serial, reason, location', repairs: 'Challan, vendor, contact', receive: 'Challan, vendor, contact' }[tab] || 'Number or vendor (this page)' }] : []),
-    ...(statusOptions ? [{ key: 'status', label: 'Status', options: [{ value: '', label: 'All statuses' }, ...statusOptions.map(([value, label]) => ({ value, label }))] }] : []),
+    ...(tab === 'challans' ? [{ key: 'vendor', label: 'Vendor', options: (vendors || []).map((v) => ({ value: String(v.vendor_id), label: vendorName(v) })) }] : []),
+    ...(statusOptions ? [{ key: 'status', label: 'Status', options: statusOptions.map(([value, label]) => ({ value, label })) }] : []),
   ];
+  const setFilter = (k, v) => {
+    if (k === 'search') setSearch(v);
+    else if (k === 'vendor') setVendorId(v);
+    else setStatus(v);
+  };
+  const dateRange = tab === 'repairs' && (
+    <div className="flex flex-wrap items-center" style={{ gap: '6px' }}>
+      <span className="text-ink-3">Sent</span>
+      <Input type="date" aria-label="Sent from" value={range.from} max={range.to || undefined} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} style={{ width: '10rem' }} />
+      <span className="text-ink-3">to</span>
+      <Input type="date" aria-label="Sent to" value={range.to} min={range.from || undefined} onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))} style={{ width: '10rem' }} />
+      {(range.from || range.to) && <Button variant="quiet" onClick={() => setRange({ from: '', to: '' })}>Any date</Button>}
+    </div>
+  );
 
   if (!tabs.length) {
     return <DeskShell title="Vendor returns" breadcrumb="Procurement"><EmptyState title="Nothing here for your access" /></DeskShell>;
@@ -294,9 +341,10 @@ export default function VendorReturnsPage() {
           {filters.length > 0 && (
             <FilterBar
               filters={filters}
-              values={{ search, status }}
-              onChange={(k, v) => (k === 'search' ? setSearch(v) : setStatus(v))}
-              onClear={() => { setSearch(''); setStatus(''); }}
+              values={{ search, status, vendor: vendorId }}
+              onChange={setFilter}
+              onClear={() => { setSearch(''); setStatus(''); setVendorId(''); setRange({ from: '', to: '' }); }}
+              right={dateRange || undefined}
               count={shown ? `${shown.length} shown` : undefined}
             />
           )}

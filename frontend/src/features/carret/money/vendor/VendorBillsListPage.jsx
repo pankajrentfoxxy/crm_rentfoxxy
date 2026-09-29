@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../../shells/DeskShell';
 import {
-  Button, DataTable, DocNumber, Drawer, EmptyState, Field, FilterBar, FormGrid, Money, Notice, Panel, SearchSelect,
-  Select, StatTile, StatusChip,
+  Button, ConfirmDialog, DataTable, DocNumber, Drawer, EmptyState, Field, FilterBar, FormGrid, Money, Notice, Panel,
+  SearchSelect, Select, StatTile, StatusChip,
 } from '../../../../components/carret';
 import { usePermission } from '../../../../hooks/usePermission';
+import { useAuth } from '../../../../context/AuthContext';
 import {
-  BILL_STATUS_LABEL, MONTHS, billChipStatus, errMsg, generateVendorBill, monthLabel, outstandingOf, useBillableVendors,
-  useVendorBills,
+  BILL_STATUS_LABEL, MONTHS, approveVendorBill, billChipStatus, downloadVendorBillPdf, errMsg, generateVendorBill,
+  monthLabel, outstandingOf, useBillableVendors, useVendorBills,
 } from './vendorMoneyApi';
 
 /**
@@ -18,6 +19,8 @@ import {
  * One bill per vendor per month for laptops we rent from the vendor. A bill is
  * generated (maker), approved by someone else (checker), then paid. GST shows
  * the head it was classified under; bills raised before the split say so.
+ * Each row has the bill PDF and, for a bill awaiting approval that someone
+ * else generated, Approve — the record page's rule (vendor_billing_mgmt edit).
  */
 const STATUS_OPTIONS = Object.entries(BILL_STATUS_LABEL).map(([value, label]) => ({ value, label }));
 const MONTH_OPTIONS = MONTHS.slice(1).map((m, i) => ({ value: String(i + 1), label: m }));
@@ -108,19 +111,48 @@ export default function VendorBillsListPage() {
   const navigate = useNavigate();
   const { hasPermission } = usePermission();
   const canCreate = hasPermission('vendor_billing_mgmt', 'create');
+  const canEdit = hasPermission('vendor_billing_mgmt', 'edit');
+  const { user } = useAuth() || {};
+  const [approving, setApproving] = useState(null);
+  const [rowBusy, setRowBusy] = useState('');
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(1);
   const [genOpen, setGenOpen] = useState(false);
   const search = useDebounced(filters.search || '');
   const { vendors } = useBillableVendors();
 
-  const { loading, error, rows, summary, pagination } = useVendorBills({
+  const { loading, error, rows, summary, pagination, refresh } = useVendorBills({
     search, vendor_id: filters.vendor_id, month: filters.month, year: filters.year, status: filters.status,
     page, limit: PAGE_SIZE,
   });
 
   const onFilter = useCallback((k, v) => { setFilters((f) => ({ ...f, [k]: v })); setPage(1); }, []);
   const onClear = useCallback(() => { setFilters({}); setPage(1); }, []);
+
+  // Maker-checker: whoever generated the bill cannot approve it (the API
+  // refuses too; hiding the button saves the round trip).
+  const canApproveRow = useCallback((r) => canEdit && r.status === 'generated'
+    && !(r.generated_by && Number(r.generated_by) === Number(user?.user_id)), [canEdit, user]);
+
+  const pdf = useCallback(async (r) => {
+    setRowBusy(`pdf-${r.bill_id}`);
+    try { await downloadVendorBillPdf(r); } catch (e) { toast.error(errMsg(e, 'Could not download the PDF.')); } finally { setRowBusy(''); }
+  }, []);
+
+  const approve = async () => {
+    const r = approving;
+    if (!r) return;
+    setRowBusy(`approve-${r.bill_id}`);
+    try {
+      await approveVendorBill(r.bill_id);
+      toast.success(`${r.bill_number} approved — it can now be paid`);
+      refresh();
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not approve the bill.'));
+    } finally {
+      setRowBusy('');
+    }
+  };
 
   const filterDefs = useMemo(() => ([
     { key: 'search', label: 'Search', type: 'search', placeholder: 'Bill number or vendor' },
@@ -147,7 +179,21 @@ export default function VendorBillsListPage() {
         return due ? <Money value={due} /> : <span className="text-ink-3">settled</span>;
       },
     },
-  ], []);
+    {
+      key: 'actions', header: '', align: 'right',
+      // A row opens the record; its buttons must not (click or Enter).
+      render: (r) => (
+        <span className="c-row-actions" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="presentation">
+          <Button variant="quiet" disabled={rowBusy === `pdf-${r.bill_id}`} onClick={() => pdf(r)}>{rowBusy === `pdf-${r.bill_id}` ? 'PDF…' : 'PDF'}</Button>
+          {canApproveRow(r) && (
+            <Button disabled={rowBusy === `approve-${r.bill_id}`} onClick={() => setApproving(r)}>
+              {rowBusy === `approve-${r.bill_id}` ? 'Approving…' : 'Approve'}
+            </Button>
+          )}
+        </span>
+      ),
+    },
+  ], [canApproveRow, pdf, rowBusy]);
 
   return (
     <DeskShell
@@ -201,6 +247,16 @@ export default function VendorBillsListPage() {
           )}
         </Panel>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(approving)}
+        onClose={() => setApproving(null)}
+        onConfirm={approve}
+        title={`Approve ${approving?.bill_number || 'this bill'}?`}
+        body={approving ? `₹${Number(approving.total_payable || 0).toFixed(2)} to ${approving.vendor_name || `vendor #${approving.vendor_id}`} for ${monthLabel(approving.bill_month, approving.bill_year)}. Check the laptops, days and rates on the bill first; once approved it can be paid.` : ''}
+        confirmLabel="Approve"
+        tone="good"
+      />
 
       {genOpen && (
         <GenerateDrawer

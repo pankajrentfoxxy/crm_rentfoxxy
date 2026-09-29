@@ -11,7 +11,7 @@ import { DEFAULT_BILLING_ADDRESS, formatVendorBillingFromVendor, formatVendorShi
 import { REPAIR_ISSUE_TYPES, addDaysYmd, todayIst } from '../../floor-pipeline/repairIssueTypes';
 import { fetchVendor, fetchVendors } from '../../vendor-management/vendorManagementApi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
-import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
+import VrtdcTransportFields, { validateVrtdcTransport } from './VrtdcTransportFields';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { checkTtsplAndSerial } from '../../../utils/machineIdentityVerify';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';

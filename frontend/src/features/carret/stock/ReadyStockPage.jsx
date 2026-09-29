@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DocNumber, EmptyState, Input, Notice, Segmented, StatTile,
+  Button, ConfirmDialog, DataTable, DocNumber, EmptyState, Input, Notice, Segmented, StatTile,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { errMsg, fetchReadyStock, sendToQc } from './stockApi';
@@ -41,6 +41,7 @@ export default function ReadyStockPage() {
   const [tagFor, setTagFor] = useState(null);
   const [slotFor, setSlotFor] = useState(null);
   const [busy, setBusy] = useState(null);
+  const [qcFor, setQcFor] = useState(null);
 
   const load = useCallback(() => {
     fetchReadyStock().then(({ data }) => { setRes(data); setPicked({}); }).catch((e) => { setRes({ data: [], summary: {} }); toast.error(errMsg(e)); });
@@ -59,7 +60,6 @@ export default function ReadyStockPage() {
   const chosen = rows.filter((r) => picked[r.serial_id]);
 
   const qc = async (r) => {
-    if (!window.confirm(`Send ${r.ttspl_id} back to QC? It leaves ready stock and its slot is freed.`)) return;
     setBusy(r.serial_id);
     try { await sendToQc(r.serial_id, r.serial_number); toast.success(`${r.ttspl_id} sent to QC`); load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(null); }
   };
@@ -86,7 +86,7 @@ export default function ReadyStockPage() {
         <div className="flex" style={{ gap: '4px', justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()} role="presentation">
           {canWarehouse && <Button variant="quiet" onClick={() => setTagFor([r])}>Tag</Button>}
           {canWarehouse && <Button variant="quiet" onClick={() => setSlotFor(r)}>{r.location ? 'Move' : 'Slot'}</Button>}
-          {canSendToQc && <Button variant="quiet" disabled={busy === r.serial_id} onClick={() => qc(r)}>Send to QC</Button>}
+          {canSendToQc && <Button variant="quiet" disabled={busy === r.serial_id} onClick={() => setQcFor(r)}>Send to QC</Button>}
         </div>
       ),
     },
@@ -128,6 +128,15 @@ export default function ReadyStockPage() {
       </div>
       <RetagDrawer laptops={tagFor} onClose={() => setTagFor(null)} onDone={() => { setTagFor(null); load(); }} />
       <LocationDrawer laptop={slotFor} onClose={() => setSlotFor(null)} onDone={() => { setSlotFor(null); load(); }} />
+      <ConfirmDialog
+        open={!!qcFor}
+        onClose={() => setQcFor(null)}
+        onConfirm={() => qcFor && qc(qcFor)}
+        title={`Send ${qcFor?.ttspl_id || ''} back to QC?`}
+        body="It leaves ready stock and its slot is freed."
+        confirmLabel="Send to QC"
+        tone="warn"
+      />
     </DeskShell>
   );
 }

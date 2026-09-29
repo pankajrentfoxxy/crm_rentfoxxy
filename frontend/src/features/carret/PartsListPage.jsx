@@ -4,12 +4,12 @@ import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
 import { Button, Tabs } from '../../components/carret';
 import { usePermission } from '../../hooks/usePermission';
-import PartLabelPrintModal from '../inventory-management/components/PartLabelPrintModal';
 import PartUnitsTab from './stock/setup/PartUnitsTab';
 import PartCatalogueTab from './stock/setup/PartCatalogueTab';
 import PartFormDrawer from './stock/setup/PartFormDrawer';
 import AddUnitsDrawer from './stock/setup/AddUnitsDrawer';
 import PartRecordDrawer from './stock/setup/PartRecordDrawer';
+import PartLabelPrintDrawer from './stock/setup/PartLabelPrintDrawer';
 import {
   PART_REPAIR_WRITE_ROLES, PART_UNIT_WRITE_ROLES, errMsg, fetchParts, labelUnit,
 } from './stock/setup/partsApi';
@@ -82,10 +82,10 @@ export default function PartsListPage() {
           : <PartCatalogueTab parts={parts} loading={parts === null} onOpenPart={setOpenId} canEditPart={canEditPart} />}
       </div>
 
-      {/* Hidden, not closed, while its edit / add-units drawer is up: two
-          dialogs would both take Esc and the focus trap. */}
+      {/* Hidden, not closed, while its edit / add-units / label drawer is up:
+          two dialogs would both take Esc and the focus trap. */}
       <PartRecordDrawer
-        part={form || addFor ? null : openPart}
+        part={form || addFor || labels?.length ? null : openPart}
         onClose={() => setOpenId(null)}
         onChanged={changed}
         onEdit={(p) => setForm({ part: p })}
@@ -112,7 +112,7 @@ export default function PartsListPage() {
         onClose={() => setAddFor(null)}
         onAdded={(created, p) => { changed(); if (created.length) print(created, p.part_name); }}
       />
-      <PartLabelPrintModal
+      <PartLabelPrintDrawer
         open={Boolean(labels && labels.length)}
         units={labels || []}
         onClose={() => setLabels(null)}

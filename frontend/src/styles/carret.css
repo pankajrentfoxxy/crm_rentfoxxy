@@ -430,3 +430,67 @@
 .c-qsec-h + .c-tick{ border-top:0 }
 .c-tick input{ width:18px; height:18px; accent-color:var(--alert-good) }
 .c-tick.is-on{ color:var(--ink-2) }
+
+/* Signature pad (components/carret/SignaturePad) */
+.c-sign{ display:flex; flex-direction:column; gap:8px; border:1px dashed var(--rule-2); border-radius:var(--d-radius-lg); padding:10px; background:var(--surface) }
+.c-sign-canvas{ width:100%; height:12rem; touch-action:none; border:1px solid var(--rule); border-radius:var(--d-radius); background:#fff }
+.c-sign-actions{ display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap }
+
+/* List pages (agent C) */
+/* Stat tiles above a list, and a group heading inside a Panel body (one customer's lines). */
+.c-tiles{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)) }
+.c-listgroup{ border-top:1px solid var(--rule) }
+.c-toolbar + .c-listgroup{ border-top:0 }
+.c-listgroup-h{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; padding:10px 16px; background:var(--surface-2); border-bottom:1px solid var(--rule) }
+.c-listgroup-t{ font-size:var(--d-base); font-weight:600; color:var(--ink) }
+.c-listgroup-t small{ font-weight:400; color:var(--ink-3); margin-left:8px }
+.c-listgroup .c-notice{ margin:10px 16px }
+.c-row-actions{ display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap }
+
+/* Part labels (agent B) */
+/* PartLabelPrintDrawer: sticker thumbnail, copies stepper, the 4-up strip. The printed
+   sheet is a server-built PDF, so there is no @media print here. */
+.c-plabel-thumb{ width:3rem; height:3.3rem; display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; padding:2px; border:1px solid var(--rule); border-radius:var(--d-radius); background:#fff }
+.c-plabel-thumb img{ width:2.1rem; height:2.1rem; object-fit:contain }
+.c-plabel-thumb-wait{ width:2.1rem; height:2.1rem; background:var(--surface-sunk); border-radius:2px }
+.c-plabel-thumb-cap{ max-width:100%; font-size:6px; line-height:1; color:#141D26; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.c-plabel-step{ display:inline-flex; align-items:center; gap:4px }
+.c-plabel-step .c-input{ width:3.5rem; text-align:center; font-variant-numeric:tabular-nums }
+.c-plabel-step .c-btn{ min-width:var(--d-tap); padding-left:0; padding-right:0; justify-content:center }
+.c-plabel-strip{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; font-size:var(--d-sm) }
+.c-plabel-strip-row{ display:inline-flex; gap:6px; padding:6px; border:1px solid var(--rule); border-radius:var(--d-radius); background:var(--surface-2) }
+.c-plabel-strip-cell{ width:2.6rem; height:2.6rem; display:grid; place-items:center; border:1px dashed var(--accent-line); border-radius:2px; background:var(--surface); color:var(--ink-3); font-size:11px; font-weight:600 }
+.c-plabel-hint{ display:block; font-size:var(--d-sm); color:var(--ink-3) }
+
+/* Service parts challans (agent F) */
+.c-btn.c-parts-reserved-link{ min-height:0; padding:0; border:0; color:var(--alert-warn); text-decoration:underline; font-size:inherit }
+.c-btn.c-parts-reserved-link:hover{ background:none }
+.c-parts-register-dates{ display:inline-flex; align-items:center; gap:6px }
+.c-parts-register-dates .c-input{ width:auto }
+.c-parts-register-pager{ border-top:1px solid var(--rule); border-bottom:0 }
+
+/* Report charts & fleet (agent E) */
+/* a Button that reads as an inline link: drill numbers in report tables, the fleet's laptop code */
+.c-btn.c-btn--inline{ height:auto; min-height:0; padding:0; border:0; border-radius:2px; font-weight:inherit; white-space:inherit; text-align:inherit; justify-content:flex-start }
+.c-btn.c-btn--inline:hover{ background:none; text-decoration:underline }
+/* a Button wrapping a whole StatTile: the tile is the target, no button chrome */
+.c-btn.c-btn--tile{ display:block; height:auto; padding:0; border:0; border-radius:var(--d-radius-lg); color:inherit; font-weight:inherit; white-space:normal; text-align:left }
+.c-btn.c-btn--tile:hover{ background:none }
+.c-btn.c-btn--tile:hover > *{ border-color:var(--accent-line) }
+/* a Button used as a section disclosure (permission matrix groups) */
+.c-btn.c-btn--disclosure{ height:auto; min-height:var(--d-tap); padding:0 6px; margin-left:-6px; color:var(--ink); font-size:15px; font-weight:600 }
+.c-btn.c-btn--inline:focus-visible, .c-btn.c-btn--tile:focus-visible, .c-btn.c-btn--disclosure:focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
+
+.c-chart{ margin:0; min-width:0 }
+.c-chart .recharts-surface:focus, .c-chart .recharts-wrapper:focus{ outline:none }
+.c-chart .recharts-wrapper:focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
+.c-chart-legend{ display:flex; flex-wrap:wrap; gap:4px 16px; list-style:none; margin:0 0 8px; padding:0; font-size:var(--d-sm); color:var(--ink-2) }
+.c-chart-legend li{ display:inline-flex; align-items:center; gap:6px }
+.c-chart-swatch{ display:inline-block; width:10px; height:10px; border-radius:2px; flex:none }
+.c-chart-tip{ background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--d-radius); box-shadow:var(--shadow-lg); padding:8px 10px; font-family:var(--font-ui); font-size:var(--d-sm); color:var(--ink); min-width:10rem }
+.c-chart-tip-h{ font-weight:600; margin-bottom:4px }
+.c-chart-tip-row{ display:flex; align-items:center; gap:6px }
+.c-chart-tip-v{ margin-left:auto; padding-left:12px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; color:var(--ink) }
+.c-chart-centre{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; text-align:center }
+.c-chart-centre strong{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:var(--d-lg); color:var(--ink) }
+.c-chart-centre span{ font-size:var(--d-sm); color:var(--ink-3) }

@@ -7,11 +7,11 @@ import {
 } from '../../components/carret';
 import { usePermission } from '../../hooks/usePermission';
 import {
-  MONTHS, blobErrMsg, errMsg, getInvoice, invoicePdf, invoiceTimeline, listInvoicePayments, saveBlob,
+  MONTHS, blobErrMsg, dcEinvoiceStatus, errMsg, getInvoice, invoicePdf, invoiceTimeline, listInvoicePayments, saveBlob,
 } from './money/moneyApi';
 import { MoneyChip, Tiles, outstandingOf } from './money/moneyShared';
 import {
-  CancelInvoiceDrawer, MarkPaidDrawer, RecordPaymentDrawer, SendInvoiceDrawer, ZohoDrawer,
+  CancelInvoiceDrawer, EwayBillDrawer, MarkPaidDrawer, RecordPaymentDrawer, SendInvoiceDrawer, ZohoDrawer,
 } from './money/InvoiceDrawers';
 
 /**
@@ -20,6 +20,11 @@ import {
  * mark paid — plus what it could not: Record payment (MD1) with the payment
  * history, the GST heads, the due date, security billed, the timeline, and
  * cancel with the MD4 guard.
+ *
+ * E-invoice / e-way bill: the IRN, its QR and the e-way bill's validity, and
+ * "Generate e-way bill" per DC (einvoice_ewb create). IRN generation stays on
+ * the Invoice & e-way queue. The e-way bill is written to the DC's lines, so
+ * each DC's status is read too — the invoice row does not always carry it.
  */
 
 const isSecurity = (l) => l?.line_type === 'security' || l?.is_security === true || l?.is_security === 'true';
@@ -40,6 +45,8 @@ export default function InvoiceRecordPage() {
   const canEdit = hasPermission('customer_billing', 'edit');
   const canCancel = hasPermission('customer_billing', 'delete');
   const canCredit = hasPermission('credit_notes', 'create');
+  const canEwbView = hasPermission('einvoice_ewb', 'view');
+  const canEwb = hasPermission('einvoice_ewb', 'create');
 
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -49,6 +56,8 @@ export default function InvoiceRecordPage() {
   const [lineView, setLineView] = useState('all');
   const [q, setQ] = useState('');
   const [pdfBusy, setPdfBusy] = useState('');
+  const [dcStatus, setDcStatus] = useState({});
+  const [ewbNonce, setEwbNonce] = useState(0);
 
   const load = useCallback(() => {
     getInvoice(invoiceId)
@@ -65,6 +74,16 @@ export default function InvoiceRecordPage() {
     const arr = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
     return Array.isArray(arr) ? arr : [];
   }, [inv]);
+  // The invoice's DCs, first-seen order (security lines carry the DC too).
+  const dcs = useMemo(() => [...new Set(lines.map((l) => tidy(l.dc_number)).filter(Boolean))], [lines]);
+  const dcKey = dcs.join('|');
+  useEffect(() => {
+    if (!canEwbView || !dcs.length) { setDcStatus({}); return undefined; }
+    let off = false;
+    Promise.all(dcs.slice(0, 20).map((dc) => dcEinvoiceStatus(dc).then(({ data: d }) => [dc, d]).catch(() => [dc, null])))
+      .then((pairs) => { if (!off) setDcStatus(Object.fromEntries(pairs.filter(([, d]) => d))); });
+    return () => { off = true; };
+  }, [dcKey, canEwbView, ewbNonce]); // eslint-disable-line react-hooks/exhaustive-deps
   const counts = useMemo(() => ({
     all: lines.length,
     rent: lines.filter((l) => lineKind(l) === 'rent').length,
@@ -107,6 +126,13 @@ export default function InvoiceRecordPage() {
   const received = payments.reduce((a, p) => a + Number(p.amount || 0), 0);
   const creditNotes = data.credit_notes || [];
   const deposits = data.security_deposits || [];
+  // DCs whose status says no e-way bill yet. Without einvoice_ewb view the DC
+  // status is unreadable, so fall back to the invoice's own field.
+  const ewbPending = dcs.filter((dc) => (dcStatus[dc] ? !dcStatus[dc].eway_bill_number : !inv.eway_bill_number));
+  const dcEwbs = dcs.map((dc) => ({ dc, ...(dcStatus[dc] || {}) })).filter((d) => d.eway_bill_number);
+  const qr = inv.qr_code_url || Object.values(dcStatus).map((d) => d.qr_code_url).find(Boolean) || '';
+  const ewbNumber = inv.eway_bill_number || dcEwbs[0]?.eway_bill_number || '';
+  const ewbValidTill = inv.eway_bill_valid_till || dcEwbs[0]?.eway_bill_valid_till || null;
   const gstLabel = inv.is_intra_state === null || inv.is_intra_state === undefined
     ? `GST ${inv.gst_percent}% (not classified)`
     : inv.is_intra_state ? 'CGST + SGST' : 'IGST';
@@ -240,11 +266,25 @@ export default function InvoiceRecordPage() {
                 {issued && <div className="is-grand"><span>Outstanding</span><span><Money value={due} /></span></div>}
               </div>
             </Section>
-            <Section title="E-invoice / e-way bill">
+            <Section
+              title="E-invoice / e-way bill"
+              actions={canEwb && st !== 'cancelled' && ewbPending.length > 0
+                ? <Button onClick={() => setDrawer('ewb')}>Generate e-way bill</Button>
+                : null}
+            >
               <div className="c-totals">
-                <div><span>IRN</span><span>{inv.irn || 'not generated'}</span></div>
-                <div><span>E-way bill</span><span>{inv.eway_bill_number || 'not generated'}</span></div>
+                <div><span>IRN</span><span style={{ overflowWrap: 'anywhere', textAlign: 'right' }}>{inv.irn || 'not generated'}</span></div>
+                {inv.irn_generated_at && <div><span>IRN generated</span><span><DateTime value={inv.irn_generated_at} format="datetime" /></span></div>}
+                <div><span>E-way bill</span><span>{ewbNumber ? <DocNumber value={ewbNumber} /> : 'not generated'}</span></div>
+                {ewbNumber && <div><span>Valid till</span><span>{ewbValidTill ? <DateTime value={ewbValidTill} format="datetime" /> : '—'}</span></div>}
+                {dcEwbs.length > 1 && dcEwbs.slice(1).map((d) => (
+                  <div key={d.dc}><span>{d.dc}</span><span><DocNumber value={d.eway_bill_number} /> · till <DateTime value={d.eway_bill_valid_till} /></span></div>
+                ))}
+                {canEwb && ewbPending.length > 0 && dcs.length > 1 && (
+                  <div><span>Without e-way bill</span><span>{ewbPending.join(', ')}</span></div>
+                )}
               </div>
+              {qr && <img src={qr} style={{ display: 'block', width: '128px', height: '128px', marginTop: '10px', border: '1px solid var(--rule)', borderRadius: 'var(--d-radius)', background: 'var(--surface)' }} alt={`E-invoice QR for ${inv.invoice_number}`} />}
             </Section>
             {deposits.length > 0 && (
               <Section title="Security billed here">
@@ -282,6 +322,13 @@ export default function InvoiceRecordPage() {
       <MarkPaidDrawer invoice={inv} open={drawer === 'paid'} onClose={() => setDrawer('')} onDone={load} />
       <SendInvoiceDrawer invoice={inv} open={drawer === 'send'} onClose={() => setDrawer('')} onDone={load} />
       <ZohoDrawer invoice={inv} candidates={data.zoho_candidates || []} open={drawer === 'zoho'} onClose={() => setDrawer('')} onDone={load} />
+      <EwayBillDrawer
+        invoice={inv}
+        dcs={ewbPending}
+        open={drawer === 'ewb'}
+        onClose={() => setDrawer('')}
+        onDone={() => { setEwbNonce((n) => n + 1); load(); }}
+      />
       <CancelInvoiceDrawer invoice={inv} open={drawer === 'cancel'} onClose={() => setDrawer('')} onDone={load} />
     </DeskShell>
   );

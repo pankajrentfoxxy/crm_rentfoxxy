@@ -9,7 +9,7 @@ import {
 import ScanField from '../../../components/ScanField';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
-import PartLabelPrintModal from '../../inventory-management/components/PartLabelPrintModal';
+import PartLabelPrintDrawer from '../stock/setup/PartLabelPrintDrawer';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import FitmentPicker from '../stock/setup/FitmentPicker';
 import { errMsg } from './procureShared';
@@ -450,7 +450,7 @@ export default function SparePoReceivePage() {
         onPrint={(ls) => { setReceiveLine(null); printLabels(ls); }}
       />
       <NewGrnDrawer open={grnOpen} busy={busy === 'grn'} onClose={() => setGrnOpen(false)} onSave={openGrn} />
-      <PartLabelPrintModal open={labels.length > 0} units={labels} title="Print QR labels for received parts" onClose={() => setLabels([])} />
+      <PartLabelPrintDrawer open={labels.length > 0} units={labels} title="Print QR labels for received parts" onClose={() => setLabels([])} />
     </DeskShell>
   );
 }

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Trash2 } from 'lucide-react';
-import { Button, DataTable, DateTime, EmptyState, Money } from '../../../components/carret';
+import { Button, ConfirmDialog, DataTable, DateTime, EmptyState, Money } from '../../../components/carret';
 import { deleteSalesOrderDraft, listSalesOrderDrafts } from '../../sales-pipeline/salesPipelineApi';
 
 const typeLabel = (t) => ({ sale: 'Sale', rental: 'Rental', demo: 'Demo' }[String(t || '').toLowerCase()] || t || '—');
@@ -14,6 +14,7 @@ const typeLabel = (t) => ({ sale: 'Sale', rental: 'Rental', demo: 'Demo' }[Strin
 export default function SoDraftsTable() {
   const navigate = useNavigate();
   const [state, setState] = useState({ loading: true, error: '', rows: [] });
+  const [deleteFor, setDeleteFor] = useState(null);
 
   const load = useCallback(() => {
     setState((s) => ({ ...s, loading: true, error: '' }));
@@ -24,8 +25,6 @@ export default function SoDraftsTable() {
   useEffect(() => { load(); }, [load]);
 
   const remove = async (r) => {
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete the draft for ${r.customer_name || 'no customer'}? This cannot be undone.`)) return;
     try {
       await deleteSalesOrderDraft(r.draft_id);
       toast.success('Draft deleted');
@@ -53,7 +52,7 @@ export default function SoDraftsTable() {
           type="button"
           className="c-icon-btn"
           aria-label={`Delete draft ${r.draft_id}`}
-          onClick={(e) => { e.stopPropagation(); remove(r); }}
+          onClick={(e) => { e.stopPropagation(); setDeleteFor(r); }}
         >
           <Trash2 size={16} aria-hidden="true" />
         </button>
@@ -62,12 +61,22 @@ export default function SoDraftsTable() {
   ];
 
   return (
-    <DataTable
-      columns={columns}
-      rows={state.rows}
-      rowKey={(r) => r.draft_id}
-      onRowClick={(r) => navigate(`/carret/sell/sales-orders/new?draft=${r.draft_id}`)}
-      empty={<EmptyState title="No drafts" body="Use “Save as draft” on a new sales order to keep it here without taking an SO number." action={<Button onClick={() => navigate('/carret/sell/sales-orders/new')}>New sales order</Button>} />}
-    />
+    <>
+      <DataTable
+        columns={columns}
+        rows={state.rows}
+        rowKey={(r) => r.draft_id}
+        onRowClick={(r) => navigate(`/carret/sell/sales-orders/new?draft=${r.draft_id}`)}
+        empty={<EmptyState title="No drafts" body="Use “Save as draft” on a new sales order to keep it here without taking an SO number." action={<Button onClick={() => navigate('/carret/sell/sales-orders/new')}>New sales order</Button>} />}
+      />
+      <ConfirmDialog
+        open={!!deleteFor}
+        onClose={() => setDeleteFor(null)}
+        onConfirm={() => { if (deleteFor) remove(deleteFor); }}
+        title={`Delete the draft for ${deleteFor?.customer_name || 'no customer'}?`}
+        body="This cannot be undone."
+        confirmLabel="Delete draft"
+      />
+    </>
   );
 }

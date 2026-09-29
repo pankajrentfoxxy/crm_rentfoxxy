@@ -114,15 +114,14 @@ export function PermissionMatrix({ catalogue, values, onChange, readOnly, source
         return (
           <section key={g.key} className="c-card">
             <div className="c-card-h">
-              <button
-                type="button"
-                className="bg-transparent border-0 cursor-pointer font-ui text-ink"
-                style={{ padding: 0, fontSize: '15px', fontWeight: 600 }}
+              <Button
+                variant="quiet"
+                className="c-btn--disclosure"
                 onClick={() => setClosed({ ...closed, [g.key]: !isClosed })}
                 aria-expanded={!isClosed}
               >
                 {isClosed ? '▸' : '▾'} {g.label} <span className="text-ink-3" style={{ fontWeight: 400 }}>({g.sections.length})</span>
-              </button>
+              </Button>
               {!readOnly && !isClosed && (
                 <div className="flex" style={{ gap: '6px' }}>
                   <Button variant="quiet" onClick={() => setGroup(g, 'can_view', !allView)}>{allView ? 'Clear view' : 'View all'}</Button>

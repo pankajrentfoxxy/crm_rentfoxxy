@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Button, DocNumber, Notice, Segmented } from '../../../components/carret';
 import ScanField from '../../../components/ScanField';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
+import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import { formatDeliveryAddressLine, deliveryAddressPhone } from '../../sales-pipeline/salesPipelineUtils';
 
 /**

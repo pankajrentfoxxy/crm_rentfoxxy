@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, Checkbox, ConfirmDialog, DateTime, Drawer, Field, FormGrid, Input, KeyValue, Money, Notice, Section, Segmented, Textarea,
+  Button, Checkbox, ConfirmDialog, DateTime, Drawer, Field, FormGrid, Input, KeyValue, Money, Notice, Section, Segmented, SignaturePad, Textarea,
 } from '../../../components/carret';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
 import {
   decideReplacement, downloadRepairRequestPdf, fetchRepairMailPreview, markVendorKept, previewVendorKept, receiveVendorRepairBack,
   sendAccountsVrdcEwayMail, sendRepairMail, updateRepairRequestDetails, uploadVrdcEway,
@@ -526,7 +525,7 @@ export function ReceiveDrawer({ open, dc, items, user, onClose, onDone }) {
                 <div><Button variant="quiet" onClick={() => setSigning(true)}>Sign again</Button></div>
               </div>
             ) : signing || !form.wh_esign ? (
-              <SignaturePadComponent onSave={(sig) => { set('wh_esign', sig); setSigning(false); }} onCancel={() => setSigning(false)} />
+              <SignaturePad prompt="The person receiving signs in the box" onSave={(sig) => { set('wh_esign', sig); setSigning(false); }} onCancel={() => setSigning(false)} />
             ) : null}
           </Field>
           {first.issue_type ? <p className="text-ink-3">Issue sent for: {issueTypeLabel(first.issue_type)}</p> : null}

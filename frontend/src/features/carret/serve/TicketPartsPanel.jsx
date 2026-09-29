@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, DataTable, DateTime, Drawer, Field, Money, Section, Textarea,
+  Button, ConfirmDialog, DataTable, DateTime, Drawer, Field, Money, Section, Textarea,
 } from '../../../components/carret';
 import { cancelPartRequest, fetchTicketParts, markPartChargeable } from './serveApi';
 import { errMsg } from './serveShared';
@@ -32,6 +32,8 @@ export default function TicketPartsPanel({ ticketId, canLead }) {
   const [rows, setRows] = useState(null);
   const [mark, setMark] = useState(null); // { r, reason }
   const [busy, setBusy] = useState(false);
+  // One confirm at a time: { title, label, tone, action }.
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(() => {
     fetchTicketParts(ticketId).then(({ data }) => setRows(data.requests || data.data || [])).catch(() => setRows([]));
@@ -67,10 +69,10 @@ export default function TicketPartsPanel({ ticketId, canLead }) {
             render: (r) => canLead && !LOCKED.includes(r.status) && (
               <div className="flex flex-wrap" style={{ gap: '6px' }}>
                 {charged(r)
-                  ? <Button variant="quiet" disabled={busy} onClick={() => { if (window.confirm(`Make ${r.part_name} free for the customer?`)) run(() => markPartChargeable(r.id, false), 'Marked free'); }}>Make free</Button>
+                  ? <Button variant="quiet" disabled={busy} onClick={() => setConfirm({ title: `Make ${r.part_name} free for the customer?`, label: 'Make free', tone: 'warn', action: () => run(() => markPartChargeable(r.id, false), 'Marked free') })}>Make free</Button>
                   : <Button variant="quiet" onClick={() => setMark({ r, reason: '' })}>Charge the customer</Button>}
                 {['pending', 'approved'].includes(r.status) && (
-                  <Button variant="quiet" disabled={busy} onClick={() => { if (window.confirm(`Cancel ${r.request_number}?`)) run(() => cancelPartRequest(r.id), 'Request cancelled'); }}>Cancel</Button>
+                  <Button variant="quiet" disabled={busy} onClick={() => setConfirm({ title: `Cancel ${r.request_number}?`, label: 'Cancel request', tone: 'crit', action: () => run(() => cancelPartRequest(r.id), 'Request cancelled') })}>Cancel</Button>
                 )}
               </div>
             ),
@@ -95,6 +97,14 @@ export default function TicketPartsPanel({ ticketId, canLead }) {
           </div>
         )}
       </Drawer>
+      <ConfirmDialog
+        open={!!confirm}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.action()}
+        title={confirm?.title}
+        confirmLabel={confirm?.label}
+        tone={confirm?.tone}
+      />
     </Section>
   );
 }

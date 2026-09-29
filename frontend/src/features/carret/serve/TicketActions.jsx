@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, Checkbox, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Section, Select, Textarea,
+  Button, Checkbox, ConfirmDialog, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Section, Select, Textarea,
 } from '../../../components/carret';
 import { fileUrl } from '../procure/procureShared';
 import DispatchFields, { dispatchBody, dispatchError, emptyDispatch } from './DispatchFields';
@@ -171,8 +171,8 @@ export default function TicketActions({ data, techs, reload }) {
       if (pk) setPk(null);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
+  const [withdrawFor, setWithdrawFor] = useState(null);
   const withdrawEarlyReturn = async (r) => {
-    if (!window.confirm(`Withdraw the early-return request for ${r.asset_code}? The customer keeps the laptop.`)) return;
     try { await cancelEarlyReturn(r.id, 'Withdrawn by Support'); toast.success('Withdrawn'); loadEarlyReturns(); } catch (e) { toast.error(errMsg(e)); }
   };
   // Laptops delivered work-from-home: collecting them is chargeable (Rs 799 + GST).
@@ -206,6 +206,8 @@ export default function TicketActions({ data, techs, reload }) {
       ...dispatchBody(rep.dispatch),
     }), 'Replacement ordered — the faulty laptop comes back on a return pickup');
   };
+  // Complaint being moved to replacement, with the optional reason: { item, reason }.
+  const [moveRep, setMoveRep] = useState(null);
   const eligibleForMove = complaints.find((i) => !['resolved', 'closed', 'cancelled'].includes(i.status) && i.outcome !== 'replacement_required' && !i.replacement_flag_reason);
 
   /* ---------------- swap from repair / another laptop / resend ---------------- */
@@ -290,7 +292,7 @@ export default function TicketActions({ data, techs, reload }) {
               { key: 'l', header: 'Early return', render: (r) => <DocNumber value={r.asset_code} />, sub: (r) => `Lock-in till ${fmtDay(r.lock_in_end_date)} · ${r.remaining_days} days` },
               { key: 's', header: 'Status', render: (r) => EARLY_RETURN_LABEL[r.status] || r.status, sub: (r) => r.sales_note || r.accounts_note || r.reason },
               { key: 'a', header: 'Charge', numeric: true, render: (r) => (r.approved_amount != null ? <Money value={r.approved_amount} /> : (r.proposed_amount != null ? <Money value={r.proposed_amount} /> : <Money value={r.full_amount} />)), sub: (r) => (r.approved_amount != null ? 'approved' : r.proposed_amount != null ? 'proposed' : 'full') },
-              { key: 'x', header: '', render: (r) => (['pending_sales', 'pending_accounts', 'approved'].includes(r.status) ? <Button variant="quiet" onClick={() => withdrawEarlyReturn(r)}>Withdraw</Button> : null) },
+              { key: 'x', header: '', render: (r) => (['pending_sales', 'pending_accounts', 'approved'].includes(r.status) ? <Button variant="quiet" onClick={() => setWithdrawFor(r)}>Withdraw</Button> : null) },
             ]}
             rows={earlyReturns}
             rowKey={(r) => r.id}
@@ -308,7 +310,7 @@ export default function TicketActions({ data, techs, reload }) {
               {complaints.some((i) => i.outcome === 'replacement_required' && !orders.some((o) => forItem(o, i) && o.status !== 'cancelled')) && (
                 <Button variant="primary" onClick={openReplacement}>{activeOrder && tk.return_dc_number ? 'Add to replacement' : 'Start replacement'}</Button>
               )}
-              {eligibleForMove && <Button variant="quiet" onClick={() => { const why = window.prompt('Why replace this laptop instead of repairing it?') ?? null; if (why !== null) run(() => moveToReplacement(eligibleForMove.id, why), 'Marked for replacement'); }}>Move {code(eligibleForMove)} to replacement</Button>}
+              {eligibleForMove && <Button variant="quiet" onClick={() => { setMoveRep({ item: eligibleForMove, reason: '' }); setOpen('moveReplacement'); }}>Move {code(eligibleForMove)} to replacement</Button>}
               {repairReceived.length > 0 && !activeOrder && <Button onClick={() => openSwap('swap')}>Swap from repair</Button>}
               {warehouseReceived.length > 0 && <Button onClick={() => openSwap('redelivery')}>Send another laptop</Button>}
               {warehouseReceived.length > 0 && orders.some((o) => o.status !== 'cancelled') && tk.sales_order_number && <Button variant="quiet" onClick={openResend}>Resend on the same order</Button>}
@@ -506,6 +508,26 @@ export default function TicketActions({ data, techs, reload }) {
           </div>
         )}
       </Drawer>
+
+      <Drawer open={open === 'moveReplacement'} onClose={() => setOpen(null)} title={`Move ${moveRep ? code(moveRep.item) : ''} to replacement`} footer={<Button variant="primary" disabled={busy || !moveRep} onClick={() => run(() => moveToReplacement(moveRep.item.id, moveRep.reason), 'Marked for replacement')}>Move to replacement</Button>}>
+        {moveRep && (
+          <div className="c-stack">
+            <Field label="Why replace this laptop instead of repairing it?" hint="Optional">
+              <Textarea rows={3} value={moveRep.reason} onChange={(e) => setMoveRep({ ...moveRep, reason: e.target.value })} />
+            </Field>
+          </div>
+        )}
+      </Drawer>
+
+      <ConfirmDialog
+        open={!!withdrawFor}
+        onClose={() => setWithdrawFor(null)}
+        onConfirm={() => { if (withdrawFor) withdrawEarlyReturn(withdrawFor); }}
+        title={`Withdraw the early-return request for ${withdrawFor?.asset_code || ''}?`}
+        body="The customer keeps the laptop."
+        confirmLabel="Withdraw"
+        tone="warn"
+      />
     </>
   );
 }

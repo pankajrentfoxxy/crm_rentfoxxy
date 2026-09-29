@@ -6,8 +6,8 @@ import {
   Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid,
   Input, KeyValue, Notice, Section, Textarea,
 } from '../../../components/carret';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
-import VrdcDispatchFields, { validateVrdcDispatch } from '../../floor-pipeline/components/VrdcDispatchFields';
+import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../stock/VrdcDispatchFields';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { usePermission } from '../../../hooks/usePermission';
 import {

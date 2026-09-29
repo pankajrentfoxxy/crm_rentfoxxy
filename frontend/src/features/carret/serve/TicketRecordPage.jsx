@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, Input, KeyValue, Notice, Section,
+  Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, Input, KeyValue, Notice, Section,
   Textarea,
 } from '../../../components/carret';
 import {
@@ -63,6 +63,7 @@ export default function TicketRecordPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelNote, setCancelNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [wfhFor, setWfhFor] = useState(null);
   const [error, setError] = useState(null);
 
   const load = useCallback(() => {
@@ -126,7 +127,7 @@ export default function TicketRecordPage() {
           {i.item_type !== 'replacement' && <Button onClick={(e) => { e.stopPropagation(); setAssignFor(i); }}>{i.assigned_to || i.pickup_assigned_to ? 'Reassign' : 'Assign'}</Button>}
           <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setApptFor(i); setAppt(i.visit_scheduled_at ? new Date(new Date(i.visit_scheduled_at).getTime() + 330 * 60000).toISOString().slice(0, 16) : ''); }}>Visit slot</Button>
           {wfh[i.id]?.is_wfh && !wfh[i.id]?.charged && (i.item_type === 'replacement' || (i.item_type === 'pickup' && i.return_dc_number)) && (
-            <Button variant="quiet" disabled={busy} onClick={(e) => { e.stopPropagation(); if (window.confirm('Charge this work-from-home delivery Rs 799 + GST? It goes on the Delivery Charges list.')) run(() => chargeWfh(i.id), 'Charged — it shows under Delivery Charges'); }}>Charge WFH ₹799</Button>
+            <Button variant="quiet" disabled={busy} onClick={(e) => { e.stopPropagation(); setWfhFor(i); }}>Charge WFH ₹799</Button>
           )}
         </div>
       ),
@@ -282,6 +283,15 @@ export default function TicketRecordPage() {
         <p style={{ marginBottom: '8px' }}>Only when the ticket was raised by mistake or the customer withdrew it. Open parts must be settled first.</p>
         <Field label="Why" required><Textarea rows={3} value={cancelNote} onChange={(e) => setCancelNote(e.target.value)} /></Field>
       </Drawer>
+      <ConfirmDialog
+        open={!!wfhFor}
+        onClose={() => setWfhFor(null)}
+        onConfirm={() => { if (wfhFor) run(() => chargeWfh(wfhFor.id), 'Charged — it shows under Delivery Charges'); }}
+        title="Charge this work-from-home delivery Rs 799 + GST?"
+        body="It goes on the Delivery Charges list."
+        confirmLabel="Charge ₹799"
+        tone="warn"
+      />
     </DeskShell>
   );
 }

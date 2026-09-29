@@ -98,6 +98,8 @@ router.get('/part-return-dcs/:dcNumber',         requireSupportOrWarehouse, ctrl
 router.patch('/part-return-dcs/:dcNumber/receive', requireWarehouseEdit,     ctrl.receivePartReturnDc);
 router.patch('/part-return-dcs/:dcNumber/courier', requireWarehouseEdit,    ctrl.updatePartReturnDcCourier);
 router.get('/part-return-dcs-pending',            requireWarehouse,          ctrl.listPartReturnDcsPendingReceive);
+// Register of every part challan, Part DC and RPDC (open and closed), newest first.
+router.get('/challans-register',                   requireWarehouse,          ctrl.listChallansRegister);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 // Charges: Support marks a part chargeable; the warehouse prices it; Accounts bills it.
 router.patch('/requests/:requestId/chargeable',   requireSupportOrWarehouse, ctrl.markPartChargeable);

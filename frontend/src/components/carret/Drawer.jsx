@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 
+// Open dialogs, innermost last: Esc and Tab belong to the top one only, so a
+// ConfirmDialog opened over a Drawer closes just itself.
+const openStack = [];
+
 /** Focus trap, Esc closes, focus returns to whatever opened it. */
 function useDialogBehaviour(open, onClose) {
   const ref = useRef(null);
@@ -16,12 +20,15 @@ function useDialogBehaviour(open, onClose) {
     returnTo.current = document.activeElement;
 
     const node = ref.current;
+    const token = {};
+    openStack.push(token);
     const focusables = () => Array.from(
       node?.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])') || []
     );
     focusables()[0]?.focus() ?? node?.focus();
 
     const onKey = (e) => {
+      if (openStack[openStack.length - 1] !== token) return;
       if (e.key === 'Escape') { e.stopPropagation(); onCloseRef.current?.(); return; }
       if (e.key !== 'Tab') return;
       const items = focusables();
@@ -34,6 +41,8 @@ function useDialogBehaviour(open, onClose) {
 
     document.addEventListener('keydown', onKey, true);
     return () => {
+      const i = openStack.indexOf(token);
+      if (i >= 0) openStack.splice(i, 1);
       document.removeEventListener('keydown', onKey, true);
       // Returning focus is the half everyone forgets; without it a keyboard
       // user lands back at the top of the document every time.

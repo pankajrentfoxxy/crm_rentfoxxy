@@ -7,7 +7,7 @@ import {
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
+import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import DamageReportDrawer from '../serve/DamageReportDrawer';
 import { fetchDamageCases } from '../serve/serveApi';
 

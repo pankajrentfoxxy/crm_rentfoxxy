@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, ConfirmDialog, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Segmented, StatusChip,
+  Button, ConfirmDialog, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FilterBar, Input, Money, Notice, Panel, StatTile,
+  StatusChip, Tabs,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
@@ -21,10 +22,10 @@ import { SO_SECTIONS } from './sellShared';
  * API: GET /demo/agreements (demo_management view), decide (demo_management edit).
  */
 const FILTERS = [
-  { value: 'pending', label: 'Waiting for a decision' },
-  { value: 'overdue', label: 'Overdue' },
-  { value: 'decided', label: 'Decided' },
-  { value: '', label: 'All' },
+  { key: 'pending', label: 'Waiting for a decision' },
+  { key: 'overdue', label: 'Overdue' },
+  { key: 'decided', label: 'Decided' },
+  { key: '', label: 'All' },
 ];
 const enc = encodeURIComponent;
 
@@ -51,6 +52,7 @@ export default function DemoAgreementsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState(null);
+  const [everything, setEverything] = useState(null); // the unfiltered list — tiles and tab counts
   const [keep, setKeep] = useState(null); // { row, start, rate }
   const [returning, setReturning] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -68,6 +70,25 @@ export default function DemoAgreementsPage() {
   }, [filter, search]);
   useEffect(() => { load(); }, [load]);
 
+  // The same list call with no status or search, so the tiles count every
+  // demo whatever the tab. A failure leaves them blank rather than zero.
+  const loadAll = useCallback(() => {
+    api.get('/demo/agreements').then(({ data }) => setEverything(data?.data || [])).catch(() => setEverything(null));
+  }, []);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  const tally = useMemo(() => {
+    if (!everything) return null;
+    const pending = everything.filter((r) => r.decision === 'pending');
+    return {
+      pending: pending.length,
+      overdue: pending.filter((r) => r.is_overdue).length,
+      decided: everything.length - pending.length,
+      kept: everything.filter((r) => r.decision === 'keep').length,
+      returning: everything.filter((r) => r.decision === 'return').length,
+      all: everything.length,
+    };
+  }, [everything]);
+
   // Open work: soonest decision first (the server's order). Decided / all: newest first.
   const shown = useMemo(() => {
     if (!rows) return rows;
@@ -83,6 +104,7 @@ export default function DemoAgreementsPage() {
       toast.success(ok || data?.message || 'Saved');
       setKeep(null);
       load();
+      loadAll();
     } catch (e) {
       toast.error(e?.response?.data?.message || 'That did not work.');
     } finally {
@@ -132,7 +154,7 @@ export default function DemoAgreementsPage() {
     {
       key: 'a', header: '', align: 'right',
       render: (r) => canDecide && r.decision === 'pending' && (
-        <div className="flex" style={{ gap: '6px', justifyContent: 'flex-end' }}>
+        <div className="c-row-actions">
           <Button variant="primary" onClick={(e) => { e.stopPropagation(); setKeep({ row: r, start: todayYmd(), rate: r.rent_monthly_rate ? String(r.rent_monthly_rate) : '' }); }}>Keep</Button>
           <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setReturning(r); }}>Return</Button>
         </div>
@@ -143,16 +165,46 @@ export default function DemoAgreementsPage() {
   return (
     <DeskShell title="Demo agreements" breadcrumb="Sell" subtitle="Demo laptops are free for 7 days after delivery; then the customer keeps it on rent or it comes back.">
       <div className="c-stack">
+        <div className="c-tiles">
+          <StatTile label="Waiting for a decision" value={tally ? tally.pending - tally.overdue : null} delta="inside the 7 free days" />
+          <StatTile label="Decision overdue" value={tally ? tally.overdue : null} family={tally?.overdue ? 'moving' : undefined} />
+          <StatTile label="Kept — on rent" value={tally ? tally.kept : null} family="earning" />
+          <StatTile label="Returning" value={tally ? tally.returning : null} delta="pickup ticket raised" />
+        </div>
+
         <Notice tone="info">
           Keep turns the demo into a rental from the billing start date you pick. Return raises a support pickup ticket; the laptop comes back through the normal pickup.
         </Notice>
-        <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
-          <Segmented label="Show" value={filter} onChange={setFilter} options={FILTERS} />
-          <Input type="search" placeholder="Customer, TTSPL or serial" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} style={{ width: '16rem', marginLeft: 'auto' }} aria-label="Search" />
-        </div>
-        {shown === null ? <EmptyState title="Loading…" /> : (
-          <DataTable columns={columns} rows={shown} rowKey={(r) => r.demo_id} empty={<EmptyState title="No demo agreements" />} />
-        )}
+
+        <Panel
+          toolbar={(
+            <>
+              <Tabs
+                tabs={FILTERS.map((f) => ({ ...f, count: tally ? tally[f.key || 'all'] : null }))}
+                value={filter}
+                onChange={setFilter}
+              />
+              <FilterBar
+                filters={[{ key: 'search', label: 'Search', type: 'search', placeholder: 'Customer, TTSPL or serial' }]}
+                values={{ search: searchInput }}
+                onChange={(k, v) => setSearchInput(v)}
+                onClear={() => setSearchInput('')}
+                count={shown ? `${shown.length} demo${shown.length === 1 ? '' : 's'}` : '…'}
+              />
+            </>
+          )}
+        >
+          {shown === null ? <EmptyState title="Loading…" /> : (
+            <DataTable
+              columns={columns}
+              rows={shown}
+              rowKey={(r) => r.demo_id}
+              empty={search
+                ? <EmptyState title="No demo agreements match" action={<Button variant="quiet" onClick={() => setSearchInput('')}>Clear search</Button>} />
+                : <EmptyState title="No demo agreements here" />}
+            />
+          )}
+        </Panel>
       </div>
 
       <Drawer

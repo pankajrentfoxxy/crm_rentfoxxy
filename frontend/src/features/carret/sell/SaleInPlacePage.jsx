@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Segmented, StatusChip,
+  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FilterBar, Input, Money, Notice, Panel, StatTile, StatusChip,
+  Tabs,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
@@ -23,12 +24,14 @@ import { SO_SECTIONS } from './sellShared';
  * The list is GET /customer-management/sale-in-place (section sale_in_place view).
  */
 const STAGES = [
-  { value: '', label: 'All' },
-  { value: 'rent_stopped', label: 'Rent stopped — no order' },
-  { value: 'vendor_buyout', label: 'Waiting for vendor buyout' },
-  { value: 'to_confirm', label: 'To confirm' },
-  { value: 'sold', label: 'Sold' },
+  { key: '', label: 'All' },
+  { key: 'rent_stopped', label: 'Rent stopped — no order' },
+  { key: 'vendor_buyout', label: 'Waiting for vendor buyout' },
+  { key: 'to_confirm', label: 'To confirm' },
+  { key: 'sold', label: 'Sold' },
 ];
+// The list API caps at 500 rows; the tiles say so when they hit it.
+const SUMMARY_LIMIT = 500;
 const STAGE_CHIP = {
   rent_stopped: { status: 'pending', label: 'Rent stopped — no order yet' },
   vendor_buyout: { status: 'pending', label: 'Waiting for vendor buyout' },
@@ -37,6 +40,7 @@ const STAGE_CHIP = {
 };
 const enc = encodeURIComponent;
 const reasonLabel = (r) => SALE_IN_PLACE_REASONS.find((x) => x.value === r)?.label || r;
+const rentDelta = (t) => (t ? <><Money value={t.rent} /> /month rent stopped</> : null);
 const day = (v) => (v ? String(v).slice(0, 10) : '—');
 
 export default function SaleInPlacePage() {
@@ -51,6 +55,7 @@ export default function SaleInPlacePage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState(null);
+  const [everything, setEverything] = useState(null); // no stage, no search — tiles and tab counts
   const [buyout, setBuyout] = useState(null); // { row, billNo, amount }
   const [busy, setBusy] = useState(false);
 
@@ -67,6 +72,26 @@ export default function SaleInPlacePage() {
   }, [stage, search]);
   useEffect(() => { load(); }, [load]);
 
+  // The same list call with no stage or search, so the tiles count every case
+  // whatever the tab. A failure leaves them blank rather than zero.
+  const loadAll = useCallback(() => {
+    api.get('/customer-management/sale-in-place', { params: { limit: SUMMARY_LIMIT } })
+      .then(({ data }) => setEverything(data?.data || []))
+      .catch(() => setEverything(null));
+  }, []);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  const tally = useMemo(() => {
+    if (!everything) return null;
+    const t = { '': { n: everything.length, rent: 0 } };
+    for (const r of everything) {
+      t[r.stage] = t[r.stage] || { n: 0, rent: 0 };
+      t[r.stage].n += 1;
+      t[r.stage].rent += Number(r.rent_monthly_rate || 0);
+    }
+    return t;
+  }, [everything]);
+  const tile = (stage) => (tally ? tally[stage] || { n: 0, rent: 0 } : null);
+
   const submitBuyout = async () => {
     if (!buyout.billNo.trim()) { toast.error('Enter the vendor bill number'); return; }
     if (!(Number(buyout.amount) > 0)) { toast.error('Enter the buyout amount'); return; }
@@ -76,6 +101,7 @@ export default function SaleInPlacePage() {
       toast.success(res?.message || 'Vendor buyout recorded');
       setBuyout(null);
       load();
+      loadAll();
     } catch (e) {
       toast.error(e?.response?.data?.message || e?.response?.data?.errors?.[0]?.msg || 'Could not record the buyout');
     } finally {
@@ -115,7 +141,7 @@ export default function SaleInPlacePage() {
     {
       key: 'a', header: '', align: 'right',
       render: (r) => (
-        <div className="flex" style={{ gap: '6px', justifyContent: 'flex-end' }}>
+        <div className="c-row-actions">
           {r.stage === 'vendor_buyout' && canBuyout && (
             <Button variant="primary" onClick={(e) => { e.stopPropagation(); setBuyout({ row: r, billNo: '', amount: '' }); }}>Record vendor buyout</Button>
           )}
@@ -138,18 +164,52 @@ export default function SaleInPlacePage() {
       actions={canCreate && <Button variant="primary" onClick={() => navigate('/carret/sell/sale-in-place/new')}>New sale in place</Button>}
     >
       <div className="c-stack">
+        <div className="c-tiles">
+          {[
+            { stage: 'rent_stopped', label: 'Rent stopped — no order' },
+            { stage: 'vendor_buyout', label: 'Waiting for vendor buyout' },
+            { stage: 'to_confirm', label: 'To confirm on the order', family: 'moving' },
+            { stage: 'sold', label: 'Sold', family: 'earning' },
+          ].map((x) => {
+            const t = tile(x.stage);
+            return <StatTile key={x.stage} label={x.label} value={t ? t.n : null} family={x.family} delta={rentDelta(t)} />;
+          })}
+        </div>
+        {everything && everything.length >= SUMMARY_LIMIT && (
+          <Notice tone="info">The counts above cover the latest {SUMMARY_LIMIT} cases.</Notice>
+        )}
+
         <Notice tone="info">
           A new sale in place stops rent (credit note for unused prepaid days), raises a Sale order and sells every laptop we own on the spot.
           A laptop we rent from a vendor waits for the vendor’s buyout bill; recording it completes that laptop’s sale.
           Accounts then attach the Zoho invoice in the sale invoice queue.
         </Notice>
-        <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
-          <Segmented label="Stage" value={stage} onChange={setStage} options={STAGES} />
-          <Input type="search" placeholder="TTSPL, serial, customer, order" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} style={{ width: '16rem', marginLeft: 'auto' }} aria-label="Search" />
-        </div>
-        {rows === null ? <EmptyState title="Loading…" /> : (
-          <DataTable columns={columns} rows={rows} rowKey={(r) => r.event_id} empty={<EmptyState title="No sale-in-place cases" />} />
-        )}
+
+        <Panel
+          toolbar={(
+            <>
+              <Tabs tabs={STAGES.map((x) => ({ ...x, count: tally ? tile(x.key).n : null }))} value={stage} onChange={setStage} />
+              <FilterBar
+                filters={[{ key: 'search', label: 'Search', type: 'search', placeholder: 'TTSPL, serial, customer, order' }]}
+                values={{ search: searchInput }}
+                onChange={(k, v) => setSearchInput(v)}
+                onClear={() => setSearchInput('')}
+                count={rows ? `${rows.length} case${rows.length === 1 ? '' : 's'}` : '…'}
+              />
+            </>
+          )}
+        >
+          {rows === null ? <EmptyState title="Loading…" /> : (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.event_id}
+              empty={search
+                ? <EmptyState title="No sale-in-place cases match" action={<Button variant="quiet" onClick={() => setSearchInput('')}>Clear search</Button>} />
+                : <EmptyState title="No sale-in-place cases here" />}
+            />
+          )}
+        </Panel>
       </div>
 
       <Drawer

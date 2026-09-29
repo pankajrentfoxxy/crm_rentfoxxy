@@ -8,9 +8,10 @@ import {
 import { usePermission } from '../../../hooks/usePermission';
 import {
   cancelReturnToVendorDc, completeReturnToVendorDc, dispatchReturnToVendorDc, downloadReturnToVendorDcPdf, fetchReturnToVendorDc,
+  setReturnToVendorItemValues,
 } from '../../vendor-management/vendorManagementApi';
-import VrtdcTransportFields, { validateVrtdcTransport } from '../../vendor-management/components/VrtdcTransportFields';
-import VrtdcEwayPanel from '../../vendor-management/components/VrtdcEwayPanel';
+import VrtdcTransportFields, { validateVrtdcTransport } from './VrtdcTransportFields';
+import VrtdcEwayPanel from './VrtdcEwayPanel';
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { errMsg } from './procureShared';
 import { uploadUrl } from './repairShared';
@@ -76,6 +77,27 @@ export default function ReturnChallanRecordPage() {
   const valueOf = (i) => values[i.serial_id] ?? (i.declared_value ?? '');
   const total = live.reduce((n, i) => n + (Number(valueOf(i)) || 0), 0);
   const missing = live.filter((i) => !(Number(valueOf(i)) > 0)).length;
+
+  // One value across every laptop, saved on the challan straight away (the old
+  // screen's "Overwrite all") — typing the same figure sixty times is how a
+  // wrong total gets entered. Values typed per row after this stay local until
+  // "Send to the gate".
+  const applyToAll = async () => {
+    const v = Number(sameValue);
+    if (!Number.isFinite(v) || v <= 0) { toast.error('Enter a value above 0'); return; }
+    setBusy('apply');
+    try {
+      const res = await setReturnToVendorItemValues(dcNumber, { apply_to_all: v, overwrite: true });
+      toast.success(`${res.data?.updated ?? live.length} laptop(s) set to ₹${v.toLocaleString('en-IN')}`);
+      setValues({});
+      setSameValue('');
+      load();
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not apply the value'));
+    } finally {
+      setBusy('');
+    }
+  };
 
   const sendToGate = async () => {
     const err = validateVrtdcTransport(shipBy, fields);
@@ -174,8 +196,8 @@ export default function ReturnChallanRecordPage() {
           title={`Laptops · ${live.length}`}
           actions={st === 'draft' && canEdit && (
             <div className="flex items-center" style={{ gap: '8px' }}>
-              <Input type="number" min={0} placeholder="Same value for all" value={sameValue} onChange={(e) => setSameValue(e.target.value)} style={{ width: '10rem' }} />
-              <Button disabled={!(Number(sameValue) > 0)} onClick={() => setValues(Object.fromEntries(live.map((i) => [i.serial_id, sameValue])))}>Apply</Button>
+              <Input type="number" min={0} placeholder="Same value for all" aria-label="Same value for all laptops" value={sameValue} onChange={(e) => setSameValue(e.target.value)} style={{ width: '10rem' }} />
+              <Button disabled={busy === 'apply' || !(Number(sameValue) > 0)} onClick={applyToAll}>{busy === 'apply' ? 'Saving…' : 'Apply to all'}</Button>
             </div>
           )}
         >

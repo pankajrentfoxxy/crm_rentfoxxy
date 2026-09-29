@@ -1,5 +1,6 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
+import ProtectedRoute from '../../router/ProtectedRoute';
 
 /**
  * Today dashboard (claude/pending.md item 11), behind REACT_APP_CARRET like the
@@ -23,7 +24,8 @@ const TodayDashboardPage = React.lazy(() => import('../../features/carret/dashbo
 
 export const dashboardRoutes = CARRET_ENABLED
   ? [
-      { path: '/carret/home', element: <React.Suspense fallback={null}><TodayDashboardPage /></React.Suspense> },
+      // Login only: the page shows just the tiles this user may see.
+      { path: '/carret/home', element: <ProtectedRoute><React.Suspense fallback={null}><TodayDashboardPage /></React.Suspense></ProtectedRoute> },
       { path: '/carret', element: <Navigate to="/carret/home" replace /> },
     ]
   : [];

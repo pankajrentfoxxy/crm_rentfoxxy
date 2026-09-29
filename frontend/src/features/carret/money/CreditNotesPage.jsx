@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, EmptyState, FilterBar, Money, Panel, SearchSelect, Segmented, StatTile, Tabs,
+  Button, Checkbox, DataTable, DateTime, DocNumber, EmptyState, FilterBar, Money, Panel, SearchSelect, Segmented, StatTile,
+  Tabs,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
@@ -19,7 +20,8 @@ import { GenerateCreditNotesDrawer } from './CreditNoteDrawers';
  * review screens in one: status tabs with counts and amounts, type / month /
  * year / customer / search filters, a By-note or By-laptop view, bulk approve
  * (a different person from the maker), generate return drafts, the month's
- * PDFs, and a manual note against an issued invoice.
+ * PDFs, and a manual note against an issued invoice. In the laptop view each
+ * TTSPL opens the asset record (its history), which replaces the old modal.
  */
 
 const TYPES = [
@@ -136,8 +138,7 @@ export default function CreditNotesPage() {
       width: '36px',
       render: (r) => (
         <span onClick={(e) => e.stopPropagation()} role="presentation">
-          <input
-            type="checkbox"
+          <Checkbox
             aria-label={`Select ${r.credit_note_number}`}
             checked={picked.has(r.credit_note_id)}
             disabled={Number(r.created_by) === me}
@@ -157,7 +158,14 @@ export default function CreditNotesPage() {
   ];
 
   const laptopCols = [
-    { key: 't', header: 'Laptop', render: (r) => r.ttspl_id || '—', sub: (r) => r.return_dc_number || null },
+    {
+      key: 't',
+      header: 'Laptop',
+      render: (r) => (r.ttspl_id
+        ? <Link to={`/carret/stock/assets/${encodeURIComponent(r.ttspl_id)}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>{r.ttspl_id}</Link>
+        : '—'),
+      sub: (r) => r.return_dc_number || null,
+    },
     { key: 'n', header: 'Credit note', render: (r) => <DocNumber value={r.credit_note_number} /> },
     { key: 'c', header: 'Customer', render: (r) => r.customer_name || `#${r.customer_id}` },
     { key: 's', header: 'Status', render: (r) => <MoneyChip status={r.status} /> },

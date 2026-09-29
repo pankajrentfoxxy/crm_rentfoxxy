@@ -6,8 +6,10 @@ import {
   Button, DataTable, DateTime, DocNumber, EmptyState, Input, Money, Panel, StatusChip, Tabs,
 } from '../../../../components/carret';
 import useDebouncedValue from '../../../../hooks/useDebouncedValue';
+import { usePermission } from '../../../../hooks/usePermission';
 import { fetchCustomerAssets } from '../../../inventory-management/inventoryManagementApi';
 import { errMsg } from './partsApi';
+import FleetHistoryDrawer from './FleetHistoryDrawer';
 
 const LIMIT = 50;
 const STATES = [
@@ -32,7 +34,9 @@ const stop = (e) => e.stopPropagation();
  * Not folded into Stock → Assets ("With customers" view): that page is
  * inventory_management, this list is customer_inventory — merging would lock
  * out people who have only the fleet — and Assets has no state breakdown,
- * delivered-date filter, entity or dispatch/delivery dates.
+ * delivered-date filter, entity or dispatch/delivery dates. For the same
+ * reason the laptop link opens the asset record only for inventory_management;
+ * everyone else gets its history in a drawer here.
  */
 export default function DeployedFleetPage() {
   const [params, setParams] = useSearchParams();
@@ -43,6 +47,9 @@ export default function DeployedFleetPage() {
   const [to, setTo] = useState('');
   const [page, setPage] = useState(1);
   const [res, setRes] = useState(null);
+  const [historyRow, setHistoryRow] = useState(null);
+  const { hasPermission } = usePermission();
+  const canOpenAsset = hasPermission('inventory_management', 'view');
 
   useEffect(() => { setPage(1); }, [search, status, from, to]);
   useEffect(() => {
@@ -59,7 +66,13 @@ export default function DeployedFleetPage() {
     {
       key: 't',
       header: 'Laptop',
-      render: (r) => <Link to={`/carret/stock/assets/${enc(r.ttspl_id || r.serial_number)}`} onClick={stop}><DocNumber value={r.ttspl_id || r.serial_number} /></Link>,
+      render: (r) => (canOpenAsset
+        ? <Link to={`/carret/stock/assets/${enc(r.ttspl_id || r.serial_number)}`} onClick={stop}><DocNumber value={r.ttspl_id || r.serial_number} /></Link>
+        : (
+          <Button variant="quiet" className="c-btn--inline" title="Show this laptop's history" onClick={(e) => { stop(e); setHistoryRow(r); }}>
+            <DocNumber value={r.ttspl_id || r.serial_number} />
+          </Button>
+        )),
       sub: (r) => (r.ttspl_id ? r.serial_number : null),
     },
     { key: 'm', header: 'Model', render: (r) => [r.brand, r.model].filter(Boolean).join(' ') || '—', sub: (r) => [r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ') || null },
@@ -124,6 +137,7 @@ export default function DeployedFleetPage() {
           )}
         </Panel>
       </div>
+      <FleetHistoryDrawer row={historyRow} onClose={() => setHistoryRow(null)} />
     </DeskShell>
   );
 }

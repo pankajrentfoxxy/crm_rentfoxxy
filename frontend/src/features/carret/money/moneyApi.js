@@ -74,6 +74,18 @@ export const invoicePdf = (id, format = 'tax_invoice') => api.get(`${base}/invoi
 export const invoicesZip = (params) => api.get(`${base}/invoices/pdf-zip`, { params, responseType: 'blob', timeout: 15 * 60 * 1000 });
 export const invoicesExcel = (params) => api.get(`${base}/invoices/export.xlsx`, { params, responseType: 'blob', timeout: 5 * 60 * 1000 });
 
+// E-invoice / e-way bill — /api/einvoice, keyed by DC (section einvoice_ewb).
+// The e-way bill is written to the DC's lines, so the invoice row can lag; the
+// DC status is the fresher source for the number, validity and QR.
+export const dcEinvoiceStatus = (dc) => api.get(`/einvoice/dc/${encodeURIComponent(dc)}/status`);
+export const generateDcEwb = (dc, body) => api.post(`/einvoice/dc/${encodeURIComponent(dc)}/ewb`, body);
+export const EWB_MODES = [
+  { value: 'road', label: 'Road' },
+  { value: 'rail', label: 'Rail' },
+  { value: 'air', label: 'Air' },
+  { value: 'ship', label: 'Ship' },
+];
+
 // Payments received
 export const listPayments = (params) => api.get(`${base}/payments`, { params });
 

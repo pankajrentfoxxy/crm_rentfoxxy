@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, Checkbox, Drawer, Field, FormGrid, Input, Money, Notice, Select, Textarea,
+  Button, Checkbox, ConfirmDialog, DateTime, DocNumber, Drawer, Field, FormGrid, Input, Money, Notice, Select, Textarea,
 } from '../../../components/carret';
 import {
-  MONTH_OPTIONS, PAYMENT_METHODS, cancelInvoice, errMsg, generateInvoicesBulk, listCoverage, markPaid,
-  markZoho, newRequestKey, recordPayment, sendInvoice, todayYmd, yearOptions,
+  EWB_MODES, MONTH_OPTIONS, PAYMENT_METHODS, cancelInvoice, errMsg, generateDcEwb, generateInvoicesBulk, listCoverage,
+  markPaid, markZoho, newRequestKey, recordPayment, sendInvoice, todayYmd, yearOptions,
 } from './moneyApi';
 import { outstandingOf } from './moneyShared';
 
@@ -399,6 +399,107 @@ export function GenerateInvoicesDrawer({ open, onClose, onDone, initialMonth, in
           </div>
         )}
       </div>
+    </Drawer>
+  );
+}
+
+/**
+ * Generate an e-way bill for one of the invoice's DCs (the old detail page's
+ * "Generate E-Way Bill"). The backend refuses a DC that already has one (MD7),
+ * so `dcs` is only the DCs still without. The GSP call is not reversible from
+ * here, hence the confirm; the result or the refusal stays on the drawer.
+ */
+export function EwayBillDrawer({ invoice, dcs = [], open, onClose, onDone }) {
+  const blank = { dc: '', transporter_name: '', vehicle_number: '', distance_km: '', mode_of_transport: 'road' };
+  const [form, setForm] = useState(blank);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  // Reset on opening only: after a success the page reloads and `dcs` shrinks,
+  // and the result must stay on screen rather than reset the form.
+  useEffect(() => {
+    if (!open) return;
+    setForm({ ...blank, dc: dcs[0] || '' });
+    setResult(null);
+    setError('');
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const km = Number(form.distance_km);
+  const valid = form.dc && form.vehicle_number.trim() && km > 0;
+
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const { data } = await generateDcEwb(form.dc, {
+        transporter_name: form.transporter_name.trim() || undefined,
+        vehicle_number: form.vehicle_number.trim().toUpperCase(),
+        distance_km: km,
+        mode_of_transport: form.mode_of_transport,
+      });
+      setResult({ ...data, dc: form.dc });
+      toast.success(`E-way bill ${data.ewbNumber || ''} generated`);
+      onDone?.();
+    } catch (e) {
+      setError(errMsg(e, 'The e-way bill was not generated'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={`E-way bill — ${invoice?.invoice_number || ''}`}
+      footer={result
+        ? <Button onClick={onClose}>Done</Button>
+        : <Button variant="primary" disabled={!valid || busy} onClick={() => setConfirm(true)}>{busy ? 'Generating…' : 'Generate e-way bill'}</Button>}
+    >
+      <div className="c-stack">
+        {result ? (
+          <Notice tone="good" title={<span>E-way bill <DocNumber value={result.ewbNumber} /></span>}>
+            For {result.dc}. Valid till {result.validTill ? <DateTime value={result.validTill} format="datetime" /> : 'not returned'}.
+            {result.isSandbox ? ' Sandbox mode — this number is not filed with the GST portal.' : ''}
+          </Notice>
+        ) : (
+          <>
+            {error && <Notice tone="crit" title="Not generated">{error}</Notice>}
+            <Notice tone="info">
+              Filed against the delivery challan, not the invoice. A DC that already has an e-way bill is not offered here.
+            </Notice>
+            <FormGrid cols={2}>
+              <Field label="Delivery challan" required span={2}>
+                <Select options={dcs.map((d) => ({ value: d, label: d }))} value={form.dc} onChange={set('dc')} />
+              </Field>
+              <Field label="Vehicle number" required>
+                <Input value={form.vehicle_number} maxLength={20} onChange={set('vehicle_number')} />
+              </Field>
+              <Field label="Distance (km)" required>
+                <Input type="number" inputMode="numeric" min="1" step="1" value={form.distance_km} onChange={set('distance_km')} />
+              </Field>
+              <Field label="Transporter">
+                <Input value={form.transporter_name} maxLength={100} onChange={set('transporter_name')} />
+              </Field>
+              <Field label="Mode">
+                <Select options={EWB_MODES} value={form.mode_of_transport} onChange={set('mode_of_transport')} />
+              </Field>
+            </FormGrid>
+          </>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirm}
+        onClose={() => setConfirm(false)}
+        onConfirm={submit}
+        title={`Generate the e-way bill for ${form.dc}?`}
+        body={`Vehicle ${form.vehicle_number.trim().toUpperCase()}, ${form.distance_km} km by ${form.mode_of_transport}. It is filed with the GST portal and cannot be undone from this screen.`}
+        confirmLabel="Generate"
+        tone="good"
+      />
     </Drawer>
   );
 }

@@ -3,9 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, DocumentHeader, EmptyState, Field, KeyValue, Notice, Section, Input,
+  Button, DataTable, DateTime, DocNumber, DocumentHeader, EmptyState, Field, KeyValue, Notice, Section, Input, SignaturePad,
 } from '../../../components/carret';
-import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
 import { fileUrl } from '../procure/procureShared';
 import { fetchPartChallan, signPartChallan } from './serveApi';
 import { errMsg } from './serveShared';
@@ -107,7 +106,7 @@ export default function PartChallanRecordPage() {
                   <img src={esign} alt="Signature" style={{ maxHeight: '5rem', background: 'var(--surface)', border: '1px solid var(--rule)' }} />
                   <Button variant="quiet" onClick={() => setEsign(null)}>Sign again</Button>
                 </div>
-              ) : <SignaturePadComponent onSave={setEsign} onCancel={() => setEsign(null)} />}
+              ) : <SignaturePad onSave={setEsign} onCancel={() => setEsign(null)} />}
               <div className="flex justify-end">
                 <Button variant="primary" disabled={busy || !esign || !signer.trim()} onClick={sign}>{busy ? 'Issuing…' : 'Issue the parts'}</Button>
               </div>

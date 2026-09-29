@@ -30,6 +30,8 @@ export default function RolePermissionsPage() {
   const [showHidden, setShowHidden] = useState(false);
   const [copyFrom, setCopyFrom] = useState('');
   const [confirm, setConfirm] = useState(false);
+  // Role switch waiting on "Discard unsaved changes?": the path to go to, or null.
+  const [discardTo, setDiscardTo] = useState(null);
   const [busy, setBusy] = useState(false);
   const role = roleParam ? decodeURIComponent(roleParam) : '';
 
@@ -125,8 +127,9 @@ export default function RolePermissionsPage() {
               placeholder="Pick a role"
               options={roleOptions}
               onChange={(e) => {
-                if (dirty.length && !window.confirm('Discard unsaved changes?')) return;
-                navigate(e.target.value ? `/carret/control/role-permissions/${encodeURIComponent(e.target.value)}` : '/carret/control/role-permissions');
+                const to = e.target.value ? `/carret/control/role-permissions/${encodeURIComponent(e.target.value)}` : '/carret/control/role-permissions';
+                if (dirty.length) setDiscardTo(to);
+                else navigate(to);
               }}
             />
           </Field>
@@ -172,6 +175,14 @@ export default function RolePermissionsPage() {
         title={`Apply defaults to ${roleLabel(roles, role)}?`}
         body="This replaces the role's permissions with the built-in defaults. Unsaved edits are lost."
         confirmLabel="Apply defaults"
+      />
+      <ConfirmDialog
+        open={discardTo !== null}
+        onClose={() => setDiscardTo(null)}
+        onConfirm={() => navigate(discardTo)}
+        title="Discard unsaved changes?"
+        confirmLabel="Discard"
+        tone="warn"
       />
     </DeskShell>
   );

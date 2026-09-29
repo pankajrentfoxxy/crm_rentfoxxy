@@ -4,6 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import usePermission from '../hooks/usePermission';
 import { firstAccessibleReportPath } from '../utils/reportAccess';
 
+// With the new UI on, the deployed fleet lives in Carret (Stock → With customers).
+const CARRET_ON = process.env.REACT_APP_CARRET === '1';
+
 // First match wins — sends each user to the first module they can actually open,
 // so nobody lands on a blank page or a "permission denied" screen. Sections here
 // are the SAME ones the sidebar/route guards use (role_permissions matrix).
@@ -24,7 +27,7 @@ const LANDING_ORDER = [
   ['vendor_repair_dc', '/vendor-management/vendor-repair-dc'],
   ['vendor_repair_dc_dispatch', '/vendor-management/vendor-repair-dc'],
   ['part_vendor_repair', '/inventory-management/part-vendor-repair'],
-  ['customer_inventory', '/inventory-management/customer-assets'],
+  ['customer_inventory', CARRET_ON ? '/carret/stock/with-customers' : '/inventory-management/customer-assets'],
   ['inventory_management', '/inventory-management/universal-search'],
   ['technician_bucket', '/carret/move/my-deliveries'],
   ['delivery_register_management', '/sales-pipeline/delivery-register'],

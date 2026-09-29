@@ -4,14 +4,12 @@ import toast from 'react-hot-toast';
 import DeskShell from '../../../../shells/DeskShell';
 import {
   Button, DataTable, DocNumber, Drawer, EmptyState, Field, FormGrid, Input, KeyValue, Money, Notice, Section,
-  Select, StatusChip, Textarea, DateTime,
+  Select, SignaturePad, StatusChip, Textarea, DateTime,
 } from '../../../../components/carret';
 import { usePermission } from '../../../../hooks/usePermission';
 import { getBackendOrigin } from '../../../../utils/api';
 import { fetchDeliveryTechnicians } from '../../../../utils/deliveryRegisterApi';
-import { formatIndianMobileInput } from '../../../../utils/phoneValidation';
-import { validateVrdcDispatch } from '../../../floor-pipeline/components/VrdcDispatchFields';
-import SignaturePadComponent from '../../../sales-pipeline/components/SignaturePad';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../VrdcDispatchFields';
 import { RepairDcStatus } from './PartRepairsPage';
 import {
   PART_REPAIR_WRITE_ROLES, REPAIR_LINE_STATUS, cancelPartVendorReturnDc, dispatchPartVendorReturnDc,
@@ -48,56 +46,8 @@ function Signature({ url, onChange, label }) {
   }
   if (!onChange) return <span className="text-ink-3">Not signed</span>;
   return drawing || !url
-    ? <SignaturePadComponent onSave={(d) => { onChange(d); setDrawing(false); }} onCancel={() => setDrawing(false)} />
+    ? <SignaturePad prompt={`${label} — sign in the box`} onSave={(d) => { onChange(d); setDrawing(false); }} onCancel={() => setDrawing(false)} />
     : null;
-}
-
-/** How the parts leave — the same modes and rules as the laptop repair challan. */
-function DispatchFields({ shipBy, onShipBy, fields, onFields, technicians }) {
-  const set = (k) => (e) => onFields({ ...fields, [k]: e.target.value });
-  const vehicle = (e) => onFields({ ...fields, vehicle_number: e.target.value.toUpperCase().replace(/\s+/g, '') });
-  return (
-    <div className="c-stack">
-      <Field label="Send by" required><Select value={shipBy} onChange={(e) => onShipBy(e.target.value)} placeholder="Choose…" options={SHIP_OPTIONS} /></Field>
-      {shipBy === 'by_courier' && (
-        <FormGrid cols={3}>
-          <Field label="Courier" required><Input value={fields.courier_name || ''} onChange={set('courier_name')} /></Field>
-          <Field label="AWB number"><Input value={fields.awb_number || ''} onChange={set('awb_number')} /></Field>
-          <Field label="Tracking link"><Input value={fields.courier_tracking_url || ''} onChange={set('courier_tracking_url')} /></Field>
-        </FormGrid>
-      )}
-      {shipBy === 'by_porter' && (
-        <FormGrid cols={3}>
-          <Field label="Porter booking / tracking ID" required><Input value={fields.porter_tracking_id || ''} onChange={set('porter_tracking_id')} /></Field>
-          <Field label="Porter order ID"><Input value={fields.porter_order_id || ''} onChange={set('porter_order_id')} /></Field>
-          <Field label="Booking link"><Input value={fields.porter_booking_url || ''} onChange={set('porter_booking_url')} /></Field>
-        </FormGrid>
-      )}
-      {shipBy === 'by_hand' && (
-        <FormGrid cols={2}>
-          <Field label="Delivery person" required hint={technicians.length ? undefined : 'No delivery people on record'}>
-            <Select
-              value={String(fields.delivery_person_id || '')}
-              onChange={set('delivery_person_id')}
-              placeholder="Choose…"
-              options={technicians.filter((t) => t.is_active !== false).map((t) => ({
-                value: String(t.technician_id),
-                label: `${[t.first_name, t.last_name].filter(Boolean).join(' ')}${t.phone ? ` — ${t.phone}` : ''}`,
-              }))}
-            />
-          </Field>
-          <Field label="Vehicle number" required><Input value={fields.vehicle_number || ''} onChange={vehicle} maxLength={20} /></Field>
-        </FormGrid>
-      )}
-      {shipBy === 'by_vendor_pickup' && (
-        <FormGrid cols={3}>
-          <Field label="Collector name" required><Input value={fields.vendor_pickup_person || ''} onChange={set('vendor_pickup_person')} /></Field>
-          <Field label="Collector mobile" required><Input inputMode="numeric" maxLength={10} value={fields.vendor_pickup_mobile || ''} onChange={(e) => onFields({ ...fields, vendor_pickup_mobile: formatIndianMobileInput(e.target.value) })} /></Field>
-          <Field label="Vehicle number" required><Input value={fields.vehicle_number || ''} onChange={vehicle} maxLength={20} /></Field>
-        </FormGrid>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -283,7 +233,7 @@ export default function PartRepairRecordPage() {
         {canWrite && dc.status === 'draft' && (
           <Section title="Sign and send">
             <div className="c-stack">
-              <DispatchFields shipBy={shipBy} onShipBy={setShipBy} fields={fields} onFields={setFields} technicians={technicians} />
+              <VrdcDispatchFields shipBy={shipBy} onShipByChange={setShipBy} fields={fields} onFieldsChange={setFields} deliveryTechnicians={technicians} />
               <Field label="Warehouse signer" required><Input value={whName} onChange={(e) => setWhName(e.target.value)} /></Field>
               <Field label="Warehouse signature" required>
                 <Signature url={whSign || dc.warehouse_dispatch_esign_url} onChange={setWhSign} label="Warehouse signature" />

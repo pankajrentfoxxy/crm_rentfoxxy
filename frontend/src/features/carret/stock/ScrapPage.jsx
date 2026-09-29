@@ -7,7 +7,7 @@ import {
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import {
-  PART_UNITS_VIEW_SECTIONS, cancelScrap, createScrapChallan, decideScrap, errMsg, fetchDiscardedParts, fetchScrapChallans,
+  PART_UNITS_VIEW_SECTIONS, cancelScrap, createScrapChallan, decideScrap, downloadScrapChallanPdf, errMsg, fetchDiscardedParts, fetchScrapChallans,
   fetchScrapRequests, fetchScrappedAwaitingChallan,
 } from './stockApi';
 
@@ -51,6 +51,7 @@ export default function ScrapPage() {
   const [values, setValues] = useState({});
   const [challan, setChallan] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [pdfFor, setPdfFor] = useState('');
 
   const load = useCallback(() => {
     setRows(null);
@@ -173,6 +174,12 @@ export default function ScrapPage() {
         : null),
     },
   ];
+  // The row opens the challan; its PDF button must not.
+  const pdf = async (e, no) => {
+    e.stopPropagation();
+    setPdfFor(no);
+    try { await downloadScrapChallanPdf(no); } catch (err) { toast.error(errMsg(err, 'PDF download failed')); } finally { setPdfFor(''); }
+  };
   const challanCols = [
     { key: 'n', header: 'Scrap challan', render: (c) => <DocNumber value={c.challan_number} />, sub: (c) => c.remarks || null },
     { key: 'b', header: 'Buyer', render: (c) => c.recipient_name, sub: (c) => c.contact_mobile },
@@ -180,6 +187,11 @@ export default function ScrapPage() {
     { key: 'v', header: 'Sale value', numeric: true, render: (c) => (c.sale_total != null ? `₹${Number(c.sale_total).toLocaleString('en-IN')}` : '—') },
     { key: 's', header: 'Status', render: (c) => <StatusChip status={c.status} />, sub: (c) => c.cancel_reason || null },
     { key: 'd', header: 'Date', render: (c) => <DateTime value={c.dispatched_at || c.created_at} /> },
+    {
+      key: 'a',
+      header: '',
+      render: (c) => <Button variant="quiet" disabled={pdfFor === c.challan_number} onClick={(e) => pdf(e, c.challan_number)}>{pdfFor === c.challan_number ? 'PDF…' : 'PDF'}</Button>,
+    },
   ];
 
   return (

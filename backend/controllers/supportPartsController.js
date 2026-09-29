@@ -2068,3 +2068,19 @@ exports.addChargesToInvoice = async (req, res) => {
   }));
   if (out !== undefined) res.json({ success: true, message: `${out.added} charge(s) added to the draft invoice`, ...out });
 };
+
+// ── CHALLANS REGISTER (Carret Parts desk — every challan / Part DC / RPDC) ──
+
+/**
+ * GET /support-parts/challans-register?type=&status=&search=&from=&to=&limit=&offset=&sort=&dir=
+ * Newest first, paged (limit max 200). See services/supportPartsRegisterService.js.
+ */
+exports.listChallansRegister = async (req, res) => {
+  try {
+    const { listChallansRegister } = require('../services/supportPartsRegisterService');
+    const out = await listChallansRegister(req.query);
+    res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};

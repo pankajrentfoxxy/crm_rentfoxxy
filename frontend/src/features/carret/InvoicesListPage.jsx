@@ -1,31 +1,35 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, EmptyState, FilterBar, Money, Panel, SearchSelect, StatTile, Tabs,
+  Button, DataTable, DateTime, DocNumber, EmptyState, FilterBar, Money, Panel, SearchSelect, Select, StatTile, Tabs,
 } from '../../components/carret';
 import { usePermission } from '../../hooks/usePermission';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import {
-  MONTHS, MONTH_OPTIONS, blobErrMsg, errMsg, invoicesExcel, invoicesZip, listCoverage, listInvoices, saveBlob,
-  useCustomerOptions, yearOptions,
+  MONTHS, MONTH_OPTIONS, blobErrMsg, errMsg, invoicePdf, invoicesExcel, invoicesZip, listCoverage, listInvoices,
+  saveBlob, useCustomerOptions, yearOptions,
 } from './money/moneyApi';
 import { MoneyChip, Pager, Tiles, outstandingOf } from './money/moneyShared';
-import { GenerateInvoicesDrawer } from './money/InvoiceDrawers';
+import { GenerateInvoicesDrawer, MarkPaidDrawer } from './money/InvoiceDrawers';
 
 /**
  * Finance → Customer invoices (Builder 1). Replaces the old list's jobs:
  * status tabs with counts, customer / month / year / search filters, the
  * month's coverage (customers with laptops but no invoice), generate for
  * chosen customers or all, the month's PDFs as a ZIP and the billed-serials
- * Excel. Each row opens the invoice record (send, payments, credit, cancel).
+ * Excel. Each row opens the invoice record (send, payments, credit, cancel),
+ * and carries the two things done most without opening it: the invoice PDF
+ * and Mark paid (the record page's drawer and gating). ?customer=<id> opens
+ * the list filtered to one customer (Ageing links here).
  *
  * GST column: CGST+SGST or IGST from the place of supply (BL7) — "not
  * classified" only for invoices raised before the split existed.
  */
 
 const TABS = ['all', 'draft', 'sent', 'overdue', 'partially_paid', 'paid', 'cancelled'];
+const PAGE_SIZES = [25, 50, 100, 200].map((n) => ({ value: String(n), label: `${n} per page` }));
 const TAB_LABEL = { all: 'All', draft: 'Draft', sent: 'Sent', overdue: 'Overdue', partially_paid: 'Part paid', paid: 'Paid', cancelled: 'Cancelled' };
 
 function GstCell({ row }) {
@@ -75,31 +79,46 @@ function CoverageStrip({ month, year, refreshKey, onGenerate, canCreate }) {
 
 export default function InvoicesListPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { hasPermission } = usePermission();
   const canCreate = hasPermission('customer_billing', 'create');
+  const canEdit = hasPermission('customer_billing', 'edit');
   const customerOptions = useCustomerOptions();
 
   const [tab, setTab] = useState('all');
   const [filters, setFilters] = useState({ search: '', month: '', year: '' });
-  const [customerId, setCustomerId] = useState('');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState('50');
+  const [paying, setPaying] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(null);
   const [state, setState] = useState({ loading: true, rows: [], summary: {}, total: 0, totalPages: 1 });
   const [nonce, setNonce] = useState(0);
   const [gen, setGen] = useState(null);
   const [busy, setBusy] = useState('');
   const search = useDebouncedValue(filters.search);
 
+  // The customer filter lives in the URL, so a link (Ageing) can open it and
+  // Back returns to it.
+  const customerId = searchParams.get('customer') || '';
+  const setCustomerId = useCallback((id) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (id) next.set('customer', id); else next.delete('customer');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   const params = useMemo(() => {
-    const p = { page, limit: 50 };
+    const p = { page, limit: Number(pageSize) };
     if (tab !== 'all') p.status = tab;
     if (customerId) p.customer_id = customerId;
     if (filters.month) p.month = filters.month;
     if (filters.year) p.year = filters.year;
     if (search.trim()) p.search = search.trim();
     return p;
-  }, [tab, customerId, filters.month, filters.year, search, page]);
+  }, [tab, customerId, filters.month, filters.year, search, page, pageSize]);
 
-  useEffect(() => { setPage(1); }, [tab, customerId, filters.month, filters.year, search]);
+  useEffect(() => { setPage(1); }, [tab, customerId, filters.month, filters.year, search, pageSize]);
 
   useEffect(() => {
     let off = false;
@@ -123,7 +142,19 @@ export default function InvoicesListPage() {
   }));
 
   const onFilter = useCallback((k, v) => setFilters((f) => ({ ...f, [k]: v })), []);
-  const onClear = useCallback(() => { setFilters({ search: '', month: '', year: '' }); setCustomerId(''); }, []);
+  const onClear = useCallback(() => { setFilters({ search: '', month: '', year: '' }); setCustomerId(''); }, [setCustomerId]);
+
+  const rowPdf = useCallback(async (r) => {
+    setPdfBusy(r.invoice_id);
+    try {
+      const { data } = await invoicePdf(r.invoice_id, 'tax_invoice');
+      saveBlob(data, `${r.invoice_number}.pdf`.replace(/\//g, '-'), 'application/pdf');
+    } catch (e) {
+      toast.error(await blobErrMsg(e, 'PDF download failed'));
+    } finally {
+      setPdfBusy(null);
+    }
+  }, []);
 
   const download = async (kind) => {
     if (kind === 'zip' && (!filters.month || !filters.year)) { toast.error('Pick a month and year first'); return; }
@@ -172,7 +203,23 @@ export default function InvoicesListPage() {
         return due ? <Money value={due} /> : <span className="text-ink-3">settled</span>;
       },
     },
-  ], []);
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (r) => {
+        const st = String(r.status || '').toLowerCase();
+        const payable = canEdit && ['sent', 'overdue', 'partially_paid'].includes(st) && outstandingOf(r) > 0;
+        // A row opens the record; its buttons must not (click or Enter).
+        return (
+          <span className="c-row-actions" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="presentation">
+            <Button variant="quiet" disabled={pdfBusy === r.invoice_id} onClick={() => rowPdf(r)}>{pdfBusy === r.invoice_id ? 'PDF…' : 'PDF'}</Button>
+            {payable && <Button variant="quiet" onClick={() => setPaying(r)}>Mark paid</Button>}
+          </span>
+        );
+      },
+    },
+  ], [canEdit, pdfBusy, rowPdf]);
 
   const filterDefs = useMemo(() => ([
     { key: 'search', label: 'Search', type: 'search', placeholder: 'Invoice number, customer or IRN' },
@@ -221,14 +268,19 @@ export default function InvoicesListPage() {
               onClear={onClear}
               count={`${state.total} invoice(s)`}
               right={(
-                <div style={{ minWidth: '240px' }}>
-                  <SearchSelect
-                    aria-label="Customer"
-                    options={customerOptions}
-                    value={customerId}
-                    placeholder="Customer: All"
-                    onChange={(e) => setCustomerId(e.target.value)}
-                  />
+                <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
+                  <div style={{ minWidth: '240px' }}>
+                    <SearchSelect
+                      aria-label="Customer"
+                      options={customerOptions}
+                      value={customerId}
+                      placeholder="Customer: All"
+                      onChange={(e) => setCustomerId(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ width: '140px' }}>
+                    <Select aria-label="Rows per page" options={PAGE_SIZES} value={pageSize} onChange={(e) => setPageSize(e.target.value)} />
+                  </div>
                 </div>
               )}
             />
@@ -250,6 +302,13 @@ export default function InvoicesListPage() {
           )}
         </Panel>
       </div>
+
+      <MarkPaidDrawer
+        invoice={paying}
+        open={Boolean(paying)}
+        onClose={() => setPaying(null)}
+        onDone={() => setNonce((n) => n + 1)}
+      />
 
       <GenerateInvoicesDrawer
         open={Boolean(gen)}
