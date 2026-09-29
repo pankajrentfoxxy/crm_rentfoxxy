@@ -55,6 +55,12 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     Vendor Return / Repair DC + receive + return ticket, Scrap Challans, Service Parts Challans, Part Repairs,
     Master Data, Deployed Fleet, Asset Configuration, Teams, Settings, Reports, Overview dashboard.
 
+12b. **Wave 2 (29 Sep)** — BUILT on QA: spare-parts PO receiving, part naming (category + details + fits →
+    generated name), dead parts in & out + discarded parts → scrap, customer profile / documents / portal,
+    My Deliveries pickups + vendor hand-over. Migrations 396, 399, 405 on QA (due at promotion). Waiting on the
+    user: `sync-spare-po-receive-status.js --apply` (57 spare POs), part-naming clean-up CSV review
+    (`claude/reports/part-naming-cleanup-QA-2026-09-29.csv`, 56 confident / 63 REVIEW) then `apply-part-naming-cleanup.js`.
+
 ## C. Waiting on the user / Accounts
 13. First month the CRM makes vendor bills (earlier months settled outside).
 14. Accounts to confirm `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
