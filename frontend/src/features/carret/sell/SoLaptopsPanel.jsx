@@ -146,7 +146,7 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
                   ? <span className="font-ui text-ink" style={{ fontWeight: 600 }} title="Dispatch QC technician">{a.qc_assigned_name}</span>
                   : String(a.qc_status || 'pending') === 'pending' && <span className="font-ui text-ink-3">Not assigned</span>)}
                 {a.qc_ticket_id && (
-                  <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="font-ui" style={{ fontSize: 'var(--d-sm)' }}>
+                  <Link to={`/carret/produce/tickets/${a.qc_ticket_id}`} className="font-ui" style={{ fontSize: 'var(--d-sm)' }}>
                     Ticket #{a.qc_ticket_id}
                   </Link>
                 )}

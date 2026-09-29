@@ -128,7 +128,7 @@ export default function ChargerHandoverDrawer({ requestId, onClose, onDone }) {
               items={[
                 { label: 'Sales order', value: row.sales_order_number ? <Link to={`/carret/sell/sales-orders/${encodeURIComponent(row.sales_order_number)}`}><DocNumber value={row.sales_order_number} /></Link> : null },
                 { label: 'Customer', value: row.customer_name },
-                { label: 'Dispatch QC ticket', value: row.ticket_id ? <Link to={`/floor-pipeline/tickets/${row.ticket_id}`}>#{row.ticket_id}{row.ticket_stage ? ` · ${row.ticket_stage}` : ''}</Link> : null },
+                { label: 'Dispatch QC ticket', value: row.ticket_id ? <Link to={`/carret/produce/tickets/${row.ticket_id}`}>#{row.ticket_id}{row.ticket_stage ? ` · ${row.ticket_stage}` : ''}</Link> : null },
                 { label: 'Challan', value: row.dc_number ? <DocNumber value={row.dc_number} /> : null },
               ]}
             />

@@ -1,5 +1,6 @@
 import React from 'react';
 import ProtectedRoute from '../router/ProtectedRoute';
+import { FLOOR_TICKETS_BASE_SECTIONS } from '../features/floor-pipeline/floorPipelineAccess';
 import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
 
 /**
@@ -220,7 +221,10 @@ export const carretRoutes = CARRET_ENABLED
       // QC2 must not move between sections.
       { path: '/carret/produce/floor', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorBoardPage />) },
       { path: '/carret/produce/pipeline', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorBoardPage />) },
-      { path: '/carret/produce/tickets/:ticketId', element: guardAny(['floor_pipeline', 'floor_tickets'], 'view', <FloorTicketPage />) },
+      // Same sections as the old ticket page (/floor-pipeline/tickets/:id), so
+      // links from Sell / Movement can open the new page without locking out
+      // chip-level or QC users who could open the old one.
+      { path: '/carret/produce/tickets/:ticketId', element: guardAny(FLOOR_TICKETS_BASE_SECTIONS, 'view', <FloorTicketPage />) },
       { path: '/carret/produce/parts-desk', element: guardAny(['parts_approval', 'parts_inventory'], 'view', <PartsDeskPage />) },
       { path: '/carret/produce/into-stock', element: guard('pending_inventory', 'view', <IntoStockPage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
