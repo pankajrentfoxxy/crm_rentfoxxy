@@ -251,7 +251,8 @@ export default function DispatchChargerQueuePage() {
                 <th className="px-3 py-2">Model</th>
                 <th className="px-3 py-2">Adapter</th>
                 <th className="px-3 py-2">Cable</th>
-                <th className="px-3 py-2">SO</th>
+                <th className="px-3 py-2">SO / customer</th>
+                <th className="px-3 py-2">Requested by</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Attached</th>
                 <th className="px-3 py-2" />
@@ -267,11 +268,21 @@ export default function DispatchChargerQueuePage() {
                   <td className="px-3 py-2">{r.model || '—'}</td>
                   <td className="px-3 py-2 font-mono text-xs">{r.adapter_label || '—'}</td>
                   <td className="px-3 py-2 font-mono text-xs">{r.cable_label || '—'}</td>
-                  <td className="px-3 py-2">{r.sales_order_number || r.ticket_so || '—'}</td>
+                  <td className="px-3 py-2">
+                    {r.sales_order_number || '—'}
+                    {r.customer_name ? <span className="block text-xs text-slate-500">{r.customer_name}</span> : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.requested_by_name || '—'}
+                    <span className="block text-xs text-slate-500">{formatWhen(r.requested_at)}</span>
+                  </td>
                   <td className="px-3 py-2 capitalize">{r.status.replaceAll('_', ' ')}</td>
                   <td className="px-3 py-2 text-xs text-slate-600">{formatWhen(r.attached_at)}</td>
                   <td className="px-3 py-2 text-right">
-                    {r.status === 'pending' ? (
+                    {r.status === 'pending' && !r.can_hand_over ? (
+                      <span className="text-xs text-red-700">{(r.handover_blockers || []).join('; ') || 'Details missing'}</span>
+                    ) : null}
+                    {r.status === 'pending' && r.can_hand_over ? (
                       <button
                         type="button"
                         onClick={() => { setActive(r); resetKit(); }}

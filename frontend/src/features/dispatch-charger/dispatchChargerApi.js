@@ -27,8 +27,9 @@ export function scanDispatchQcCharger(ticketId, payload) {
   return api.post(`${base}/ticket/${ticketId}/qc-scan`, payload);
 }
 
-export function fetchChargerWarehouseQueue(status = 'pending') {
-  return api.get(`${base}/warehouse-queue`, { params: { status } });
+/** extras: { search, so, request_id } */
+export function fetchChargerWarehouseQueue(status = 'pending', extras = {}) {
+  return api.get(`${base}/warehouse-queue`, { params: { status, ...extras } });
 }
 
 export function fetchAvailableChargers(search, extras = {}) {

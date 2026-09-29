@@ -602,22 +602,134 @@ async function listAvailableChargers(db, search, opts = {}) {
   return r.rows;
 }
 
-async function listWarehouseQueue(db, status) {
+/**
+ * One charger request with everything the warehouse needs before handing a kit
+ * over: the laptop (TTSPL, serial, brand / model / configuration), the order it
+ * is going out on (SO, customer, challan) and who asked for it. Brand and model
+ * come from the asset record first — the Dispatch QC ticket copy is often blank.
+ */
+const REQUEST_DETAIL_SQL = `
+  SELECT dcr.*,
+         u.name AS requested_by_name, u.role AS requested_by_role,
+         h.name AS handed_over_by_name,
+         a.name AS attached_by_name,
+         t.status AS ticket_status, t.ticket_type, st.stage_name AS ticket_stage,
+         sos.dc_number, sos.qc_status, sos.status AS allocation_status,
+         COALESCE(NULLIF(TRIM(dcr.ttspl_id), ''), NULLIF(TRIM(sos.ttspl_id), ''), NULLIF(TRIM(t.ttspl_id), '')) AS laptop_ttspl,
+         COALESCE(NULLIF(TRIM(vsn.serial_number), ''), NULLIF(TRIM(sos.serial_number), ''), NULLIF(TRIM(t.serial_number), '')) AS laptop_serial,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'brand'), ''), NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+                  NULLIF(TRIM(vpd.brand), ''), NULLIF(TRIM(t.brand), '')) AS laptop_brand,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+                  NULLIF(TRIM(vsn.grn_received_config->>'model'), ''), NULLIF(TRIM(vpd.model), ''),
+                  NULLIF(TRIM(t.model), '')) AS laptop_model,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'processor'), ''), NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+                  NULLIF(TRIM(vpd.processor), '')) AS laptop_processor,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+                  NULLIF(TRIM(vpd.generation), '')) AS laptop_generation,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+                  NULLIF(TRIM(vpd.ram), '')) AS laptop_ram,
+         COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+                  NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''), NULLIF(TRIM(vpd.storage), '')) AS laptop_storage,
+         so.so_number, so.customer_name, so.customer_id, so.quotation_type, so.so_status
+    FROM dispatch_charger_requests dcr
+    LEFT JOIN users u ON u.user_id = dcr.requested_by
+    LEFT JOIN users h ON h.user_id = dcr.handed_over_by
+    LEFT JOIN users a ON a.user_id = dcr.attached_by
+    LEFT JOIN tickets t ON t.ticket_id = dcr.ticket_id
+    LEFT JOIN stages st ON st.stage_id = t.current_stage_id
+    LEFT JOIN sales_order_serials sos ON sos.allocation_id = dcr.allocation_id
+    LEFT JOIN vendor_serial_numbers vsn
+      ON vsn.serial_id = COALESCE(dcr.serial_id, sos.serial_id, t.vendor_serial_id)
+    LEFT JOIN vendor_product_details vpd
+      ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+    LEFT JOIN LATERAL (
+      SELECT sol.sales_order_number AS so_number, sol.customer_name, sol.customer_id,
+             sol.quotation_type, sol.status AS so_status
+        FROM sales_order_lines sol
+       WHERE sol.sales_order_number = COALESCE(
+               NULLIF(TRIM(dcr.sales_order_number), ''),
+               NULLIF(TRIM(sos.sales_order_number), ''),
+               NULLIF(TRIM(t.sales_order_number), ''))
+       ORDER BY sol.id ASC
+       LIMIT 1
+    ) so ON TRUE`;
+
+/**
+ * Why a pending request cannot be handed over yet. The warehouse must see the
+ * laptop, the order and the requester before a kit leaves the shelf; a request
+ * missing any of them is fixed at Dispatch QC (cancel and raise again), not
+ * guessed at on the warehouse desk.
+ */
+function handoverBlockers(row) {
+  if (!row) return ['Request not found'];
+  const out = [];
+  if (!row.laptop_ttspl) out.push('Laptop TTSPL is missing');
+  if (!row.laptop_serial) out.push('Laptop serial number is missing');
+  if (!row.laptop_brand && !row.laptop_model) out.push('Laptop brand / model is missing');
+  if (!row.so_number) out.push('Sales order is missing');
+  if (!row.requested_by || !row.requested_by_name) out.push('Requested-by is missing');
+  if (!row.requested_at) out.push('Request date is missing');
+  if (row.ticket_status === 'cancelled') out.push('The Dispatch QC ticket is cancelled');
+  if (row.allocation_status === 'removed') out.push('The laptop was removed from the sales order');
+  if (String(row.so_status || '').toLowerCase() === 'cancelled') out.push('The sales order is cancelled');
+  if (row.dc_number || String(row.allocation_status || '') === 'dispatched') {
+    out.push(`The laptop is already on challan ${row.dc_number || ''}`.trim());
+  }
+  return out;
+}
+
+function detailedRequest(row) {
+  const pub = publicRequest(row);
+  if (!pub) return null;
+  const blockers = row.status === 'pending' ? handoverBlockers(row) : [];
+  return {
+    ...pub,
+    ttspl_id: row.laptop_ttspl || row.ttspl_id || null,
+    serial_number: row.laptop_serial || null,
+    brand: row.laptop_brand || null,
+    model: row.laptop_model || null,
+    sales_order_number: row.so_number || row.sales_order_number || null,
+    handover_blockers: blockers,
+    can_hand_over: row.status === 'pending' && blockers.length === 0,
+  };
+}
+
+async function getRequestDetail(db, requestId, { forUpdate = false } = {}) {
+  if (forUpdate) {
+    await db.query(
+      `SELECT request_id FROM dispatch_charger_requests WHERE request_id = $1 FOR UPDATE`,
+      [requestId]
+    );
+  }
+  const r = await db.query(`${REQUEST_DETAIL_SQL} WHERE dcr.request_id = $1`, [requestId]);
+  return hydrateRequest(db, r.rows[0] || null);
+}
+
+async function listWarehouseQueue(db, status, opts = {}) {
   const params = [];
   let where = `dcr.disposition = 'attach' AND dcr.status <> 'cancelled'`;
   if (status && status !== 'all') {
     params.push(status);
     where += ` AND dcr.status = $${params.length}`;
   }
+  if (opts.salesOrder && String(opts.salesOrder).trim()) {
+    params.push(String(opts.salesOrder).trim());
+    where += ` AND so.so_number = $${params.length}`;
+  }
+  const requestId = Number(opts.requestId);
+  if (Number.isInteger(requestId) && requestId > 0) {
+    params.push(requestId);
+    where += ` AND dcr.request_id = $${params.length}`;
+  }
+  if (opts.search && String(opts.search).trim()) {
+    params.push(`%${String(opts.search).trim()}%`);
+    const n = params.length;
+    where += ` AND (dcr.request_number ILIKE $${n} OR dcr.ttspl_id ILIKE $${n}
+                OR vsn.serial_number ILIKE $${n} OR so.so_number ILIKE $${n}
+                OR so.customer_name ILIKE $${n} OR u.name ILIKE $${n})`;
+  }
   const r = await db.query(
-    `SELECT dcr.*,
-            u.name AS requested_by_name,
-            h.name AS handed_over_by_name,
-            t.brand, t.model, t.serial_number, t.sales_order_number AS ticket_so
-       FROM dispatch_charger_requests dcr
-       LEFT JOIN users u ON u.user_id = dcr.requested_by
-       LEFT JOIN users h ON h.user_id = dcr.handed_over_by
-       LEFT JOIN tickets t ON t.ticket_id = dcr.ticket_id
+    `${REQUEST_DETAIL_SQL}
       WHERE ${where}
       ORDER BY
         CASE dcr.status
@@ -626,12 +738,13 @@ async function listWarehouseQueue(db, status) {
           WHEN 'attached' THEN 2
           ELSE 3
         END,
-        dcr.requested_at ASC`,
+        dcr.requested_at ASC
+      LIMIT 500`,
     params
   );
   const hydrated = [];
   for (const row of r.rows) {
-    hydrated.push(publicRequest(await hydrateRequest(db, row)));
+    hydrated.push(detailedRequest(await hydrateRequest(db, row)));
   }
   return hydrated;
 }
@@ -759,10 +872,14 @@ function assertKitScansMatch(row, body = {}) {
 }
 
 async function approveAndHandover(db, requestId, user, body = {}) {
-  const row = await getById(db, requestId);
+  const row = await getRequestDetail(db, requestId, { forUpdate: true });
   if (!row) throw httpError('Charger request not found', 404);
   if (row.disposition !== 'attach') throw httpError('This request is not a charger attach');
   if (row.status !== 'pending') throw httpError(`Request is already ${row.status}`);
+  const blockers = handoverBlockers(row);
+  if (blockers.length) {
+    throw httpError(`Cannot hand over ${row.request_number}: ${blockers.join('; ')}`, 409);
+  }
 
   const scans = kitScanPayload(body);
   const adapter = await loadStockUnit(db, scans.adapter);
@@ -1239,6 +1356,9 @@ module.exports = {
   lookupChargerUnit,
   listAvailableChargers,
   listWarehouseQueue,
+  handoverBlockers,
+  getRequestDetail,
+  detailedRequest,
   approveAndHandover,
   attachCharger,
   recordQcScan,

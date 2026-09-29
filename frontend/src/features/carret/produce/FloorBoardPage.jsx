@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
@@ -29,7 +29,11 @@ const VIEWS = [
 export default function FloorBoardPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [stage, setStage] = useState('');
+  // ?stage= lets a menu entry open one stage (Movement → Dispatch QC).
+  const [params] = useSearchParams();
+  const stageParam = params.get('stage') || '';
+  const [stage, setStage] = useState(stageParam);
+  useEffect(() => { setStage(stageParam); }, [stageParam]);
   // A technician opens on their own work; a floor manager on the whole floor.
   const [view, setView] = useState(isFloorLead(user) ? 'queue' : 'mine');
   const [search, setSearch] = useState('');

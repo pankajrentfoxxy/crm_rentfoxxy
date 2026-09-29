@@ -14,6 +14,8 @@ import { usePermission } from '../../../hooks/usePermission';
 import { AddressFields, AddressText, validateAddress } from './CustomerAddresses';
 import { configText } from './LineItemsEditor';
 import { SO_SECTIONS, parseJson } from './sellShared';
+import ChargerHandoverDrawer from '../move/ChargerHandoverDrawer';
+import { CHARGER_STATUS, chargerStatusLabel } from '../move/chargerShared';
 
 /**
  * Sales order → Laptops & Dispatch QC.
@@ -44,12 +46,14 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
   const { hasPermission, user } = usePermission();
   const canEdit = SERIAL_EDIT_SECTIONS.some((s) => hasPermission(s, 'edit'));
   const isSuper = user?.role === 'super_admin';
+  const isWarehouse = hasPermission('dispatch_charger_warehouse', 'view');
 
   const [data, setData] = useState({ loading: true, error: null, lines: [], summary: null });
   const [attachLine, setAttachLine] = useState(null);
   const [assign, setAssign] = useState(null);
   const [addrFor, setAddrFor] = useState(null);
   const [removing, setRemoving] = useState(null);
+  const [chargerFor, setChargerFor] = useState(null);
 
   const load = useCallback(() => {
     listSoSerials(soNumber)
@@ -151,6 +155,27 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
             sub: (a) => a.ticket_stage || null,
           },
           {
+            // The charger kit is part of getting this laptop out: chosen at
+            // Dispatch QC, handed over by the warehouse, attached before QC ends.
+            key: 'charger', header: 'Charger',
+            render: (a) => {
+              if (!a.charger_status) {
+                return <span className="text-ink-3">{a.qc_ticket_id && String(a.qc_status || 'pending') === 'pending' ? 'Not chosen yet' : '—'}</span>;
+              }
+              const chip = <StatusChip status={CHARGER_STATUS[a.charger_status]?.chip || a.charger_status} label={chargerStatusLabel(a.charger_status)} />;
+              if (!isWarehouse) return chip;
+              return (
+                <span className="flex items-center flex-wrap" style={{ gap: '6px' }}>
+                  {chip}
+                  <Button variant={a.charger_status === 'pending' ? 'primary' : 'quiet'} onClick={() => setChargerFor(a.charger_request_id)}>
+                    {a.charger_status === 'pending' ? 'Hand over' : 'View'}
+                  </Button>
+                </span>
+              );
+            },
+            sub: (a) => a.charger_request_number || null,
+          },
+          {
             key: 'addr', header: 'Ships to',
             render: (a) => {
               const d = parseJson(a.delivery_address);
@@ -193,6 +218,8 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
           </Section>
         );
       })}
+
+      <ChargerHandoverDrawer requestId={chargerFor} onClose={() => setChargerFor(null)} onDone={refresh} />
 
       <AttachDrawer
         soNumber={soNumber}

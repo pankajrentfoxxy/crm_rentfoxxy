@@ -125,12 +125,13 @@ export const SECTIONS = [
     groups: ['Outward', 'Inward', 'Gate & tracking', 'Old view'],
     items: [
       // ---- Outward: leaving the warehouse ----
+      { group: 'Outward', to: '/carret/move/orders-to-accept', label: 'Orders to accept', section: 'dispatch_pending_orders', action: 'view' },
       { group: 'Outward', to: '/carret/move/challans', label: 'Delivery Challans', section: 'delivery_challans', action: 'view' },
+      { group: 'Outward', to: '/carret/move/chargers', label: 'Chargers to hand over', section: 'dispatch_charger_warehouse', action: 'view' },
       { group: 'Outward', to: '/vendor-management/return-to-vendor', label: 'Vendor Return DC', section: 'vendor_return_to_vendor', action: 'view' },
       { group: 'Outward', to: '/vendor-management/vendor-repair-dc', label: 'Vendor Repair DC', section: 'vendor_repair_dc', action: 'view' },
       { group: 'Outward', to: '/inventory-management/scrap-challans', label: 'Scrap Challans', section: 'scrap_challans', action: 'view' },
       { group: 'Outward', to: '/support-parts/queue', label: 'Service Parts Challans', section: 'support_part_challan', action: 'view' },
-      { group: 'Outward', to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers', section: 'dispatch_charger', action: 'view' },
 
       // ---- Inward: coming back in ----
       { group: 'Inward', to: '/carret/procure/arrivals', label: 'Vendor Arrivals', sections: ['guard_gate_checking', 'vendor_management'], section: 'vendor_management', action: 'view' },
@@ -138,16 +139,15 @@ export const SECTIONS = [
       { group: 'Inward', to: '/carret/move/return-challans', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/vendor-management/vendor-repair-dc?direction=inward', label: 'Vendor Repair Receive', section: 'vendor_repair_dc', action: 'view' },
       { group: 'Inward', to: '/vendor-management/return-ticket', label: 'Vendor Return Ticket', section: 'vendor_return_ticket', action: 'view' },
-      { group: 'Inward', to: '/inventory-management/physical-part-inward', label: 'Part Inward', section: 'parts_inventory', action: 'view' },
+      { group: 'Inward', to: '/carret/move/part-inward', label: 'Part Inward', section: 'physical_dead_parts', action: 'view' },
 
       // ---- Gate & tracking: the crossing itself ----
       { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
-      { group: 'Gate & tracking', to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/produce/floor?stage=Dispatch%20QC', label: 'Dispatch QC', section: 'dispatch_qc', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/deliveries', label: 'Delivery Register', sections: ['delivery_register_management', 'technician_bucket'], section: 'delivery_register_management', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/my-deliveries', label: 'My Deliveries', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
-      { group: 'Gate & tracking', to: '/delivery-register-management/technicians', label: 'Delivery Technicians', section: 'delivery_register_management', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/move/technicians', label: 'Delivery Technicians', section: 'technician_bucket', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/tracking', label: 'Courier & Tracking', section: 'bluedart_awb_tracking', action: 'view' },
-      { group: 'Gate & tracking', to: '/dispatch/pending-orders', label: 'Pending Dispatch', section: 'dispatch_pending_orders', action: 'view' },
 
       // ---- Old view: kept until Order to delivery is signed off ----
       { group: 'Old view', to: '/sales-pipeline/delivery-challans', label: 'Delivery Challans (old)', section: 'delivery_challans', action: 'view' },
@@ -156,6 +156,11 @@ export const SECTIONS = [
       { group: 'Old view', to: '/sales-pipeline/delivery-register', label: 'Delivery Register (old)', section: 'delivery_register_management', action: 'view' },
       { group: 'Old view', to: '/sales-pipeline/my-deliveries', label: 'My Deliveries (old)', section: 'technician_bucket', action: 'view' },
       { group: 'Old view', to: '/sales-pipeline/bluedart-tracking', label: 'Courier & Tracking (old)', section: 'bluedart_awb_tracking', action: 'view' },
+      { group: 'Old view', to: '/dispatch/pending-orders', label: 'Pending Dispatch (old)', section: 'dispatch_pending_orders', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/dispatch-chargers', label: 'Dispatch Chargers (old)', section: 'dispatch_charger_warehouse', action: 'view' },
+      { group: 'Old view', to: '/inventory-management/physical-parts', label: 'Dead / Physical Parts (old)', section: 'physical_dead_parts', action: 'view' },
+      { group: 'Old view', to: '/delivery-register-management/technicians', label: 'Delivery Technicians (old)', section: 'delivery_technicians', action: 'view' },
+      { group: 'Old view', to: '/floor-pipeline/tickets?stage=Dispatch%20QC', label: 'Dispatch QC (old)', section: 'dispatch_qc', action: 'view' },
     ],
   },
   {

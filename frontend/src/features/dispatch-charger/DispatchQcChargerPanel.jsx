@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CheckCircle2, Loader2, PlugZap, Warehouse } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import ScanField from '../../components/ScanField';
+import { usePermission } from '../../hooks/usePermission';
 import {
   attachDispatchCharger,
   cancelChargerRequest,
@@ -16,6 +18,8 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
   const [data, setData] = useState(null);
   const [adapterScan, setAdapterScan] = useState('');
   const [cableScan, setCableScan] = useState('');
+  const { hasPermission } = usePermission();
+  const isWarehouse = hasPermission('dispatch_charger_warehouse', 'edit');
   const onReadyChangeRef = useRef(onReadyChange);
   useEffect(() => { onReadyChangeRef.current = onReadyChange; }, [onReadyChange]);
 
@@ -115,6 +119,25 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
           <p className="text-xs text-slate-600">
             Request {charger.request_number} is with warehouse. After they hand over the adapter and power cable, scan both here to attach.
           </p>
+          <p className="text-xs text-slate-600">
+            Asked by {charger.requested_by_name || 'unknown'}
+            {charger.requested_at ? ` on ${new Date(charger.requested_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+            {charger.sales_order_number ? ` · ${charger.sales_order_number}` : ''}
+            {charger.customer_name ? ` · ${charger.customer_name}` : ''}
+          </p>
+          {charger.handover_blockers?.length ? (
+            <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+              Warehouse cannot hand over yet: {charger.handover_blockers.join('; ')}. Cancel this request and raise it again.
+            </div>
+          ) : null}
+          {isWarehouse && charger.can_hand_over ? (
+            <Link
+              to={`/carret/move/chargers?request=${charger.request_id}`}
+              className="inline-block text-xs font-semibold text-amber-800 hover:underline"
+            >
+              Hand over the kit now →
+            </Link>
+          ) : null}
           <button
             type="button"
             disabled={busy}

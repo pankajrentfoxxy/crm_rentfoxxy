@@ -25,8 +25,11 @@ async function withTx(fn) {
 exports.getTicketCharger = async (req, res) => {
   try {
     const ticketId = Number(req.params.ticketId);
-    const row = await svc.getActiveByTicket(pool, ticketId);
+    const active = await svc.getActiveByTicket(pool, ticketId);
     const ctx = await svc.loadTicketContext(pool, ticketId);
+    // Same detail the warehouse queue shows, so Dispatch QC sees why a pending
+    // request cannot be handed over yet.
+    const row = active ? await svc.getRequestDetail(pool, active.request_id) : null;
     res.json({
       success: true,
       data: {
@@ -34,7 +37,7 @@ exports.getTicketCharger = async (req, res) => {
         ttspl_id: ctx.ttspl_id,
         sales_order_number: ctx.sales_order_number,
         stage_name: ctx.stage_name,
-        charger: svc.publicRequest(row),
+        charger: row ? svc.detailedRequest(row) : null,
       },
     });
   } catch (e) {
@@ -81,7 +84,11 @@ exports.cancelRequest = async (req, res) => {
 
 exports.warehouseQueue = async (req, res) => {
   try {
-    const rows = await svc.listWarehouseQueue(pool, req.query.status || 'pending');
+    const rows = await svc.listWarehouseQueue(pool, req.query.status || 'pending', {
+      search: req.query.search,
+      salesOrder: req.query.so,
+      requestId: req.query.request_id,
+    });
     res.json({ success: true, data: rows });
   } catch (e) {
     sendError(res, e, 'Failed to load charger queue');

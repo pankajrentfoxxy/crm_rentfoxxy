@@ -39,8 +39,11 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    Clean-up applied on QA 27 Sep by the user (398 rows, backup
    backend/backups/stock-cleanup-2026-09-27T22-03-38-587Z.json). Waiting: click-through, the 13
    REVIEW rows checked physically. (Asset-config duplicates merged 27 Sep: scripts/merge-asset-config-duplicates.js — run on live at promotion.)
-10. **Move leftovers** — dispatch chargers, part inward, pending dispatch, delivery
-    technicians, dispatch QC link.
+10. **Move leftovers** — BUILT on QA 29 Sep (`claude/carret-move-leftovers.md`): charger
+    handover clubbed into Order to delivery (SO laptops "Charger" column, Dispatch QC ticket,
+    "Chargers to hand over" list; no handover without laptop / SO / requester — backend
+    refuses too), Orders to accept (pending dispatch), Delivery technicians, Part inward (old
+    link was broken), Dispatch QC → new floor board. Waiting: click-through.
 11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
 12. **Hide the old screens** of each process after its sign-off (the "Old view" links).
 

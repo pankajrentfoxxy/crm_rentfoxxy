@@ -80,6 +80,10 @@ const ChallanRecordPage = React.lazy(() => import('../features/carret/move/Chall
 const DeliveryRegisterPage = React.lazy(() => import('../features/carret/move/DeliveryRegisterPage'));
 const MyDeliveriesPage = React.lazy(() => import('../features/carret/move/MyDeliveriesPage'));
 const CourierTrackingPage = React.lazy(() => import('../features/carret/move/CourierTrackingPage'));
+const ChargersPage = React.lazy(() => import('../features/carret/move/ChargersPage'));
+const OrdersToAcceptPage = React.lazy(() => import('../features/carret/move/OrdersToAcceptPage'));
+const TechniciansPage = React.lazy(() => import('../features/carret/move/TechniciansPage'));
+const PartInwardPage = React.lazy(() => import('../features/carret/move/PartInwardPage'));
 const ControlUsersPage = React.lazy(() => import('../features/carret/control/UsersPage'));
 const ControlRolesPage = React.lazy(() => import('../features/carret/control/RolesPage'));
 const ControlRolePermissionsPage = React.lazy(() => import('../features/carret/control/RolePermissionsPage'));
@@ -134,6 +138,12 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/move/deliveries', element: guardAny(['delivery_register_management', 'technician_bucket'], 'view', <DeliveryRegisterPage />) },
       { path: '/carret/move/my-deliveries', element: guardAny(['technician_bucket', 'delivery_my_deliveries'], 'view', <MyDeliveriesPage />) },
       { path: '/carret/move/tracking', element: guard('bluedart_awb_tracking', 'view', <CourierTrackingPage />) },
+      // Move leftovers (claude/carret-move-leftovers.md). Each guard is the
+      // section its API enforces, so the menu never shows a page the API refuses.
+      { path: '/carret/move/chargers', element: guard('dispatch_charger_warehouse', 'view', <ChargersPage />) },
+      { path: '/carret/move/orders-to-accept', element: guard('dispatch_pending_orders', 'view', <OrdersToAcceptPage />) },
+      { path: '/carret/move/technicians', element: guard('technician_bucket', 'view', <TechniciansPage />) },
+      { path: '/carret/move/part-inward', element: guard('physical_dead_parts', 'view', <PartInwardPage />) },
       // Customer returns (claude/carret-customers-returns-control.md, step 2).
       { path: '/carret/move/return-challans', element: guard('return_dc', 'view', <ReturnChallansPage />) },
       { path: '/carret/move/return-challans/:rdcNumber', element: guard('return_dc', 'view', <CustomerReturnChallanPage />) },

@@ -120,9 +120,18 @@ exports.listSerials = async (req, res) => {
                 NULLIF(TRIM(vsn.extra->>'ssd'), ''),
                 NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
                 NULLIF(TRIM(vpd.storage), '')
-              ) AS serial_storage
+              ) AS serial_storage,
+              dcr.request_id AS charger_request_id, dcr.request_number AS charger_request_number,
+              dcr.status AS charger_status, dcr.disposition AS charger_disposition
          FROM sales_order_serials sos
          LEFT JOIN tickets t ON t.ticket_id = sos.qc_ticket_id
+         LEFT JOIN LATERAL (
+           SELECT request_id, request_number, status, disposition
+             FROM dispatch_charger_requests
+            WHERE ticket_id = sos.qc_ticket_id AND status <> 'cancelled'
+            ORDER BY request_id DESC
+            LIMIT 1
+         ) dcr ON sos.qc_ticket_id IS NOT NULL
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
          LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
          LEFT JOIN vendor_product_details vpd
