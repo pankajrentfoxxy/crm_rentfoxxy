@@ -2133,6 +2133,8 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     }
   }
 
+  const collectedItems = pickupItems.filter((i) => !isPickupStillWithCustomer(i));
+
   return {
     return_dc_number: rdcNumber,
     ticket_id: dcl.support_ticket_id,
@@ -2153,12 +2155,15 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     unit_count: pickupItems.length || dcl.quantity || 1,
     units,
     customer_otp_code: pickupItems[0]?.customer_otp_code || pickupItems[0]?.otp_code || null,
-    customer_otp_verified_at: pickupItems.length && pickupItems.every((i) => i.customer_otp_verified_at)
-      ? pickupItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
+    // RDC-level OTP / guard-inward flags cover the laptops collected so far; a laptop
+    // still with the customer (second visit pending) must not hold them back.
+    customer_otp_verified_at: collectedItems.length && collectedItems.every((i) => i.customer_otp_verified_at)
+      ? collectedItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
       : null,
-    gate_inward_at: pickupItems.length && pickupItems.every((i) => i.gate_inward_at)
-      ? pickupItems.find((i) => i.gate_inward_at)?.gate_inward_at
+    gate_inward_at: collectedItems.length && collectedItems.every((i) => i.gate_inward_at)
+      ? collectedItems.find((i) => i.gate_inward_at)?.gate_inward_at
       : null,
+    units_with_customer: pickupItems.length - collectedItems.length,
     pickup_items: pickupItems.map((i) => ({
       id: i.id,
       serial_number: i.serial_number,
@@ -2181,6 +2186,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
       warehouse_receiver_name: i.warehouse_receiver_name,
       customer_otp_verified_at: i.customer_otp_verified_at,
       gate_inward_at: i.gate_inward_at,
+      still_with_customer: isPickupStillWithCustomer(i),
       floor_ticket_id: i.floor_ticket_id,
       return_config_verified_at: i.return_config_verified_at || null,
       return_captured_serial: i.return_captured_serial || null,

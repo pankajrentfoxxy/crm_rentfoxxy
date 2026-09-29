@@ -233,6 +233,11 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     Awaiting Guard inward
                   </span>
                 )}
+                {detail.units_with_customer > 0 ? (
+                  <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">
+                    {detail.units_with_customer} laptop(s) still with customer — next pickup
+                  </span>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-4">
@@ -290,7 +295,7 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                 </div>
               </div>
 
-              {detail.gate_inward_at && (detail.pickup_items || []).some((i) => !i.warehouse_received_at) ? (
+              {detail.gate_inward_at && (detail.pickup_items || []).some((i) => !i.warehouse_received_at && !i.still_with_customer) ? (
                 <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -318,7 +323,7 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     </a>
                   </div>
                   <div className="space-y-2">
-                    {(detail.pickup_items || []).map((item) => {
+                    {(detail.pickup_items || []).filter((item) => !item.still_with_customer).map((item) => {
                       const capture = item.return_capture || {};
                       const matched = !!item.return_config_verified_at && !!item.return_captured_serial;
                       const notOn = item.return_laptop_condition === 'not_on'
