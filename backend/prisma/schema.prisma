@@ -228,6 +228,7 @@ model Lead {
   inquiryType                               String?                          @default("rental") @map("inquiry_type") @db.VarChar(50)
   lastActivityAt                            DateTime?                        @default(now()) @map("last_activity_at") @db.Timestamptz(6)
   companyBrand                              String?                          @map("company_brand") @db.VarChar(255)
+  tradeName                                 String?                          @map("trade_name") @db.VarChar(255)
   brand                                     String?                          @db.VarChar(100)
   processor                                 String?                          @db.VarChar(100)
   generation                                String?                          @db.VarChar(50)

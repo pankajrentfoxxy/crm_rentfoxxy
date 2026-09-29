@@ -2452,6 +2452,7 @@ exports.updateLeadFullProfile = async (req, res) => {
     addField('name', pick('name', 'name')?.trim?.() ?? pick('name', 'name'), 'name', existing.name);
     addField('company_name', pick('company_name', 'companyName'), 'company', existing.companyName);
     addField('company_brand', pick('company_brand', 'companyBrand'), 'company brand', existing.companyBrand);
+    addField('trade_name', pick('trade_name', 'tradeName'), 'trade name', existing.tradeName);
     addField('email', pick('email', 'email') != null ? normalizeEmail(pick('email', 'email')) : undefined, 'email', existing.email);
     addField('phone', pick('phone', 'phone') != null ? normalizePhone(pick('phone', 'phone')) : undefined, 'phone', existing.phone);
     const whatsappPick = pick('whatsapp_number', 'whatsappNumber');

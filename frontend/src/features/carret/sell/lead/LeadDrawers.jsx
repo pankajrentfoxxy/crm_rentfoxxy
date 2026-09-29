@@ -8,6 +8,7 @@ import {
 } from './leadApi';
 import { CLOSED_STATUSES, OUTCOMES, STATUS_HINT, addDaysIst, leadErr, todayIst } from './leadShared';
 import { MONTH_CHOICES } from '../sellShared';
+import LeadGstFields from './LeadGstFields';
 
 /**
  * The three things done to a lead (claude/carret-lead.md):
@@ -124,6 +125,8 @@ export function WinDrawer({ lead, status = 'Deal', open, onClose, onDone }) {
       status,
       gst_number: lead.gstNumber || lead.research?.gst || '',
       company_name: lead.companyName || '',
+      trade_name: lead.tradeName || '',
+      company_type: lead.companyType || '',
       customer_name: lead.name || '',
       email: lead.email || '',
       phone: lead.phone || '',
@@ -152,12 +155,15 @@ export function WinDrawer({ lead, status = 'Deal', open, onClose, onDone }) {
   return (
     <Drawer open={open} onClose={onClose} title={`Mark as ${f.status} — ${lead.companyName || lead.name}`} width="44rem" footer={<Button variant="primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : `Mark as ${f.status} and create the customer`}</Button>}>
       <div className="c-stack">
-        <Notice tone="info">This creates (or updates) the customer with these details and their billing / shipping addresses — the sales order and delivery challans use them.</Notice>
+        <Notice tone="info">This creates (or updates) the customer with these details and their billing / shipping addresses — the sales order and delivery challans use them. Details already looked up from the GSTIN on the lead are filled in.</Notice>
+        <Field label="Won as"><Select value={f.status} onChange={s('status')} options={[{ value: 'Deal', label: 'Deal' }, { value: 'Demo', label: 'Demo' }]} /></Field>
+        <LeadGstFields
+          value={f}
+          required
+          onChange={(patch) => setF((x) => ({ ...x, ...patch }))}
+          addr={{ address: 'billing_address', city: 'billing_city', state: 'billing_state', pincode: 'billing_pincode' }}
+        />
         <FormGrid cols={2}>
-          <Field label="Won as"><Select value={f.status} onChange={s('status')} options={[{ value: 'Deal', label: 'Deal' }, { value: 'Demo', label: 'Demo' }]} /></Field>
-          <Field label="GSTIN" required><Input value={f.gst_number} onChange={(e) => setF({ ...f, gst_number: e.target.value.toUpperCase().slice(0, 15) })} placeholder="15 characters" /></Field>
-          <Field label="Company"><Input value={f.company_name} onChange={s('company_name')} /></Field>
-          <Field label="PAN"><Input value={f.pan_number} onChange={(e) => setF({ ...f, pan_number: e.target.value.toUpperCase().slice(0, 10) })} /></Field>
           <Field label="Contact name"><Input value={f.customer_name} onChange={s('customer_name')} /></Field>
           <Field label="Contact phone"><Input value={f.phone} onChange={s('phone')} inputMode="numeric" /></Field>
           <Field label="Billing address" required span={2}><Textarea rows={2} value={f.billing_address} onChange={s('billing_address')} /></Field>

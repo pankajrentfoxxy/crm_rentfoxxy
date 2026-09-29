@@ -64,6 +64,9 @@ async function convertLead(db, lead, body, userId) {
   const email = body.email || lead.email || null;
   const phone = body.phone || lead.phone || null;
   const pan = body.pan_number || lead.pan_number || null;
+  // From the GSTIN looked up on the lead (or in the convert form).
+  const tradeName = String(body.trade_name || lead.trade_name || '').trim() || null;
+  const companyType = String(body.company_type || lead.company_type || '').trim() || null;
 
   const existing = (await db.query(
     'SELECT customer_id, details FROM customers WHERE source_lead_id = $1 OR customer_id = $2 ORDER BY customer_id LIMIT 1',
@@ -75,7 +78,7 @@ async function convertLead(db, lead, body, userId) {
   applyFinanceSpockDetails(details, body);
 
   const values = [
-    name, company, email, phone, gstNo, pan, lead.company_type, lead.company_size, lead.industry,
+    name, company, email, phone, gstNo, pan, companyType, lead.company_size, lead.industry,
     billingAddress, billingCity, billingState, billingPincode,
     shippingSame, ship.address, ship.city, ship.state, ship.pincode,
     lead.whatsapp_number, lead.designation, lead.lead_stage, userId, JSON.stringify(details),
@@ -92,9 +95,9 @@ async function convertLead(db, lead, body, userId) {
          shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
          whatsapp_number = $19, designation = $20, source_lead_stage = $21,
          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), details = $23,
-         source_lead_id = COALESCE(source_lead_id, $25), updated_at = NOW()
+         source_lead_id = COALESCE(source_lead_id, $25), trade_name = COALESCE($26, trade_name), updated_at = NOW()
        WHERE customer_id = $24`,
-      [...values, customerId, lead.lead_id]
+      [...values, customerId, lead.lead_id, tradeName]
     );
   } else {
     customerId = (await db.query(
@@ -103,10 +106,10 @@ async function convertLead(db, lead, body, userId) {
          billing_address, billing_city, billing_state, billing_pincode,
          shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
          whatsapp_number, designation, source_lead_stage, onboarded_by, details,
-         source_lead_id, onboarded_at, type, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, NOW(), 'Lead', NOW(), NOW())
+         source_lead_id, trade_name, onboarded_at, type, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, NOW(), 'Lead', NOW(), NOW())
        RETURNING customer_id`,
-      [...values, lead.lead_id]
+      [...values, lead.lead_id, tradeName]
     )).rows[0].customer_id;
     isNew = true;
   }
@@ -144,9 +147,11 @@ async function convertLead(db, lead, body, userId) {
   );
 
   await db.query(
-    `UPDATE leads SET customer_id = $1, gst_number = $2, converted_at = COALESCE(converted_at, NOW()), converted_by = COALESCE(converted_by, $3), updated_at = NOW()
+    `UPDATE leads SET customer_id = $1, gst_number = $2, converted_at = COALESCE(converted_at, NOW()), converted_by = COALESCE(converted_by, $3),
+            company_name = COALESCE($5, company_name), trade_name = COALESCE($6, trade_name), company_type = COALESCE($7, company_type),
+            pan_number = COALESCE($8, pan_number), billing_address = $9, city = $10, state = $11, pincode = $12, updated_at = NOW()
       WHERE lead_id = $4`,
-    [customerId, gstNo, userId, lead.lead_id]
+    [customerId, gstNo, userId, lead.lead_id, company, tradeName, companyType, pan, billingAddress, billingCity, billingState, billingPincode]
   );
   await logActivity(db, { leadId: lead.lead_id, userId, action: 'converted_to_customer', notes: `${isNew ? 'New' : 'Updated'} customer #${customerId}` });
   return { customer_id: customerId, is_new: isNew };

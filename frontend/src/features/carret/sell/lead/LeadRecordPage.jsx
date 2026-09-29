@@ -17,6 +17,7 @@ import {
   istDate, leadErr, need, todayIst,
 } from './leadShared';
 import LeadStatusChip from './LeadStatusChip';
+import LeadGstFields from './LeadGstFields';
 
 /**
  * Sell → a lead (claude/carret-lead.md). One page: what they need, where the
@@ -103,6 +104,7 @@ export default function LeadRecordPage() {
     setEdit({
       name: lead.name || '', company_name: lead.companyName || '', email: lead.email || '', phone: lead.phone || '', whatsapp_number: lead.whatsappNumber || '',
       designation: lead.designation || '', city: lead.city || '', state: lead.state || '', pincode: lead.pincode || '', gst_number: lead.gstNumber || '',
+      trade_name: lead.tradeName || '', company_type: lead.companyType || '', pan_number: lead.panNumber || '', billing_address: lead.billingAddress || '',
       source: lead.source || '', inquiry_type: lead.inquiryType || 'rental', quantity_required: lead.quantityRequired || '', rental_duration: lead.rentalDuration || '',
       monthly_budget: lead.monthlyBudget || '', brand: lead.brand || '', processor: lead.processor || '', generation: lead.generation || '', ram: lead.ram || '',
       storage: lead.storage || '', use_case: lead.useCase || '', personal_remarks: lead.personalRemarks || '',
@@ -192,6 +194,10 @@ export default function LeadRecordPage() {
               { label: 'WhatsApp', value: lead.whatsappNumber },
               { label: 'City / state', value: [lead.city, lead.state].filter(Boolean).join(', ') },
               { label: 'GSTIN', value: lead.gstNumber || r.gst },
+              { label: 'Trade name', value: lead.tradeName },
+              { label: 'Company type', value: lead.companyType },
+              { label: 'PAN', value: lead.panNumber },
+              { label: 'Billing address', value: [lead.billingAddress, lead.city, lead.state, lead.pincode].filter(Boolean).join(', ') || null },
               { label: 'Industry', value: lead.industry || r.industry },
               { label: 'Employees', value: lead.companySize || r.employees },
             ]}
@@ -264,8 +270,10 @@ export default function LeadRecordPage() {
       <Drawer open={drawer === 'edit'} onClose={() => setDrawer(null)} title="Edit lead" width="44rem" footer={<Button variant="primary" disabled={busy} onClick={saveEdit}>Save</Button>}>
         {edit && (
           <div className="c-stack">
+            <div className="c-label">Company and GST</div>
+            <LeadGstFields value={edit} onChange={(patch) => setEdit((x) => ({ ...x, ...patch }))} />
+            <Field label="Billing address"><Textarea rows={2} value={edit.billing_address} onChange={e('billing_address')} /></Field>
             <FormGrid cols={2}>
-              <Field label="Company"><Input value={edit.company_name} onChange={e('company_name')} /></Field>
               <Field label="Contact name"><Input value={edit.name} onChange={e('name')} /></Field>
               <Field label="Phone"><Input value={edit.phone} onChange={e('phone')} /></Field>
               <Field label="Email"><Input type="email" value={edit.email} onChange={e('email')} /></Field>
@@ -274,7 +282,6 @@ export default function LeadRecordPage() {
               <Field label="City"><Input value={edit.city} onChange={e('city')} /></Field>
               <Field label="State"><Input value={edit.state} onChange={e('state')} /></Field>
               <Field label="Pincode"><Input value={edit.pincode} onChange={e('pincode')} /></Field>
-              <Field label="GSTIN"><Input value={edit.gst_number} onChange={(ev) => setEdit({ ...edit, gst_number: ev.target.value.toUpperCase().slice(0, 15) })} /></Field>
               <Field label="Source"><Select value={edit.source} onChange={e('source')} placeholder="Choose…" options={[...new Set([edit.source, ...SOURCES].filter(Boolean))]} /></Field>
               <Field label="Rent or buy"><Select value={edit.inquiry_type} onChange={e('inquiry_type')} options={INQUIRY} /></Field>
             </FormGrid>
