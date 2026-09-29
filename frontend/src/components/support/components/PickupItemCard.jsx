@@ -913,6 +913,12 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
         </div>
       )}
 
+      {/* Customer keeps this laptop: move it to its own Return DC (own OTP) so the
+          ones already collected can go through the gate. Same API as the new UI. */}
+      {canActTech && !otpVerified && !gateDone && !whDone && item.return_dc_number && !['courier', 'porter'].includes(item.pickup_method) && (
+        <CollectLaterInline item={item} asLead={lead} onDone={onRefresh} />
+      )}
+
       {esignOpen && (
         <WarehouseReceiptSignModal
           item={item}
@@ -928,6 +934,67 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
           onClose={() => setTechSignOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+/** "Collect later" on the old pickup card — POST /support/items/:id/collect-later. */
+function CollectLaterInline({ item, asLead, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(() => new Date(Date.now() + 330 * 60000 + 86400000).toISOString().slice(0, 10));
+  const [unassigned, setUnassigned] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const submit = async () => {
+    if (reason.trim().length < 3) { toast.error('Write why the customer kept it'); return; }
+    setSaving(true);
+    try {
+      const { data } = await api.post(`/support/items/${item.id}/collect-later`, {
+        reason: reason.trim(), pickup_date: date, unassigned: asLead && unassigned ? true : undefined,
+      });
+      toast.success(data.message || 'Moved to a later pickup');
+      setOpen(false);
+      onDone?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not move the laptop');
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (!open) {
+    return (
+      <div className="mx-4 mb-3">
+        <button type="button" onClick={() => setOpen(true)} className="text-xs font-semibold text-orange-700 hover:underline">
+          Customer keeps this laptop — collect later
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-4 mb-3 p-3 rounded-xl border border-gray-200 bg-gray-50 space-y-2">
+      <p className="text-xs text-gray-600">
+        It moves to a new Return DC with its own customer OTP. The laptops already collected stay on {item.return_dc_number} and can go through the gate.
+      </p>
+      <textarea
+        rows={2} value={reason} onChange={(e) => setReason(e.target.value)}
+        placeholder="Why did the customer keep it? *"
+        className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"
+      />
+      <label className="block text-xs text-gray-500">
+        New pickup date *
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm" />
+      </label>
+      {asLead && (
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input type="checkbox" checked={unassigned} onChange={(e) => setUnassigned(e.target.checked)} /> Leave it unassigned (assign later)
+        </label>
+      )}
+      <div className="flex gap-2">
+        <button type="button" disabled={saving} onClick={submit} className="flex-1 py-2 bg-orange-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+          {saving ? 'Moving…' : 'Move to a later pickup'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">Back</button>
+      </div>
     </div>
   );
 }

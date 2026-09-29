@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import FieldShell from '../../../shells/FieldShell';
 import {
   Button, EmptyState, Field, FlowSteps, Input, Notice, Segmented, Textarea,
@@ -181,6 +181,12 @@ export default function MyDeliveriesPage() {
         <div style={{ overflowX: 'auto' }}>
           <Segmented label="Show" value={show} onChange={(v) => setParams(v === 'all' ? {} : { show: v }, { replace: true })} options={options} />
         </div>
+        {show === 'pickups' && hasPermission('support_tickets', 'view') && (
+          <Notice tone="info" title="Support pickups are in My work">
+            A support ticket&apos;s laptops are collected one by one with the customer&apos;s OTP in <Link to="/carret/serve/my-work">My work</Link>.
+            If the customer keeps a laptop, use &quot;Collect later&quot; on that job.
+          </Notice>
+        )}
         {state.loading && <EmptyState title="Loading…" />}
         {state.error && <Notice tone="crit">{state.error}</Notice>}
         {!state.loading && !state.error && !rows.length && !showHandIn && (
