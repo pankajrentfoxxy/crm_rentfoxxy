@@ -427,7 +427,7 @@ exports.getAddQuotationMeta = async (req, res) => {
 
     const [customersRes, quotationNumber, catalog] = await Promise.all([
       pool.query(
-        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
+        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type, security_deposit_months
            FROM customers c
           WHERE COALESCE(c.status, 1) = 1
             ${typeSql ? `AND ${typeSql}` : ''}
@@ -673,13 +673,14 @@ exports.storeQuotation = async (req, res) => {
       ]
     );
 
-    // Security: 'one_month_rental' = sum(rate x qty) of all lines; 'none' = 0.
+    // Security: 1 / 2 / 3 months = sum(rate x qty) of all lines x months; 'none' = 0.
     const qSecurityType = String(body.security_type || 'none').toLowerCase();
-    if (qSecurityType === 'one_month_rental') {
+    const qMonths = securityMonths(qSecurityType);
+    if (qMonths > 0) {
       const oneMonth = lineItems.reduce((s, it) => s + (Number(it.rate || 0) * Number(it.quantity || 1)), 0);
       await client.query(
-        `UPDATE sales_quotations SET security_amount = $1, security_type = 'one_month_rental' WHERE quotation_number = $2`,
-        [oneMonth, quotationNumber]
+        `UPDATE sales_quotations SET security_amount = $1, security_type = $3 WHERE quotation_number = $2`,
+        [+(oneMonth * qMonths).toFixed(2), quotationNumber, qSecurityType]
       );
     } else {
       await client.query(

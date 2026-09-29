@@ -12,7 +12,9 @@ import {
 } from '../../../utils/customerType';
 import { INDIAN_STATES, slugifyState, matchIndianState } from '../../../constants/indianStates';
 import GstinField from './GstinField';
-import { customerGstin, gstinError } from './sellShared';
+import {
+  customerGstin, gstinError, SECURITY_OPTIONS, securityMonths, securityTypeFor,
+} from './sellShared';
 import LineItemsEditor, {
   emptyLine, linesToPayload, linesTotal, firstMissing, fieldLabel,
 } from './LineItemsEditor';
@@ -101,7 +103,7 @@ export default function QuotationFormPage() {
   const isSale = type === 'sale';
   const book = TYPES.find((t) => t.value === type).entity;
   const subtotal = linesTotal(lines);
-  const security = !isSale && securityType === 'one_month_rental' ? subtotal : 0;
+  const security = !isSale ? subtotal * securityMonths(securityType) : 0;
   const shippingCharge = Number(shipping) || 0;
   const firstPayment = subtotal + security + shippingCharge;
 
@@ -127,6 +129,9 @@ export default function QuotationFormPage() {
       email: c.email || '',
       GST_number: customerGstin(c),
     });
+    // An existing customer's agreed security is the starting point; a prospect
+    // (lead not yet a deal) is chosen by hand.
+    if (c.security_deposit_months != null && !isSale) setSecurityType(securityTypeFor(c.security_deposit_months));
     setSend((s) => ({ ...s, to: s.to || c.email || '' }));
   };
 
@@ -321,10 +326,7 @@ export default function QuotationFormPage() {
                   <Select
                     value={securityType}
                     onChange={(e) => setSecurityType(e.target.value)}
-                    options={[
-                      { value: 'none', label: 'None' },
-                      { value: 'one_month_rental', label: 'One month’s rent' },
-                    ]}
+                    options={SECURITY_OPTIONS}
                   />
                 </Field>
               )}
