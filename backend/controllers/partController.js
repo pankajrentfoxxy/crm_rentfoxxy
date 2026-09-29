@@ -175,6 +175,14 @@ exports.createPart = async (req, res) => {
   if (!Number.isInteger(opening) || opening < 0 || opening > 500) {
     return res.status(400).json({ success: false, message: 'Opening quantity must be a whole number from 0 to 500' });
   }
+  if (body.kind === undefined && body.specs === undefined) {
+    // Old Parts Inventory screens send a free-text name; the catalogue now
+    // needs the structure the name is generated from.
+    return res.status(400).json({
+      success: false,
+      message: 'Add parts from Stock → Parts catalogue: choose the category, what it is and its details — the name is made from them.',
+    });
+  }
   const { ok, errors, value: st } = normalizePartStructure(structureFromBody(body));
   if (!ok) {
     return res.status(400).json({ success: false, message: `${errors.join('. ')}.`, errors });
