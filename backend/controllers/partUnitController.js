@@ -167,12 +167,16 @@ exports.lookupPartUnit = async (req, res) => {
   }
 };
 
-// GET /api/parts/units?search=&status=&part_id=&category=&limit=
+// GET /api/parts/units?search=&status=&part_id=&category=&scrap_challan=none|any&limit=
 exports.searchPartUnits = async (req, res) => {
   try {
-    const { search, status, part_id, category, limit = 50 } = req.query;
+    const { search, status, part_id, category, scrap_challan, limit = 50 } = req.query;
     const conditions = [];
     const params = [];
+
+    // Stock → Scrap → Discarded parts lists only the ones not yet on a challan.
+    if (scrap_challan === 'none') conditions.push('pi.scrap_challan_number IS NULL');
+    else if (scrap_challan === 'any') conditions.push('pi.scrap_challan_number IS NOT NULL');
 
     if (status) { params.push(status); conditions.push(`pi.status = $${params.length}`); }
     if (part_id) { params.push(Number(part_id)); conditions.push(`pi.part_id = $${params.length}`); }

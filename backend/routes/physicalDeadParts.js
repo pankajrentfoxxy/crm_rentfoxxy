@@ -41,8 +41,8 @@ router.get('/inwards', view, ctrl.listInwards);
 router.get(...prefixedDcRoute('/inwards', '', view, ctrl.getInward));
 
 router.get('/outwards', view, ctrl.listOutwards);
-router.post(...prefixedDcRoute('/outwards', '/dispatch', create, ctrl.dispatchOutward));
-router.post(...prefixedDcRoute('/outwards', '/cancel', create, ctrl.cancelDraftOutward));
+router.post(...prefixedDcRoute('/outwards', '/dispatch', create, ctrl.requireWarehouse, ctrl.dispatchOutward));
+router.post(...prefixedDcRoute('/outwards', '/cancel', create, ctrl.requireWarehouse, ctrl.cancelDraftOutward));
 router.get(...prefixedDcRoute('/outwards', '/pdf', view, ctrl.downloadPdf));
 router.get(...prefixedDcRoute('/outwards', '', view, ctrl.getOutward));
 

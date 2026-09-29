@@ -7,6 +7,20 @@ function handleError(res, err) {
   return res.status(status).json({ success: false, message: err.message || 'Request failed' });
 }
 
+/**
+ * Approve (generate the Part DC) and cancel: the warehouse roles the old screen
+ * showed those buttons to, or a physical_dead_parts edit grant. Before this the
+ * API let anyone with create approve their own request.
+ */
+exports.requireWarehouse = (req, res, next) => {
+  if (svc.WAREHOUSE_ROLES.has(req.user?.role)) return next();
+  const { hasPermission } = require('../services/permissionService');
+  if (!req.permissionCache) req.permissionCache = {};
+  return hasPermission(req.user.user_id, req.user.role, 'physical_dead_parts', 'can_edit', req.permissionCache)
+    .then((ok) => (ok ? next() : res.status(403).json({ success: false, message: 'Warehouse approval access required' })))
+    .catch(next);
+};
+
 function actor(req) {
   return svc.actorFrom(req.user);
 }
@@ -177,7 +191,11 @@ exports.cancelDraftOutward = async (req, res) => {
   try {
     await client.query('BEGIN');
     const number = req.params.dcNumber || req.params.outwardNumber;
-    const result = await svc.cancelDraftOutward(client, { outwardNumber: number, actor: actor(req) });
+    const result = await svc.cancelDraftOutward(client, {
+      outwardNumber: number,
+      reason: req.body?.reason,
+      actor: actor(req),
+    });
     await client.query('COMMIT');
     res.json({ success: true, ...result });
   } catch (err) {
