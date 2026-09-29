@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { EWAY_VALUE_THRESHOLD } = require('../services/saleDcComplianceService');
+const { enrichDcRows, enrichSaleOrderRows } = require('../services/gstDocumentQueueService');
 
 const PENDING_DC_INVOICE_WHERE = `
   COALESCE(dcl.movement_type, 'outbound') = 'outbound'
@@ -285,7 +286,14 @@ exports.getEinvoiceQueue = async (req, res) => {
          AND COALESCE(sol.quotation_type, sq.quotation_type) = 'sale'
        ORDER BY dcl.dc_number, dcl.created_at DESC`
     );
-    res.json({ success: true, queue: result.rows });
+    // MD7: the SUM above repeats every order line once per challan line, so it
+    // overstates the amount. Replace it with the challan's billed amount.
+    const queue = result.rows.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    await enrichDcRows(queue);
+    for (const row of queue) {
+      if (row.invoice) row.amount = row.invoice.subtotal;
+    }
+    res.json({ success: true, queue });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -293,6 +301,49 @@ exports.getEinvoiceQueue = async (req, res) => {
 
 exports.getDcInvoiceQueue = async (req, res) => {
   try {
+    // ?status=attached lists challans whose invoice number is already on file,
+    // newest first, so Accounts can find one to correct (explicit replace, MD7).
+    if (String(req.query?.status || '').toLowerCase() === 'attached') {
+      const search = String(req.query?.search || '').trim();
+      const attached = await pool.query(
+        `SELECT * FROM (
+           SELECT DISTINCT ON (dcl.dc_number)
+             dcl.dc_number,
+             dcl.sales_order_number,
+             dcl.created_at,
+             dcl.status,
+             COALESCE(dcl.customer_name, sol.customer_name) AS customer_name,
+             dcl.customer_id,
+             sol.quotation_type,
+             dcl.entity_code,
+             dcl.einvoice_number,
+             dcl.einvoice_pdf_path,
+             dcl.einvoice_uploaded_at,
+             dcl.irn,
+             dcl.eway_bill_number,
+             dcl.eway_bill_pdf_path,
+             dcl.eway_required,
+             dcl.accounts_notified_at,
+             COALESCE(dcq.dc_qty, 0) AS quantity,
+             COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount
+           ${DC_INVOICE_FROM}
+           WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+             AND LOWER(COALESCE(dcl.status, '')) <> 'cancelled'
+             AND NULLIF(TRIM(COALESCE(dcl.einvoice_number, '')), '') IS NOT NULL
+             AND ($1::text IS NULL
+                  OR dcl.dc_number ILIKE $1 OR dcl.sales_order_number ILIKE $1
+                  OR dcl.customer_name ILIKE $1 OR dcl.einvoice_number ILIKE $1
+                  OR dcl.eway_bill_number ILIKE $1)
+           ORDER BY dcl.dc_number, dcl.id
+         ) q
+         ORDER BY COALESCE(einvoice_uploaded_at, created_at) DESC NULLS LAST, dc_number DESC
+         LIMIT 200`,
+        [search ? `%${search}%` : null]
+      );
+      const queue = await enrichDcRows(attached.rows);
+      return res.json({ success: true, status: 'attached', queue, eway_threshold: EWAY_VALUE_THRESHOLD });
+    }
+
     const result = await pool.query(
       `SELECT * FROM (
          SELECT DISTINCT ON (dcl.dc_number)
@@ -310,6 +361,7 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.eway_bill_number,
            dcl.eway_bill_pdf_path,
            dcl.accounts_notified_at,
+           dcl.eway_required,
            COALESCE(dcq.dc_qty, 0) AS quantity,
            COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            (
@@ -341,6 +393,7 @@ exports.getDcInvoiceQueue = async (req, res) => {
            dcl.ship_by,
            dcl.dispatch_mode,
            dcl.vehicle_number,
+           dcl.eway_required,
            COALESCE(dcq.dc_qty, 0) AS quantity,
            COALESCE(dcl.eway_asset_value, dcl_amt.amount, 0) AS amount,
            CASE
@@ -367,8 +420,13 @@ exports.getDcInvoiceQueue = async (req, res) => {
          created_at DESC NULLS LAST,
          dc_number DESC`
     );
+    // MD7: real billed amount + GST split per challan, and the e-way decision
+    // from the asset value the upload handler uses (not the rate estimate).
+    await enrichDcRows(result.rows);
+    await enrichDcRows(demoRes.rows);
     res.json({
       success: true,
+      status: 'pending',
       queue: result.rows,
       demo_eway: demoRes.rows,
       eway_threshold: EWAY_VALUE_THRESHOLD,
@@ -399,6 +457,10 @@ exports.getSaleInvoiceQueue = async (req, res) => {
               MIN(sol.created_at)                      AS created_at,
               SUM(COALESCE(sol.main_qty, sol.quantity, 0))::int                     AS qty,
               SUM(COALESCE(sol.rate, 0) * COALESCE(sol.main_qty, sol.quantity, 0))  AS order_value,
+              MAX(COALESCE(sol.shiping_charges, 0))    AS shipping_charges,
+              MAX(COALESCE(sol.security_amount, 0))    AS security_amount,
+              (ARRAY_AGG(sol.customer_shipping_address ORDER BY sol.id))[1] AS customer_shipping_address,
+              (ARRAY_AGG(sol.supply_state ORDER BY sol.id))[1]              AS supply_state,
               MAX(sol.sale_invoice_number)             AS sale_invoice_number,
               MAX(sol.sale_invoice_uploaded_at)        AS sale_invoice_uploaded_at,
               BOOL_OR(sol.sale_invoice_pdf_path IS NOT NULL) AS has_pdf,
@@ -415,6 +477,7 @@ exports.getSaleInvoiceQueue = async (req, res) => {
         LIMIT 200`
     );
 
+    enrichSaleOrderRows(rows);
     res.json({ success: true, status: wantPending ? 'pending' : 'attached', count: rows.length, data: rows });
   } catch (err) {
     console.error('getSaleInvoiceQueue:', err);

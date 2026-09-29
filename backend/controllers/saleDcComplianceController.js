@@ -33,6 +33,7 @@ const {
 } = require('../services/saleDcComplianceService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { safeLogSalesOrderActivity, ACTIVITY_TYPES } = require('../services/salesOrderActivityService');
+const gstNo = require('../services/gstDocumentNumberService');
 
 /** Dispatch / accounts / DC editors — upload docs or send accounts mail. */
 exports.checkSaleDcComplianceUpload = async (req, res, next) => {
@@ -105,6 +106,13 @@ function laptopRowsFromLines(lines) {
     else rows.push({ ttspl: null, serial: null, config });
   }
   return rows;
+}
+
+/** A refused upload must not leave its file behind in the served uploads tree. */
+function removeUploadedFiles(files = []) {
+  for (const f of files) {
+    if (f?.path) fs.promises.unlink(f.path).catch(() => {});
+  }
 }
 
 function relativeUploadPath(absPath) {
@@ -183,29 +191,84 @@ exports.uploadSaleDcCompliance = async (req, res) => {
 
     const einvoicePdfPath = einvoiceFile ? relativeUploadPath(einvoiceFile.path) : head.einvoice_pdf_path;
     const ewayPdfPath = ewayFile ? relativeUploadPath(ewayFile.path) : head.eway_bill_pdf_path;
-    const finalEinvNum = einvoiceNumber || head.einvoice_number || head.irn || null;
-    const finalEwbNum = needsEway ? (ewayBillNumber || head.eway_bill_number || null) : (head.eway_bill_number || null);
 
-    await pool.query(
-      `UPDATE delivery_challan_lines SET
-          einvoice_number = $1,
-          einvoice_pdf_path = COALESCE($2, einvoice_pdf_path),
-          einvoice_uploaded_at = NOW(),
-          einvoice_uploaded_by = $3,
-          eway_bill_number = $4,
-          eway_bill_pdf_path = CASE WHEN $5::boolean THEN COALESCE($6, eway_bill_pdf_path) ELSE eway_bill_pdf_path END,
-          updated_at = NOW()
-        WHERE dc_number = $7`,
-      [
-        finalEinvNum,
-        einvoicePdfPath,
-        req.user?.user_id || null,
-        finalEwbNum,
-        needsEway,
-        ewayPdfPath,
-        dcNumber,
-      ]
-    );
+    // MD7: numbers are checked and written under a row lock, in one transaction —
+    // a different number than the one on file needs an explicit replace + reason,
+    // and a number already on another document is refused.
+    const request = gstNo.replaceRequest(body);
+    let finalEinvNum;
+    let finalEwbNum;
+    let einvAction = 'none';
+    let ewbAction = 'none';
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT einvoice_number, eway_bill_number, irn, customer_id
+           FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id FOR UPDATE`,
+        [dcNumber]
+      );
+      const curEinv = gstNo.firstNonEmpty(locked.rows.map((r) => r.einvoice_number));
+      const curEwb = gstNo.firstNonEmpty(locked.rows.map((r) => r.eway_bill_number));
+      const curIrn = gstNo.firstNonEmpty(locked.rows.map((r) => r.irn));
+      const customerId = locked.rows.find((r) => r.customer_id != null)?.customer_id ?? head.customer_id;
+
+      einvAction = gstNo.checkOverwrite({
+        label: 'e-invoice number', docNumber: dcNumber, current: curEinv, next: einvoiceNumber || null, request,
+      });
+      ewbAction = gstNo.checkOverwrite({
+        label: 'e-way bill', docNumber: dcNumber, current: curEwb, next: needsEway ? (ewayBillNumber || null) : null, request,
+      });
+      if (einvAction !== 'none') {
+        await gstNo.lockNumber(client, einvoiceNumber);
+        await gstNo.assertInvoiceNumberFree(client, einvoiceNumber, { customerId, exceptDc: dcNumber, request });
+      }
+      if (ewbAction !== 'none') {
+        await gstNo.lockNumber(client, ewayBillNumber);
+        await gstNo.assertEwayNumberFree(client, ewayBillNumber, { docType: 'delivery_challan', docNumber: dcNumber });
+      }
+
+      finalEinvNum = (einvAction !== 'none' ? einvoiceNumber : null) || curEinv || curIrn || null;
+      finalEwbNum = (ewbAction !== 'none' ? ewayBillNumber : null) || curEwb || null;
+
+      await client.query(
+        `UPDATE delivery_challan_lines SET
+            einvoice_number = $1,
+            einvoice_pdf_path = COALESCE($2, einvoice_pdf_path),
+            einvoice_uploaded_at = NOW(),
+            einvoice_uploaded_by = $3,
+            eway_bill_number = $4,
+            eway_bill_pdf_path = CASE WHEN $5::boolean THEN COALESCE($6, eway_bill_pdf_path) ELSE eway_bill_pdf_path END,
+            updated_at = NOW()
+          WHERE dc_number = $7`,
+        [
+          finalEinvNum,
+          einvoicePdfPath,
+          req.user?.user_id || null,
+          finalEwbNum,
+          needsEway,
+          ewayPdfPath,
+          dcNumber,
+        ]
+      );
+      const userId = req.user?.user_id || null;
+      await gstNo.recordNumberChange(client, {
+        docType: 'delivery_challan', docNumber: dcNumber, field: 'einvoice_number', action: einvAction,
+        oldValue: curEinv, newValue: finalEinvNum, reason: request.reason, userId,
+      });
+      await gstNo.recordNumberChange(client, {
+        docType: 'delivery_challan', docNumber: dcNumber, field: 'eway_bill_number', action: ewbAction,
+        oldValue: curEwb, newValue: finalEwbNum, reason: request.reason, userId,
+      });
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      removeUploadedFiles([einvoiceFile, ewayFile]);
+      if (gstNo.sendGstNumberError(res, txErr)) return undefined;
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     const updated = await getDeliveryChallanLines(dcNumber);
     const canUpload = await canUploadSaleDcCompliance(req.user, req.permissionCache);
@@ -221,8 +284,16 @@ exports.uploadSaleDcCompliance = async (req, res) => {
         salesOrderNumber: head.sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'einvoice_uploaded',
-        description: `E-Invoice documents uploaded for ${dcNumber}${needsEway && finalEwbNum ? ` (E-Way: ${finalEwbNum})` : ''}.`,
-        metadata: { dc_number: dcNumber, einvoice_number: finalEinvNum, eway_bill_number: finalEwbNum },
+        description: `E-Invoice documents uploaded for ${dcNumber}${needsEway && finalEwbNum ? ` (E-Way: ${finalEwbNum})` : ''}.`
+          + (einvAction === 'replace' || ewbAction === 'replace' ? ` Number replaced — reason: ${request.reason}` : ''),
+        metadata: {
+          dc_number: dcNumber,
+          einvoice_number: finalEinvNum,
+          eway_bill_number: finalEwbNum,
+          einvoice_action: einvAction,
+          eway_action: ewbAction,
+          replace_reason: einvAction === 'replace' || ewbAction === 'replace' ? request.reason : undefined,
+        },
         user: req.user,
       }).catch(() => {});
     }
@@ -557,31 +628,67 @@ exports.uploadDemoEway = async (req, res) => {
     }
 
     const ewayPdfPath = ewayFile ? relativeUploadPath(ewayFile.path) : head.eway_bill_pdf_path;
-    const finalNum = ewayBillNumber || head.eway_bill_number;
 
-    await pool.query(
-      `UPDATE delivery_challan_lines SET
-          eway_bill_number = $1,
-          eway_bill_date = COALESCE($2::date, eway_bill_date),
-          eway_bill_pdf_path = COALESCE($3, eway_bill_pdf_path),
-          eway_bill_uploaded_at = NOW(),
-          eway_bill_uploaded_by = $4,
-          vehicle_number = COALESCE($6, vehicle_number),
-          updated_at = NOW()
-        WHERE dc_number = $5`,
-      [finalNum, ewayBillDate, ewayPdfPath, req.user?.user_id || null, dcNumber, finalVehicle || null]
-    );
+    // MD7: never silently overwrite an e-way bill number; refuse duplicates.
+    const request = gstNo.replaceRequest(body);
+    let finalNum;
+    let ewbAction = 'none';
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT eway_bill_number FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id FOR UPDATE`,
+        [dcNumber]
+      );
+      const curEwb = gstNo.firstNonEmpty(locked.rows.map((r) => r.eway_bill_number));
+      ewbAction = gstNo.checkOverwrite({
+        label: 'e-way bill', docNumber: dcNumber, current: curEwb, next: ewayBillNumber || null, request,
+      });
+      if (ewbAction !== 'none') {
+        await gstNo.lockNumber(client, ewayBillNumber);
+        await gstNo.assertEwayNumberFree(client, ewayBillNumber, { docType: 'delivery_challan', docNumber: dcNumber });
+      }
+      finalNum = (ewbAction !== 'none' ? ewayBillNumber : null) || curEwb;
+
+      await client.query(
+        `UPDATE delivery_challan_lines SET
+            eway_bill_number = $1,
+            eway_bill_date = COALESCE($2::date, eway_bill_date),
+            eway_bill_pdf_path = COALESCE($3, eway_bill_pdf_path),
+            eway_bill_uploaded_at = NOW(),
+            eway_bill_uploaded_by = $4,
+            vehicle_number = COALESCE($6, vehicle_number),
+            updated_at = NOW()
+          WHERE dc_number = $5`,
+        [finalNum, ewayBillDate, ewayPdfPath, req.user?.user_id || null, dcNumber, finalVehicle || null]
+      );
+      await gstNo.recordNumberChange(client, {
+        docType: 'delivery_challan', docNumber: dcNumber, field: 'eway_bill_number', action: ewbAction,
+        oldValue: curEwb, newValue: finalNum, reason: request.reason, userId: req.user?.user_id || null,
+      });
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      removeUploadedFiles([ewayFile]);
+      if (gstNo.sendGstNumberError(res, txErr)) return undefined;
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     if (head.sales_order_number) {
       await safeLogSalesOrderActivity({
         salesOrderNumber: head.sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'eway_uploaded',
-        description: `E-Way Bill ${finalNum} uploaded for ${dcNumber}. DC download enabled.`,
+        description: `E-Way Bill ${finalNum} uploaded for ${dcNumber}. DC download enabled.`
+          + (ewbAction === 'replace' ? ` Number replaced — reason: ${request.reason}` : ''),
         metadata: {
           dc_number: dcNumber,
           eway_bill_number: finalNum,
           eway_bill_date: ewayBillDate,
+          eway_action: ewbAction,
+          replace_reason: ewbAction === 'replace' ? request.reason : undefined,
         },
         user: req.user,
       }).catch(() => {});
