@@ -56,7 +56,7 @@ const resolveFloorPartsId = resolveFloorPartId;
  */
 async function trackReceivedUnits(client, {
   line, units, spoId, grnId, lineIndex, vendorId, user,
-  fitment, fits_laptop_brand, fits_laptop_models,
+  fitment, fits_laptop_brand, fits_laptop_models, locationCode, notes,
 }) {
   if (!Array.isArray(units) || !units.length) return [];
 
@@ -70,7 +70,9 @@ async function trackReceivedUnits(client, {
       assetCode: u.assetCode,
     })),
     unitCost: Number(line.unit_price ?? line.rate ?? line.cost ?? 0),
-    locationCode: line.location_code || null,
+    // Shelf chosen at receipt, else the line's, else the part's default.
+    locationCode: locationCode || line.location_code || null,
+    notes: notes || null,
     spoId,
     grnId,
     spoLineIndex: lineIndex,
@@ -139,11 +141,11 @@ function parseLineItemsJson(raw) {
 /**
  * Laravel view: product_details + receivedQty — count vendor_serial_numbers for this spo_id keyed by extra.line_index / part ids.
  */
-async function buildReceivedQtyMapsForSpoIds(spoIds) {
+async function buildReceivedQtyMapsForSpoIds(spoIds, db = pool) {
   const map = new Map();
   if (!Array.isArray(spoIds) || !spoIds.length) return map;
 
-  const r = await pool.query(
+  const r = await db.query(
     `SELECT spo_id, extra FROM vendor_serial_numbers
      WHERE spo_id = ANY($1::int[]) AND deleted_at IS NULL`,
     [spoIds]
@@ -186,22 +188,37 @@ async function buildReceivedQtyMapsForSpoIds(spoIds) {
 function enrichSpareLinesWithReceived(lineItems, info) {
   if (!Array.isArray(lineItems) || !info) return lineItems;
   const { byIdx, byPd, unalloc } = info;
+  const pdOf = (row) => row.product_detail_id ?? row.part_id ?? row.product_id ?? row.pro_id ?? row.id;
+
+  // Units received through this CRM carry their line_index and count only on
+  // that line. Legacy/ERP rows carry just a part id: they are shared out over
+  // the lines with that part in order (each filled to its quantity, any excess
+  // on the last one). This used to take byPd *instead of* byIdx whenever a
+  // legacy row existed, so new receipts on that line went uncounted and the
+  // line could be received past its ordered quantity; and two lines with the
+  // same part both showed the full legacy count.
+  const pdLeft = { ...byPd };
+  const lastLineForPd = {};
+  lineItems.forEach((row, idx) => {
+    const pd = pdOf(row);
+    if (pd != null && String(pd).trim() !== '') lastLineForPd[String(pd)] = idx;
+  });
 
   const out = lineItems.map((row, idx) => {
     const preset = Number(row.receivedQty ?? row.received_qty ?? 0) || 0;
-    const pd =
-      row.product_detail_id ??
-      row.part_id ??
-      row.product_id ??
-      row.pro_id ??
-      row.id;
-    let computed = 0;
+    const pd = pdOf(row);
+    let computed = Number(byIdx[String(idx)] || 0);
     if (pd != null && String(pd).trim() !== '') {
-      const v = byPd[String(pd)];
-      if (v != null) computed = v;
+      const k = String(pd);
+      const left = Number(pdLeft[k] || 0);
+      if (left > 0) {
+        const room = Math.max(0, (Number(row.quantity) || 0) - computed);
+        const take = lastLineForPd[k] === idx ? left : Math.min(left, room);
+        computed += take;
+        pdLeft[k] = left - take;
+      }
     }
-    if (!computed && byIdx[String(idx)] != null) computed = byIdx[String(idx)];
-    const receivedQty = Math.max(preset, computed || 0);
+    const receivedQty = Math.max(preset, computed);
     return { ...row, receivedQty };
   });
 
@@ -916,13 +933,7 @@ async function removeSpoBill(req, res) {
 
 const spareProductReceivedValidators = [param('spoId').isInt().toInt()];
 
-async function getSpareProductReceivedContext(req, res) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-
-  const spoId = Number(req.params.spoId);
-  const r = await pool.query(
-    `SELECT
+const SPO_WITH_VENDOR_SQL = `SELECT
        sp.*,
        v.first_name AS vendor_first_name,
        v.business_name AS vendor_business_name,
@@ -933,9 +944,43 @@ async function getSpareProductReceivedContext(req, res) {
        COALESCE(NULLIF(TRIM(v.business_name), ''), NULLIF(TRIM(v.first_name), ''), '') AS vendor_display_name
      FROM vendor_spare_parts_purchase_orders sp
      LEFT JOIN vendors v ON v.vendor_id = sp.vendor_id AND v.deleted_at IS NULL
-     WHERE sp.spo_id = $1 AND sp.deleted_at IS NULL`,
+     WHERE sp.spo_id = $1 AND sp.deleted_at IS NULL`;
+
+/** GRNs on a spare PO with what each holds (vendor challan / invoice, units). */
+async function spareGrnsWithCounts(db, spoId) {
+  const r = await db.query(
+    `SELECT g.*, ('GRN-' || LPAD(g.grn_id::text, 4, '0')) AS grn_number,
+            (SELECT COUNT(*)::int FROM vendor_serial_numbers s
+              WHERE s.grn_id = g.grn_id AND s.spo_id = g.spo_id AND s.deleted_at IS NULL) AS received_qty
+       FROM vendor_goods_received_notes g
+      WHERE g.spo_id = $1 AND g.deleted_at IS NULL
+      ORDER BY g.grn_id`,
     [spoId]
   );
+  return r.rows;
+}
+
+function spareQtyStats(lines) {
+  let orderQty = 0;
+  let receivedQty = 0;
+  lines.forEach((l) => {
+    orderQty += Number(l.quantity) || 0;
+    receivedQty += Number(l.receivedQty) || 0;
+  });
+  return {
+    total_lines: lines.length,
+    order_qty: orderQty,
+    received_qty: receivedQty,
+    remaining_qty: Math.max(0, orderQty - receivedQty),
+  };
+}
+
+async function getSpareProductReceivedContext(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const spoId = Number(req.params.spoId);
+  const r = await pool.query(SPO_WITH_VENDOR_SQL, [spoId]);
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
 
   const row = r.rows[0];
@@ -949,18 +994,7 @@ async function getSpareProductReceivedContext(req, res) {
   const qtyMaps = await buildReceivedQtyMapsForSpoIds([spoId]);
   const enriched = attachSpareProductDetails(row, qtyMaps);
   const lines = enriched.product_details || [];
-
-  const grnsR = await pool.query(
-    `SELECT * FROM vendor_goods_received_notes WHERE spo_id = $1 AND deleted_at IS NULL ORDER BY grn_id`,
-    [spoId]
-  );
-
-  let orderQty = 0;
-  let receivedQty = 0;
-  lines.forEach((l) => {
-    orderQty += Number(l.quantity) || 0;
-    receivedQty += Number(l.receivedQty) || 0;
-  });
+  const grns = await spareGrnsWithCounts(pool, spoId);
 
   res.json({
     success: true,
@@ -981,15 +1015,314 @@ async function getSpareProductReceivedContext(req, res) {
         vendor_address: enriched.vendor_address
       },
       lines,
-      stats: {
-        total_lines: lines.length,
-        order_qty: orderQty,
-        received_qty: receivedQty,
-        remaining_qty: Math.max(0, orderQty - receivedQty)
-      },
-      grns: grnsR.rows
+      stats: spareQtyStats(lines),
+      grns
     }
   });
+}
+
+/* ---------- receiving: one core, run inside the caller's transaction ---------- */
+
+/** A refusal the handler turns into an HTTP answer (everything is rolled back). */
+class SpareReceiveRefusal extends Error {
+  constructor(status, message, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * The status a spare PO moves to after a receipt: approved → processing on the
+ * first part, → completed once every line has all it ordered. Same rule as
+ * laptop POs (syncPoReceiveProgressStatus); spare POs never moved at all, so
+ * 54 fully received ones on QA still read "approved" (26 Sep 2026).
+ */
+function spareStatusAfterReceipt(status, lines) {
+  const st = String(status || '').toLowerCase();
+  if (!['approved', 'vendor_accepted', 'sent', 'processing'].includes(st)) return null;
+  const counted = (lines || []).filter((l) => (Number(l.quantity) || 0) > 0);
+  if (!counted.length) return null;
+  const got = counted.reduce((n, l) => n + (Number(l.receivedQty) || 0), 0);
+  let next = null;
+  if (counted.every((l) => (Number(l.receivedQty) || 0) >= (Number(l.quantity) || 0))) next = 'completed';
+  else if (got > 0) next = 'processing';
+  return next && next !== st ? next : null;
+}
+
+async function lockedSpareLines(client, spoId) {
+  const r = await client.query(
+    'SELECT * FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL FOR UPDATE',
+    [spoId]
+  );
+  if (!r.rows.length) return null;
+  const spo = r.rows[0];
+  const maps = await buildReceivedQtyMapsForSpoIds([spoId], client);
+  const lines = enrichSpareLinesWithReceived(
+    parseLineItemsJson(spo.line_items),
+    maps.get(spoId) || { byIdx: {}, byPd: {}, unalloc: 0 }
+  );
+  return { spo, lines };
+}
+
+/**
+ * Receive `serials.length` units on one spare PO line. Must run inside a
+ * transaction on `client`.
+ *
+ * Fixed here (builder 7, 29 Sep 2026): the PO row was never locked and the
+ * "remaining on this line" check ran on the pool *before* BEGIN, so two
+ * submits at once (a double click, two people) could both pass and receive
+ * past the ordered quantity. Now the PO row is locked FOR UPDATE and the count
+ * re-read inside the transaction. A `receive_key` from the screen makes a
+ * repeated submit return the first result instead of receiving twice (parts
+ * with no serial had nothing else to stop a duplicate). The PO status follows
+ * the receipt in the same transaction.
+ *
+ * @returns {{ replayed: boolean, spo: object, grnId: number, created: object[], lines: object[], statusChange: null|{from:string,to:string} }}
+ */
+async function receiveSpareUnitsTx(client, {
+  spoId, lineIndex, serials, grnId, receiveKey, locationCode, note, user, fitment,
+}) {
+  const locked = await lockedSpareLines(client, spoId);
+  if (!locked) throw new SpareReceiveRefusal(404, 'Not found');
+  const { spo, lines } = locked;
+  if (!spareReceiveAllowed(spo)) {
+    throw new SpareReceiveRefusal(403, 'Receiving is not available for void or pending spare parts POs.');
+  }
+
+  if (receiveKey) {
+    const prev = await client.query(
+      `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.grn_id, s.extra,
+              pi.prt_id, pi.instance_id, pi.serial_number AS physical_serial
+         FROM vendor_serial_numbers s
+         LEFT JOIN part_instances pi ON pi.instance_id = s.part_instance_id
+        WHERE s.spo_id = $1 AND s.deleted_at IS NULL AND s.extra->>'receive_key' = $2
+        ORDER BY s.serial_id`,
+      [spoId, receiveKey]
+    );
+    if (prev.rows.length) {
+      return {
+        replayed: true,
+        spo,
+        grnId: prev.rows[0].grn_id,
+        created: prev.rows.map((row) => ({
+          serial_id: row.serial_id,
+          serial_number: row.serial_number,
+          physical_serial: row.physical_serial || null,
+          inventory_asset_code: row.inventory_asset_code,
+          prt_id: row.prt_id || null,
+          instance_id: row.instance_id || null,
+        })),
+        lines,
+        statusChange: null,
+      };
+    }
+  }
+
+  const line = lines[lineIndex];
+  if (!line) throw new SpareReceiveRefusal(400, 'Invalid line_index for this spare PO');
+
+  const quantity = serials.length;
+  const ordered = Number(line.quantity) || 0;
+  const remaining = Math.max(0, ordered - (Number(line.receivedQty) || 0));
+  if (quantity > remaining) {
+    throw new SpareReceiveRefusal(
+      409,
+      remaining === 0
+        ? 'Everything ordered on this line has already been received.'
+        : `Cannot receive ${quantity} units; only ${remaining} remaining on this line.`,
+      'OVER_RECEIPT'
+    );
+  }
+
+  const provided = serials.filter(Boolean);
+  if (provided.length) {
+    const dup = await client.query(
+      `SELECT serial_number FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL AND LOWER(serial_number) = ANY($1::text[])`,
+      [provided.map((s) => s.toLowerCase())]
+    );
+    if (dup.rows.length) {
+      throw new SpareReceiveRefusal(
+        409,
+        `Serial already exists in inventory: ${dup.rows.map((row) => row.serial_number).join(', ')}`,
+        'DUPLICATE_SERIAL'
+      );
+    }
+  }
+
+  let finalGrnId;
+  if (grnId != null && Number.isFinite(grnId)) {
+    const g = await client.query(
+      'SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND spo_id = $2 AND deleted_at IS NULL',
+      [grnId, spoId]
+    );
+    if (!g.rows.length) throw new SpareReceiveRefusal(400, 'Invalid GRN for this spare PO.');
+    finalGrnId = grnId;
+  } else {
+    const last = await client.query(
+      'SELECT grn_id FROM vendor_goods_received_notes WHERE spo_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1',
+      [spoId]
+    );
+    if (last.rows.length) finalGrnId = last.rows[0].grn_id;
+    else {
+      const insG = await client.query(
+        `INSERT INTO vendor_goods_received_notes (spo_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
+        [spoId]
+      );
+      finalGrnId = insG.rows[0].grn_id;
+    }
+  }
+
+  const pd = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
+  const partName = await resolveSpareLinePartName(line);
+  const assetCodes = await allocatePartAssetCodes(client, partName, quantity);
+  const created = [];
+
+  for (let i = 0; i < quantity; i += 1) {
+    const physicalSerial = serials[i] || null;
+    const inventory_asset_code = assetCodes[i];
+    // vendor_serial_numbers.serial_number is NOT NULL and unique, so a part
+    // with no manufacturer serial is keyed by its asset code there. The
+    // tracked unit records the honest answer: no physical serial.
+    const serial_number = physicalSerial || inventory_asset_code;
+    const extra = {
+      line_index: lineIndex,
+      unique_product_serial: inventory_asset_code,
+      part_asset_code: inventory_asset_code,
+      has_physical_serial: Boolean(physicalSerial),
+    };
+    if (receiveKey) extra.receive_key = receiveKey;
+    if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
+    if (line.brand_name || line.brand) extra.brand_name = String(line.brand_name || line.brand);
+    if (line.model_name || line.model) extra.model_name = String(line.model_name || line.model);
+    if (partName) extra.spare_part_name = partName;
+
+    const insS = await client.query(
+      `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, qc_status, extra)
+       VALUES ($1,$2,$3,$4,'pending',$5::jsonb) RETURNING serial_id`,
+      [spoId, finalGrnId, serial_number, inventory_asset_code, JSON.stringify(extra)]
+    );
+    created.push({
+      serial_id: insS.rows[0].serial_id,
+      serial_number,
+      physical_serial: physicalSerial,
+      inventory_asset_code,
+    });
+  }
+
+  // Same transaction: every received unit becomes a tracked, labelable Part ID.
+  const instances = await trackReceivedUnits(client, {
+    line,
+    units: created.map((row) => ({
+      serialId: row.serial_id,
+      serialNumber: row.physical_serial,
+      assetCode: row.inventory_asset_code,
+    })),
+    spoId,
+    grnId: finalGrnId,
+    lineIndex,
+    vendorId: spo.vendor_id || null,
+    user,
+    locationCode,
+    notes: note,
+    ...fitment,
+  });
+  instances.forEach((inst, i) => {
+    if (created[i]) {
+      created[i].prt_id = inst.prt_id;
+      created[i].instance_id = inst.instance_id;
+    }
+  });
+
+  const mapsAfter = await buildReceivedQtyMapsForSpoIds([spoId], client);
+  const linesAfter = enrichSpareLinesWithReceived(
+    parseLineItemsJson(spo.line_items),
+    mapsAfter.get(spoId) || { byIdx: {}, byPd: {}, unalloc: 0 }
+  );
+  let statusChange = null;
+  const next = spareStatusAfterReceipt(spo.status, linesAfter);
+  if (next) {
+    await client.query(
+      'UPDATE vendor_spare_parts_purchase_orders SET status = $1, updated_at = NOW() WHERE spo_id = $2',
+      [next, spoId]
+    );
+    statusChange = { from: spo.status, to: next };
+  }
+
+  return { replayed: false, spo, grnId: finalGrnId, created, lines: linesAfter, statusChange };
+}
+
+/** Runs receiveSpareUnitsTx in its own transaction and answers refusals. */
+async function runSpareReceive(res, args) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await receiveSpareUnitsTx(client, args);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
+    if (e instanceof SpareReceiveRefusal) {
+      res.status(e.status).json({ success: false, message: e.message, ...(e.code ? { code: e.code } : {}) });
+      return null;
+    }
+    if (String(e.code) === '23505') {
+      res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
+      return null;
+    }
+    console.error('spare receive:', e);
+    res.status(500).json({ success: false, message: e.message || 'Spare receive failed' });
+    return null;
+  } finally {
+    client.release();
+  }
+}
+
+async function auditSpareReceipt(req, out, action, payload) {
+  if (out.replayed) return;
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: out.spo.vendor_id || null,
+    entityType: action === 'receive_on_spare_po_line' ? 'serial_number' : 'serial_number_bulk',
+    entityId: action === 'receive_on_spare_po_line' ? String(out.created[0]?.serial_id) : String(out.spo.spo_id),
+    action,
+    payload,
+  });
+  if (out.statusChange) {
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: out.spo.vendor_id || null,
+      entityType: 'spare_parts_po',
+      entityId: String(out.spo.spo_id),
+      action: 'status_auto_receive_progress',
+      payload: out.statusChange,
+    });
+  }
+}
+
+const receiveExtrasValidators = [
+  body('receive_key').optional({ nullable: true }).isString().trim().isLength({ max: 80 }),
+  body('location_code').optional({ nullable: true }).isString().trim().isLength({ max: 60 }),
+  body('note').optional({ nullable: true }).isString().trim().isLength({ max: 500 }),
+];
+
+function receiveExtras(reqBody) {
+  const s = (v) => (v == null ? '' : String(v).trim());
+  return {
+    receiveKey: s(reqBody.receive_key) || null,
+    locationCode: s(reqBody.location_code) || null,
+    note: s(reqBody.note) || null,
+  };
+}
+
+function grnIdFromBody(reqBody) {
+  const v = reqBody.grn_id;
+  return v === '' || v === undefined || v === null ? null : Number(v);
 }
 
 const receiveSpareSerialValidators = [
@@ -997,7 +1330,8 @@ const receiveSpareSerialValidators = [
   body('line_index').isInt({ min: 0 }).toInt(),
   // Optional: parts without a manufacturer serial are tracked by their Part ID.
   body('serial_number').optional({ nullable: true }).trim(),
-  body('grn_id').optional({ nullable: true }).isInt().toInt()
+  body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  ...receiveExtrasValidators,
 ];
 
 async function receiveSpareLineSerial(req, res) {
@@ -1006,147 +1340,37 @@ async function receiveSpareLineSerial(req, res) {
 
   const spoId = Number(req.params.spoId);
   const lineIndex = Number(req.body.line_index);
-  const serial_number = String(req.body.serial_number || '').trim();
+  const serial = String(req.body.serial_number || '').trim();
 
-  let grnId =
-    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
-      ? null
-      : Number(req.body.grn_id);
+  const out = await runSpareReceive(res, {
+    spoId,
+    lineIndex,
+    serials: [serial || null],
+    grnId: grnIdFromBody(req.body),
+    user: req.user,
+    fitment: fitmentFromBody(req.body),
+    ...receiveExtras(req.body),
+  });
+  if (!out) return undefined;
 
-  const r = await pool.query(
-    `SELECT * FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`,
-    [spoId]
-  );
-  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
-  const spo = r.rows[0];
-  if (!spareReceiveAllowed(spo)) {
-    return res.status(403).json({
-      success: false,
-      message: 'Receiving is not available for void or pending spare parts POs.'
-    });
-  }
-
-  const qtyMaps = await buildReceivedQtyMapsForSpoIds([spoId]);
-  const lines = enrichSpareLinesWithReceived(parseLineItemsJson(spo.line_items), qtyMaps.get(spoId));
-  const line = lines[lineIndex];
-  if (!line) {
-    return res.status(400).json({ success: false, message: 'Invalid line_index for this spare PO' });
-  }
-
-  const ordered = Number(line.quantity) || 0;
-  const currentReceived = Number(line.receivedQty) || 0;
-  if (currentReceived + 1 > ordered) {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot receive more units than ordered for this line.'
-    });
-  }
-
-  const pd = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
-  const partName = await resolveSpareLinePartName(line);
-  const extra = { line_index: lineIndex };
-  if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
-  if (line.brand_name || line.brand) extra.brand_name = String(line.brand_name || line.brand);
-  if (line.model_name || line.model) extra.model_name = String(line.model_name || line.model);
-  if (partName) extra.spare_part_name = partName;
-
-  const client = await pool.connect();
-  let finalGrnId;
-  let serialId;
-  let inventoryAssetCode = null;
-  let prtId = null;
-  try {
-    await client.query('BEGIN');
-
-    if (grnId != null && Number.isFinite(grnId)) {
-      const g = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND spo_id = $2 AND deleted_at IS NULL`,
-        [grnId, spoId]
-      );
-      if (!g.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Invalid GRN for this spare PO.' });
-      }
-      finalGrnId = grnId;
-    } else {
-      const last = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE spo_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
-        [spoId]
-      );
-      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
-      else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (spo_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
-          [spoId]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-      }
-    }
-
-    const [assetCode] = await allocatePartAssetCodes(client, partName, 1);
-    inventoryAssetCode = assetCode;
-    extra.unique_product_serial = assetCode;
-    extra.part_asset_code = assetCode;
-    extra.has_physical_serial = Boolean(serial_number);
-
-    const insS = await client.query(
-      `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, extra)
-       VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING serial_id`,
-      [spoId, finalGrnId, serial_number || inventoryAssetCode, JSON.stringify(extra)]
-    );
-    serialId = insS.rows[0].serial_id;
-
-    const [instance] = await trackReceivedUnits(client, {
-      line,
-      units: [{ serialId, serialNumber: serial_number || null, assetCode: inventoryAssetCode }],
-      spoId,
-      grnId: finalGrnId,
-      lineIndex,
-      vendorId: spo.vendor_id || null,
-      user: req.user,
-      ...fitmentFromBody(req.body),
-    });
-    prtId = instance?.prt_id || null;
-
-    await client.query('COMMIT');
-  } catch (e) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (_) {
-      /* ignore */
-    }
-    if (String(e.code) === '23505') {
-      return res.status(409).json({ success: false, message: 'Serial number already exists' });
-    }
-    console.error(e);
-    return res.status(500).json({ success: false, message: e.message });
-  } finally {
-    client.release();
-  }
-
-  await logVendorAudit({
-    actorUserId: req.user?.user_id,
-    vendorId: spo.vendor_id || null,
-    entityType: 'serial_number',
-    entityId: String(serialId),
-    action: 'receive_on_spare_po_line',
-    payload: { spo_id: spoId, grn_id: finalGrnId, line_index: lineIndex, prt_id: prtId }
+  const unit = out.created[0] || {};
+  await auditSpareReceipt(req, out, 'receive_on_spare_po_line', {
+    spo_id: spoId, grn_id: out.grnId, line_index: lineIndex, prt_id: unit.prt_id || null,
   });
 
-  const qtyMaps2 = await buildReceivedQtyMapsForSpoIds([spoId]);
-  const lines2 = enrichSpareLinesWithReceived(parseLineItemsJson(spo.line_items), qtyMaps2.get(spoId));
-
-  res.status(201).json({
+  return res.status(out.replayed ? 200 : 201).json({
     success: true,
-    message: prtId
-      ? `Spare unit received — Part ID ${prtId}`
+    message: unit.prt_id
+      ? `Spare unit received — Part ID ${unit.prt_id}`
       : 'Serial recorded against this spare PO line.',
     data: {
-      grn_id: finalGrnId,
-      serial_id: serialId,
-      inventory_asset_code: inventoryAssetCode,
-      prt_id: prtId,
-      lines: lines2
+      grn_id: out.grnId,
+      serial_id: unit.serial_id,
+      inventory_asset_code: unit.inventory_asset_code,
+      prt_id: unit.prt_id || null,
+      lines: out.lines,
+      status: out.statusChange ? out.statusChange.to : out.spo.status,
+      replayed: out.replayed,
     }
   });
 }
@@ -1160,6 +1384,7 @@ const receiveSpareLineBulkValidators = [
   body('quantity').isInt({ min: 1, max: RECEIVE_SPARE_BULK_CAP }).toInt(),
   body('serial_numbers').isArray({ min: 1 }).withMessage('serial_numbers required'),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  ...receiveExtrasValidators,
   body().custom((_v, { req }) => {
     const q = Number(req.body.quantity);
     const arr = req.body.serial_numbers;
@@ -1184,229 +1409,133 @@ async function receiveSpareLineBulk(req, res) {
 
   const spoId = Number(req.params.spoId);
   const lineIndex = Number(req.body.line_index);
-  const quantity = Number(req.body.quantity);
-
-  let grnId =
-    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
-      ? null
-      : Number(req.body.grn_id);
-
   // A blank entry means "this part has no serial number" — it still gets a Part ID.
-  const serialsNorm = req.body.serial_numbers.map((s) => {
-    const v = String(s || '').trim().toUpperCase();
-    return v || null;
+  const serials = req.body.serial_numbers.map((s) => String(s || '').trim().toUpperCase() || null);
+
+  const out = await runSpareReceive(res, {
+    spoId,
+    lineIndex,
+    serials,
+    grnId: grnIdFromBody(req.body),
+    user: req.user,
+    fitment: fitmentFromBody(req.body),
+    ...receiveExtras(req.body),
+  });
+  if (!out) return undefined;
+
+  await auditSpareReceipt(req, out, 'receive_bulk_on_spare_po_line', {
+    spo_id: spoId,
+    grn_id: out.grnId,
+    line_index: lineIndex,
+    qty: out.created.length,
+    inventory_codes: out.created.map((x) => x.inventory_asset_code),
+    part_ids: out.created.map((x) => x.prt_id).filter(Boolean),
   });
 
-  const r = await pool.query(
-    `SELECT * FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`,
-    [spoId]
-  );
-  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
-  const spo = r.rows[0];
-  if (!spareReceiveAllowed(spo)) {
-    return res.status(403).json({
-      success: false,
-      message: 'Receiving is not available for void or pending spare parts POs.'
-    });
-  }
-
-  const qtyMapsBefore = await buildReceivedQtyMapsForSpoIds([spoId]);
-  const linesBefore = enrichSpareLinesWithReceived(parseLineItemsJson(spo.line_items), qtyMapsBefore.get(spoId));
-  const line = linesBefore[lineIndex];
-  if (!line) {
-    return res.status(400).json({ success: false, message: 'Invalid line_index for this spare PO' });
-  }
-
-  const ordered = Number(line.quantity) || 0;
-  const currentReceived = Number(line.receivedQty) || 0;
-  const remaining = Math.max(0, ordered - currentReceived);
-  if (quantity > remaining) {
-    return res.status(400).json({
-      success: false,
-      message: `Cannot receive ${quantity} units; only ${remaining} remaining on this line.`
-    });
-  }
-
-  const pd = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
-  const partName = await resolveSpareLinePartName(line);
-
-  const client = await pool.connect();
-  let finalGrnId;
-  const createdRows = [];
-
-  try {
-    await client.query('BEGIN');
-
-    const providedSerials = serialsNorm.filter(Boolean);
-    if (providedSerials.length) {
-      const dup = await client.query(
-        `SELECT serial_number FROM vendor_serial_numbers
-         WHERE deleted_at IS NULL AND LOWER(serial_number) = ANY($1::text[])`,
-        [providedSerials.map((s) => s.toLowerCase())]
-      );
-      if (dup.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          success: false,
-          message: `Serial already exists in inventory: ${dup.rows.map((row) => row.serial_number).join(', ')}`
-        });
-      }
-    }
-
-    if (grnId != null && Number.isFinite(grnId)) {
-      const g = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND spo_id = $2 AND deleted_at IS NULL`,
-        [grnId, spoId]
-      );
-      if (!g.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Invalid GRN for this spare PO.' });
-      }
-      finalGrnId = grnId;
-    } else {
-      const last = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE spo_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
-        [spoId]
-      );
-      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
-      else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (spo_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
-          [spoId]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-      }
-    }
-
-    const assetCodes = await allocatePartAssetCodes(client, partName, quantity);
-
-    for (let i = 0; i < quantity; i += 1) {
-      const physicalSerial = serialsNorm[i];
-      const inventory_asset_code = assetCodes[i];
-      // vendor_serial_numbers.serial_number is NOT NULL and unique, so a part
-      // with no manufacturer serial is keyed by its asset code there. The
-      // tracked unit records the honest answer: no physical serial.
-      const serial_number = physicalSerial || inventory_asset_code;
-      const extra = {
-        line_index: lineIndex,
-        unique_product_serial: inventory_asset_code,
-        part_asset_code: inventory_asset_code,
-        has_physical_serial: Boolean(physicalSerial),
-      };
-      if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
-      if (line.brand_name || line.brand) extra.brand_name = String(line.brand_name || line.brand);
-      if (line.model_name || line.model) extra.model_name = String(line.model_name || line.model);
-      if (partName) extra.spare_part_name = partName;
-
-      const insS = await client.query(
-        `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, qc_status, extra)
-         VALUES ($1,$2,$3,$4,'pending',$5::jsonb) RETURNING serial_id`,
-        [spoId, finalGrnId, serial_number, inventory_asset_code, JSON.stringify(extra)]
-      );
-      createdRows.push({
-        serial_id: insS.rows[0].serial_id,
-        serial_number,
-        physical_serial: physicalSerial,
-        inventory_asset_code
-      });
-    }
-
-    // Same transaction: every received unit becomes a tracked, labelable Part ID.
-    const instances = await trackReceivedUnits(client, {
-      line,
-      units: createdRows.map((row) => ({
-        serialId: row.serial_id,
-        serialNumber: row.physical_serial,
-        assetCode: row.inventory_asset_code,
-      })),
-      spoId,
-      grnId: finalGrnId,
-      lineIndex,
-      vendorId: spo.vendor_id || null,
-      user: req.user,
-      ...fitmentFromBody(req.body),
-    });
-    instances.forEach((inst, i) => {
-      if (createdRows[i]) createdRows[i].prt_id = inst.prt_id;
-      if (createdRows[i]) createdRows[i].instance_id = inst.instance_id;
-    });
-
-    await client.query('COMMIT');
-  } catch (e) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (_) {
-      /* ignore */
-    }
-    if (String(e.code) === '23505') {
-      return res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
-    }
-    console.error(e);
-    return res.status(500).json({ success: false, message: e.message || 'Spare bulk receive failed' });
-  } finally {
-    client.release();
-  }
-
-  await logVendorAudit({
-    actorUserId: req.user?.user_id,
-    vendorId: spo.vendor_id || null,
-    entityType: 'serial_number_bulk',
-    entityId: String(spoId),
-    action: 'receive_bulk_on_spare_po_line',
-    payload: {
-      spo_id: spoId,
-      grn_id: finalGrnId,
-      line_index: lineIndex,
-      qty: quantity,
-      inventory_codes: createdRows.map((x) => x.inventory_asset_code),
-      part_ids: createdRows.map((x) => x.prt_id).filter(Boolean)
-    }
-  });
-
-  const qtyMapsAfter = await buildReceivedQtyMapsForSpoIds([spoId]);
-  const linesAfter = enrichSpareLinesWithReceived(parseLineItemsJson(spo.line_items), qtyMapsAfter.get(spoId));
-
-  res.status(201).json({
+  return res.status(out.replayed ? 200 : 201).json({
     success: true,
-    message: `${quantity} spare unit(s) received. Part IDs generated — labels ready to print.`,
+    message: out.replayed
+      ? `Already received — ${out.created.length} unit(s) from this submission.`
+      : `${out.created.length} spare unit(s) received. Part IDs generated — labels ready to print.`,
     data: {
-      grn_id: finalGrnId,
-      created: createdRows,
-      lines: linesAfter
+      grn_id: out.grnId,
+      created: out.created,
+      lines: out.lines,
+      status: out.statusChange ? out.statusChange.to : out.spo.status,
+      replayed: out.replayed,
     }
   });
 }
 
 const spareGrnPoParam = [param('spoId').isInt().toInt()];
-const spareGrnCreateValidators = [body('meta').optional().isObject()];
+const spareGrnCreateValidators = [
+  body('meta').optional().isObject(),
+  body('vendor_challan_no').optional({ nullable: true }).isString().trim().isLength({ max: 100 }),
+  body('vendor_invoice_no').optional({ nullable: true }).isString().trim().isLength({ max: 100 }),
+];
 
+/**
+ * A new GRN (one per delivery) on a spare PO, with the vendor's challan and
+ * invoice numbers when given. Fixed: it was created on any spare PO — draft,
+ * cancelled, short-closed — and a double click made two empty GRNs. Now the PO
+ * row is locked, it must be receivable with something still to come, and an
+ * empty latest GRN is reused (its challan / invoice filled in if blank).
+ */
 async function createSpareGrn(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const spoId = Number(req.params.spoId);
   const meta = req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : {};
+  const challan = String(req.body?.vendor_challan_no || '').trim() || null;
+  const invoice = String(req.body?.vendor_invoice_no || '').trim() || null;
 
-  const spo = await pool.query(`SELECT 1 FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`, [
-    spoId
-  ]);
-  if (!spo.rows.length) return res.status(404).json({ success: false, message: 'Spare PO not found' });
+  const client = await pool.connect();
+  let grn;
+  let reused = false;
+  try {
+    await client.query('BEGIN');
+    const locked = await lockedSpareLines(client, spoId);
+    if (!locked) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Spare PO not found' });
+    }
+    if (!spareReceiveAllowed(locked.spo)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: `A GRN can only be opened on an approved spare PO (this one is ${locked.spo.status || 'draft'}).` });
+    }
+    if (spareQtyStats(locked.lines).remaining_qty <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Everything on this spare PO has been received.' });
+    }
+    const last = await client.query(
+      `SELECT g.*, (SELECT COUNT(*)::int FROM vendor_serial_numbers s
+                     WHERE s.grn_id = g.grn_id AND s.deleted_at IS NULL) AS n
+         FROM vendor_goods_received_notes g
+        WHERE g.spo_id = $1 AND g.deleted_at IS NULL ORDER BY g.grn_id DESC LIMIT 1`,
+      [spoId]
+    );
+    if (last.rows.length && last.rows[0].n === 0) {
+      reused = true;
+      grn = (await client.query(
+        `UPDATE vendor_goods_received_notes
+            SET vendor_challan_no = COALESCE(NULLIF(TRIM(vendor_challan_no), ''), $2),
+                vendor_invoice_no = COALESCE(NULLIF(TRIM(vendor_invoice_no), ''), $3),
+                updated_at = NOW()
+          WHERE grn_id = $1 RETURNING *`,
+        [last.rows[0].grn_id, challan, invoice]
+      )).rows[0];
+    } else {
+      grn = (await client.query(
+        `INSERT INTO vendor_goods_received_notes (spo_id, meta, vendor_challan_no, vendor_invoice_no)
+         VALUES ($1, $2::jsonb, $3, $4) RETURNING *`,
+        [spoId, JSON.stringify(meta), challan, invoice]
+      )).rows[0];
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('createSpareGrn:', e);
+    return res.status(500).json({ success: false, message: 'Could not open the GRN' });
+  } finally {
+    client.release();
+  }
 
-  const ins = await pool.query(
-    `INSERT INTO vendor_goods_received_notes (spo_id, meta) VALUES ($1, $2::jsonb) RETURNING *`,
-    [spoId, JSON.stringify(meta)]
-  );
+  if (!reused) {
+    await logVendorAudit({
+      actorUserId: req.user?.user_id,
+      vendorId: null,
+      entityType: 'grn',
+      entityId: grn.grn_id,
+      action: 'create',
+      payload: { spo_id: spoId, vendor_challan_no: challan, vendor_invoice_no: invoice }
+    });
+  }
 
-  await logVendorAudit({
-    actorUserId: req.user?.user_id,
-    vendorId: null,
-    entityType: 'grn',
-    entityId: ins.rows[0].grn_id,
-    action: 'create',
-    payload: { spo_id: spoId }
+  return res.status(reused ? 200 : 201).json({
+    success: true,
+    data: { ...grn, grn_number: formatGrnNumber(grn.grn_id), reused },
   });
-
-  res.status(201).json({ success: true, data: ins.rows[0] });
 }
 
 const spareGeneratedGrnValidators = [param('spoId').isInt().toInt()];
@@ -1517,9 +1646,13 @@ async function getSpareGrnReceivedProducts(req, res) {
   const lineItems = parseLineItemsJson(spoR.rows[0]?.line_items);
 
   const serials = await pool.query(
-    `SELECT serial_id, serial_number, inventory_asset_code, extra, created_at FROM vendor_serial_numbers
-     WHERE spo_id = $1 AND grn_id = $2 AND deleted_at IS NULL
-     ORDER BY serial_id`,
+    `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.created_at,
+            pi.prt_id, pi.instance_id, pi.serial_number AS physical_serial, pi.status AS part_status,
+            pi.location_code, pi.unit_cost, pi.notes AS receipt_note, pi.label_print_count
+       FROM vendor_serial_numbers s
+       LEFT JOIN part_instances pi ON pi.instance_id = s.part_instance_id
+      WHERE s.spo_id = $1 AND s.grn_id = $2 AND s.deleted_at IS NULL
+      ORDER BY s.serial_id`,
     [spoId, grnId]
   );
 
@@ -1546,7 +1679,16 @@ async function getSpareGrnReceivedProducts(req, res) {
       storage: null,
       gpu: null,
       screen_size: null,
-      grn_date: grn.updated_at ?? grn.created_at
+      grn_date: grn.updated_at ?? grn.created_at,
+      line_index: Number.isFinite(li) ? li : null,
+      prt_id: s.prt_id || null,
+      instance_id: s.instance_id || null,
+      physical_serial: s.prt_id ? (s.physical_serial || null) : null,
+      part_status: s.part_status || null,
+      location_code: s.location_code || null,
+      unit_cost: s.unit_cost != null ? Number(s.unit_cost) : null,
+      receipt_note: s.receipt_note || null,
+      label_print_count: s.label_print_count ?? null,
     };
   });
 
@@ -1555,6 +1697,8 @@ async function getSpareGrnReceivedProducts(req, res) {
     data: {
       grn_id: grnId,
       grn_number: formatGrnNumber(grnId),
+      vendor_challan_no: grn.vendor_challan_no || null,
+      vendor_invoice_no: grn.vendor_invoice_no || null,
       created_at: grn.created_at,
       updated_at: grn.updated_at,
       items
@@ -1706,4 +1850,9 @@ module.exports = {
   removeSpoBill,
   remove,
   resolveFloorPartsId,
+  // For tests and scripts/sync-spare-po-receive-status.js.
+  spareStatusAfterReceipt,
+  enrichSpareLinesWithReceived,
+  buildReceivedQtyMapsForSpoIds,
+  parseLineItemsJson,
 };
