@@ -117,7 +117,7 @@ export default function FloorTicketPage() {
   const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
   return (
-    <DeskShell title={t.ttspl_id || `Ticket #${t.ticket_id}`} breadcrumb="Production / Floor" subtitle={configText(t)}>
+    <DeskShell title={t.ttspl_id || `Ticket #${t.ticket_id}`} breadcrumb="Production / Floor" subtitle={configText({ ...t, ...Object.fromEntries(Object.entries(cc).filter(([, v]) => v)) })}>
       <div className="c-stack">
         <DocumentHeader
           docNumber={t.ttspl_id || `#${t.ticket_id}`}

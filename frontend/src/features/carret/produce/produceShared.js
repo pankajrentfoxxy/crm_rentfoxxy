@@ -25,7 +25,28 @@ export const stageLabel = (s) => ({
   'Assembly & Software': 'Assembly & software',
 }[s] || s);
 
-export const configText = (t) => [t.brand, t.model, t.processor, t.ram, t.storage].filter(Boolean).join(' · ');
+/**
+ * "Dell Latitude 5420 · i7 · 11th Gen · 16 GB · 512 SSD". Generation was
+ * missing (29 Sep 2026); the brand is not repeated when the model already
+ * starts with it, and a bare RAM number gets its GB.
+ */
+export const configText = (t) => {
+  const brand = String(t.brand || '').trim();
+  const model = String(t.model || t.model_name || '').trim();
+  const gen = String(t.generation || '').trim();
+  const n = /^\d+\s*(st|nd|rd|th)?$/i.test(gen) ? parseInt(gen, 10) : null;
+  const ord = n == null ? '' : ([11, 12, 13].includes(n % 100) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'));
+  const genText = n == null ? gen : `${n}${ord} Gen`;
+  const ram = String(t.ram || '').trim();
+  return [
+    model && brand && model.toLowerCase().startsWith(brand.toLowerCase()) ? null : brand,
+    model,
+    t.processor,
+    genText && genText.toLowerCase() !== String(t.processor || '').trim().toLowerCase() ? genText : null,
+    /^\d+$/.test(ram) ? `${ram} GB` : ram,
+    t.storage,
+  ].filter(Boolean).join(' · ');
+};
 export const MANAGER_ROLES = ['manager', 'admin', 'super_admin', 'floor_manager'];
 export const isFloorLead = (user) => MANAGER_ROLES.includes(String(user?.role || '').toLowerCase());
 
