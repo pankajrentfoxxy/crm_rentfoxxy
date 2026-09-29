@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
@@ -7,8 +8,8 @@ import {
 import SignaturePadComponent from '../../sales-pipeline/components/SignaturePad';
 import { usePermission } from '../../../hooks/usePermission';
 import {
-  acceptPartReturn, approvePartsToCustomer, approvePartsToTechnician, cancelPartRequest, fetchPartDcsAwaitingCourier,
-  fetchPartReturnDcsPending, fetchPartUnits, fetchPartsQueue, markPartDcDelivered, receivePartReturnDc, resolvePartMove,
+  acceptPartReturn, approvePartsToCustomer, approvePartsToTechnician, cancelPartRequest, fetchMyParts, fetchPartDcsAwaitingCourier,
+  fetchPartReturnDcsPending, fetchPartUnits, fetchPartsQueue, fetchReservedUnits, markPartDcDelivered, receivePartReturnDc, resolvePartMove,
   setPartDcCourier, setPartPrice, signPartChallan,
 } from './serveApi';
 import { errMsg } from './serveShared';
@@ -22,9 +23,22 @@ import { errMsg } from './serveShared';
  *               (Part DC). A part Support marked chargeable needs its price first.
  *   Returns   — a technician brings an unused part back; the warehouse signs.
  *   Moves     — a technician asks to move a held part to another ticket.
- *   Part DCs  — courier details / delivered for parts sent to customers, and
- *               old parts coming back on an RPDC.
+ *   Challans & DCs — technician challans still waiting for a signature, Part
+ *               DCs to customers (courier / delivered) and old parts coming
+ *               back on an RPDC; each opens its Carret record page (PDF there).
+ * Filters as the old queue: request/return/move date, technician, oldest or
+ * newest first. "Reserved elsewhere" shows which requests hold the units.
+ * This page replaces the old Service Parts Challans screen (/support-parts/queue).
  */
+const SORTS = [{ value: 'desc', label: 'Newest first' }, { value: 'asc', label: 'Oldest first' }];
+const TAB_KEYS = ['requests', 'returns', 'moves', 'dcs'];
+const heldBy = (h) => (h ? `${h.label}${h.status ? ` · ${String(h.status).replace(/_/g, ' ')}` : ''}` : '—');
+const heldWhere = (h) => (h ? [h.kind === 'floor_prq' ? `Floor ticket #${h.ticket_id}${h.stage_name ? ` · ${h.stage_name}` : ''}` : 'Support request', h.ttspl_id, h.customer_name].filter(Boolean).join(' · ') : null);
+const RESERVED_COLS = [
+  { key: 'u', header: 'Unit', render: (u) => <DocNumber value={u.prt_id} />, sub: (u) => [u.serial_number, u.location_code].filter(Boolean).join(' · ') || null },
+  { key: 'h', header: 'Held by', render: (u) => heldBy(u.held_by), sub: (u) => heldWhere(u.held_by) },
+  { key: 'd', header: 'Since', render: (u) => <DateTime value={u.updated_at || u.received_at} /> },
+];
 const toCustomer = (r) => r.fulfillment_mode === 'courier_to_customer';
 const chargeable = (r) => r.billing_type === 'charge_customer';
 const priced = (r) => Number(r.charge_amount) > 0;
@@ -32,20 +46,30 @@ const priced = (r) => Number(r.charge_amount) > 0;
 export default function PartsDeskPage() {
   const { hasPermission } = usePermission();
   const canEdit = hasPermission('support_part_challan', 'edit');
-  const [tab, setTab] = useState('requests');
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab = TAB_KEYS.includes(params.get('tab')) ? params.get('tab') : 'requests';
+  const setTab = (t) => setParams((p) => { const n = new URLSearchParams(p); n.set('tab', t); return n; }, { replace: true });
+  const [filters, setFilters] = useState({ from: '', to: '', tech_id: '', sort: 'desc' });
+  const [techOptions, setTechOptions] = useState([]);
   const [q, setQ] = useState(null);
-  const [dcs, setDcs] = useState({ out: null, back: null });
+  const [dcs, setDcs] = useState({ out: null, back: null, unsigned: null });
   const [sel, setSel] = useState(new Set());
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState(null);
 
   const load = useCallback(() => {
-    fetchPartsQueue().then(({ data }) => setQ(data)).catch((e) => { setQ({ pending: [], returns: [], reassigns: [] }); toast.error(errMsg(e, 'Could not load the parts queue')); });
+    const qp = { from: filters.from || undefined, to: filters.to || undefined, tech_id: filters.tech_id || undefined, sort: filters.sort };
+    fetchPartsQueue(qp).then(({ data }) => setQ(data)).catch((e) => { setQ({ pending: [], returns: [], reassigns: [] }); toast.error(errMsg(e, 'Could not load the parts queue')); });
+    fetchMyParts().then(({ data }) => setDcs((d) => ({ ...d, unsigned: data.awaiting || [] }))).catch(() => setDcs((d) => ({ ...d, unsigned: [] })));
     fetchPartDcsAwaitingCourier().then(({ data }) => setDcs((d) => ({ ...d, out: data.dcs || [] }))).catch(() => setDcs((d) => ({ ...d, out: [] })));
     fetchPartReturnDcsPending().then(({ data }) => setDcs((d) => ({ ...d, back: data.dcs || [] }))).catch(() => setDcs((d) => ({ ...d, back: [] })));
-  }, []);
+  }, [filters]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (q?.technicians?.length) setTechOptions((o) => (o.length ? o : q.technicians.map((t) => ({ value: String(t.tech_id), label: t.tech_name }))));
+  }, [q]);
 
   const run = async (fn, ok) => {
     setBusy(true);
@@ -97,14 +121,29 @@ export default function PartsDeskPage() {
       ...base, ship_by: d.ship_by, courier_name: d.courier_name.trim() || undefined, awb_number: d.awb_number.trim() || undefined,
       add_courier_later: d.ship_by === 'by_courier' && d.later, tampered_by_customer: d.tampered, charge_amount: 0,
     }), 'Part DC made');
-    if (r) { setSel(new Set()); setDrawer(null); }
+    if (r) {
+      setSel(new Set()); setDrawer(null);
+      if (r.data?.dc_number) navigate(`/carret/serve/part-dcs/${encodeURIComponent(r.data.dc_number)}`);
+    }
   };
 
   /* ---------- columns ---------- */
   const reqCols = [
     { key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.request_number}`} checked={sel.has(r.id)} onChange={() => toggle(r.id)} onClick={(e) => e.stopPropagation()} /> },
     { key: 'n', header: 'Request', render: (r) => <DocNumber value={r.request_number} />, sub: (r) => <DateTime value={r.created_at} /> },
-    { key: 'p', header: 'Part', render: (r) => `${r.part_name}${r.quantity > 1 ? ` × ${r.quantity}` : ''}`, sub: (r) => `${r.available} in stock${r.location_code ? ` · ${r.location_code}` : ''}` },
+    { key: 'p', header: 'Part', render: (r) => `${r.part_name}${r.quantity > 1 ? ` × ${r.quantity}` : ''}`, sub: (r) => (
+        <>
+          {`${r.available} in stock${r.location_code ? ` · ${r.location_code}` : ''}`}
+          {Number(r.instances_reserved) > 0 && (
+            <>
+              {' · '}
+              <button type="button" className="bg-transparent border-0 cursor-pointer" style={{ padding: 0, color: 'var(--alert-warn)', textDecoration: 'underline' }} onClick={(e) => { e.stopPropagation(); openReserved(r); }}>
+                {r.instances_reserved} reserved elsewhere
+              </button>
+            </>
+          )}
+        </>
+      ) },
     { key: 't', header: 'Ticket / laptop', render: (r) => r.ticket_number, sub: (r) => [r.ttspl_id, r.laptop_brand, r.laptop_model].filter(Boolean).join(' · ') || r.customer_name },
     { key: 'w', header: 'For', render: (r) => r.tech_name, sub: (r) => (toCustomer(r) ? 'Send to the customer' : 'Hand to the technician') },
     {
@@ -147,6 +186,18 @@ export default function PartsDeskPage() {
       ),
     },
   ];
+  const openReserved = (r) => {
+    setDrawer({ kind: 'reserved', r, units: null });
+    fetchReservedUnits(r.part_id)
+      .then(({ data }) => setDrawer((x) => (x?.kind === 'reserved' ? { ...x, units: data.units || [] } : x)))
+      .catch((e) => { toast.error(errMsg(e, 'Could not load reserved units')); setDrawer(null); });
+  };
+  const unsignedCols = [
+    { key: 'n', header: 'Part challan', render: (c) => <DocNumber value={c.challan_number} />, sub: (c) => c.ttspl_id || null },
+    { key: 'w', header: 'Technician', render: (c) => c.tech_name, sub: (c) => c.ticket_number },
+    { key: 'c', header: 'Customer', render: (c) => c.customer_name },
+    { key: 'p', header: 'Parts', render: (c) => (c.items || []).map((i) => `${i.part_name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}`).join(', ') },
+  ];
   const dcOutCols = [
     { key: 'n', header: 'Part DC', render: (d) => <DocNumber value={d.dc_number} />, sub: (d) => <DateTime value={d.created_at} /> },
     { key: 'c', header: 'Customer', render: (d) => d.customer_name, sub: (d) => d.ticket_number },
@@ -165,7 +216,7 @@ export default function PartsDeskPage() {
   const dcBackCols = [
     { key: 'n', header: 'Old-part return DC', render: (d) => <DocNumber value={d.dc_number} />, sub: (d) => <DateTime value={d.created_at} /> },
     { key: 'c', header: 'From', render: (d) => d.customer_name, sub: (d) => d.ticket_number },
-    { key: 'k', header: 'Courier', render: (d) => (d.courier_name ? `${d.courier_name}${d.awb_number ? ` · ${d.awb_number}` : ''}` : '—') },
+    { key: 'k', header: 'Courier', render: (d) => (d.courier_name ? `${d.courier_name}${d.awb_number ? ` · ${d.awb_number}` : ''}` : (d.ship_by === 'by_courier' ? <span style={{ color: 'var(--alert-warn)' }}>Not added — open to add</span> : '—')) },
     { key: 'a', header: '', render: (d) => canEdit && <Button disabled={busy} onClick={() => { if (window.confirm(`Receive the old parts on ${d.dc_number}?`)) run(() => receivePartReturnDc(d.dc_number), 'Received'); }}>Received</Button> },
   ];
 
@@ -174,7 +225,7 @@ export default function PartsDeskPage() {
     { key: 'requests', label: `Requests · ${count(q?.pending)}` },
     { key: 'returns', label: `Returns · ${count(q?.returns)}` },
     { key: 'moves', label: `Moves · ${count(q?.reassigns)}` },
-    { key: 'dcs', label: `Part DCs · ${dcs.out == null || dcs.back == null ? '…' : dcs.out.length + dcs.back.length}` },
+    { key: 'dcs', label: `Challans & DCs · ${dcs.out == null || dcs.back == null || dcs.unsigned == null ? '…' : dcs.out.length + dcs.back.length + dcs.unsigned.length}` },
   ];
 
   const d = drawer;
@@ -182,6 +233,16 @@ export default function PartsDeskPage() {
     <DeskShell title="Support parts desk" breadcrumb="Support" subtitle="Parts the technicians asked for: pick the unit, hand it over or send it, and take unused ones back.">
       <div className="c-stack">
         <Tabs tabs={tabs} value={tab} onChange={setTab} />
+        {tab !== 'dcs' && (
+          <div className="flex flex-wrap items-end" style={{ gap: '8px' }}>
+            <Field label="From"><Input type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} /></Field>
+            <Field label="To"><Input type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} /></Field>
+            <Field label="Technician"><Select value={filters.tech_id} onChange={(e) => setFilters({ ...filters, tech_id: e.target.value })} placeholder="All technicians" options={techOptions} /></Field>
+            <Field label="Order"><Select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })} options={SORTS} /></Field>
+            {(filters.from || filters.to || filters.tech_id || filters.sort !== 'desc') && <Button variant="quiet" onClick={() => setFilters({ from: '', to: '', tech_id: '', sort: 'desc' })}>Clear</Button>}
+            <span className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>Dates: requests by raised date, returns by return date, moves by move date.</span>
+          </div>
+        )}
         {q === null ? <EmptyState title="Loading…" /> : (
           <>
             {tab === 'requests' && (
@@ -214,11 +275,14 @@ export default function PartsDeskPage() {
             )}
             {tab === 'dcs' && (
               <>
+                <Section title="Technician challans waiting for a signature">
+                  {dcs.unsigned === null ? <EmptyState title="Loading…" /> : <DataTable columns={unsignedCols} rows={dcs.unsigned} rowKey={(x) => x.challan_id} onRowClick={(x) => navigate(`/carret/serve/parts-challans/${x.challan_id}`)} empty={<EmptyState title="Every challan is signed" />} />}
+                </Section>
                 <Section title="Parts sent to customers — not delivered yet">
-                  {dcs.out === null ? <EmptyState title="Loading…" /> : <DataTable columns={dcOutCols} rows={dcs.out} rowKey={(x) => x.dc_number} empty={<EmptyState title="None open" />} />}
+                  {dcs.out === null ? <EmptyState title="Loading…" /> : <DataTable columns={dcOutCols} rows={dcs.out} rowKey={(x) => x.dc_number} onRowClick={(x) => navigate(`/carret/serve/part-dcs/${encodeURIComponent(x.dc_number)}`)} empty={<EmptyState title="None open" />} />}
                 </Section>
                 <Section title="Old parts coming back (RPDC)">
-                  {dcs.back === null ? <EmptyState title="Loading…" /> : <DataTable columns={dcBackCols} rows={dcs.back} rowKey={(x) => x.dc_number} empty={<EmptyState title="None in transit" />} />}
+                  {dcs.back === null ? <EmptyState title="Loading…" /> : <DataTable columns={dcBackCols} rows={dcs.back} rowKey={(x) => x.dc_number} onRowClick={(x) => navigate(`/carret/serve/part-return-dcs/${encodeURIComponent(x.dc_number)}`)} empty={<EmptyState title="None in transit" />} />}
                 </Section>
               </>
             )}
@@ -288,7 +352,8 @@ export default function PartsDeskPage() {
       >
         {d?.kind === 'sign' && (
           <div className="c-stack">
-            <p className="text-ink-3">The challan is made. The technician signs to take the parts; you can also close this and they sign later from the old challan screen.</p>
+            <p className="text-ink-3">The challan is made. The technician signs to take the parts; you can also close this and they sign later on the challan page (Challans &amp; DCs tab).</p>
+            <Button variant="quiet" onClick={() => navigate(`/carret/serve/parts-challans/${d.challanId}`)}>Open the challan page</Button>
             <Field label="Technician's name" required><Input value={d.signer} onChange={(e) => setDrawer({ ...d, signer: e.target.value })} /></Field>
             {d.esign ? <Button variant="quiet" onClick={() => setDrawer({ ...d, esign: null })}>Sign again</Button>
               : <SignaturePadComponent onSave={(esign) => setDrawer((x) => ({ ...x, esign }))} onCancel={() => setDrawer({ ...d, esign: null })} />}
@@ -338,6 +403,19 @@ export default function PartsDeskPage() {
             <Field label="AWB"><Input value={d.awb_number} onChange={(e) => setDrawer({ ...d, awb_number: e.target.value })} /></Field>
           </div>
         )}
+      </Drawer>
+      <Drawer
+        open={d?.kind === 'reserved'}
+        onClose={() => setDrawer(null)}
+        title={`Reserved units — ${d?.r?.part_name || ''}`}
+        width="36rem"
+      >
+        {d?.kind === 'reserved' && (d.units === null ? <EmptyState title="Loading…" /> : (
+          <div className="c-stack">
+            <p className="text-ink-3">These units are held by other requests and can't be picked here until they are released or returned to stock.</p>
+            <DataTable columns={RESERVED_COLS} rows={d.units} rowKey={(u) => u.instance_id || u.prt_id} empty={<EmptyState title="No reserved units right now" />} />
+          </div>
+        ))}
       </Drawer>
     </DeskShell>
   );

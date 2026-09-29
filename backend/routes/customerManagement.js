@@ -59,6 +59,8 @@ router.get('/customers/:customerId/laptops/export.xlsx', cp('customer_assets', '
 router.get('/customers/:customerId/laptops', cp('customer_assets', 'view'), ctrl.getCustomerLaptops);
 // Sale in place (PHASE 21): report a rented laptop lost / damaged / bought out.
 router.get('/customers/:customerId/sale-in-place', cp('customer_assets', 'view'), ctrl.listSaleInPlaceCases);
+// Sell → Sale in Place worklist (all customers). Same section as the create routes.
+router.get('/sale-in-place', cp('sale_in_place', 'view'), ctrl.listAllSaleInPlaceCases);
 // Accounts only (section 'sale_in_place', migration 249); super_admin always passes.
 router.post('/customers/:customerId/sale-in-place', cp('sale_in_place', 'create'), ctrl.reportSaleInPlace);
 router.get('/customers/:customerId/sale-in-place/prefill', cp('sale_in_place', 'create'), ctrl.getSaleInPlacePrefill);

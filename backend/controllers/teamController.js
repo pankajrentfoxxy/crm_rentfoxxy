@@ -1,6 +1,15 @@
 const pool = require('../config/db');
 const { getDisplayTeams } = require('../utils/teamUtils');
 
+// Active members of a team: primary team (users.team_id) OR any extra team
+// (user_teams) — the same rule getTeamMembers lists. Counting users.team_id
+// alone showed 0 for teams whose members joined through user_teams (QA,
+// 29 Sep 2026: Diagnose Team 0 vs 8 members).
+const MEMBER_COUNT_SQL = `(SELECT COUNT(DISTINCT u.user_id)
+           FROM users u
+           LEFT JOIN user_teams ut ON ut.user_id = u.user_id AND ut.team_id = t.team_id
+          WHERE (u.team_id = t.team_id OR ut.team_id = t.team_id) AND u.active = true)`;
+
 // Get All Teams (optionally for ticket assignment: ordered by stage, excludes QC/Dispatch/Procurement)
 exports.getAllTeams = async (req, res) => {
   const forAssignment = req.query.for_assignment === '1' || req.query.for_assignment === 'true';
@@ -17,7 +26,7 @@ exports.getAllTeams = async (req, res) => {
       }
       const result = await pool.query(
         `SELECT t.*, u.name as manager_name,
-                (SELECT COUNT(*) FROM users WHERE team_id = t.team_id AND active = true) as member_count
+                ${MEMBER_COUNT_SQL} as member_count
          FROM teams t
          LEFT JOIN users u ON t.manager_id = u.user_id
          WHERE t.team_id = ANY($1::int[])
@@ -41,7 +50,7 @@ exports.getAllTeams = async (req, res) => {
 
     const result = await pool.query(
       `SELECT t.*, u.name as manager_name,
-              (SELECT COUNT(*) FROM users WHERE team_id = t.team_id AND active = true) as member_count
+              ${MEMBER_COUNT_SQL} as member_count
        FROM teams t
        LEFT JOIN users u ON t.manager_id = u.user_id
        WHERE t.team_id = ANY($1::int[])
@@ -103,3 +112,5 @@ exports.getTeamMembers = async (req, res) => {
     });
   }
 };
+
+exports._test = { MEMBER_COUNT_SQL };
