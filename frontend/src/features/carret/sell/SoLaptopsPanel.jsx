@@ -16,6 +16,7 @@ import { configText } from './LineItemsEditor';
 import { SO_SECTIONS, parseJson } from './sellShared';
 import ChargerHandoverDrawer from '../move/ChargerHandoverDrawer';
 import { CHARGER_STATUS, chargerStatusLabel } from '../move/chargerShared';
+import { openPramanPdf } from '../produce/work/PramanPanel';
 
 /**
  * Sales order → Laptops & Dispatch QC.
@@ -158,9 +159,15 @@ export default function SoLaptopsPanel({ soNumber, billing, cancelled, inPlace, 
                     {a.qc_assigned_user_id ? 'Change' : 'Assign'}
                   </Button>
                 )}
+                {/* Praman proof from Dispatch QC (migration 410) */}
+                {a.praman_id && (
+                  <button type="button" className="c-link font-ui" style={{ fontSize: 'var(--d-sm)', background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'var(--accent)' }} onClick={() => openPramanPdf(a.praman_id)} title="Open the Praman report">
+                    Praman PDF
+                  </button>
+                )}
               </span>
             ),
-            sub: (a) => a.ticket_stage || null,
+            sub: (a) => [a.ticket_stage, a.praman_device_id && `Praman ${a.praman_device_id}`].filter(Boolean).join(' · ') || null,
           },
           {
             // The charger kit is part of getting this laptop out: chosen at

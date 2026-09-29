@@ -123,7 +123,8 @@ exports.listSerials = async (req, res) => {
                 NULLIF(TRIM(vpd.storage), '')
               ) AS serial_storage,
               dcr.request_id AS charger_request_id, dcr.request_number AS charger_request_number,
-              dcr.status AS charger_status, dcr.disposition AS charger_disposition
+              dcr.status AS charger_status, dcr.disposition AS charger_disposition,
+              pr.praman_id, pr.device_id AS praman_device_id, pr.uploaded_at AS praman_uploaded_at
          FROM sales_order_serials sos
          LEFT JOIN tickets t ON t.ticket_id = sos.qc_ticket_id
          LEFT JOIN LATERAL (
@@ -135,6 +136,8 @@ exports.listSerials = async (req, res) => {
          ) dcr ON sos.qc_ticket_id IS NOT NULL
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
          LEFT JOIN users au ON au.user_id = t.assigned_user_id
+         -- Praman proof from Dispatch QC (migration 410)
+         LEFT JOIN dispatch_qc_praman pr ON pr.ticket_id = sos.qc_ticket_id
          LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
          LEFT JOIN vendor_product_details vpd
            ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int

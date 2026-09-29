@@ -48,7 +48,7 @@ export const configText = (t) => {
   ].filter(Boolean).join(' · ');
 };
 export const MANAGER_ROLES = ['manager', 'admin', 'super_admin', 'floor_manager'];
-export const isFloorLead = (user) => MANAGER_ROLES.includes(String(user?.role || '').toLowerCase());
+export const isFloorLead = (user) => user?.is_superadmin === true || MANAGER_ROLES.includes(String(user?.role || '').toLowerCase());
 
 export const fetchBoard = (params) => api.get(`${T}/floor-board`, { params });
 export const fetchTicket = (id) => api.get(`${T}/${id}`);

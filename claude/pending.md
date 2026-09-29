@@ -1,4 +1,4 @@
-# What is still pending — final list (27 Sep 2026)
+# What is still pending — final list (27 Sep 2026, updated 29 Sep)
 
 We go through this one item at a time, top to bottom. An item is closed only when the
 user has clicked it through on qa.rentfoxxy.com and said it is fine.
@@ -66,6 +66,15 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     rent stops for them only; ticket closes when all are in. Support RDCs are worked in My work only (not My
     Deliveries). Needs promotion to reach crm.rentfoxxy.com; until then use Edit pickup before gate-in.
 
+12d. **Sell / production changes of 29 Sep (this session)** — BUILT on QA, pushed except the last item:
+    SO form (customer list, saved config lines, WFH = employee address + Rs 799 per laptop + GST, WFH address
+    saved on the customer, no WFH on sale, Save as draft + Drafts tab), GSTIN required on rental AND demo orders,
+    "Same as contact person" for finance / spoke, security deposit None / 1 / 2 / 3 months (chosen at Deal, default
+    per customer, per-order override, also on quotations), GSTIN lookup on the lead fills company / trade name /
+    type / PAN / billing and carries into Deal, Dispatch QC needs Praman Device ID + PDF (shown on the SO),
+    production assign / reassign to anyone (new permission "Assign floor tickets", reassign keeps the stage).
+    Migrations 406–410 on QA. Waiting: click-through.
+
 ## C. Waiting on the user / Accounts
 13. First month the CRM makes vendor bills (earlier months settled outside).
 14. Accounts to confirm `claude/reports/vendor-rates-to-confirm-QA-2026-09-26.csv` (67 laptops).
@@ -74,7 +83,7 @@ the new interface with its own menu; "Old UI" in the new header goes back.
 17. Rented-from-vendor laptops: show a purchase-equivalent cost, or monthly rent only?
 
 ## D. Promotion to live (after sign-off) — `claude/production-promotion-checklist.md`
-18. Run on live, in order, with backups: migrations 327–352 (350–352 = lock-in / warranty,
+18. Run on live, in order, with backups: migrations 327–352 (and later ones up to 410, see carret-migrations memory) (350–352 = lock-in / warranty,
     then `scripts/backfill-lockin-warranty.js` dry-run → --commit; 353–354 + stock clean-up
     (`stock-cleanup-report.js --tag LIVE-…` → review → `apply-stock-cleanup.js`),
     `merge-asset-config-duplicates.js`, `laptop-brand-cleanup.js --tag LIVE-…`) (Support v2 301–326 is a

@@ -1138,6 +1138,11 @@ exports.moveToNextStage = (req, res) => inTransaction(res, (db, held) => moveToN
 async function assignTicketInner(req, res, db) {
   const { id } = req.params;
   const { user_id, team_id, target_stage_id } = req.body;
+  // Reassign without moving the laptop: only the technician changes. Without
+  // it a reassign moved the ticket to the new person's team's first stage —
+  // refused at Assembly / Final Testing, and back to Diagnosis from Body & Paint.
+  const keepStage = req.body.keep_stage === true || req.body.keep_stage === 'true';
+  const assignReason = String(req.body.reason || '').trim().slice(0, 500);
   const laptopConditionRaw = req.body.laptop_condition ?? req.body.received_condition ?? req.body.condition;
   const assignTtspl = req.body.ttspl_id ?? req.body.ttspl ?? req.body.verify_ttspl;
   const assignSerial = req.body.serial_number ?? req.body.serial ?? req.body.verify_serial;
@@ -1161,8 +1166,11 @@ async function assignTicketInner(req, res, db) {
     // (Order to delivery), which this rule does not cover.
     const toSelf = user_id && Number(user_id) === Number(req.user.user_id) && !team_id;
     const floorWork = currentTicket.ticket_type !== 'sales_order_qc' && currentTicket.stage_name !== 'Dispatch QC';
-    if (floorWork && !toSelf && !require('../services/qcGateService').isManager(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only a floor manager assigns a laptop to someone else. Claim it to take it yourself.' });
+    if (floorWork && !toSelf && !(await require('../services/floorAssignAccess').canAssignFloorTickets(req))) {
+      return res.status(403).json({ success: false, message: 'Only a floor manager (or someone given "Assign floor tickets") assigns a laptop to someone else. Claim it to take it yourself.' });
+    }
+    if (keepStage && (!user_id || team_id || target_stage_id)) {
+      return res.status(400).json({ success: false, message: 'Keep stage needs just the person to assign.' });
     }
     const preserveDispatchQcStage =
       currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
@@ -1269,6 +1277,8 @@ async function assignTicketInner(req, res, db) {
         targetStageName = stageRes.rows[0].stage_name;
         logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
+    } else if (keepStage) {
+      logMessage += `Reassigned at ${currentTicket.stage_name}${assignReason ? ` — ${assignReason}` : ''}. `;
     } else if (preserveDispatchQcStage || preserveQcStageReassign) {
       // Reassign within Dispatch QC / QC1 / QC2 — keep stage, only change assignee
       logMessage += preserveDispatchQcStage ? 'Reassigned at Dispatch QC. ' : `Reassigned at ${currentTicket.stage_name}. `;
@@ -1335,7 +1345,10 @@ async function assignTicketInner(req, res, db) {
       }
       if (targetTeamId != null) updateQuery += `, assigned_team_id = ${targetTeamId}`;
     }
-    updateQuery += `, status = 'in_progress', completed_at = NULL WHERE ticket_id = $${paramCount} RETURNING *`;
+    // A keep-stage reassign leaves the status alone (a laptop on Hold stays on Hold).
+    updateQuery += keepStage
+      ? ` WHERE ticket_id = $${paramCount} RETURNING *`
+      : `, status = 'in_progress', completed_at = NULL WHERE ticket_id = $${paramCount} RETURNING *`;
     params.push(id);
 
     const result = await db.query(updateQuery, params);
@@ -1401,6 +1414,32 @@ async function assignTicketInner(req, res, db) {
   }
 }
 exports.assignTicket = (req, res) => inTransaction(res, (db, held) => assignTicketInner(req, held, db));
+
+/**
+ * GET /tickets/assignable-users — every active user a floor lead may give a
+ * ticket to ("anyone"), with their open floor tickets and teams. Only for
+ * people who may assign (floorAssignAccess).
+ */
+exports.getAssignableUsers = async (req, res) => {
+  try {
+    if (!(await require('../services/floorAssignAccess').canAssignFloorTickets(req))) {
+      return res.status(403).json({ success: false, message: 'Only a floor manager (or someone given "Assign floor tickets") can see this list.' });
+    }
+    const { rows } = await pool.query(
+      `SELECT u.user_id, u.name, u.role,
+              COALESCE((SELECT COUNT(*) FROM tickets t WHERE t.assigned_user_id = u.user_id AND t.status IN ('in_progress', 'on_hold')), 0)::int AS active_tickets,
+              COALESCE((SELECT ARRAY_AGG(DISTINCT tm.team_name ORDER BY tm.team_name) FROM teams tm
+                         WHERE tm.team_id = u.team_id OR tm.team_id IN (SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = u.user_id)), '{}') AS teams
+         FROM users u
+        WHERE COALESCE(u.active, TRUE) = TRUE
+        ORDER BY u.name`
+    );
+    res.json({ success: true, users: rows });
+  } catch (e) {
+    console.error('getAssignableUsers:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // Claim Ticket (Self-Assign for Team Members)
 exports.claimTicket = async (req, res) => {

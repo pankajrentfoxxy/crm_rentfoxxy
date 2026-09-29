@@ -12,6 +12,7 @@ import DispatchQcSpecVerifyPanel from '../../../floor-pipeline/components/Dispat
 import DispatchQcSubmitScanModal from '../../../dispatch-charger/DispatchQcSubmitScanModal';
 import { fetchTicketCharger } from '../../../dispatch-charger/dispatchChargerApi';
 import { Choice, QuestionSection, StepHead, errText, useFloorChecklists } from './workShared';
+import PramanPanel from './PramanPanel';
 
 /**
  * QC1, QC2 and Dispatch QC — one form.
@@ -165,6 +166,7 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
   const [scanOpen, setScanOpen] = useState(false);
   const [charger, setCharger] = useState(null);
   const [showOpen, setShowOpen] = useState(false);
+  const [praman, setPraman] = useState(null); // Dispatch QC: Praman Device ID + report (required to pass)
 
   useEffect(() => {
     api.get(`/tickets/${ticket.ticket_id}/qc`, { params: { qc_stage: stage } }).then(({ data }) => {
@@ -253,6 +255,7 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
     !grade && 'choose the grade',
     bad.length > 0 && !remarks.trim() && 'write a remark about the problems',
     willPass && stage === 'QC2' && !next.tag && 'choose how it is listed',
+    willPass && stage === 'Dispatch QC' && !praman && 'attach the Praman Device ID and report',
   ].filter(Boolean);
   const isTech = TECH_ROLES.includes(String(user?.role || '').toLowerCase());
   const routeText = willPass
@@ -319,6 +322,11 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
           {!openCount && willPass && stage === 'QC2' && (
             <Field label="How it is listed in stock" required>
               <Segmented value={next.tag} onChange={(v) => setNext((n) => ({ ...n, tag: v }))} label="Listing" options={[{ value: 'rental', label: 'Rental' }, { value: 'sale', label: 'Sale' }, { value: 'both', label: 'Both' }]} />
+            </Field>
+          )}
+          {stage === 'Dispatch QC' && (
+            <Field label="Praman verification" required={willPass}>
+              <PramanPanel ticketId={ticket.ticket_id} onChange={setPraman} />
             </Field>
           )}
           {!openCount && !willPass && !escalates && stage === 'Dispatch QC' && (

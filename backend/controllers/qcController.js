@@ -398,6 +398,17 @@ exports.submitQC = async (req, res) => {
             }
         }
 
+        // Dispatch QC pass needs the Praman Device ID + report PDF (migration 410):
+        // the sales order keeps it as proof the laptop was verified before dispatch.
+        if (result === 'PASS' && qcStage === 'Dispatch QC') {
+            try {
+                await require('../services/dispatchQcPramanService').assertPramanForPass(client, Number(id));
+            } catch (pramanErr) {
+                await client.query('ROLLBACK');
+                return res.status(pramanErr.status || 409).json({ success: false, code: pramanErr.code || 'PRAMAN_REQUIRED', message: pramanErr.message });
+            }
+        }
+
         // Save or update QC result
         const qcCheck = await client.query(
             `SELECT qc_id FROM qc_results WHERE ticket_id = $1 AND qc_stage = $2`,

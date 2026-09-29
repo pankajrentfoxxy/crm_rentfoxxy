@@ -381,6 +381,15 @@ exports.moveToStage = async (req, res) => {
         message: 'Only admin can mark Dispatch QC passed and ready for DC',
       });
     }
+    // Even the admin shortcut needs the Praman proof (migration 410).
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') {
+      try {
+        await require('../services/dispatchQcPramanService').assertPramanForPass(client, Number(id));
+      } catch (pramanErr) {
+        await client.query('ROLLBACK');
+        return res.status(pramanErr.status || 409).json({ success: false, code: pramanErr.code, message: pramanErr.message });
+      }
+    }
 
     const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
     if (managerRoutes?.includes(effectiveToStage) && !isStageRouter(req.user)) {

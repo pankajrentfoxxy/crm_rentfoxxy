@@ -13,6 +13,7 @@ import StageWork from './work/StageWork';
 import QcWork from './work/QcWork';
 import PartsWork from './work/PartsWork';
 import AssignDrawer from './work/AssignDrawer';
+import { usePermission } from '../../../hooks/usePermission';
 import { TtsplInput } from './work/workShared';
 import {
   FLOW, activeWork, claimTicket, configText, dismantleTicket, endWork, errMsg, fetchTicket, holdTicket, isFloorLead, moveStage,
@@ -36,6 +37,9 @@ export default function FloorTicketPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const lead = isFloorLead(user);
+  const { hasPermission } = usePermission();
+  // Assign / reassign: floor leads, or anyone given "Assign floor tickets" (migration 409).
+  const canAssign = lead || hasPermission('floor_ticket_assign', 'edit');
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -78,11 +82,11 @@ export default function FloorTicketPage() {
   let next = null;
   if (closed) next = <Notice tone="good" title={t.status === 'completed' ? 'Finished' : 'Closed'}>{t.completed_at ? <>On <DateTime value={t.completed_at} />.</> : null}</Notice>;
   else if (stage === 'Hold') next = <Notice tone="warn" title={`On hold (from ${t.hold_from_stage_name || '—'})`} action={lead && <Button variant="primary" onClick={() => setDrawer('release')}>Release</Button>}>{t.hold_reason}</Notice>;
-  else if (!t.assigned_user_id && stage === 'Floor Manager') next = <Notice tone="info" title="New on the floor — waiting for triage" action={lead && <Button variant="primary" onClick={() => setAssignOpen(true)}>Triage and assign</Button>}>Check it powers on, confirm the TTSPL and serial, and give it to a technician.</Notice>;
+  else if (!t.assigned_user_id && stage === 'Floor Manager') next = <Notice tone="info" title="New on the floor — waiting for triage" action={canAssign && <Button variant="primary" onClick={() => setAssignOpen(true)}>Triage and assign</Button>}>Check it powers on, confirm the TTSPL and serial, and give it to a technician.</Notice>;
   else if (!t.assigned_user_id) next = <Notice tone="info" title="Waiting to be picked up" action={<Button variant="primary" disabled={busy === 'claim'} onClick={() => run('claim', () => claimTicket(t.ticket_id), 'Claimed — it is yours')}>Claim</Button>}>Anyone on the {stageLabel(stage)} team can claim it.</Notice>;
   else if (mine && !work && WORK_STAGES.includes(stage)) next = <Notice tone="info" title="Start work to begin the timer" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>Scan or type the TTSPL and the serial from the laptop, so the right laptop is on the bench.</Notice>;
   else if (stage === 'Pending Inventory') next = <Notice tone="good" title="Passed QC — waiting to go into stock" action={<Button variant="primary" onClick={() => navigate('/carret/produce/into-stock')}>Receive into a slot</Button>}>The warehouse scans the serial into a carret slot; only then is it in stock.</Notice>;
-  else if (!mine && t.assigned_user_id) next = <Notice tone="info" title={`With ${t.assigned_user_name || 'a technician'}`}>{lead ? 'You can reassign it.' : 'Only they work on it and run its timer.'}</Notice>;
+  else if (!mine && t.assigned_user_id) next = <Notice tone="info" title={`With ${t.assigned_user_name || 'a technician'}`}>{canAssign ? 'You can reassign it.' : 'Only they work on it and run its timer.'}</Notice>;
 
   const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
   const fitted = (data.part_requests || []).filter((r) => r.status === 'attached');
@@ -104,7 +108,7 @@ export default function FloorTicketPage() {
   const actions = (
     <>
       {mine && work && <Button onClick={() => run('stop', () => endWork(t.ticket_id), 'Timer stopped')}>Stop work</Button>}
-      {lead && !closed && <Button onClick={() => setAssignOpen(true)}>{t.assigned_user_id ? 'Reassign' : 'Assign'}</Button>}
+      {canAssign && !closed && <Button onClick={() => setAssignOpen(true)}>{t.assigned_user_id ? 'Reassign' : 'Assign'}</Button>}
       {lead && !closed && stage !== 'Hold' && <Button variant="quiet" onClick={() => setDrawer('hold')}>Hold</Button>}
       {lead && !closed && ['Diagnosis', 'Floor Manager'].includes(stage) && <Button variant="quiet" onClick={() => setDrawer('toDismantle')}>Break for parts</Button>}
       {lead && !closed && t.vendor_serial_id && <Button variant="quiet" onClick={() => setDrawer('fail')}>Send back to vendor</Button>}

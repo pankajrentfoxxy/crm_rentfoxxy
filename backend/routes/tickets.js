@@ -21,6 +21,19 @@ const qcPhotoUpload = multer({
     return cb(new Error('Only image files are allowed'));
   },
 });
+// Praman report PDFs (Dispatch QC proof, migration 410) — private, streamed by an authed route.
+const { PRAMAN_DIR } = require('../services/dispatchQcPramanService');
+const pramanUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => { fs.mkdirSync(PRAMAN_DIR, { recursive: true }); cb(null, PRAMAN_DIR); },
+    filename: (req, _file, cb) => cb(null, `praman-t${parseInt(req.params.id, 10) || 0}-${Date.now()}-${Math.round(Math.random() * 1e6)}.pdf`),
+  }),
+  limits: multerLimits({ files: 1 }),
+  fileFilter: (_req, file, cb) => {
+    const isPdf = file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname || '');
+    return isPdf ? cb(null, true) : cb(new Error('The Praman report must be a PDF'));
+  },
+});
 const router = express.Router();
 const {
   createTicket,
@@ -57,7 +70,7 @@ const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
 const ftConfigEdit = checkSectionPermission('floor_ticket_config_edit', 'edit');
 const ftAssign = checkAnySectionPermission(
-  ['floor_tickets', 'floor_pipeline', 'tickets', 'replacement_so_laptop_qc'],
+  ['floor_tickets', 'floor_pipeline', 'tickets', 'replacement_so_laptop_qc', 'floor_ticket_assign'],
   'edit'
 );
 const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
@@ -165,6 +178,17 @@ router.patch(
 );
 router.patch('/:id/diagnosis-failed', floorAnyEdit, phase2.markDiagnosisFailed);
 router.patch('/:id/config', ftConfigEdit, phase2.updateTtsplConfig);
+
+// Praman proof on Dispatch QC (migration 410): Device ID + report PDF, required to pass.
+const pramanCtrl = require('../controllers/dispatchQcPramanController');
+router.post('/:id/dispatch-qc/praman', qcSubmit, wrapMulter(pramanUpload.single('praman_report')), pramanCtrl.uploadPraman);
+router.get('/:id/dispatch-qc/praman', floorAnyView, pramanCtrl.getPramanForTicket);
+router.get('/dispatch-qc/praman/:pramanId/pdf',
+  checkAnySectionPermission([...FLOOR_SECTIONS, 'dispatch_qc', 'qc_management', ...require('../services/dataScopeService').SO_VIEW_SECTIONS], 'view'),
+  pramanCtrl.downloadPramanPdf);
+
+// Everyone a floor lead may assign to (the controller checks who may ask).
+router.get('/assignable-users', ftAssign, require('../controllers/ticketController').getAssignableUsers);
 
 // @route   GET /api/tickets/:id
 // @desc    Get ticket by ID with full details
