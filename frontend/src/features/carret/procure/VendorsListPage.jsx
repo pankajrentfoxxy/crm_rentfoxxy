@@ -6,7 +6,7 @@ import {
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { fetchVendors } from '../../vendor-management/vendorManagementApi';
-import { VENDOR_STATUSES, errMsg, vendorName } from './procureShared';
+import { VENDOR_STATUSES, errMsg, vendorName, vendorPhone } from './procureShared';
 
 /**
  * Procure → Vendors.
@@ -63,7 +63,7 @@ export default function VendorsListPage() {
       sub: (r) => [r.contact_person_name, r.city].filter(Boolean).join(' · ') || null,
     },
     { key: 'gst', header: 'GSTIN', render: (r) => (r.gst_number ? <DocNumber value={r.gst_number} /> : <span className="text-ink-3">none</span>) },
-    { key: 'phone', header: 'Phone', render: (r) => r.phone || r.number || '—', sub: (r) => r.email || null },
+    { key: 'phone', header: 'Phone', render: (r) => vendorPhone(r.phone || r.number) || <span className="text-ink-3">Not recorded</span>, sub: (r) => r.email || null },
     {
       key: 'bank',
       header: 'Bank',

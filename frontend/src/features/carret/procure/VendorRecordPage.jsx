@@ -11,7 +11,7 @@ import {
   fetchPurchaseOrders, fetchVendor, fetchVendorLaptops, updateVendor, updateVendorPortalAccess,
 } from '../../vendor-management/vendorManagementApi';
 import {
-  actionLabel, errMsg, fetchVendorActivity, fileUrl, vendorFormData, vendorFormFromRow, vendorName,
+  actionLabel, errMsg, fetchVendorActivity, fileUrl, vendorFormData, vendorFormFromRow, vendorName, vendorPhone,
 } from './procureShared';
 
 /**
@@ -95,6 +95,9 @@ export default function VendorRecordPage() {
   };
 
   const setStatus = (to, ok) => run(to, async () => {
+    // The server needs a real 10-digit phone on every save; say so plainly
+    // rather than failing on a field this action did not touch.
+    if (!vendorPhone(v.phone)) throw new Error('This vendor has no valid 10-digit phone. Edit the vendor and add one first.');
     // The update endpoint takes the whole record; send it back as loaded
     // ("hidden" bank values are kept by the server) with the new status.
     await updateVendor(vendorId, vendorFormData({ ...vendorFormFromRow(v), status: to }));
@@ -196,7 +199,7 @@ export default function VendorRecordPage() {
             actions={actions}
             meta={[
               { label: 'Contact', value: v.contact_person_name || v.f_name },
-              { label: 'Phone', value: v.phone },
+              { label: 'Phone', value: vendorPhone(v.phone) || 'Not recorded — edit the vendor to add a 10-digit number' },
               { label: 'Email', value: v.email },
               { label: 'Open POs', value: pos ? open : '…' },
               { label: 'Laptops with us', value: c.total != null ? `${c.total} (${c.active || 0} with customers)` : '…' },
@@ -229,7 +232,7 @@ export default function VendorRecordPage() {
                     { label: 'MSME', value: v.msme_number },
                     { label: 'Address', value: [v.address, v.city, v.state, v.pincode].filter(Boolean).join(', ') },
                     { label: 'Ships from', value: v.shipping_same === false ? [v.shipping_address, v.shipping_city, v.shipping_state, v.shipping_pincode].filter(Boolean).join(', ') : 'Same address' },
-                    { label: 'Alternate phone', value: v.alternate_phone },
+                    { label: 'Alternate phone', value: vendorPhone(v.alternate_phone) },
                   ]}
                   />
                 </Section>

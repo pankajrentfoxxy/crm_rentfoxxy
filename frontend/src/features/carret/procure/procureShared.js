@@ -57,6 +57,27 @@ export const UDYAM_RE = /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/;
 export const UAM_RE = /^[A-Z]{2}\d{2}[A-Z]\d{7}$/;
 const MOBILE_RE = /^[6-9]\d{9}$/;
 
+/**
+ * A vendor phone as stored → the 10 digits to show, or '' when there is no
+ * real number. 98 imported ERP vendors carry the 9-digit placeholder
+ * 721835838; it is not a phone and must not pass for one.
+ */
+export function vendorPhone(x) {
+  let d = String(x || '').replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d.length === 10 ? d : '';
+}
+
+/** Inline message for a phone field; '' when fine. */
+export function phoneError(value, { required = false } = {}) {
+  const d = String(value || '');
+  if (!d) return required ? 'Required — 10 digits' : '';
+  if (d.length < 10) return `Must be 10 digits — ${d.length} entered`;
+  if (!MOBILE_RE.test(d)) return 'A mobile number starts with 6, 7, 8 or 9';
+  return '';
+}
+
 export function newPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
   const buf = new Uint32Array(12);
@@ -80,15 +101,9 @@ export function emptyVendorForm() {
 export function vendorFormFromRow(v) {
   const f = emptyVendorForm();
   Object.keys(f).forEach((k) => { if (v[k] !== undefined && v[k] !== null) f[k] = typeof f[k] === 'boolean' ? v[k] !== false : String(v[k]); });
-  const phone = (x) => {
-    const d = String(x || '').replace(/\D/g, '');
-    if (d.length === 12 && d.startsWith('91')) return d.slice(2);
-    if (d.length === 11 && d.startsWith('0')) return d.slice(1);
-    return d;
-  };
-  f.number = phone(v.phone || v.number);
-  f.contact_person_phone = phone(v.contact_person_phone);
-  f.alternate_phone = phone(v.alternate_phone);
+  f.number = vendorPhone(v.phone || v.number);
+  f.contact_person_phone = vendorPhone(v.contact_person_phone);
+  f.alternate_phone = vendorPhone(v.alternate_phone);
   f.state = slugState(v.state);
   f.password = '';
   f.registration_date = String(v.registration_date || '').slice(0, 10) || today();
@@ -127,9 +142,11 @@ export function vendorFormErrors(f, { isEdit, original } = {}) {
   req('business_type', 'Pick one');
   req('state', 'Pick the state');
   if (!/^\S+@\S+\.\S+$/.test(String(f.email || '').trim())) e.email = 'Enter a valid email';
-  if (!MOBILE_RE.test(String(f.number || ''))) e.number = 'Exactly 10 digits, starting 6-9';
+  const pn = phoneError(f.number, { required: true });
+  if (pn) e.number = pn;
   ['contact_person_phone', 'alternate_phone'].forEach((k) => {
-    if (f[k] && !MOBILE_RE.test(String(f[k]))) e[k] = 'Exactly 10 digits, starting 6-9';
+    const pe = phoneError(f[k]);
+    if (pe) e[k] = pe;
   });
   // Tax/bank formats: checked when new or changed, like the server — the
   // imported placeholders must not block an unrelated edit.

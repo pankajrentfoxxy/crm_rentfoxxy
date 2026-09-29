@@ -10,7 +10,7 @@ import {
   createVendor, fetchVendor, updateVendor, updateVendorPortalAccess,
 } from '../../vendor-management/vendorManagementApi';
 import {
-  VENDOR_STATUSES, emptyVendorForm, errMsg, fileUrl, newPassword, vendorFormData, vendorFormErrors, vendorFormFromRow, vendorName,
+  VENDOR_STATUSES, emptyVendorForm, errMsg, fileUrl, newPassword, phoneError, vendorFormData, vendorFormErrors, vendorFormFromRow, vendorName,
 } from './procureShared';
 
 /**
@@ -65,7 +65,18 @@ export default function VendorFormPage() {
   // Phone fields take digits only, at most 10 — typing or pasting anything
   // else is dropped instead of being accepted and failing on save.
   const setDigits = (k) => (e) => set(k)(String(e.target.value || '').replace(/\D/g, '').slice(0, 10));
-  const phoneProps = (k) => ({ inputMode: 'numeric', maxLength: 10, onChange: setDigits(k), placeholder: '10-digit mobile' });
+  // Checked as soon as the field is left, not only on Save.
+  const checkPhone = (k, required) => () => {
+    const msg = phoneError(form[k], { required });
+    setErrors((er) => { const n = { ...er }; if (msg) n[k] = msg; else delete n[k]; return n; });
+  };
+  const phoneProps = (k, required = false) => ({
+    inputMode: 'numeric', maxLength: 10, minLength: 10, onChange: setDigits(k), onBlur: checkPhone(k, required), placeholder: '10-digit mobile',
+  });
+  const phoneHint = (k) => {
+    const n = String(form[k] || '').length;
+    return n > 0 && n < 10 ? `${n} of 10 digits` : undefined;
+  };
   const field = (k, label, props = {}, extra = {}) => (
     <Field label={label} error={errors[k]} required={extra.required} hint={extra.hint} span={extra.span}>
       <Input value={form[k] ?? ''} onChange={set(k)} {...props} />
@@ -139,7 +150,7 @@ export default function VendorFormPage() {
                 <Select value={form.business_type} onChange={set('business_type')} placeholder="Pick one" options={BUSINESS_TYPES} />
               </Field>
               {field('email', 'Email', { type: 'email' }, { required: true, hint: 'Also the vendor portal login' })}
-              {field('number', 'Phone', phoneProps('number'), { required: true })}
+              {field('number', 'Phone', phoneProps('number', true), { required: true, hint: phoneHint('number') })}
               {isEdit ? (
                 <Field label="Status">
                   <Select value={form.status} onChange={set('status')} options={VENDOR_STATUSES.map((s) => ({ value: s.key, label: s.label }))} />
@@ -151,8 +162,8 @@ export default function VendorFormPage() {
           <Section title="Contact person">
             <FormGrid cols={3}>
               {field('contact_person_name', 'Name')}
-              {field('contact_person_phone', 'Phone', phoneProps('contact_person_phone'))}
-              {field('alternate_phone', 'Alternate phone', phoneProps('alternate_phone'))}
+              {field('contact_person_phone', 'Phone', phoneProps('contact_person_phone'), { hint: phoneHint('contact_person_phone') })}
+              {field('alternate_phone', 'Alternate phone', phoneProps('alternate_phone'), { hint: phoneHint('alternate_phone') })}
             </FormGrid>
           </Section>
 
