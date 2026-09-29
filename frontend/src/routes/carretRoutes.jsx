@@ -8,6 +8,8 @@ import { gstDocsRoutes } from './carret/gstDocsRoutes';
 import { stockSetupRoutes } from './carret/stockSetupRoutes';
 import { movementSellControlRoutes, VENDOR_RETURNS_SECTIONS } from './carret/movementSellControlRoutes';
 import { moneyCustomerRoutes } from './carret/moneyCustomerRoutes';
+import sparePoReceiveRoutes from './carret/sparePoReceiveRoutes';
+import partsDisposalRoutes from './carret/partsDisposalRoutes';
 import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
 
 /**
@@ -258,6 +260,8 @@ export const carretRoutes = CARRET_ENABLED
       ...gstDocsRoutes,
       ...stockSetupRoutes,
       ...movementSellControlRoutes,
+      ...sparePoReceiveRoutes,
+      ...partsDisposalRoutes,
     ]
   : [];
 

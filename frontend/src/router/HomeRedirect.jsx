@@ -26,7 +26,7 @@ const LANDING_ORDER = [
   ['part_vendor_repair', '/inventory-management/part-vendor-repair'],
   ['customer_inventory', '/inventory-management/customer-assets'],
   ['inventory_management', '/inventory-management/universal-search'],
-  ['technician_bucket', '/sales-pipeline/my-deliveries'],
+  ['technician_bucket', '/carret/move/my-deliveries'],
   ['delivery_register_management', '/sales-pipeline/delivery-register'],
   ['delivery_challans', '/sales-pipeline/delivery-challans'],
   ['return_dc', '/sales-pipeline/return-dc'],
@@ -60,7 +60,7 @@ export default function HomeRedirect() {
   }
   // Support technicians: land on delivery module when granted, else support tickets.
   if (user?.role === 'support_tech') {
-    if (canView('technician_bucket')) return <Navigate to="/sales-pipeline/my-deliveries" replace />;
+    if (canView('technician_bucket')) return <Navigate to="/carret/move/my-deliveries" replace />;
     if (canView('delivery_register_management')) return <Navigate to="/sales-pipeline/delivery-register" replace />;
     if (canView('delivery_challans')) return <Navigate to="/sales-pipeline/delivery-challans" replace />;
     return <Navigate to="/support/my-tickets" replace />;

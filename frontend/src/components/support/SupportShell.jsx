@@ -48,11 +48,11 @@ export default function SupportShell() {
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
               {!warehouseLead && showMyDeliveries && (
-                <NavItem to="/sales-pipeline/my-deliveries" icon={Truck} label="My deliveries" />
+                <NavItem to="/carret/move/my-deliveries" icon={Truck} label="My deliveries" />
               )}
               {!warehouseLead && (
                 <>
-                  <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
+                  <NavItem to="/carret/move/my-deliveries?show=pickups" icon={Truck} label="My pickups" />
                   <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
                 </>
               )}
@@ -70,7 +70,7 @@ export default function SupportShell() {
               <NavItem to="/support/overdue" icon={Clock} label="Overdue" badge={badges.overdue_tickets} badgeDanger />
               <NavItem to="/support/pickups" icon={Truck} label="Pickups" />
               <NavItem to="/support/pickup-bucket" icon={Package} label="Pickup bucket" />
-              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
+              <NavItem to="/carret/move/my-deliveries?show=pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
               {canCancelSupportTicket(user) && (
                 <NavItem to="/support/cancelled-tickets" icon={Ticket} label="Cancelled tickets" />
@@ -108,12 +108,12 @@ export default function SupportShell() {
               <ClipboardList className="w-5 h-5" /> My tickets
             </NavLink>
             {!warehouseLead && showMyDeliveries && (
-              <NavLink to="/sales-pipeline/my-deliveries" className={({ isActive }) => (isActive ? 'active' : '')}>
+              <NavLink to="/carret/move/my-deliveries" className={({ isActive }) => (isActive ? 'active' : '')}>
                 <Truck className="w-5 h-5" /> Deliveries
               </NavLink>
             )}
             {!warehouseLead && (
-              <NavLink to="/support/my-pickups" className={({ isActive }) => (isActive ? 'active' : '')}>
+              <NavLink to="/carret/move/my-deliveries?show=pickups" className={({ isActive }) => (isActive ? 'active' : '')}>
                 <Truck className="w-5 h-5" /> Pickups
               </NavLink>
             )}

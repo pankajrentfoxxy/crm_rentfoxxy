@@ -14,7 +14,7 @@ const LEADS = process.env.REACT_APP_CARRET === '1' ? '/carret/sell/leads' : '/le
 const ROLE_REDIRECTS = {
   admin: '/reports/manager-dashboard',
   manager: '/reports/manager-dashboard',
-  dispatch: '/sales-pipeline/my-deliveries',
+  dispatch: '/carret/move/my-deliveries',
   guard: '/guard',
 };
 

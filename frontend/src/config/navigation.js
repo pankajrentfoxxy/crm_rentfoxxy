@@ -119,7 +119,7 @@ export const SECTIONS = [
       { group: 'Inward', to: '/carret/move/return-challans', label: 'Return Challans', section: 'return_dc', action: 'view' },
       { group: 'Inward', to: '/carret/procure/returns?tab=receive', label: 'Vendor Repair Receive', sections: ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'floor_pipeline', 'vendor_management'], section: 'vendor_repair_dc', action: 'view' },
       { group: 'Inward', to: '/carret/procure/returns?tab=tickets', label: 'Vendor Return Requests', sections: ['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], section: 'vendor_return_ticket', action: 'view' },
-      { group: 'Inward', to: '/carret/move/part-inward', label: 'Part Inward', section: 'physical_dead_parts', action: 'view' },
+      { group: 'Inward', to: '/carret/move/part-inward', label: 'Dead Parts — In & Out', section: 'physical_dead_parts', action: 'view' },
 
       // ---- Gate & tracking: the crossing itself ----
       { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
@@ -153,6 +153,7 @@ export const SECTIONS = [
       { group: 'Technician', to: '/carret/serve/my-work', label: 'My work', section: 'support_tickets', action: 'view' },
       { group: 'Technician', to: '/carret/serve/my-parts', label: 'My parts', sections: ['support_part_requests', 'support_tickets'], section: 'support_part_requests', action: 'view' },
       { group: 'Technician', to: '/carret/move/my-deliveries', label: 'My deliveries', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
+      { group: 'Technician', to: '/carret/move/my-deliveries?show=pickups', label: 'My pickups', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
     ],
   },
   {
