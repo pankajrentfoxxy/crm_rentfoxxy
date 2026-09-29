@@ -31,6 +31,22 @@ function formatDocRow(req, row) {
   };
 }
 
+/**
+ * Customer Access scope for one customer (req.allowedCustomerTypes from
+ * middleware/customerScope). null when fine, else { status, message }.
+ * List and delete used to skip this, so a sales-only user could read or
+ * delete a rental customer's KYC files by id.
+ */
+async function scopeProblem(req, customerId) {
+  const r = await pool.query('SELECT customer_type FROM customers WHERE customer_id = $1', [customerId]);
+  if (!r.rows.length) return { status: 404, message: 'Customer not found' };
+  const { isCustomerTypeAllowed } = require('../services/customerAccessScope');
+  if (!isCustomerTypeAllowed(req.allowedCustomerTypes, r.rows[0].customer_type)) {
+    return { status: 403, message: 'Access denied: customer is outside your Customer Access scope' };
+  }
+  return null;
+}
+
 exports.uploadDocument = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
@@ -104,6 +120,8 @@ exports.listDocuments = async (req, res) => {
     if (Number.isNaN(customerId)) {
       return res.status(400).json({ success: false, message: 'Invalid customer id' });
     }
+    const problem = await scopeProblem(req, customerId);
+    if (problem) return res.status(problem.status).json({ success: false, message: problem.message });
 
     const result = await pool.query(
       `SELECT d.*, u.name AS uploaded_by_name
@@ -136,6 +154,8 @@ exports.deleteDocument = async (req, res) => {
     if (Number.isNaN(customerId) || Number.isNaN(docId)) {
       return res.status(400).json({ success: false, message: 'Invalid id' });
     }
+    const problem = await scopeProblem(req, customerId);
+    if (problem) return res.status(problem.status).json({ success: false, message: problem.message });
 
     const result = await pool.query(
       'SELECT * FROM customer_documents WHERE doc_id = $1 AND customer_id = $2',

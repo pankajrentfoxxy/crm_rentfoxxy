@@ -41,7 +41,21 @@ export const exportCustomerSaleAssets = (params = {}) =>
   api.get('/customer-management/customers/sale-assets/export', { params, responseType: 'blob' });
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
-export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);
+/**
+ * A change to the state billing uses for GST comes back 409 SUPPLY_STATE_CHANGE
+ * (backend updateCustomer). The old screens ask once, then resend confirmed.
+ */
+export const updateCustomer = async (id, data) => {
+  try {
+    return await api.put(`/customer-management/customers/${id}`, data);
+  } catch (err) {
+    const d = err?.response?.data;
+    if (err?.response?.status === 409 && d?.code === 'SUPPLY_STATE_CHANGE' && window.confirm(d.message)) {
+      return api.put(`/customer-management/customers/${id}`, { ...data, confirm_supply_state_change: true });
+    }
+    throw err;
+  }
+};
 export const updateCustomerStatus = (id, status) =>
   api.patch(`/customer-management/customers/${id}/status`, { status });
 export const bulkUpdateCustomerType = (data) =>
