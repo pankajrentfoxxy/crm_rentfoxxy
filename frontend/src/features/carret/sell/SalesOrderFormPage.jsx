@@ -21,7 +21,8 @@ import LineItemsEditor, {
 import {
   useCustomerAddresses, ShippingPicker, resolveShipping, AddressText, validateAddress,
 } from './CustomerAddresses';
-import { parseJson } from './sellShared';
+import { customerGstin, gstinError, parseJson } from './sellShared';
+import GstinField from './GstinField';
 
 /**
  * Sell → New sales order / Edit sales order.
@@ -194,11 +195,15 @@ export default function SalesOrderFormPage() {
     setQuotationNumber('');
   };
 
+  const selectedCustomer = (meta?.customers || []).find((x) => String(x.customer_id) === String(customerId));
+  const gstLocked = Boolean(gst) && gst === customerGstin(selectedCustomer);
+
   const onCustomer = (id) => {
     setCustomerId(id);
     setShipChoice({ key: 'billing', manual: null });
     const c = (meta?.customers || []).find((x) => String(x.customer_id) === String(id));
-    setGst(c?.gst_no || c?.gst_number || '');
+    // Only a real GSTIN is copied (and then locked); placeholders like "NA" are not.
+    setGst(customerGstin(c));
   };
 
   const submit = async () => {
@@ -208,6 +213,7 @@ export default function SalesOrderFormPage() {
     if (c && !isCustomerEligibleForQuotation(c.customer_type, type, c.customer_type_source)) e.customer = customerTypeMismatchMessage(c.customer_type, type);
     const miss = firstMissing(lines, REQUIRED);
     if (miss) e.line = miss;
+    if (gstinError(gst)) e.gst = gstinError(gst);
     if (!inPlace) {
       if (!shipAddress) e.ship = { address: 'Choose where this order ships' };
       else if (shipChoice.key === 'manual' || wfh.on) {
@@ -219,7 +225,7 @@ export default function SalesOrderFormPage() {
     if (advance.on && !(Number(advance.amount) > 0)) e.advance = 'Enter the advance amount, or untick it';
     setErrors(e);
     if (Object.keys(e).length) {
-      toast.error(e.advance || e.customer || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
+      toast.error(e.advance || e.customer || (e.gst && `GSTIN: ${e.gst}`) || (e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.shipping || 'Some required fields are empty'));
       return;
     }
 
@@ -340,9 +346,7 @@ export default function SalesOrderFormPage() {
                   ]}
                 />
               </Field>
-              <Field label="GSTIN">
-                <Input value={gst} onChange={(e) => setGst(e.target.value)} className="font-mono" />
-              </Field>
+              <GstinField value={gst} onChange={setGst} locked={gstLocked} error={errors.gst} />
             </FormGrid>
           </Section>
 

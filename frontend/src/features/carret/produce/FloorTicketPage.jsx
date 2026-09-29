@@ -140,7 +140,10 @@ export default function FloorTicketPage() {
           onChange={setTab}
           tabs={[
             { key: 'work', label: `Work — ${stageLabel(stage)}` },
-            { key: 'parts', label: 'Parts', count: (data.part_requests || []).length },
+            // A laptop reaches Dispatch QC fully ready: no part requests there.
+            // Earlier requests stay visible (read-only) if there are any.
+            ...(stage !== 'Dispatch QC' || (data.part_requests || []).length
+              ? [{ key: 'parts', label: 'Parts', count: (data.part_requests || []).length }] : []),
             { key: 'laptop', label: 'Laptop' },
             { key: 'history', label: 'History', count: acts.length },
           ]}
@@ -151,7 +154,7 @@ export default function FloorTicketPage() {
             : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
         )}
         {tab === 'parts' && (
-          <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && (mine || lead)} onChanged={done} />
+          <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && stage !== 'Dispatch QC' && (mine || lead)} onChanged={done} />
         )}
         {tab === 'laptop' && (
           <div className="c-stack">

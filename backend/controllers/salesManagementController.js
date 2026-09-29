@@ -2,6 +2,7 @@ const { deliveryNotifyTo, deliveryNotifyCc } = require('../utils/deliveryMailRec
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { isValidGstin } = require('../services/gstinLookupService');
 const { respondIfRefused } = require('../utils/transitionRefusal');
 const inventorySM = require('../services/inventoryStateMachine');
 const {
@@ -501,10 +502,30 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+/**
+ * GSTIN on a quotation / sales order: empty, or a valid 15-character GSTIN
+ * (upper-cased in place). Legacy customer placeholders ("NA", "N/A-2",
+ * "Unknown") are passed through so an old order can still be edited, but
+ * anything else that is not a real GSTIN is refused. Returns an error or null.
+ */
+const GSTIN_PLACEHOLDER_RE = /^(N\/?A|NIL|NONE|UNKNOWN|-)([-\s]*\d*)?$/i;
+function checkDocGstin(body) {
+  const key = body.GST_number != null ? 'GST_number' : 'gst_number';
+  const raw = String(body[key] ?? '').trim();
+  if (!raw) return null;
+  const up = raw.toUpperCase();
+  if (GSTIN_PLACEHOLDER_RE.test(up)) return null;
+  if (up.length !== 15 || !isValidGstin(up)) return `GSTIN ${raw} is not valid — 15 characters, like 06AAHCT0310N1ZG`;
+  body[key] = up;
+  return null;
+}
+
 exports.storeQuotation = async (req, res) => {
   const client = await pool.connect();
   try {
     const body = req.body;
+    const gstinErr = checkDocGstin(body);
+    if (gstinErr) return res.status(400).json({ success: false, message: gstinErr });
     const lineItems = normalizeLineItems(body);
     if (!lineItems.length) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
@@ -1031,6 +1052,8 @@ exports.storeSalesOrder = async (req, res) => {
   const client = await pool.connect();
   try {
     const body = req.body;
+    const gstinErr = checkDocGstin(body);
+    if (gstinErr) return res.status(400).json({ success: false, message: gstinErr });
     const lineItems = normalizeLineItems(body);
     if (!lineItems.length) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
@@ -1394,6 +1417,8 @@ exports.updateSalesOrder = async (req, res) => {
   try {
     const soNumber = req.params.soNumber || req.params.salesOrderNumber;
     const body = req.body || {};
+    const gstinErr = checkDocGstin(body);
+    if (gstinErr) return res.status(400).json({ success: false, message: gstinErr });
     const lineItems = normalizeLineItems(body);
     if (!lineItems.length) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });

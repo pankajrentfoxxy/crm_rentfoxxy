@@ -11,6 +11,8 @@ import {
   filterCustomersForQuotation, isCustomerEligibleForQuotation, customerTypeMismatchMessage,
 } from '../../../utils/customerType';
 import { INDIAN_STATES, slugifyState, matchIndianState } from '../../../constants/indianStates';
+import GstinField from './GstinField';
+import { customerGstin, gstinError } from './sellShared';
 import LineItemsEditor, {
   emptyLine, linesToPayload, linesTotal, firstMissing, fieldLabel,
 } from './LineItemsEditor';
@@ -123,7 +125,7 @@ export default function QuotationFormPage() {
       company_name: c.company_name || c.name || '',
       customer_mobile: c.phone || c.customer_mobile || '',
       email: c.email || '',
-      GST_number: c.gst_no || c.gst_number || '',
+      GST_number: customerGstin(c),
     });
     setSend((s) => ({ ...s, to: s.to || c.email || '' }));
   };
@@ -143,10 +145,11 @@ export default function QuotationFormPage() {
       const ae = validateAddress(prospectShip.address);
       if (Object.keys(ae).length) e.prospectShip = ae;
     }
+    if (gstinError(party.GST_number)) e.GST_number = gstinError(party.GST_number);
     if (andSend && !/^\S+@\S+\.\S+$/.test(send.to.trim())) e.sendTo = 'A valid email is needed to send';
     setErrors(e);
     if (Object.keys(e).length) {
-      const first = e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : 'Some required fields are empty';
+      const first = e.line ? `Line ${e.line.index + 1}: ${fieldLabel(e.line.field)} is missing` : e.GST_number ? `GSTIN: ${e.GST_number}` : 'Some required fields are empty';
       toast.error(first);
       return false;
     }
@@ -256,9 +259,12 @@ export default function QuotationFormPage() {
               <Field label="Email">
                 <Input type="email" value={party.email} onChange={setP('email')} />
               </Field>
-              <Field label="GSTIN">
-                <Input value={party.GST_number} onChange={setP('GST_number')} className="font-mono" />
-              </Field>
+              <GstinField
+                value={party.GST_number}
+                onChange={(v) => setParty((p) => ({ ...p, GST_number: v }))}
+                locked={Boolean(party.GST_number) && party.GST_number === customerGstin((meta?.customers || []).find((x) => String(x.customer_id) === String(party.customer_id)))}
+                error={errors.GST_number}
+              />
               <Field label="Place of supply" hint="Follows the shipping state unless you change it.">
                 <Select
                   value={supplyState}

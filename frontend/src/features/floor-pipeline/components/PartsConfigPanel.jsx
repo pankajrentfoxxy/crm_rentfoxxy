@@ -838,6 +838,11 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         </section>
       )}
 
+      {ticket?.stage_name === 'Dispatch QC' ? (
+        <p className="rounded-xl border border-gray-100 bg-white p-4 text-sm text-slate-600">
+          No part requests at Dispatch QC — the laptop should be ready. If it needs a part, fail Dispatch QC to send it back to the floor.
+        </p>
+      ) : (
       <section className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm space-y-3">
         <div className="flex gap-2">
           <button type="button" onClick={() => { setMode('request'); resetSelection(); }}
@@ -1015,6 +1020,7 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
           </div>
         )}
       </section>
+      )}
 
       <section className="rounded-xl border overflow-hidden">
         <h3 className="font-semibold text-slate-900 px-4 py-3 bg-slate-50 border-b text-sm">Config History</h3>

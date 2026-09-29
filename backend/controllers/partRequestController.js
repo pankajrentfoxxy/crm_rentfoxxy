@@ -221,6 +221,14 @@ exports.createPartRequest = async (req, res) => {
       const sRes = await client.query(`SELECT stage_name FROM stages WHERE stage_id = $1`, [ticket.current_stage_id]);
       stageName = sRes.rows[0]?.stage_name || null;
     }
+    // 29 Sep 2026: a laptop reaches Dispatch QC only when it is fully ready.
+    // If it needs a part there, it fails Dispatch QC and goes back to the floor.
+    if (stageName === 'Dispatch QC') {
+      return res.status(409).json({
+        success: false,
+        message: 'Parts cannot be requested at Dispatch QC — the laptop should be ready. Fail Dispatch QC to send it back to the floor for the part.',
+      });
+    }
 
     // P5: "in stock" means a unit is on the shelf, not parts.quantity (which
     // also counts reserved units and drifts). P4: one request is one unit.

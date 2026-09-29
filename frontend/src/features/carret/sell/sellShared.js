@@ -22,3 +22,20 @@ export function openPdf(path) {
   const url = pdfUrl(path);
   if (url) window.open(url, '_blank', 'noopener');
 }
+
+/** GSTIN: 2-digit state, PAN, entity, Z, check character — 15 in all. */
+export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+export const validGstin = (v) => GSTIN_RE.test(String(v || '').trim().toUpperCase());
+/** Legacy customer placeholders ("NA", "N/A-2", "Unknown") — not a GSTIN. */
+export const gstinPlaceholder = (v) => /^(N\/?A|NIL|NONE|UNKNOWN|-)([-\s]*\d*)?$/i.test(String(v || '').trim());
+/** The customer's GSTIN when it is a real one, else ''. */
+export const customerGstin = (c) => {
+  const g = String(c?.gst_no || c?.gst_number || '').trim().toUpperCase();
+  return validGstin(g) ? g : '';
+};
+/** Error text for a GSTIN typed on a document; '' when fine or empty. */
+export const gstinError = (v) => {
+  const g = String(v || '').trim();
+  if (!g || validGstin(g) || gstinPlaceholder(g)) return '';
+  return g.length !== 15 ? `15 characters — ${g.length} entered` : 'Not a valid GSTIN (like 06AAHCT0310N1ZG)';
+};
