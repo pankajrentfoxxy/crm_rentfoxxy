@@ -52,6 +52,10 @@ const slugState = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '_
 export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+/** Udyam registration (UDYAM-UP-01-0012345) or the older Udyog Aadhaar (UP01A0012345). */
+export const UDYAM_RE = /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/;
+export const UAM_RE = /^[A-Z]{2}\d{2}[A-Z]\d{7}$/;
+const MOBILE_RE = /^[6-9]\d{9}$/;
 
 export function newPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -76,7 +80,15 @@ export function emptyVendorForm() {
 export function vendorFormFromRow(v) {
   const f = emptyVendorForm();
   Object.keys(f).forEach((k) => { if (v[k] !== undefined && v[k] !== null) f[k] = typeof f[k] === 'boolean' ? v[k] !== false : String(v[k]); });
-  f.number = String(v.phone || v.number || '').replace(/\D/g, '').slice(-10);
+  const phone = (x) => {
+    const d = String(x || '').replace(/\D/g, '');
+    if (d.length === 12 && d.startsWith('91')) return d.slice(2);
+    if (d.length === 11 && d.startsWith('0')) return d.slice(1);
+    return d;
+  };
+  f.number = phone(v.phone || v.number);
+  f.contact_person_phone = phone(v.contact_person_phone);
+  f.alternate_phone = phone(v.alternate_phone);
   f.state = slugState(v.state);
   f.password = '';
   f.registration_date = String(v.registration_date || '').slice(0, 10) || today();
@@ -93,6 +105,7 @@ export function vendorFormData(form, files = {}) {
     from_submit: 'admin',
     gst_number: String(form.gst_number || '').trim().toUpperCase(),
     pan_number: String(form.pan_number || '').trim().toUpperCase(),
+    msme_number: String(form.msme_number || '').trim().toUpperCase(),
     bank_ifsc_code: String(form.bank_ifsc_code || '').trim().toUpperCase(),
     shipping_same: form.shipping_same ? 'true' : 'false',
   };
@@ -114,9 +127,9 @@ export function vendorFormErrors(f, { isEdit, original } = {}) {
   req('business_type', 'Pick one');
   req('state', 'Pick the state');
   if (!/^\S+@\S+\.\S+$/.test(String(f.email || '').trim())) e.email = 'Enter a valid email';
-  if (!/^[6-9]\d{9}$/.test(String(f.number || '').replace(/\D/g, '').slice(-10))) e.number = '10-digit mobile number';
+  if (!MOBILE_RE.test(String(f.number || ''))) e.number = 'Exactly 10 digits, starting 6-9';
   ['contact_person_phone', 'alternate_phone'].forEach((k) => {
-    if (f[k] && !/^[6-9]\d{9}$/.test(String(f[k]).replace(/\D/g, '').slice(-10))) e[k] = '10-digit mobile number';
+    if (f[k] && !MOBILE_RE.test(String(f[k]))) e[k] = 'Exactly 10 digits, starting 6-9';
   });
   // Tax/bank formats: checked when new or changed, like the server — the
   // imported placeholders must not block an unrelated edit.
@@ -126,6 +139,8 @@ export function vendorFormErrors(f, { isEdit, original } = {}) {
   if (g && changed('gst_number') && !GSTIN_RE.test(g)) e.gst_number = '15 characters, like 06AAHCT0310N1ZG';
   const p = String(f.pan_number || '').trim().toUpperCase();
   if (p && !hidden('pan_number') && changed('pan_number') && !PAN_RE.test(p)) e.pan_number = 'Like ABCDE1234F';
+  const m = String(f.msme_number || '').trim().toUpperCase();
+  if (m && changed('msme_number') && !UDYAM_RE.test(m) && !UAM_RE.test(m)) e.msme_number = 'Like UDYAM-UP-01-0012345';
   const i = String(f.bank_ifsc_code || '').trim().toUpperCase();
   if (i && !hidden('bank_ifsc_code') && changed('bank_ifsc_code') && !IFSC_RE.test(i)) e.bank_ifsc_code = '11 characters, like HDFC0001234';
   if (!hidden('account_number') && f.account_number && !/^\d{6,20}$/.test(String(f.account_number).trim())) e.account_number = 'Digits only';

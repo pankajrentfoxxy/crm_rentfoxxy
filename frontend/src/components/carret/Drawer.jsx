@@ -4,6 +4,12 @@ import React, { useEffect, useRef, useCallback } from 'react';
 function useDialogBehaviour(open, onClose) {
   const ref = useRef(null);
   const returnTo = useRef(null);
+  // Callers pass an inline onClose, which is a new function every render. If
+  // the effect depended on it, every keystroke in the dialog would re-run it:
+  // focus jumped back to the opener and then to the first button, so a text
+  // field lost the cursor after each character. Read it through a ref instead.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -16,7 +22,7 @@ function useDialogBehaviour(open, onClose) {
     focusables()[0]?.focus() ?? node?.focus();
 
     const onKey = (e) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); return; }
+      if (e.key === 'Escape') { e.stopPropagation(); onCloseRef.current?.(); return; }
       if (e.key !== 'Tab') return;
       const items = focusables();
       if (!items.length) return;
@@ -33,7 +39,7 @@ function useDialogBehaviour(open, onClose) {
       // user lands back at the top of the document every time.
       if (returnTo.current?.focus) returnTo.current.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   return ref;
 }

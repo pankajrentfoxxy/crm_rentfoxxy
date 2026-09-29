@@ -62,6 +62,10 @@ export default function VendorFormPage() {
     setErrors((er) => { const n = { ...er }; delete n[k]; return n; });
   };
   const pick = (k) => (e) => setFiles((f) => ({ ...f, [k]: e.target.files?.[0] || null }));
+  // Phone fields take digits only, at most 10 — typing or pasting anything
+  // else is dropped instead of being accepted and failing on save.
+  const setDigits = (k) => (e) => set(k)(String(e.target.value || '').replace(/\D/g, '').slice(0, 10));
+  const phoneProps = (k) => ({ inputMode: 'numeric', maxLength: 10, onChange: setDigits(k), placeholder: '10-digit mobile' });
   const field = (k, label, props = {}, extra = {}) => (
     <Field label={label} error={errors[k]} required={extra.required} hint={extra.hint} span={extra.span}>
       <Input value={form[k] ?? ''} onChange={set(k)} {...props} />
@@ -135,7 +139,7 @@ export default function VendorFormPage() {
                 <Select value={form.business_type} onChange={set('business_type')} placeholder="Pick one" options={BUSINESS_TYPES} />
               </Field>
               {field('email', 'Email', { type: 'email' }, { required: true, hint: 'Also the vendor portal login' })}
-              {field('number', 'Phone', { inputMode: 'numeric', maxLength: 13 }, { required: true })}
+              {field('number', 'Phone', phoneProps('number'), { required: true })}
               {isEdit ? (
                 <Field label="Status">
                   <Select value={form.status} onChange={set('status')} options={VENDOR_STATUSES.map((s) => ({ value: s.key, label: s.label }))} />
@@ -147,8 +151,8 @@ export default function VendorFormPage() {
           <Section title="Contact person">
             <FormGrid cols={3}>
               {field('contact_person_name', 'Name')}
-              {field('contact_person_phone', 'Phone', { inputMode: 'numeric', maxLength: 13 })}
-              {field('alternate_phone', 'Alternate phone', { inputMode: 'numeric', maxLength: 13 })}
+              {field('contact_person_phone', 'Phone', phoneProps('contact_person_phone'))}
+              {field('alternate_phone', 'Alternate phone', phoneProps('alternate_phone'))}
             </FormGrid>
           </Section>
 
@@ -184,7 +188,7 @@ export default function VendorFormPage() {
             <FormGrid cols={3}>
               {field('gst_number', 'GSTIN', { style: { textTransform: 'uppercase' }, maxLength: 15 }, { hint: 'Leave empty if the vendor is not GST-registered' })}
               {field('pan_number', 'PAN', { style: { textTransform: 'uppercase' }, maxLength: 10, disabled: bankHidden })}
-              {field('msme_number', 'MSME / Udyam number')}
+              {field('msme_number', 'MSME / Udyam number', { style: { textTransform: 'uppercase' }, maxLength: 19, placeholder: 'UDYAM-UP-01-0012345' }, { hint: 'Leave empty if the vendor is not MSME-registered' })}
               <Field label="GST certificate" hint={original?.gst_certificate_url ? 'A certificate is on file — choose a file to replace it' : 'PDF or image'}>
                 <Input type="file" accept=".pdf,image/*" onChange={pick('gst_certificate')} />
               </Field>

@@ -137,6 +137,22 @@ async function listVendors(req, res) {
   });
 }
 
+/**
+ * Vendor phones are exactly 10 digits. Only a +91 / 91 / 0 prefix in front of
+ * ten digits is stripped; anything longer is left as typed so the 10-digit
+ * check fails, instead of silently keeping the last ten digits.
+ */
+function strictVendorMobile(value) {
+  const d = String(value ?? '').replace(/[\s\-()]/g, '');
+  if (/^\+?91\d{10}$/.test(d)) return d.slice(-10);
+  if (/^0\d{10}$/.test(d)) return d.slice(1);
+  return d;
+}
+
+/** Udyam registration (UDYAM-UP-01-0012345) or the older Udyog Aadhaar (UP01A0012345). */
+const UDYAM_RE = /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/;
+const UAM_RE = /^[A-Z]{2}\d{2}[A-Z]\d{7}$/;
+
 function extendedVendorValidators() {
   return [
     body('po_payment_terms')
@@ -144,16 +160,17 @@ function extendedVendorValidators() {
       .isIn(['postpaid_monthly', 'net30', 'net15', 'advance']),
     body('credit_days').optional({ checkFalsy: true }).isInt({ min: 0, max: 365 }),
     body('pan_number').optional({ checkFalsy: true }).isString().isLength({ max: 20 }),
-    body('msme_number').optional({ checkFalsy: true }).isString().isLength({ max: 50 }),
+    body('msme_number').optional({ checkFalsy: true }).isString().trim().toUpperCase().isLength({ max: 19 })
+      .withMessage('MSME / Udyam number is at most 19 characters (UDYAM-UP-01-0012345)'),
     body('contact_person_name').optional({ checkFalsy: true }).isString().isLength({ max: 255 }),
     body('contact_person_phone')
       .optional({ checkFalsy: true })
-      .customSanitizer(normalizeIndianMobile)
+      .customSanitizer(strictVendorMobile)
       .matches(/^\d{10}$/)
       .withMessage('Contact phone must be exactly 10 digits'),
     body('alternate_phone')
       .optional({ checkFalsy: true })
-      .customSanitizer(normalizeIndianMobile)
+      .customSanitizer(strictVendorMobile)
       .matches(/^\d{10}$/)
       .withMessage('Alternate phone must be exactly 10 digits'),
     body('city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
@@ -296,6 +313,9 @@ async function vendorIdProblems(body, prev = null) {
   };
   if (changed('gst_number') && !GSTIN_RE.test(up(body.gst_number))) problems.push('GSTIN is not in the 15-character GST format (e.g. 06AAHCT0310N1ZG).');
   if (changed('pan_number') && !PAN_RE.test(up(body.pan_number))) problems.push('PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F).');
+  if (changed('msme_number') && !UDYAM_RE.test(up(body.msme_number)) && !UAM_RE.test(up(body.msme_number))) {
+    problems.push('MSME / Udyam number must look like UDYAM-UP-01-0012345 (or the old Udyog Aadhaar UP01A0012345).');
+  }
   if (changed('bank_ifsc_code') && !IFSC_RE.test(up(body.bank_ifsc_code))) problems.push('IFSC must be 4 letters, 0, then 6 letters or digits (e.g. HDFC0001234).');
   if (changed('gst_number')) {
     const dup = await pool.query(
@@ -334,7 +354,7 @@ function createValidators() {
     body('email').trim().notEmpty().isEmail(),
     body('password').notEmpty().isLength({ min: 8, max: 256 }),
     body('number')
-      .customSanitizer(normalizeIndianMobile)
+      .customSanitizer(strictVendorMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)
@@ -517,7 +537,7 @@ function updateValidatorsFixed() {
     body('business_name').trim().notEmpty().isLength({ min: 1, max: 255 }),
     body('email').trim().notEmpty().isEmail(),
     body('number')
-      .customSanitizer(normalizeIndianMobile)
+      .customSanitizer(strictVendorMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)
