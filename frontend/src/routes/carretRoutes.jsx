@@ -1,6 +1,13 @@
 import React from 'react';
+import { Navigate } from 'react-router-dom';
 import ProtectedRoute from '../router/ProtectedRoute';
 import { FLOOR_TICKETS_BASE_SECTIONS } from '../features/floor-pipeline/floorPipelineAccess';
+import { dashboardRoutes } from './carret/dashboardRoutes';
+import { moneyVendorRoutes } from './carret/moneyVendorRoutes';
+import { gstDocsRoutes } from './carret/gstDocsRoutes';
+import { stockSetupRoutes } from './carret/stockSetupRoutes';
+import { movementSellControlRoutes, VENDOR_RETURNS_SECTIONS } from './carret/movementSellControlRoutes';
+import { moneyCustomerRoutes } from './carret/moneyCustomerRoutes';
 import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
 
 /**
@@ -16,7 +23,6 @@ import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
  */
 const AssetRecordPage = React.lazy(() => import('../features/carret/AssetRecordPage'));
 const AssetsListPage = React.lazy(() => import('../features/carret/AssetsListPage'));
-const NewUiHomePage = React.lazy(() => import('../features/carret/NewUiHomePage'));
 const ReadyStockPage = React.lazy(() => import('../features/carret/stock/ReadyStockPage'));
 const NotEarningPage = React.lazy(() => import('../features/carret/stock/NotEarningPage'));
 const ScrapPage = React.lazy(() => import('../features/carret/stock/ScrapPage'));
@@ -25,7 +31,6 @@ const CustomerRecordPage = React.lazy(() => import('../features/carret/sell/cust
 const ReturnChallansPage = React.lazy(() => import('../features/carret/move/ReturnChallansPage'));
 const CustomerReturnChallanPage = React.lazy(() => import('../features/carret/move/ReturnChallanRecordPage'));
 const DamageChargesPage = React.lazy(() => import('../features/carret/serve/DamageChargesPage'));
-const OperationsOverviewPage = React.lazy(() => import('../features/carret/OperationsOverviewPage'));
 const GuardGatePage = React.lazy(() => import('../features/carret/GuardGatePage'));
 const ChallansPage = React.lazy(() => import('../features/carret/ChallansPage'));
 const SellListPage = React.lazy(() => import('../features/carret/SellListPage'));
@@ -120,9 +125,8 @@ const guard = (section, action, node) => (
 
 export const carretRoutes = CARRET_ENABLED
   ? [
-      { path: '/carret', element: guard('dashboard', 'view', <OperationsOverviewPage />) },
-      // The old sidebar's one "New UI" entry; sends each user to a screen they can open.
-      { path: '/carret/home', element: <React.Suspense fallback={null}><NewUiHomePage /></React.Suspense> },
+      // /carret and /carret/home: the Today dashboard (routes/carret/dashboardRoutes.jsx,
+      // 29 Sep 2026) replaces Operations and the old home redirect.
       { path: '/carret/stock/assets', element: guard('inventory_management', 'view', <AssetsListPage />) },
       { path: '/carret/stock/assets/:ttspl', element: guard('inventory_management', 'view', <AssetRecordPage />) },
       // Stock (claude/carret-stock.md): ready stock with tag + slot, not earning, scrap.
@@ -188,7 +192,9 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/procure/spare-parts-orders/:spoId', element: guardAny(['vendor_management', 'parts_procurement'], 'view', <SparePoRecordPage />) },
       // One area for everything going back to a vendor (step 6). The two old
       // Carret list paths open it too.
-      { path: '/carret/procure/returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
+      // Vendor Returns is the one place for return / repair documents (29 Sep): every
+      // section here is one an API behind one of its tabs already accepts.
+      { path: '/carret/procure/returns', element: guardAny(VENDOR_RETURNS_SECTIONS, 'view', <VendorReturnsPage />) },
       // Serve — the support technician's phone (claude/carret-support.md step 3)
       { path: '/carret/serve/my-work', element: guard('support_tickets', 'view', <ServeMyWorkPage />) },
       { path: '/carret/serve/job/:itemId', element: guard('support_tickets', 'view', <ServeJobPage />) },
@@ -214,7 +220,7 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/procure/return-requests/:ticketNumber', element: guardAny(['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'], 'view', <ReturnRequestRecordPage />) },
       { path: '/carret/procure/returns/:dcNumber', element: guardAny(['vendor_return_to_vendor', 'vendor_management'], 'view', <ReturnChallanRecordPage />) },
       { path: '/carret/procure/vendor-returns', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
-      { path: '/carret/procure/vendor-repair', element: guardAny(['vendor_return_to_vendor', 'vendor_management', 'vendor_repair_dc', 'vendor_return_ticket'], 'view', <VendorReturnsPage />) },
+      { path: '/carret/procure/vendor-repair', element: <Navigate to="/carret/procure/returns?tab=repairs" replace /> },
 
       // The six stage views are ONE screen with the stage as a filter, for the
       // same reason the entity split is a filter: a laptop moving from QC1 to
@@ -245,6 +251,13 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/control/user-permissions', element: guardControl(ACCESS.userPermsView, <ControlUserPermissionsPage />) },
       { path: '/carret/control/user-permissions/:userId', element: guardControl(ACCESS.userPermsView, <ControlUserPermissionsPage />) },
       { path: '/carret/control/audit-log', element: guardControl(ACCESS.auditView, <ControlAuditLogPage />) },
+      // Remaining build (claude/carret-remaining-build.md, 29 Sep 2026).
+      ...dashboardRoutes,
+      ...moneyCustomerRoutes,
+      ...moneyVendorRoutes,
+      ...gstDocsRoutes,
+      ...stockSetupRoutes,
+      ...movementSellControlRoutes,
     ]
   : [];
 
