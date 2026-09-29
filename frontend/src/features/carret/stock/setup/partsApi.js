@@ -4,6 +4,8 @@
  * routes/partRequests.js, routes/partVendorRepair.js); nothing new.
  */
 import api from '../../../../utils/api';
+import { CATALOGUE_PART_CATEGORIES } from '../../../../constants/laptopConditions';
+import { kindLabel, kindSchema } from '../../../../constants/partNaming';
 
 export {
   listPartInstances, addPartInstances, updatePartInstance,
@@ -28,21 +30,34 @@ export const saveFitmentSettings = (enforcement) => api.put('/parts/fitment-sett
 
 export const errMsg = (e, fallback = 'That did not work.') => e?.response?.data?.message || e?.message || fallback;
 
-/** Same list as backend constants/laptopConditions PART_CATEGORIES. */
-export const PART_CATEGORIES = [
-  { value: 'ram', label: 'RAM' },
-  { value: 'storage', label: 'Storage / SSD' },
-  { value: 'display', label: 'Display' },
-  { value: 'battery', label: 'Battery' },
-  { value: 'keyboard', label: 'Keyboard' },
-  { value: 'motherboard', label: 'Motherboard / Chip level' },
-  { value: 'cooling', label: 'Cooling / Thermal' },
-  { value: 'power', label: 'Power / Charger' },
-  { value: 'body', label: 'Body / Casing' },
-  { value: 'general', label: 'General / Other' },
-];
+/**
+ * Catalogue categories — backend constants/laptopConditions
+ * CATALOGUE_PART_CATEGORIES (the GRN missing-part list plus consumables,
+ * tools and accessories).
+ */
+export const PART_CATEGORIES = CATALOGUE_PART_CATEGORIES;
 export const CATEGORY_LABEL = Object.fromEntries(PART_CATEGORIES.map((c) => [c.value, c.label]));
-export const partCategory = (p) => String(p?.category || p?.part_type || 'general').toLowerCase();
+/** A part's category. part_type holds the kind (ram, ssd, d_panel…), so it only stands in when it is a category. */
+export const partCategory = (p) => {
+  const c = String(p?.category || '').toLowerCase();
+  if (CATEGORY_LABEL[c]) return c;
+  const t = String(p?.part_type || '').toLowerCase();
+  return CATEGORY_LABEL[t] ? t : (c || 'general');
+};
+
+/** Kind label ("RAM module", "D panel — base / bottom") or '' for a part added before the naming redesign. */
+export const partKindLabel = (p) => (kindSchema(partCategory(p), p?.part_type) ? kindLabel(partCategory(p), p.part_type) : '');
+
+/** "8 GB · DDR4 · SODIMM" — the spec values in field order. */
+export function partSpecsText(p) {
+  const k = kindSchema(partCategory(p), p?.part_type);
+  const specs = p?.specs && typeof p.specs === 'object' ? p.specs : {};
+  if (!k) return '';
+  return (k.fields || []).map((f) => specs[f.key]).filter(Boolean).join(' · ');
+}
+
+/** Has the part been given a structure (category + kind + specs + fits)? */
+export const isStructured = (p) => Boolean(p?.spec_key);
 
 /**
  * Part-unit statuses are not laptop states, so each borrows the document tone

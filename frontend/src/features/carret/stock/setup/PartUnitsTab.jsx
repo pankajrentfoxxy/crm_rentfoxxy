@@ -9,6 +9,7 @@ import { UnitStatus } from './PartRecordDrawer';
 import {
   CATEGORY_LABEL, UNIT_STATUS_OPTIONS, errMsg, fitsSummary, listPartInstances, partCategory,
 } from './partsApi';
+import PartName from './PartName';
 
 const LIMIT = 500;
 
@@ -69,7 +70,7 @@ export default function PartUnitsTab({ onOpenPart, onPrint, refreshKey }) {
       ) : null),
     },
     { key: 'prt', header: 'Part ID', render: (r) => <DocNumber value={r.prt_id} />, sub: (r) => r.serial_number || 'no serial' },
-    { key: 'part', header: 'Part', render: (r) => r.part_name, sub: (r) => CATEGORY_LABEL[partCategory(r)] || r.category },
+    { key: 'part', header: 'Part', render: (r) => <PartName name={r.part_name} category={partCategory(r)} /> },
     { key: 'fits', header: 'Fits', render: (r) => fitsSummary(r), sub: (r) => (r.brand_name ? `part brand ${r.brand_name}` : null) },
     { key: 'st', header: 'State', render: (r) => <UnitStatus status={r.status} /> },
     {

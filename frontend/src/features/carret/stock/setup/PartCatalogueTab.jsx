@@ -4,8 +4,10 @@ import {
   DataTable, EmptyState, Field, FilterBar, Money, Notice, Panel, Section, Select, StatTile,
 } from '../../../../components/carret';
 import {
-  CATEGORY_LABEL, PART_CATEGORIES, errMsg, fetchFitmentSettings, fitsSummary, partCategory, saveFitmentSettings,
+  PART_CATEGORIES, errMsg, fetchFitmentSettings, fitsSummary, isStructured, partCategory, partKindLabel, partSpecsText, saveFitmentSettings,
 } from './partsApi';
+import PartName from './PartName';
+import { matchesPartSearch } from '../../../../constants/partNaming';
 
 /** Stock of a part: tracked parts count their in-stock units; consumables their count. */
 export const partStock = (p) => (p.is_consumable ? Number(p.quantity) || 0 : Number(p.in_stock_count) || 0);
@@ -56,12 +58,14 @@ export default function PartCatalogueTab({ parts, loading, onOpenPart, canEditPa
   const value = live.reduce((s, p) => s + partStock(p) * (Number(p.cost) || 0), 0);
 
   const rows = useMemo(() => {
-    const q = (filters.search || '').trim().toLowerCase();
+    const q = (filters.search || '').trim();
     return live.filter((p) => {
       const st = partStock(p);
-      if (q && ![p.part_name, p.default_brand, p.default_model, p.model_number, p.part_sku, p.description, p.pin_size]
-        .some((v) => String(v || '').toLowerCase().includes(q))) return false;
+      // Every word, anywhere in the name, category, kind, details, fits or old name.
+      if (q && !matchesPartSearch({ ...p, category: partCategory(p) }, q)) return false;
       if (filters.category && partCategory(p) !== filters.category) return false;
+      if (filters.naming === 'done' && !isStructured(p)) return false;
+      if (filters.naming === 'todo' && isStructured(p)) return false;
       if (filters.brand && p.default_brand !== filters.brand) return false;
       if (filters.model && p.default_model !== filters.model) return false;
       if (filters.stock === 'ok' && st < threshold(p)) return false;
@@ -72,16 +76,24 @@ export default function PartCatalogueTab({ parts, loading, onOpenPart, canEditPa
   }, [live, filters]);
 
   const filterDefs = [
-    { key: 'search', type: 'search', label: 'Search', placeholder: 'Part, model number, SKU, brand, pin size' },
+    { key: 'search', type: 'search', label: 'Search', placeholder: 'e.g. 8gb ddr4, battery 5420, d panel 7490' },
     { key: 'category', label: 'Category', options: PART_CATEGORIES },
+    { key: 'naming', label: 'Name', options: [{ value: 'done', label: 'Generated from its details' }, { value: 'todo', label: 'Old name — needs its details' }] },
     { key: 'brand', label: 'Brand', options: brands.map((b) => ({ value: b, label: b })) },
     { key: 'model', label: 'Model', options: models.map((m) => ({ value: m, label: m })) },
     { key: 'stock', label: 'Stock', options: [{ value: 'ok', label: 'At or above minimum' }, { value: 'low', label: 'Low' }, { value: 'out', label: 'Out' }] },
   ];
 
   const cols = [
-    { key: 'n', header: 'Part', render: (p) => p.part_name, sub: (p) => [p.model_number, p.pin_size, p.description].filter(Boolean).join(' · ') || null },
-    { key: 'c', header: 'Category', render: (p) => CATEGORY_LABEL[partCategory(p)] || p.category, sub: (p) => (p.part_type && p.part_type !== partCategory(p) ? p.part_type : null) },
+    {
+      key: 'n',
+      header: 'Part',
+      render: (p) => <PartName name={p.part_name} category={partCategory(p)} />,
+      sub: (p) => (isStructured(p)
+        ? [partKindLabel(p), p.model_number && `P/N ${p.model_number}`, p.pin_size].filter(Boolean).join(' · ') || null
+        : `Old name — edit to set its details${p.description && p.description !== p.part_name ? ` · ${p.description}` : ''}`),
+    },
+    { key: 'c', header: 'Details', render: (p) => partSpecsText(p) || '—' },
     { key: 'b', header: 'Brand / model', render: (p) => [p.default_brand, p.default_model].filter(Boolean).join(' · ') || '—' },
     { key: 'f', header: 'Default fitment', render: (p) => fitsSummary(p) },
     {

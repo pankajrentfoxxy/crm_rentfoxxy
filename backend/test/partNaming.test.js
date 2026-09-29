@@ -254,6 +254,14 @@ describe('parts API — structure enforced (rolled back)', () => {
     assert.equal(r.body.part_id, a.body.part.part_id);
   });
 
+  it('battery model number + photo: a laptop battery yes, a CMOS battery / connector no, old names as before', () => {
+    const { isBatteryPart } = partCtrl;
+    assert.equal(isBatteryPart({ category: 'battery', part_type: 'battery', part_name: 'Battery · Dell Latitude 5420' }), true);
+    assert.equal(isBatteryPart({ category: 'battery', part_type: 'cmos_battery', part_name: 'CMOS Battery' }), false);
+    assert.equal(isBatteryPart({ category: 'battery', part_type: 'battery_connector', part_name: 'Battery Connector' }), false);
+    assert.equal(isBatteryPart({ category: 'general', part_type: 'general', part_name: 'Laptop Battery' }), true);
+  });
+
   it('search finds a part by any words of its structure', async () => {
     await h.call(partCtrl.createPart, { user, body: { category: 'ram', kind: 'ram', specs: { capacity: '64 GB', ram_type: 'LPDDR5', form: 'SODIMM' }, name_override: true, part_name: `${tag} big ram` } });
     const r = await h.call(partCtrl.getAllParts, { user, query: { search: '64gb lpddr5', limit: 50 } });

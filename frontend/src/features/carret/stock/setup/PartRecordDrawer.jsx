@@ -7,7 +7,7 @@ import {
 } from '../../../../components/carret';
 import FitmentPicker from './FitmentPicker';
 import {
-  CATEGORY_LABEL, UNIT_STATUS, adjustPartCount, bulkUpdatePartInstanceFitment, createPartVendorReturnDc, errMsg,
+  CATEGORY_LABEL, UNIT_STATUS, adjustPartCount, isStructured, partKindLabel, partSpecsText, bulkUpdatePartInstanceFitment, createPartVendorReturnDc, errMsg,
   fetchPartUsage, fitmentFromUnit, fitsSummary, listPartInstances, partCategory, updatePartInstance,
   updatePartInstanceFitment,
 } from './partsApi';
@@ -249,12 +249,14 @@ export default function PartRecordDrawer({
           cols={4}
           items={[
             { label: 'Category', value: CATEGORY_LABEL[partCategory(part)] || part.category },
-            { label: 'Part type', value: part.part_type },
-            { label: 'Model number', value: part.model_number },
-            { label: 'Pin size', value: part.pin_size },
+            { label: 'What it is', value: partKindLabel(part) || 'Not set (old name)' },
+            { label: 'Details', value: partSpecsText(part) || part.description },
+            { label: 'Fits laptops', value: fitsSummary(part) },
+            { label: 'Part number', value: part.model_number },
+            { label: 'Pin / connector', value: part.pin_size },
             { label: 'SKU', value: part.part_sku },
-            { label: 'Specifications', value: part.description },
-            { label: 'Default fitment', value: fitsSummary(part) },
+            { label: 'Name', value: part.name_override ? 'Typed by hand' : isStructured(part) ? 'Generated from the details' : null },
+            { label: 'Was called', value: part.specs?._was && part.specs._was !== part.part_name ? part.specs._was : null },
             { label: 'Brand / model', value: [part.default_brand, part.default_model].filter(Boolean).join(' · ') },
             { label: 'Unit cost', value: <Money value={part.cost} /> },
             { label: 'Minimum stock', value: part.min_threshold },

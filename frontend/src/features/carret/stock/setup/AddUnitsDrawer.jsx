@@ -4,7 +4,9 @@ import {
   Button, Drawer, Field, FormGrid, Input, Notice, SearchSelect, Textarea,
 } from '../../../../components/carret';
 import FitmentPicker from './FitmentPicker';
-import { addPartInstances, errMsg, fitsSummary, splitSerials } from './partsApi';
+import {
+  CATEGORY_LABEL, addPartInstances, errMsg, fitsSummary, partCategory, splitSerials,
+} from './partsApi';
 
 const blankFit = () => ({ fitment: 'unset', fits_laptop_brand: null, fits_laptop_models: [] });
 
@@ -32,8 +34,8 @@ export default function AddUnitsDrawer({ open, part, parts = [], onClose, onAdde
   const chosen = useMemo(() => part || parts.find((p) => String(p.part_id) === String(partId)) || null, [part, parts, partId]);
   const partOptions = useMemo(() => parts.filter((p) => !p.archived).map((p) => ({
     value: String(p.part_id),
-    label: p.part_name,
-    search: [p.model_number, p.part_sku, p.category].filter(Boolean).join(' '),
+    label: `${p.part_name} — ${CATEGORY_LABEL[partCategory(p)] || p.category}`,
+    search: [p.model_number, p.part_sku, p.part_type, ...Object.values(p.specs || {}), ...(p.compatible_models || [])].filter(Boolean).join(' '),
   })), [parts]);
 
   const list = splitSerials(serials);

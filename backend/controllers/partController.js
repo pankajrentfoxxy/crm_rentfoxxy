@@ -4,6 +4,11 @@ const { normalizePartStructure } = require('../constants/partNaming');
 const { CATALOGUE_PART_CATEGORY_VALUES } = require('../constants/laptopConditions');
 
 function isBatteryPart(part) {
+  // Structured parts (part naming redesign): only a laptop battery, not a CMOS
+  // battery or a battery connector, needs the battery model number + photo.
+  const kind = String(part?.part_type || '').toLowerCase().trim();
+  if (String(part?.category || '').toLowerCase().trim() === 'battery'
+    && ['battery', 'cmos_battery', 'battery_connector'].includes(kind)) return kind === 'battery';
   const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
   const name = String(part?.part_name || '').toLowerCase();
   return cat === 'battery' || cat.includes('battery') || name.includes('battery');
