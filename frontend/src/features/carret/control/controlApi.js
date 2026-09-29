@@ -29,3 +29,16 @@ export const createUser = (body) => api.post('/auth/register', body);
 export const updateUser = (id, body) => api.put(`/auth/users/${id}`, body);
 export const setUserStatus = (id, status, reason) => api.patch(`/auth/users/${id}/status`, { status, reason });
 export const resetUserPassword = (id, newPassword) => api.post(`/auth/users/${id}/reset-password`, newPassword ? { new_password: newPassword } : {});
+
+// Teams (GET /api/teams — the floor teams; members include extra teams)
+export const fetchTeamList = () => api.get('/teams');
+export const fetchTeamMembers = (teamId) => api.get(`/teams/${teamId}/members`);
+
+// Company / entity settings (company_settings: view to read, edit to save)
+export const fetchCompanies = () => api.get('/companies');
+export const saveCompany = (code, body) => api.put(`/companies/${encodeURIComponent(code)}`, body);
+
+// Reports (each GET guarded by its own report_* section; see reportsCatalog.js)
+export const reportGet = (path, params) => api.get(path, { params });
+export const reportBlob = (path, params) => api.get(path, { params, responseType: 'blob' });
+export const reportExcel = (reportType, filters) => api.post('/reports/export', { report_type: reportType, filters }, { responseType: 'blob' });

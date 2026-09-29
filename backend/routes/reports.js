@@ -8,27 +8,10 @@ const any = checkAnySectionPermission;
 
 const productionQcView = any(['production_qc_report', 'qc_management'], 'view');
 
-const EXPORT_TYPE_SECTION = {
-  revenue: 'report_revenue',
-  inventory: 'report_inventory',
-  lead_conversion: 'report_lead_conversion',
-  salesperson: 'report_salesperson',
-  collections: 'report_collections',
-  vendor_spend: 'report_vendor_spend',
-  laptop: 'report_laptop',
-  warehouse_laptops: 'report_warehouse_laptops',
-  sales_order: 'report_sales_order',
-  support_daily: 'report_support_daily',
-  inward_outward: 'report_inward_outward',
-};
+// report_type → the report's own section (or reports_export). See utils/reportExportSections.js.
+const { sectionsForExport } = require('../utils/reportExportSections');
 
-const exportView = (req, res, next) => {
-  const reportType = req.body?.report_type;
-  const section = EXPORT_TYPE_SECTION[reportType];
-  const sections = ['reports_export'];
-  if (section) sections.unshift(section);
-  return any(sections, 'view')(req, res, next);
-};
+const exportView = (req, res, next) => any(sectionsForExport(req.body?.report_type), 'view')(req, res, next);
 
 router.get('/technician-performance', authMiddleware, cp('report_laptop', 'view'), reportsController.getTechnicianPerformance);
 router.get('/revenue', authMiddleware, cp('report_revenue', 'view'), reportsController.getRevenueReport);
