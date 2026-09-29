@@ -1487,8 +1487,7 @@ exports.getWarehouseQueue = async (req, res) => {
     await ensurePartsSpecColumns(pool);
     const result = await pool.query(
       `${FULL_SELECT} WHERE pr.status = ANY($1::text[]) AND ${FLOOR_ONLY}
-        ORDER BY CASE pr.status WHEN 'pending' THEN 0 WHEN 'received' THEN 1 WHEN 'ordered' THEN 2 ELSE 3 END,
-                 pr.created_at ASC`,
+        ORDER BY pr.created_at DESC`,
       [WAREHOUSE_QUEUE_STATUSES]
     );
     res.json({ success: true, requests: result.rows });

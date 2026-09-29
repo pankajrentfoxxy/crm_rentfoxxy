@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Notice, Section, Select, StatusChip, Tabs, Textarea,
+  Button, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, FilterBar, Input, Notice, Section, Segmented, Select, StatusChip, Tabs, Textarea,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
@@ -33,6 +33,8 @@ export default function PartsDeskPage() {
   const [act, setAct] = useState(null); // { kind, row }
   const [form, setForm] = useState({});
   const [units, setUnits] = useState([]);
+  const [search, setSearch] = useState('');
+  const [order, setOrder] = useState('newest');
 
   const load = useCallback(() => {
     setRows(null);
@@ -42,6 +44,20 @@ export default function PartsDeskPage() {
       .catch((e) => { setRows([]); toast.error(errMsg(e, 'Could not load')); });
   }, [tab]);
   useEffect(() => { load(); }, [load]);
+
+  // Newest first by default; search matches every typed word in any column.
+  const shown = useMemo(() => {
+    if (!rows) return rows;
+    const when = (r) => new Date(r.created_at || r.removed_at || 0).getTime();
+    const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+    const hay = (r) => [
+      r.request_number, r.part_name, r.category, r.ttspl_id, r.laptop_serial_number, r.serial_number, r.brand, r.model,
+      r.requester_name, r.technician_name, r.prt_id, r.stage_name, r.status,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return rows
+      .filter((r) => words.every((w) => hay(r).includes(w)))
+      .sort((a, b) => (order === 'newest' ? when(b) - when(a) : when(a) - when(b)));
+  }, [rows, search, order]);
 
   const open = async (kind, row) => {
     setAct({ kind, row });
@@ -104,15 +120,23 @@ export default function PartsDeskPage() {
   return (
     <DeskShell title="Parts desk" breadcrumb="Production" subtitle="Part requests from the floor, and old parts coming back.">
       <div className="c-stack">
-        <Tabs value={tab} onChange={setTab} tabs={[{ key: 'requests', label: 'Requests from the floor' }, { key: 'old', label: 'Old parts to collect' }]} />
+        <Tabs value={tab} onChange={(v) => { setTab(v); setSearch(''); }} tabs={[{ key: 'requests', label: 'Requests from the floor' }, { key: 'old', label: 'Old parts to collect' }]} />
+        <FilterBar
+          filters={[{ key: 'search', label: 'Search', type: 'search', placeholder: tab === 'requests' ? 'Request, part, TTSPL, serial, model or technician' : 'PRT, part, TTSPL or technician' }]}
+          values={{ search }}
+          onChange={(k, v) => setSearch(v)}
+          onClear={() => setSearch('')}
+          count={rows ? `${shown.length}${search ? ` of ${rows.length}` : ''} ${tab === 'requests' ? 'requests' : 'parts'}` : null}
+          right={<Segmented options={[{ value: 'newest', label: 'Newest first' }, { value: 'oldest', label: 'Oldest first' }]} value={order} onChange={setOrder} label="Order" />}
+        />
         <Section title={tab === 'requests' ? 'Waiting for a part' : 'Taken off laptops — confirm you have them'}>
           {rows === null ? <EmptyState title="Loading…" /> : (
             <DataTable
               columns={tab === 'requests' ? reqCols : oldCols}
-              rows={rows}
+              rows={shown}
               rowKey={(r) => r.request_id || r.instance_id}
               onRowClick={tab === 'requests' ? (r) => r.ticket_id && navigate(`/carret/produce/tickets/${r.ticket_id}`) : undefined}
-              empty={<EmptyState title={tab === 'requests' ? 'No part is waiting' : 'Nothing to collect'} />}
+              empty={<EmptyState title={search ? 'Nothing matches the search' : tab === 'requests' ? 'No part is waiting' : 'Nothing to collect'} />}
             />
           )}
           {tab === 'requests' && <p className="text-ink-3" style={{ marginTop: '8px' }}>Parts sent to procurement are on Procure → To buy.</p>}
