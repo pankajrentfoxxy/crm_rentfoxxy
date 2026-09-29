@@ -32,8 +32,10 @@ the new interface with its own menu; "Old UI" in the new header goes back.
    return challans + RDC record with warehouse receive (rent stops there), damage charges,
    account closure + deposit refund; also Sell → Customers (auto tag, record with rented /
    returned / purchased). Control (roles & permissions) in progress. Waiting: click-through.
-8. **Money** — vendor bills, credit / debit notes, security deposits, payments, DC / sale /
-   e-invoice queues, e-way bills. (New UI has invoices, ageing and support charges only.)
+8. **Money** — BUILT on QA 29 Sep (`claude/carret-remaining-build.md`, decisions MD1–MD8 to confirm):
+   customer invoices (record payment, cancel), payments received / to vendors, credit notes, security
+   deposits, delivery charges, vendor bills (GST split, cancel), debit notes (set amount / cancel), one
+   invoice & e-way queue, e-way register. Migrations 363, 369, 375 applied on QA — run on live at promotion.
 9. **Stock** — BUILT on QA 27 Sep (`claude/carret-stock.md`): assets, ready stock (tag + slot),
    not earning, scrap (request → approve → challan). asset_available = QC-passed (354, done).
    Clean-up applied on QA 27 Sep by the user (398 rows, backup
@@ -44,7 +46,8 @@ the new interface with its own menu; "Old UI" in the new header goes back.
     "Chargers to hand over" list; no handover without laptop / SO / requester — backend
     refuses too), Orders to accept (pending dispatch), Delivery technicians, Part inward (old
     link was broken), Dispatch QC → new floor board. Waiting: click-through.
-11. **Daily dashboard + snapshot** — the day's counts, rentals, sales.
+11. **Daily dashboard + snapshot** — BUILT 29 Sep: Today at /carret/home (replaces Overview, Billing
+    dashboard, Operations), past-day snapshot.
 12. **Hide the old screens** — DONE 29 Sep for the new UI menu: every "Old view" group removed so teams
     test only the new screens (old screens stay routed, reachable from the Old UI sidebar). Kept:
     "Parts Catalogue" (old Parts page — only place to add parts / units / print labels) until rebuilt.
