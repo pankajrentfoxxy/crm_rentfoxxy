@@ -50,7 +50,7 @@ export function ewayDocPath(r) {
   if (r.doc_type === 'dc' || r.doc_type === 'demo_dc') return `/carret/move/challans/${n}`;
   if (r.doc_type === 'vrtdc') return `/carret/procure/returns/${n}`;
   // Same target the Vendor returns → Repairs tab opens.
-  if (r.doc_type === 'vrdc') return `/vendor-management/vendor-repair-dc/${n}`;
+  if (r.doc_type === 'vrdc') return `/carret/procure/repairs/${n}`;
   return '/carret/stock/scrap';
 }
 

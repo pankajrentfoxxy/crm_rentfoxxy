@@ -91,7 +91,7 @@ export default function ReplacementApprovalsPage() {
       >
         {open ? (
           <div className="c-stack">
-            <p><strong>{open.row.vendor_name}</strong> · <Link to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(open.row.dc_number)}`}>{open.row.dc_number}</Link></p>
+            <p><strong>{open.row.vendor_name}</strong> · <Link to={`/carret/procure/repairs/${encodeURIComponent(open.row.dc_number)}`}>{open.row.dc_number}</Link></p>
             <p>We sent <span className="font-mono">{open.row.ttspl_id}</span> — {sent(open.row)} ({issueTypeLabel(open.row.issue_type)}: {open.row.item_remarks || '—'})</p>
             <p>They sent {got(open.row)} · serial <span className="font-mono">{open.row.replacement_proposed?.serial_number || '—'}</span></p>
             {(open.row.replacement_rejections || []).length ? <p className="text-ink-3">{open.row.replacement_rejections.length} earlier replacement(s) for this laptop were not accepted.</p> : null}

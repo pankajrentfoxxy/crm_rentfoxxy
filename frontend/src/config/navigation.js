@@ -158,27 +158,26 @@ export const SECTIONS = [
   {
     key: 'money',
     label: 'Finance',
+    // Finance rebuilt in the new UI (claude/carret-remaining-build.md, 29 Sep 2026).
+    // Every entry opens a new-UI page guarded by the section its API enforces;
+    // the old /customer-billing, /vendor-billing and /finance screens stay routed.
+    groups: ['Customers', 'Payments', 'Vendors', 'GST & e-way', 'Charges'],
     items: [
-      { to: '/finance/invoices', label: 'Customer Invoices', section: 'customer_billing', action: 'view' },
-      { to: '/finance/credit-notes', label: 'Credit Notes', section: 'credit_notes', action: 'view' },
-      { to: '/finance/security-deposits', label: 'Security Deposits', section: 'security_deposits', action: 'view' },
-      { to: '/finance/vendor-bills', label: 'Vendor Bills', section: 'vendor_billing_mgmt', action: 'view' },
-      { to: '/finance/debit-notes', label: 'Debit Notes', section: 'debit_notes', action: 'view' },
-      { to: '/finance/payments', label: 'Payments', section: 'payment_records', action: 'view' },
-      // Part 6.4, behind REACT_APP_CARRET. Beside the existing screens (hard
-      // rule 6). Ageing & Outstanding has no old counterpart at all — neither
-      // the buckets nor the due dates they rest on existed before Part 6.2.
-      { to: '/carret/money/invoices', label: 'Customer Invoices (Carret)', section: 'customer_billing', action: 'view' },
-      { to: '/carret/money/ageing', label: 'Ageing & Outstanding (Carret)', section: 'customer_billing', action: 'view' },
-      { to: '/carret/money/support-charges', label: 'Support Charges to Bill', section: 'customer_billing', action: 'view' },
-      { to: '/carret/serve/damage', label: 'Damage Charges', section: 'customer_billing', action: 'view' },
-      { to: '/carret/sell/early-returns', label: 'Early Returns (lock-in)', section: 'customer_billing', action: 'view' },
-      { to: '/carret/money/service-billing', label: 'Service Billing (gorefurbo)', section: 'customer_billing', action: 'view' },
-      { to: '/finance/dashboard', label: 'Billing Dashboard', section: 'billing_dashboard', action: 'view' },
-      { to: '/finance/dc-invoice', label: 'DC Invoice Queue', section: 'customer_billing', action: 'view' },
-      { to: '/finance/sale-invoice-queue', label: 'Sale Invoice Queue', section: 'customer_billing', action: 'view' },
-      { to: '/finance/einvoice-queue', label: 'E-invoice Queue', section: 'einvoice_ewb', action: 'view' },
-      { to: '/finance/eway-bills', label: 'E-way Bills', section: 'dc_eway_bill', action: 'view' },
+      { group: 'Customers', to: '/carret/money/invoices', label: 'Customer Invoices', section: 'customer_billing', action: 'view' },
+      { group: 'Customers', to: '/carret/money/credit-notes', label: 'Credit Notes', section: 'credit_notes', action: 'view' },
+      { group: 'Customers', to: '/carret/money/security-deposits', label: 'Security Deposits', section: 'security_deposits', action: 'view' },
+      { group: 'Customers', to: '/carret/money/ageing', label: 'Ageing & Outstanding', section: 'customer_billing', action: 'view' },
+      { group: 'Payments', to: '/carret/money/payments', label: 'Payments Received', section: 'customer_billing', action: 'view' },
+      { group: 'Payments', to: '/carret/money/vendor-payments', label: 'Payments to Vendors', section: 'vendor_billing_mgmt', action: 'view' },
+      { group: 'Vendors', to: '/carret/money/vendor-bills', label: 'Vendor Bills', section: 'vendor_billing_mgmt', action: 'view' },
+      { group: 'Vendors', to: '/carret/money/debit-notes', label: 'Debit Notes', section: 'debit_notes', action: 'view' },
+      { group: 'GST & e-way', to: '/carret/money/gst/queue', label: 'Invoice & E-way Queue', section: 'einvoice_ewb', action: 'view' },
+      { group: 'GST & e-way', to: '/carret/money/gst/eway-bills', label: 'E-way Bills', section: 'einvoice_ewb', action: 'view' },
+      { group: 'Charges', to: '/carret/money/support-charges', label: 'Support Charges to Bill', section: 'customer_billing', action: 'view' },
+      { group: 'Charges', to: '/carret/money/delivery-charges', label: 'Delivery Charges', section: 'customer_billing', action: 'view' },
+      { group: 'Charges', to: '/carret/serve/damage', label: 'Damage Charges', section: 'customer_billing', action: 'view' },
+      { group: 'Charges', to: '/carret/sell/early-returns', label: 'Early Returns (lock-in)', section: 'customer_billing', action: 'view' },
+      { group: 'Charges', to: '/carret/money/service-billing', label: 'Service Billing (gorefurbo)', section: 'customer_billing', action: 'view' },
     ],
   },
   {
@@ -226,6 +225,15 @@ export const UNREACHABLE_BY_DESIGN = [
   '/guard', '/guard/scanner', '/tickets', '/lead-crm/*',
   '/settings/users', '/settings/roles', '/settings/role-permissions', '/settings/user-permissions', '/settings/role-reference',
   '/customer-inventory', '/floor-pipeline/*',
+
+  // Old screens whose work moved to new-UI pages in the remaining build (29 Sep 2026):
+  // Finance, dashboards, vendor documents, parts, reports, teams, settings. Still
+  // routed and reached from the Old UI sidebar until signed off.
+  '/asset-configuration', '/finance/dc-invoice', '/finance/sale-invoice-queue', '/finance/einvoice-queue',
+  '/finance/*', '/sales-pipeline/demo', '/reports/*', '/dashboard', '/sales-pipeline/*', '/settings/companies',
+  '/support/*', '/support-parts/*', '/teams', '/vendor-management/*', '/inventory-management/*',
+  // New-UI aliases and create forms reached from their list pages.
+  '/carret', '/carret/money/credit-notes/new', '/carret/procure/repairs/new', '/carret/sell/sale-in-place/new',
 
   // Public, unauthenticated capture links (server.js mounts six families).
   '/', '/login', '/access', '/auth/impersonate',

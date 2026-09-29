@@ -17,10 +17,16 @@ function read(dir, filter) {
 /** Routed paths, with the (section, action) the route already declares. */
 function routedPaths() {
   const out = [];
-  for (const { file, text } of read(path.join(SRC, 'routes'), (f) => f.endsWith('.jsx'))) {
-    // Each entry is `{ path: '/x', element: ... }`; take the path and then look
-    // ahead in the same entry for guard('section','action') or section="x".
-    const re = /path:\s*'([^']+)'/g;
+  // routes/*.jsx plus routes/carret/*.jsx (the per-area files the new UI's
+  // remaining build added, 29 Sep 2026), some of which use entry('/path', …).
+  const files = [
+    ...read(path.join(SRC, 'routes'), (f) => f.endsWith('.jsx')),
+    ...read(path.join(SRC, 'routes/carret'), (f) => f.endsWith('.jsx')).map((x) => ({ ...x, file: `carret/${x.file}` })),
+  ];
+  for (const { file, text } of files) {
+    // Each entry is `{ path: '/x', element: ... }` or `entry('/x', …)`; take the
+    // path and then look ahead in the same entry for guard('section','action').
+    const re = /(?:path:\s*|entry\(\s*)'([^']+)'/g;
     let m;
     while ((m = re.exec(text))) {
       const tail = text.slice(m.index, m.index + 600);

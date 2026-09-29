@@ -237,7 +237,7 @@ export default function QuotationRecordPage() {
                   { label: 'Email', value: head.customer_email },
                   { label: 'GSTIN', value: head.gst_number && <DocNumber value={head.gst_number} /> },
                   { label: 'Place of supply', value: head.supply_state && String(head.supply_state).replace(/[_-]/g, ' ') },
-                  head.source_lead_id && { label: 'Lead', value: <Link to={`/lead-crm/leads/${head.source_lead_id}`}>#{head.source_lead_id}</Link> },
+                  head.source_lead_id && { label: 'Lead', value: <Link to={`/carret/sell/leads/${head.source_lead_id}`}>#{head.source_lead_id}</Link> },
                   head.status_updated_by_name && { label: 'Status set by', value: head.status_updated_by_name },
                 ]}
                 />

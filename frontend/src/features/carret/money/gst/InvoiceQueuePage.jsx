@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../../shells/DeskShell';
 import {
@@ -86,7 +86,9 @@ export default function InvoiceQueuePage() {
     .some(([s, a]) => hasPermission(s, a));
   const canAttachEway = user?.role === 'accounts' || hasPermission('dc_eway_bill', 'edit') || hasPermission('dc_eway_bill', 'create');
 
-  const [tab, setTab] = useState('dc');
+  // ?tab=dc|eway|sale|irn opens that tab (the Today dashboard links to IRN).
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(() => (['dc', 'eway', 'sale', 'irn'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'dc'));
   const [dcMode, setDcMode] = useState('pending');
   const [saleMode, setSaleMode] = useState('pending');
   const [filters, setFilters] = useState({});

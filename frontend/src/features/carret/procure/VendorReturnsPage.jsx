@@ -250,7 +250,7 @@ export default function VendorReturnsPage() {
     tickets: (r) => navigate(`/carret/procure/return-requests/${enc(r.ticket_number)}`),
     repairs: (r) => navigate(`/carret/procure/repairs/${enc(r.dc_number)}`),
     receive: (r) => navigate(`/carret/procure/repairs/${enc(r.dc_number)}`),
-    debit: () => navigate('/vendor-billing/debit-notes'),
+    debit: (r) => navigate(r.debit_note_id ? `/carret/money/debit-notes/${r.debit_note_id}` : '/carret/money/debit-notes'),
   }[tab];
 
   const statusOptions = STATUS_FILTERS[tab];

@@ -86,8 +86,8 @@ export default function ChallansPage({ movement = 'outbound' }) {
   ]), [isReturn]);
 
   const open = (r) => (isReturn
-    // Returns are the next process; until then the old list (with its drawer) is the record.
-    ? navigate('/sales-pipeline/return-dc')
+    // Customer return challans have their own new-UI record (Movement → Return Challans).
+    ? navigate(`/carret/move/return-challans/${encodeURIComponent(r.rdc_number || r.dc_number)}`)
     : navigate(`/carret/move/challans/${encodeURIComponent(r.dc_number)}`));
 
   return (

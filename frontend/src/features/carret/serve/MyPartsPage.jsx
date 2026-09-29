@@ -49,7 +49,7 @@ export default function MyPartsPage() {
                     <div style={{ fontWeight: 600 }}>{a.challan_number}</div>
                     <div className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{(a.items || []).map((i) => i.part_name).join(', ')} · {a.customer_name}</div>
                   </div>
-                  <Button variant="primary" onClick={() => navigate(`/support/challans/${a.challan_id}`)}>Sign</Button>
+                  <Button variant="primary" onClick={() => navigate(`/carret/serve/parts-challans/${a.challan_id}`)}>Sign</Button>
                 </div>
               ))}
             </Section>

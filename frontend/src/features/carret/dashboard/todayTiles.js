@@ -17,12 +17,12 @@ const FLOOR = ['floor_pipeline', 'floor_tickets'];
  */
 export const MONEY_LINKS = {
   invoices: '/carret/money/invoices',
-  payments: '/carret/money/invoices',
+  payments: '/carret/money/payments',
   ageing: '/carret/money/ageing',
-  vendorBills: '/vendor-billing/bills',
-  creditNotes: '/customer-billing/credit-notes',
-  debitNotes: '/vendor-billing/debit-notes',
-  einvoiceQueue: '/finance/einvoice-queue',
+  vendorBills: '/carret/money/vendor-bills',
+  creditNotes: '/carret/money/credit-notes',
+  debitNotes: '/carret/money/debit-notes',
+  einvoiceQueue: '/carret/money/gst/queue?tab=irn',
 };
 
 const q = (path, params) => {

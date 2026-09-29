@@ -158,7 +158,6 @@ export default function LeadRecordPage() {
               {canQuote && !closed && <Button onClick={sendQuote}>Send quotation</Button>}
               {!won && !closed && <Button onClick={() => { setWinAs('Deal'); setDrawer('win'); }}>Mark as Deal</Button>}
               <Button variant="quiet" onClick={openEdit}>Edit</Button>
-              <Button variant="quiet" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}>Old view</Button>
             </>
           )}
           meta={[
