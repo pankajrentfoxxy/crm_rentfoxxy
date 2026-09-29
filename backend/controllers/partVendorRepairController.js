@@ -147,6 +147,25 @@ exports.receivePartsFromVendor = async (req, res) => {
   }
 };
 
+exports.cancelPartVendorReturn = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await svc.cancelPartVendorReturnDc(client, {
+      dcNumber: req.params.dcNumber,
+      reason: req.body?.reason,
+      ...actor(req),
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 400).json({ success: false, message: err.message || 'Failed to cancel the challan' });
+  } finally {
+    client.release();
+  }
+};
+
 exports.listQcPending = async (req, res) => {
   try {
     const data = await svc.listQcPendingPartInstances({
