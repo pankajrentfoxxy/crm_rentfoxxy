@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Eye, X } from 'lucide-react';
 import DeskShell from '../../../shells/DeskShell';
 import {
   Button, Checkbox, EmptyState, Field, FormGrid, Input, Notice, Section, Select, Textarea,
@@ -61,7 +62,7 @@ export default function VendorFormPage() {
     setForm((f) => ({ ...f, [k]: v }));
     setErrors((er) => { const n = { ...er }; delete n[k]; return n; });
   };
-  const pick = (k) => (e) => setFiles((f) => ({ ...f, [k]: e.target.files?.[0] || null }));
+  const pick = (k) => (file) => setFiles((f) => ({ ...f, [k]: file || null }));
   // Phone fields take digits only, at most 10 — typing or pasting anything
   // else is dropped instead of being accepted and failing on save.
   const setDigits = (k) => (e) => set(k)(String(e.target.value || '').replace(/\D/g, '').slice(0, 10));
@@ -200,17 +201,10 @@ export default function VendorFormPage() {
               {field('gst_number', 'GSTIN', { style: { textTransform: 'uppercase' }, maxLength: 15 }, { hint: 'Leave empty if the vendor is not GST-registered' })}
               {field('pan_number', 'PAN', { style: { textTransform: 'uppercase' }, maxLength: 10, disabled: bankHidden })}
               {field('msme_number', 'MSME / Udyam number', { style: { textTransform: 'uppercase' }, maxLength: 19, placeholder: 'UDYAM-UP-01-0012345' }, { hint: 'Leave empty if the vendor is not MSME-registered' })}
-              <Field label="GST certificate" hint={original?.gst_certificate_url ? 'A certificate is on file — choose a file to replace it' : 'PDF or image'}>
-                <Input type="file" accept=".pdf,image/*" onChange={pick('gst_certificate')} />
-              </Field>
-              <Field label="Licences and permits" hint={original?.licenses_url ? 'A file is on file — choose a file to replace it' : undefined}>
-                <Input type="file" accept=".pdf,image/*" onChange={pick('licenses_and_permits')} />
-              </Field>
-              <Field label="Logo or photo">
-                <Input type="file" accept="image/*" onChange={pick('image')} />
-              </Field>
+              <DocUpload label="GST certificate" accept=".pdf,image/*" file={files.gst_certificate} onFile={pick('gst_certificate')} onFileUrl={original?.gst_certificate_url} />
+              <DocUpload label="Licences and permits" accept=".pdf,image/*" file={files.licenses_and_permits} onFile={pick('licenses_and_permits')} onFileUrl={original?.licenses_url} />
+              <DocUpload label="Logo or photo" accept="image/*" file={files.image} onFile={pick('image')} onFileUrl={original?.image_url} />
             </FormGrid>
-            {original?.gst_certificate_url && <p className="text-ink-3" style={{ marginTop: '8px' }}><a href={fileUrl(original.gst_certificate_url)} target="_blank" rel="noreferrer">Open the GST certificate on file</a></p>}
           </Section>
 
           <Section title="Bank — where we pay the vendor">
@@ -222,7 +216,10 @@ export default function VendorFormPage() {
               <FormGrid cols={2}>
                 {field('bank_name', 'Bank', {}, { required: true })}
                 {field('account_holder_name', 'Account holder', {}, { required: true })}
-                {field('account_number', 'Account number', { inputMode: 'numeric' }, { required: true })}
+                {field('account_number', 'Account number', {
+                  inputMode: 'numeric', maxLength: 18,
+                  onChange: (e) => set('account_number')(String(e.target.value || '').replace(/\D/g, '').slice(0, 18)),
+                }, { required: true, hint: '9 to 18 digits' })}
                 {field('bank_ifsc_code', 'IFSC', { style: { textTransform: 'uppercase' }, maxLength: 11 }, { required: true })}
               </FormGrid>
             )}
@@ -264,5 +261,70 @@ export default function VendorFormPage() {
         </form>
       )}
     </DeskShell>
+  );
+}
+
+const MAX_DOC_MB = 50; // the server's UPLOAD_MAX_FILE_MB default
+
+/**
+ * One document on the vendor form: pick a file, see it (eye) before saving,
+ * or take it off (×) and pick another. A file already on the vendor can be
+ * opened; choosing a new one replaces it on save.
+ */
+function DocUpload({ label, accept, file, onFile, onFileUrl }) {
+  const inputRef = useRef(null);
+  const [preview, setPreview] = useState(null);
+
+  useEffect(() => {
+    if (!file) { setPreview(null); return undefined; }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const choose = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > MAX_DOC_MB * 1024 * 1024) {
+      toast.error(`${f.name} is larger than ${MAX_DOC_MB} MB`);
+      e.target.value = '';
+      return;
+    }
+    onFile(f);
+  };
+  const remove = () => {
+    onFile(null);
+    if (inputRef.current) inputRef.current.value = '';
+  };
+  const iconBtn = { minWidth: 'var(--d-tap)', minHeight: 'var(--d-tap)' };
+
+  return (
+    <Field
+      label={label}
+      hint={file ? `${(file.size / 1024).toFixed(0)} KB — saved with the vendor` : onFileUrl ? 'A file is on record — choose a new one to replace it' : 'PDF or image, up to 50 MB'}
+    >
+      <div className="c-stack" style={{ gap: '6px' }}>
+        <Input ref={inputRef} type="file" accept={accept} onChange={choose} style={file ? { display: 'none' } : undefined} />
+        {file && (
+          <div className="flex items-center border border-rule" style={{ gap: '6px', padding: '4px 8px', borderRadius: 'var(--d-radius)' }}>
+            {file.type.startsWith('image/') && preview && (
+              <img src={preview} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 4 }} />
+            )}
+            <span className="font-ui min-w-0" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.name}>{file.name}</span>
+            <Button type="button" variant="quiet" style={iconBtn} aria-label={`Preview ${file.name}`} title="Preview" onClick={() => preview && window.open(preview, '_blank', 'noopener')}>
+              <Eye size={16} aria-hidden="true" />
+            </Button>
+            <Button type="button" variant="quiet" style={iconBtn} aria-label={`Remove ${file.name}`} title="Remove" onClick={remove}>
+              <X size={16} aria-hidden="true" />
+            </Button>
+          </div>
+        )}
+        {!file && onFileUrl && (
+          <a href={fileUrl(onFileUrl)} target="_blank" rel="noreferrer" className="font-ui inline-flex items-center" style={{ gap: '4px', fontSize: 'var(--d-sm)' }}>
+            <Eye size={14} aria-hidden="true" /> View the file on record
+          </a>
+        )}
+      </div>
+    </Field>
   );
 }

@@ -21,6 +21,7 @@ export { default as ScanPanel } from './ScanPanel';
 export { default as Drawer, ConfirmDialog } from './Drawer';
 export { default as Button, Segmented } from './Button';
 export { default as Panel } from './Panel';
+export { default as SearchSelect } from './SearchSelect';
 export {
   Field, Input, Select, Textarea, Checkbox, FormGrid, Section, Notice, KeyValue, Tabs, FlowSteps,
 } from './Form';

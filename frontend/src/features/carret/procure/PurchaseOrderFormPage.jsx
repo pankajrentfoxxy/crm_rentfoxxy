@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, Checkbox, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select, Textarea,
+  Button, Checkbox, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select, Textarea, SearchSelect,
 } from '../../../components/carret';
 import api from '../../../utils/api';
 import { INDIAN_STATE_OPTIONS } from '../../../constants/indianStates';
@@ -229,7 +229,7 @@ export default function PurchaseOrderFormPage() {
           <Section title="Order">
             <FormGrid cols={3}>
               <Field label="Vendor" required error={errors.vendor_id} span={2} hint={vendor ? [(vendor.gst_state || vendor.state) && `GST state: ${String(vendor.gst_state || vendor.state).replace(/_/g, ' ')}`, vendor.phone].filter(Boolean).join(' · ') : 'Only approved vendors are listed'}>
-                <Select value={form.vendor_id} onChange={set('vendor_id')} placeholder="Pick the vendor" options={vendorOptions} />
+                <SearchSelect value={form.vendor_id} onChange={set('vendor_id')} placeholder="Type to search vendors" options={vendorOptions} />
               </Field>
               <Field label="Type" required>
                 <Select value={form.purchase_order_type} onChange={set('purchase_order_type')} options={PO_TYPES} />

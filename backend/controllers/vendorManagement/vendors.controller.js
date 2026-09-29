@@ -294,6 +294,7 @@ async function lookupVendor(req, res) {
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_RE = /^\d{9,18}$/;
 const up = (v) => String(v ?? '').trim().toUpperCase();
 
 /**
@@ -316,6 +317,8 @@ async function vendorIdProblems(body, prev = null) {
   if (changed('msme_number') && !UDYAM_RE.test(up(body.msme_number)) && !UAM_RE.test(up(body.msme_number))) {
     problems.push('MSME / Udyam number must look like UDYAM-UP-01-0012345 (or the old Udyog Aadhaar UP01A0012345).');
   }
+  // Edits check it only when it changes: one imported vendor holds a 7-digit number.
+  if (changed('account_number') && !ACCOUNT_RE.test(up(body.account_number))) problems.push('Account number must be 9 to 18 digits, numbers only.');
   if (changed('bank_ifsc_code') && !IFSC_RE.test(up(body.bank_ifsc_code))) problems.push('IFSC must be 4 letters, 0, then 6 letters or digits (e.g. HDFC0001234).');
   if (changed('gst_number')) {
     const dup = await pool.query(
@@ -330,7 +333,7 @@ async function vendorIdProblems(body, prev = null) {
 
 /** True when the vendor's bank details look real (not the imported placeholder). */
 function bankDetailsLookValid(v) {
-  return IFSC_RE.test(up(v.bank_ifsc_code)) && /^\d{6,20}$/.test(String(v.account_number || '').trim());
+  return IFSC_RE.test(up(v.bank_ifsc_code)) && ACCOUNT_RE.test(String(v.account_number || '').trim());
 }
 
 /** A value shown to a user as "hidden" comes back unchanged — keep what is stored. */
@@ -370,8 +373,8 @@ function createValidators() {
     body('account_number')
       .trim()
       .notEmpty()
-      .matches(/^\d+$/)
-      .withMessage('Account number must be numeric'),
+      .matches(/^\d{9,18}$/)
+      .withMessage('Account number must be 9 to 18 digits, numbers only'),
     body('bank_ifsc_code').trim().notEmpty(),
     body('account_holder_name').trim().notEmpty(),
     body('state').trim().notEmpty(),

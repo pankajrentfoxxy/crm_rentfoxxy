@@ -25,6 +25,14 @@ export const PART_CATEGORIES = [
 
 export const DEFAULT_CONDITION = 'on';
 
+/**
+ * Missing parts the laptop cannot boot (or run the configuration check)
+ * without. Mirrors backend/constants/laptopConditions.js BOOT_CRITICAL_PARTS:
+ * a "Part Missing" laptop with one of these is received like "Not On".
+ */
+export const BOOT_CRITICAL_PARTS = ['ram', 'storage', 'motherboard', 'display', 'power'];
+export const missingPartsBlockCheck = (parts) => (parts || []).some((p) => BOOT_CRITICAL_PARTS.includes(p));
+
 const CONDITION_VALUES = LAPTOP_CONDITIONS.map((c) => c.value);
 
 export function normalizeAllowedConditions(raw) {

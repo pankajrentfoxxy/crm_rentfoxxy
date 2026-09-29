@@ -160,7 +160,10 @@ export function vendorFormErrors(f, { isEdit, original } = {}) {
   if (m && changed('msme_number') && !UDYAM_RE.test(m) && !UAM_RE.test(m)) e.msme_number = 'Like UDYAM-UP-01-0012345';
   const i = String(f.bank_ifsc_code || '').trim().toUpperCase();
   if (i && !hidden('bank_ifsc_code') && changed('bank_ifsc_code') && !IFSC_RE.test(i)) e.bank_ifsc_code = '11 characters, like HDFC0001234';
-  if (!hidden('account_number') && f.account_number && !/^\d{6,20}$/.test(String(f.account_number).trim())) e.account_number = 'Digits only';
+  const acct = String(f.account_number || '').trim();
+  if (acct && !hidden('account_number') && changed('account_number') && !/^\d{9,18}$/.test(acct)) {
+    e.account_number = /\D/.test(acct) ? 'Numbers only' : `9 to 18 digits — ${acct.length} entered`;
+  }
   if (!isEdit && String(f.password || '').length < 8) e.password = 'At least 8 characters';
   return e;
 }

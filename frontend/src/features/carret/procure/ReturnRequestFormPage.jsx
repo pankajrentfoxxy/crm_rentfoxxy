@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DocNumber, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select, StatusChip, Textarea,
+  Button, DataTable, DocNumber, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Select, StatusChip, Textarea, SearchSelect,
 } from '../../../components/carret';
 import {
   createVendorReturnTicket, fetchVendorReturnTicketEligible, fetchVendorReturnTicketEligibleVendors,
@@ -105,7 +105,7 @@ export default function ReturnRequestFormPage() {
               ? <EmptyState title="No rented laptops to return" body="Only laptops on a rental PO, sitting in our warehouse with rent still running, can go on a request." />
               : (
                 <Field label="Vendor" required hint="Only vendors with rented laptops in our warehouse are listed.">
-                  <Select
+                  <SearchSelect
                     value={vendorId}
                     onChange={(e) => setVendorId(e.target.value)}
                     placeholder="Choose…"

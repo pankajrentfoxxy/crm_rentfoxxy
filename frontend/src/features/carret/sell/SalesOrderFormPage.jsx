@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, Checkbox, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Segmented, Select,
+  Button, Checkbox, EmptyState, Field, FormGrid, Input, Money, Notice, Section, Segmented, Select, SearchSelect,
 } from '../../../components/carret';
 import { ENTITIES } from '../../../config/entities';
 import {
@@ -328,15 +328,15 @@ export default function SalesOrderFormPage() {
           <Section title="Customer">
             <FormGrid cols={2}>
               <Field label="Customer" required error={errors.customer} span={editSo ? 2 : 1}>
-                <Select
+                <SearchSelect
                   value={customerId}
                   onChange={(e) => onCustomer(e.target.value)}
                   disabled={Boolean(editSo)}
-                  placeholder={meta ? `Choose a customer (${customers.length} eligible)` : 'Loading…'}
+                  placeholder={meta ? `Type to search ${customers.length} eligible customers` : 'Loading…'}
                   options={[
                     ...(customerId && !customers.some((c) => String(c.customer_id) === customerId)
                       ? [{ value: customerId, label: `Customer #${customerId}` }] : []),
-                    ...customers.map((c) => ({ value: String(c.customer_id), label: `${c.company_name || c.name}${c.gst_no ? ` · ${c.gst_no}` : ''}` })),
+                    ...customers.map((c) => ({ value: String(c.customer_id), label: `${c.company_name || c.name}${c.gst_no ? ` · ${c.gst_no}` : ''}`, search: [c.name, c.company_name, c.phone, c.email].filter(Boolean).join(' ') })),
                   ]}
                 />
               </Field>

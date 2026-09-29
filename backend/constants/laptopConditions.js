@@ -90,6 +90,20 @@ function partCategoryLabels(values) {
   return normalizeMissingParts(values).map(partCategoryLabel);
 }
 
+/**
+ * Missing parts the laptop cannot boot — or run the configuration check —
+ * without: no RAM / storage / board means no OS, no display means nobody can
+ * enter the access number, no charger means no power. A "Part Missing" laptop
+ * with one of these is received like "Not On" (serial + reason, a manager
+ * approves). Anything else missing (keyboard, battery, body…) still boots, so
+ * the check still runs (D5).
+ */
+const BOOT_CRITICAL_PARTS = ['ram', 'storage', 'motherboard', 'display', 'power'];
+
+function missingPartsBlockCheck(missingParts) {
+  return normalizeMissingParts(missingParts).some((p) => BOOT_CRITICAL_PARTS.includes(p));
+}
+
 /** Only powered-on units can run the hardware script, so only they are config-verified. */
 function requiresConfigVerification(condition) {
   return normalizeCondition(condition) === 'on';
@@ -122,6 +136,8 @@ function conditionHighlight(condition, missingParts) {
 }
 
 module.exports = {
+  BOOT_CRITICAL_PARTS,
+  missingPartsBlockCheck,
   LAPTOP_CONDITIONS,
   PART_CATEGORIES,
   CONDITION_VALUES,

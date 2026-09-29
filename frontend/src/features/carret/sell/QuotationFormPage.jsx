@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, Field, Input, Select, FormGrid, Section, Notice, Segmented, Money, Checkbox, Textarea,
+  Button, Field, Input, Select, FormGrid, Section, Notice, Segmented, Money, Checkbox, Textarea, SearchSelect,
 } from '../../../components/carret';
 import { ENTITIES } from '../../../config/entities';
 import { getQuotationMeta, createQuotation, sendQuotationEmail } from '../../sales-pipeline/salesPipelineApi';
@@ -230,14 +230,18 @@ export default function QuotationFormPage() {
           <Section title="Customer">
             <FormGrid cols={3}>
               <Field label="Existing customer" hint="Leave empty for a prospect who is not a customer yet." span={3}>
-                <Select
+                <SearchSelect
                   value={party.customer_id}
                   onChange={(e) => onCustomer(e.target.value)}
-                  placeholder={meta ? `Prospect — not a customer yet (${customers.length} eligible customers)` : 'Loading customers…'}
-                  options={customers.map((c) => ({
-                    value: String(c.customer_id),
-                    label: `${c.company_name || c.name}${c.gst_no ? ` · ${c.gst_no}` : ''}`,
-                  }))}
+                  placeholder={meta ? `Prospect — or type to search ${customers.length} eligible customers` : 'Loading customers…'}
+                  options={[
+                    ...(party.customer_id ? [{ value: '', label: 'Prospect — not a customer yet' }] : []),
+                    ...customers.map((c) => ({
+                      value: String(c.customer_id),
+                      label: `${c.company_name || c.name}${c.gst_no ? ` · ${c.gst_no}` : ''}`,
+                      search: [c.name, c.company_name, c.phone, c.email].filter(Boolean).join(' '),
+                    })),
+                  ]}
                 />
               </Field>
               <Field label="Contact person" required error={errors.contact_name}>

@@ -12,6 +12,19 @@ const { allocateTtsplCodes } = require('../services/vendorInventoryAssetCodeServ
 describe('D5 — only a laptop that will not power on may skip the configuration check', () => {
   const base = { poId: 1, lineIndex: 0, serialNumber: 'SN-TEST', captureToken: null };
 
+  it('lets "part missing" skip the check only when a boot-critical part is missing (29 Sep)', async () => {
+    const r = await assertUnitMayBeReceived(pool, { ...base, receivedCondition: 'part_missing', missingParts: ['ram'], waiverReason: 'No RAM — will not boot' });
+    assert.equal(r.waived, true);
+    await assert.rejects(
+      assertUnitMayBeReceived(pool, { ...base, receivedCondition: 'part_missing', missingParts: ['keyboard', 'body'], waiverReason: 'keyboard missing, skip' }),
+      /must be verified/
+    );
+    await assert.rejects(
+      assertUnitMayBeReceived(pool, { ...base, receivedCondition: 'part_missing', missingParts: ['storage'], waiverReason: 'x' }),
+      /reason/
+    );
+  });
+
   it('refuses "part missing" without a check, whatever the reason (the loophole)', async () => {
     await assert.rejects(
       assertUnitMayBeReceived(pool, { ...base, receivedCondition: 'part_missing', waiverReason: 'config differs, receive anyway' }),

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import QRCode from 'qrcode';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, Drawer, EmptyState, Field, FormGrid, Input, KeyValue, Notice, Section, Select, Tabs, Textarea,
+  Button, DataTable, DateTime, Drawer, EmptyState, Field, FormGrid, Input, KeyValue, Notice, Section, Select, Tabs, Textarea, SearchSelect,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { parseRequestExtra, pickupReasonLabel } from '../../support/pickupReasonTypes';
@@ -196,10 +196,10 @@ export default function RequestsPage() {
             ) : (
               <>
                 <Field label="Customer" required hint="Matched from the phone number; search if it is not here">
-                  <Select
+                  <SearchSelect
                     value={conv.customer_id}
                     onChange={(e) => setConv({ ...conv, customer_id: e.target.value })}
-                    placeholder="Choose…"
+                    placeholder="Type to search…"
                     options={[...conv.matches, ...conv.found]
                       .filter((c, i, a) => a.findIndex((x) => x.customer_id === c.customer_id) === i)
                       .map((c) => ({ value: String(c.customer_id), label: [c.company_name, c.name, c.phone].filter(Boolean).join(' · ') }))}

@@ -9,7 +9,7 @@ import {
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
-import { LAPTOP_CONDITIONS, PART_CATEGORIES } from '../../../constants/laptopConditions';
+import { BOOT_CRITICAL_PARTS, LAPTOP_CONDITIONS, PART_CATEGORIES, missingPartsBlockCheck } from '../../../constants/laptopConditions';
 import { isManagerUser } from '../../vendor-management/vendorMgmtUi';
 import PartLabelPrintModal from '../../inventory-management/components/PartLabelPrintModal';
 import { errMsg } from './procureShared';
@@ -113,12 +113,15 @@ export default function DeliveryReceivePage() {
     }
   };
 
+  // "Part Missing" runs the check — unless a part it cannot boot without is
+  // missing; then, like "Not On", the serial is typed and a reason given.
+  const needsCheck = NEEDS_CHECK.has(unit.condition) && !(unit.condition === 'part_missing' && missingPartsBlockCheck(unit.missing_parts));
   const verified = capture && ['captured', 'used'].includes(capture.status) && capture.config_verified;
   const mismatched = capture && ['captured', 'used'].includes(capture.status) && !capture.config_verified;
   const checks = capture?.config_check?.checks || [];
 
   const ready = open && !full && line && unit.serial.trim() && (
-    NEEDS_CHECK.has(unit.condition) ? verified : unit.waiver.trim().length >= 5
+    needsCheck ? verified : unit.waiver.trim().length >= 5
   ) && (unit.condition !== 'part_missing' || unit.missing_parts.length);
 
   const submit = async (rejectReason) => {
@@ -134,7 +137,7 @@ export default function DeliveryReceivePage() {
         physical_damage_remark: unit.damage || null,
         ...(rejectReason
           ? { reject_at_receipt: true, rejection_reason: rejectReason }
-          : { capture_token: NEEDS_CHECK.has(unit.condition) ? capture?.token : null, config_capture_waiver_reason: NEEDS_CHECK.has(unit.condition) ? null : unit.waiver }),
+          : { capture_token: needsCheck ? capture?.token : null, config_capture_waiver_reason: needsCheck ? null : unit.waiver }),
       };
       const { data } = await api.post(`/vendor-management/purchase-orders/${d.po_id}/product-received/receive-unit`, body);
       const c = data.data.created;
@@ -268,13 +271,18 @@ export default function DeliveryReceivePage() {
                 <Field label="What is missing" required>
                   <div className="flex flex-wrap" style={{ gap: '12px' }}>
                     {PART_CATEGORIES.map((p) => (
-                      <Checkbox key={p.value} label={p.label} checked={unit.missing_parts.includes(p.value)} onChange={(e) => setU('missing_parts', e.target.checked ? [...unit.missing_parts, p.value] : unit.missing_parts.filter((x) => x !== p.value))} />
+                      <Checkbox key={p.value} label={`${p.label}${BOOT_CRITICAL_PARTS.includes(p.value) ? ' (won’t boot)' : ''}`} checked={unit.missing_parts.includes(p.value)} onChange={(e) => setU('missing_parts', e.target.checked ? [...unit.missing_parts, p.value] : unit.missing_parts.filter((x) => x !== p.value))} />
                     ))}
                   </div>
                 </Field>
               )}
 
-              {NEEDS_CHECK.has(unit.condition) ? (
+              {unit.condition === 'part_missing' && !needsCheck && (
+                <Notice tone="info" title="The check is skipped — this laptop cannot boot without the missing part">
+                  Type the serial from the sticker and say why. A manager approves it; Diagnosis captures the configuration later.
+                </Notice>
+              )}
+              {needsCheck ? (
                 <div className="c-card" style={{ padding: '12px' }}>
                   <strong>Configuration check</strong>
                   {!capture && (

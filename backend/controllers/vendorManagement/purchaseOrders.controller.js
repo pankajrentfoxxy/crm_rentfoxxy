@@ -603,6 +603,7 @@ async function receiveProductSerial(req, res) {
       receivedCondition,
       captureToken: req.body.capture_token,
       waiverReason: req.body.config_capture_waiver_reason,
+      missingParts: req.body.missing_parts,
     });
   } catch (gateErr) {
     if (gateErr instanceof CaptureGateError) {
@@ -901,6 +902,7 @@ async function receivePoLineBulk(req, res) {
         receivedCondition: bulkCondition,
         captureToken: capturePerUnit[i] || null,
         waiverReason: req.body.config_capture_waiver_reason,
+        missingParts: req.body.missing_parts,
       }));
     } catch (gateErr) {
       if (gateErr instanceof CaptureGateError) {
@@ -1264,6 +1266,7 @@ async function receivePoLineUnit(req, res) {
       receivedCondition,
       captureToken,
       waiverReason: req.body.config_capture_waiver_reason,
+      missingParts,
     });
   } catch (gateErr) {
     if (gateErr instanceof CaptureGateError) {

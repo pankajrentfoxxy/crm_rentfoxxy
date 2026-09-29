@@ -17,7 +17,8 @@
  * so since intake conditions were introduced. So the gate is:
  *
  *   on           → a matched capture token is required
- *   part_missing → a matched token, unless the caller waives it with a reason
+ *   part_missing → a matched token — unless a boot-critical part is missing
+ *                  (RAM, storage, board, display, charger): then like not_on
  *   not_on       → no token is possible; a reason is required instead
  *
  * Every waiver is stored on the serial and written to the event spine, so the
@@ -25,6 +26,7 @@
  * without verification used to leave no trace at all.
  */
 const pool = require('../config/db');
+const { missingPartsBlockCheck } = require('../constants/laptopConditions');
 const { recordAssetEvent } = require('./eventService');
 
 class CaptureGateError extends Error {
@@ -108,9 +110,12 @@ async function resolveMatchedToken(db, { token, poId, lineIndex, serialNumber })
  * CaptureGateError with a usable message when the unit may not be received.
  */
 async function assertUnitMayBeReceived(db, {
-  poId, lineIndex, serialNumber, receivedCondition, captureToken, waiverReason,
+  poId, lineIndex, serialNumber, receivedCondition, captureToken, waiverReason, missingParts,
 }) {
-  const condition = String(receivedCondition || 'on').toLowerCase();
+  let condition = String(receivedCondition || 'on').toLowerCase();
+  // 29 Sep 2026: a laptop missing a part it cannot boot without cannot run
+  // the check either — the same physical limit as "Not On".
+  if (condition === 'part_missing' && missingPartsBlockCheck(missingParts)) condition = 'not_on';
   const token = String(captureToken || '').trim();
   const reason = String(waiverReason || '').trim();
 
