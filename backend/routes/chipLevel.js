@@ -1,4 +1,5 @@
 const express = require('express');
+const { rejectQcReadyTicketMove } = require('../services/qcReadyHoldService');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const {
@@ -11,6 +12,6 @@ router.use(authMiddleware);
 
 router.get('/ticket/:id', getChipRepair);
 router.post('/ticket/:id', saveChipRepair);
-router.post('/ticket/:id/submit', submitChipRepair);
+router.post('/ticket/:id/submit', rejectQcReadyTicketMove(), submitChipRepair);
 
 module.exports = router;

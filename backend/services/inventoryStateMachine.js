@@ -22,6 +22,7 @@
  *   scrapped        — dead asset, removed from circulation
  */
 const pool = require('../config/db');
+const { assertNotOnQcReadyHold } = require('./qcReadyHoldService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 
 const STATUS = Object.freeze({
@@ -103,6 +104,14 @@ async function transitionAsset(db, {
   if (!serial) throw new Error(`Serial ${serialId} not found`);
 
   const from = serial.inventory_status || null;
+  if (!allowOverride && (toStatus === STATUS.RESERVED || toStatus === STATUS.DISPATCH_READY)) {
+    // Not onto an order until the warehouse has received it out of QC Ready.
+    await assertNotOnQcReadyHold(client, {
+      vendorSerialId: serial.serial_id || serialId,
+      serialNumber: serial.serial_number,
+      ttsplId: serial.ttspl_id,
+    });
+  }
   if (!allowOverride && !isAllowed(from, toStatus)) {
     throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);
   }

@@ -3221,6 +3221,7 @@ exports.storeDeliveryChallan = async (req, res) => {
               actorName: req.user?.name,
             });
           } catch (rErr) {
+            if (rErr.qcReadyHold) throw rErr;
             await client.query(
               `UPDATE vendor_serial_numbers SET inventory_status = 'dispatch_ready', current_dc_number = $2,
                       dispatch_mode = $3,
@@ -3676,6 +3677,7 @@ exports.createDcsByAddress = async (req, res) => {
             actorUserId: req.user?.user_id, actorName: req.user?.name,
           });
         } catch (rErr) {
+          if (rErr.qcReadyHold) throw rErr;
           await client.query(
             `UPDATE vendor_serial_numbers
                 SET inventory_status = 'dispatch_ready', current_dc_number = $1,

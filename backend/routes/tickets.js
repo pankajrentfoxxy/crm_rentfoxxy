@@ -1,4 +1,5 @@
 const express = require('express');
+const { rejectQcReadyTicketMove, rejectQcReadyBulkMove } = require('../services/qcReadyHoldService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -99,7 +100,7 @@ router.get('/my', getMyTickets);
 // @route   POST /api/tickets/bulk-move
 // @desc    Bulk move all tickets from one stage to another
 // @access  Private (Admin, Manager, Floor Manager)
-router.post('/bulk-move', ftEdit, bulkMoveTickets);
+router.post('/bulk-move', ftEdit, rejectQcReadyBulkMove, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
@@ -118,15 +119,17 @@ router.get('/:id/next-assignee', getNextAssignee);
 router.get('/:id/production-history', ftView, getProductionHistory);
 router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
-router.post('/:id/move-stage', phase2.moveToStage);
-router.patch('/:id/chip-repair', phase2.markChipRepairRequired);
-router.patch('/:id/body-paint', phase2.markBodyPaintRequired);
+const qcReadyHold = rejectQcReadyTicketMove();
+router.post('/:id/move-stage', qcReadyHold, phase2.moveToStage);
+router.patch('/:id/chip-repair', qcReadyHold, phase2.markChipRepairRequired);
+router.patch('/:id/body-paint', qcReadyHold, phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
   ftEdit,
+  qcReadyHold,
   phase2.markQcFailed
 );
-router.patch('/:id/diagnosis-failed', phase2.markDiagnosisFailed);
+router.patch('/:id/diagnosis-failed', qcReadyHold, phase2.markDiagnosisFailed);
 router.patch('/:id/config', ftConfigEdit, phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id
@@ -137,17 +140,17 @@ router.get('/:id', getTicketById);
 // @route   PUT /api/tickets/:id
 // @desc    Update ticket details
 // @access  Private
-router.put('/:id', updateTicket);
+router.put('/:id', rejectQcReadyTicketMove({ onlyIfBodyHas: ['status', 'current_stage_id'] }), updateTicket);
 
 // @route   POST /api/tickets/:id/next-stage
 // @desc    Move ticket to next stage
 // @access  Private
-router.post('/:id/next-stage', moveToNextStage);
+router.post('/:id/next-stage', qcReadyHold, moveToNextStage);
 
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
 // @access  Private (Team Lead, Manager, Floor Manager, Admin)
-router.post('/:id/assign', ftAssign, assignTicket);
+router.post('/:id/assign', ftAssign, qcReadyHold, assignTicket);
 
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
@@ -192,7 +195,7 @@ router.post('/:id/stage-task', saveStageTask);
 // QC Routes
 router.get('/:id/qc', qcController.getQCData);
 router.post('/:id/qc/save', qcController.saveQC);
-router.post('/:id/qc/submit', qcController.submitQC);
+router.post('/:id/qc/submit', qcReadyHold, qcController.submitQC);
 router.post('/qc/:qc_id/upload-photo', wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
 router.get('/:ticket_id/qc/history', qcController.getQCHistory);
 

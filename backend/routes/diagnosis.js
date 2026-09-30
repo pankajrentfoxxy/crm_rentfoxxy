@@ -1,4 +1,5 @@
 const express = require('express');
+const { rejectQcReadyTicketMove } = require('../services/qcReadyHoldService');
 const router = express.Router();
 const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
@@ -58,7 +59,7 @@ router.get('/ticket/:id', getDiagnosis);
 router.post('/ticket/:id', saveDiagnosis);
 
 // Submit completed diagnosis
-router.post('/ticket/:id/submit', submitDiagnosis);
+router.post('/ticket/:id/submit', rejectQcReadyTicketMove(), submitDiagnosis);
 
 // Upload diagnosis image
 router.post('/ticket/:id/images', upload.single('image'), uploadDiagnosisImage);
