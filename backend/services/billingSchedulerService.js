@@ -1261,16 +1261,20 @@ async function generatePostpaidCustomerInvoice(customerId, month, year) {
 
     // Invoice month is the issue month (1st of next month) so list/revenue
     // filters match invoice_date. Also pick up leftover drafts still stored
-    // under the occupancy month from the first postpaid rollout.
+    // under the occupancy month from the first postpaid rollout — drafts only:
+    // an issued invoice under that month is the PREVIOUS month's bill (issue
+    // month = occupancy month + 1), e.g. PPG's August INV-0974 under month 9.
+    // Matching it made the run skip the customer with "Invoice already exists".
     const existing = await client.query(
       `SELECT invoice_id, invoice_number, status, line_items, subtotal,
               gst_percent, credit_note_adjustment, from_date, to_date,
               invoice_month, invoice_year
          FROM customer_invoices
         WHERE customer_id = $1
+          AND LOWER(COALESCE(status, '')) <> 'cancelled'
           AND (
             (invoice_month = $2 AND invoice_year = $3)
-            OR (invoice_month = $4 AND invoice_year = $5)
+            OR (invoice_month = $4 AND invoice_year = $5 AND LOWER(COALESCE(status, '')) = 'draft')
           )
         ORDER BY CASE WHEN invoice_month = $2 AND invoice_year = $3 THEN 0 ELSE 1 END,
                  invoice_id DESC
