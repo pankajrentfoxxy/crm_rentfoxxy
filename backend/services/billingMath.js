@@ -10,6 +10,15 @@ function toLocalYmd(d) {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Today's date in India (IST, UTC+5:30) as YYYY-MM-DD. The server runs on UTC,
+ * so toLocalYmd(new Date()) dated a document generated before 05:30 IST with
+ * the previous day (the 1 Oct invoice run came out as 30 Sep).
+ */
+function todayIstYmd(now = new Date()) {
+  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 const addDays = (d, n) => {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
@@ -217,6 +226,7 @@ function calcVendorLineAmount({ receivedAt, returnedAt, monthStart, monthEnd, mo
 module.exports = {
   MS_PER_DAY,
   toLocalYmd,
+  todayIstYmd,
   addDays,
   daysInclusive,
   monthSegments,

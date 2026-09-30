@@ -2,6 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   toLocalYmd,
+  todayIstYmd,
   addDays,
   daysInclusive,
   monthSegments,
@@ -208,5 +209,13 @@ describe('billingPeriodEnd — quarterly and half-yearly cycles', () => {
     assert.equal(normalizeBillingFrequency(undefined), 'monthly');
     assert.equal(normalizeBillingFrequency('Half-Yearly'), 'half_yearly');
     assert.equal(normalizeBillingFrequency('QUARTERLY'), 'quarterly');
+  });
+});
+
+describe('todayIstYmd', () => {
+  it('is already the next day in India before 05:30 IST', () => {
+    assert.equal(todayIstYmd(new Date('2026-09-30T22:50:00Z')), '2026-10-01');
+    assert.equal(todayIstYmd(new Date('2026-09-30T18:29:59Z')), '2026-09-30');
+    assert.equal(todayIstYmd(new Date('2026-09-30T18:30:00Z')), '2026-10-01');
   });
 });

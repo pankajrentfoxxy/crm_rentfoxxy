@@ -8,6 +8,7 @@ const { enqueueEmail } = require('./emailQueueService');
 const { isCustomerInvoiceEmailEnabled } = require('./outboundMessagingGuard');
 const {
   toLocalYmd,
+  todayIstYmd,
   addDays,
   daysInclusive,
   monthSegments,
@@ -3460,7 +3461,7 @@ async function generateCustomerInvoiceCore(customerId, month, year, options = {}
        RETURNING invoice_id, invoice_number`,
       [
         invoiceNumber, customerId, month, year,
-        toLocalYmd(new Date()),
+        todayIstYmd(),
         toLocalYmd(periodStart || monthStart),
         toLocalYmd(periodEnd || monthEnd),
         JSON.stringify(lineItems),
@@ -4234,7 +4235,7 @@ async function generateVendorBill(vendorId, month, year, { actor = null } = {}) 
        RETURNING bill_id, bill_number`,
       [
         billNumber, vendorId, month, year,
-        toLocalYmd(new Date()),
+        todayIstYmd(),
         toLocalYmd(monthStart),
         toLocalYmd(monthEnd),
         JSON.stringify(lineItems),
