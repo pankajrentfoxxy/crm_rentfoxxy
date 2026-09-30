@@ -1002,7 +1002,13 @@ async function buildCustomerInvoiceLines(client, {
     // Skip the unit entirely instead. No line, and no watermark advance, so the
     // whole outstanding span is still owed and bills in full as soon as someone
     // sets the rate.
-    if (!(monthlyRate > 0)) {
+    //
+    // A rate set to exactly 0 is different: a laptop we deliberately give free
+    // (e.g. TTSPL1942 at Antino). It still belongs on the invoice as a Rs 0
+    // line, so only a missing (NULL) or negative rate is skipped.
+    const freeOfCharge = monthlyRate === 0
+      && row.rent_monthly_rate !== null && row.rent_monthly_rate !== undefined && row.rent_monthly_rate !== '';
+    if (!(monthlyRate > 0) && !freeOfCharge) {
       console.warn(
         `[billing] SKIPPED ${row.ttspl_id || `serial ${row.serial_id}`} for customer ${customerId}:`
         + ` no rent_monthly_rate. Nothing billed and rent_billed_until left at`
