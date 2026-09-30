@@ -41,6 +41,8 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
 
   const charger = data?.charger;
   const ready = Boolean(charger?.can_start_dispatch_qc);
+  const isChargerSet = charger?.kit_type === 'set';
+  const needsCable = !isChargerSet;
 
   const run = async (fn, okMsg) => {
     setBusy(true);
@@ -116,7 +118,7 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
             <Warehouse className="w-4 h-4" /> Waiting for warehouse handover
           </p>
           <p className="text-xs text-slate-600">
-            Request {charger.request_number} is with warehouse. After they hand over the adapter and power cable, scan both here to attach.
+            Request {charger.request_number} is with warehouse. After they hand over the charger (set, or adapter + power cable), scan it here to attach.
           </p>
           <button
             type="button"
@@ -131,35 +133,41 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
 
       {charger?.status === 'handed_over' ? (
         <div className="rounded-lg border border-teal-200 bg-white p-3 space-y-2">
-          <p className="text-sm font-medium text-teal-900">Warehouse handed over both products</p>
+          <p className="text-sm font-medium text-teal-900">
+            {isChargerSet ? 'Warehouse handed over a charger set' : 'Warehouse handed over both products'}
+          </p>
           <p className="text-xs text-slate-600">
-            Scan adapter {charger.adapter_label || ''} and power cable {charger.cable_label || ''} to attach.
+            {isChargerSet
+              ? `Scan charger set ${charger.adapter_label || ''} (cable built in) to attach.`
+              : `Scan adapter ${charger.adapter_label || ''} and power cable ${charger.cable_label || ''} to attach.`}
           </p>
           <ScanField
             value={adapterScan}
             onChange={setAdapterScan}
-            placeholder="Scan laptop charger / adapter"
+            placeholder={isChargerSet ? 'Scan charger set' : 'Scan laptop charger / adapter'}
             aria-label="Scan adapter"
           />
-          <ScanField
-            value={cableScan}
-            onChange={setCableScan}
-            placeholder="Scan power cable"
-            aria-label="Scan power cable"
-          />
+          {needsCable ? (
+            <ScanField
+              value={cableScan}
+              onChange={setCableScan}
+              placeholder="Scan power cable"
+              aria-label="Scan power cable"
+            />
+          ) : null}
           <button
             type="button"
-            disabled={busy || !adapterScan.trim() || !cableScan.trim()}
+            disabled={busy || !adapterScan.trim() || (needsCable && !cableScan.trim())}
             onClick={() => run(
               () => attachDispatchCharger(charger.request_id, {
                 adapter_scan: adapterScan,
                 cable_scan: cableScan,
               }),
-              'Adapter and power cable attached'
+              isChargerSet ? 'Charger set attached' : 'Adapter and power cable attached'
             )}
             className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold disabled:opacity-50"
           >
-            {busy ? 'Attaching…' : 'Attach adapter + power cable'}
+            {busy ? 'Attaching…' : (isChargerSet ? 'Attach charger set' : 'Attach adapter + power cable')}
           </button>
         </div>
       ) : null}
