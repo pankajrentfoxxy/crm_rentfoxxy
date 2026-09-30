@@ -326,6 +326,20 @@ export function supplyStateFromGstin(gstin) {
   return name ? normalizeStateForGst(name) : '';
 }
 
+// Mirrors backend gstinForDocument: documents created before this keep the
+// shipping-first head they were issued with; listed older orders were corrected.
+const GSTIN_PLACE_OF_SUPPLY_FROM = new Date('2026-09-30T00:00:00+05:30');
+const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416']);
+
+/** GSTIN to use for a stored document's place of supply ('' for older documents). */
+export function gstinForDocument(row) {
+  if (!row) return '';
+  if (GSTIN_PLACE_OF_SUPPLY_ORDERS.has(row.sales_order_number)) return row.gst_number || '';
+  const created = row.created_at ? new Date(row.created_at) : null;
+  if (created && !Number.isNaN(created.getTime()) && created < GSTIN_PLACE_OF_SUPPLY_FROM) return '';
+  return row.gst_number || '';
+}
+
 /** Place of supply: buyer's GSTIN state first (mirrors the backend), then the shipping state. */
 export function resolveSupplyStateFromShipping(shippingAddress, fallback = '', gstin = '') {
   const fromGstin = supplyStateFromGstin(gstin);

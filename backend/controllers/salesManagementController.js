@@ -9,6 +9,7 @@ const {
   peekFinancialYearNumber,
   computeGstBreakdown,
   resolveSupplyStateFromAddress,
+  gstinForDocument,
   resolveCustomerDocumentName,
   resolveDcBilling,
   entityForQuotationType,
@@ -1300,7 +1301,7 @@ exports.updateSalesOrder = async (req, res) => {
       shipping,
       body.supply_state || head.supply_state,
       '',
-      body.GST_number || body.gst_number || billing?.gst_number || head.gst_number
+      gstinForDocument(head) ? (body.GST_number || body.gst_number || billing?.gst_number || head.gst_number) : ''
     );
     const shippingJson = shipping ? JSON.stringify(shipping) : null;
     const billingJson = billing ? JSON.stringify(billing) : null;
@@ -2785,7 +2786,7 @@ exports.getDeliveryChallan = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', head.gst_number),
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', gstinForDocument(head)),
     });
 
     let assignmentHistory = [];
@@ -4726,7 +4727,7 @@ exports.getSoWithPayments = async (req, res) => {
       shipping: lines[0].shiping_charges,
       security: soSecurity,
       supplyState: resolveSupplyStateFromAddress(
-        lines[0].customer_shipping_address, lines[0].supply_state, '', lines[0].gst_number
+        lines[0].customer_shipping_address, lines[0].supply_state, '', gstinForDocument(lines[0])
       ),
       gstOnShipping,
     });
@@ -6970,12 +6971,12 @@ exports.updateDcHsn = async (req, res) => {
 /** Buyer GSTIN on a sales order — it decides the place of supply when present. */
 async function soGstin(db, soNumber) {
   const r = await db.query(
-    `SELECT NULLIF(TRIM(gst_number), '') AS gst_number
+    `SELECT NULLIF(TRIM(gst_number), '') AS gst_number, created_at
        FROM sales_order_lines WHERE sales_order_number = $1
       ORDER BY id LIMIT 1`,
     [soNumber]
   );
-  return r.rows[0]?.gst_number || '';
+  return gstinForDocument(r.rows[0]);
 }
 
 exports.updateSalesOrderShippingAddress = async (req, res) => {

@@ -11,7 +11,7 @@ import {
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
-  computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
+  computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel, gstinForDocument,
 } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderDetailPath } from '../salesOrderScope';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
@@ -118,6 +118,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [customers, setCustomers] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [fromQuote, setFromQuote] = useState(Boolean(prefillQuotation));
+  // Existing SO being edited: its date/number decide whether the GSTIN rule applies.
+  const [editDocMeta, setEditDocMeta] = useState(null);
   const [lines, setLines] = useState([emptyLineItem()]);
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -167,6 +169,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       const data = res.data;
       const soLines = data?.lines || [];
       const head = soLines[0] || {};
+      setEditDocMeta({ created_at: head.created_at, sales_order_number: head.sales_order_number });
       const lineWfh = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
       const delivery = parseAddress(head.delivery_address) || {};
       setIsWfh(Boolean(lineWfh));
@@ -344,8 +347,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     ? totalValue
     : (Number(form.security_amount) || 0);
   const supplyState = useMemo(
-    () => resolveSupplyStateFromShipping(selectedShippingAddress, '', form.GST_number),
-    [selectedShippingAddress, form.GST_number]
+    () => resolveSupplyStateFromShipping(
+      selectedShippingAddress, '',
+      isEdit ? gstinForDocument({ ...editDocMeta, gst_number: form.GST_number }) : form.GST_number
+    ),
+    [selectedShippingAddress, form.GST_number, isEdit, editDocMeta]
   );
   const gstTotals = useMemo(() => computeGstBreakdown({
     subtotal: totalValue,

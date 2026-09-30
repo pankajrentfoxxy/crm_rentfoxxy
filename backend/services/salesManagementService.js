@@ -2658,6 +2658,22 @@ function supplyStateFromGstin(gstin) {
   return name ? normalizeStateForGst(name) : '';
 }
 
+// Documents created before this keep the head they were issued with (shipping-first);
+// 510 already-issued DCs would otherwise re-render with a different GST head.
+const GSTIN_PLACE_OF_SUPPLY_FROM = new Date('2026-09-30T00:00:00+05:30');
+
+// Older orders moved onto the GSTIN rule on request (corrected 2026-09-30).
+const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416']);
+
+/** The buyer GSTIN to use for a stored document's place of supply ('' for older documents). */
+function gstinForDocument(row) {
+  if (!row) return '';
+  if (GSTIN_PLACE_OF_SUPPLY_ORDERS.has(row.sales_order_number)) return row.gst_number || '';
+  const created = row.created_at ? new Date(row.created_at) : null;
+  if (created && !Number.isNaN(created.getTime()) && created < GSTIN_PLACE_OF_SUPPLY_FROM) return '';
+  return row.gst_number || '';
+}
+
 function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '', gstin = '') {
   const fromGstin = supplyStateFromGstin(gstin);
   if (fromGstin) return fromGstin;
@@ -3194,6 +3210,7 @@ module.exports = {
   syncDcSecurityForSo,
   resolveSupplyStateFromAddress,
   supplyStateFromGstin,
+  gstinForDocument,
   resolveCustomerDocumentName,
   parseAddressField,
   normalizeStateForGst,

@@ -3,7 +3,9 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
-const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
+const {
+  computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount, gstinForDocument,
+} = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
 const { QUOTATION_TERMS, QUOTATION_TAX_NOTE } = require('../constants/quotationTerms');
 const { cleanSpecValue, joinSpecParts } = require('../utils/specText');
@@ -344,7 +346,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     header.customer_shipping_address || lines[0]?.customer_shipping_address,
     header.supply_state || lines[0]?.supply_state,
     '',
-    header.gst_number || lines[0]?.gst_number
+    gstinForDocument({
+      gst_number: header.gst_number || lines[0]?.gst_number,
+      created_at: header.created_at || lines[0]?.created_at,
+      sales_order_number: header.sales_order_number || lines[0]?.sales_order_number,
+    })
   );
   const gstOnShipping = (lines || []).some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
   const gst = computeGstBreakdown({ subtotal, shipping, security, supplyState, gstOnShipping });
@@ -1068,7 +1074,12 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
       gst: String(header.gst_number || billing.gst_number || '').trim(),
       pos: (() => {
         const pos = resolveSupplyStateFromAddress(
-          shippingAddr, header.supply_state, '', header.gst_number || billing.gst_number
+          shippingAddr, header.supply_state, '',
+          gstinForDocument({
+            gst_number: header.gst_number || billing.gst_number,
+            created_at: header.created_at,
+            sales_order_number: header.sales_order_number,
+          })
         );
         return pos ? titleCaseState(pos) : null;
       })(),
