@@ -1679,6 +1679,9 @@ async function receiveItemsFromVendor(client, {
         qcStatus: 'pending',
         extraPatch: {
           location: 'warehouse_floor',
+          // Set to 'in_repair' at gate outward; left behind it kept the laptop
+          // on Out for Repair after it was rented or sold.
+          action_status: 'repared',
           vendor_repair_dc: dcNumber,
           receive_dc: receiveDcNumber,
           received_by: itemWhSigner,
@@ -1785,25 +1788,16 @@ async function receiveFromVendor(client, {
   });
 }
 
-function effectiveQcStatusSql(alias = 'vsn') {
-  return `COALESCE(
-    NULLIF(TRIM(${alias}.qc_status), ''),
-    NULLIF(TRIM(${alias}.extra->>'status'), ''),
-    'pending'
-  )`;
-}
-
-/** ERP / migrated laptops marked out for repair (canonical `in_repair` + legacy typo). */
+/**
+ * ERP / migrated laptops still at a vendor: inventory_status 'out_for_repare'.
+ * Keyed on the status alone. The legacy qc_status / extra.action_status labels
+ * outlive the repair (they stayed set on laptops later rented or sold), so they
+ * must not put a laptop on this list. CRM vendor repairs come from VRDC rows.
+ */
 function erpOutForRepareSql(alias = 'vsn') {
-  const eff = effectiveQcStatusSql(alias);
   return `${alias}.deleted_at IS NULL
     AND ${alias}.po_id IS NOT NULL
-    AND (
-      ${alias}.inventory_status = 'in_repair'
-      OR ${alias}.inventory_status = 'out_for_repare'
-      OR ${eff} IN ('out_for_repare', 'out_for_repair')
-      OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') IN ('out_for_repare', 'in_repair')
-    )
+    AND ${alias}.inventory_status = 'out_for_repare'
     AND NOT EXISTS (
       SELECT 1
         FROM vendor_repair_dc_items vri
@@ -1819,6 +1813,10 @@ function erpOutForRepareSql(alias = 'vsn') {
          )
     )`;
 }
+
+/** When an ERP-list laptop last went out for repair, from its status history. */
+const ERP_OUT_TS_SQL = `(SELECT MAX(x.created_at) FROM inventory_status_transitions x
+   WHERE x.serial_id = vsn.serial_id AND x.to_status IN ('out_for_repare', 'in_repair'))`;
 
 function mapErpOutForRepareRow(row) {
   const extra = typeof row.vsn_extra === 'object' && row.vsn_extra ? row.vsn_extra : {};
@@ -1847,7 +1845,9 @@ function mapErpOutForRepareRow(row) {
     vendor_address: extra.vendor_address || row.vendor_address || null,
     dc_number: null,
     dc_label: 'ERP / Legacy',
-    out_date: extra.repair_start_date || row.updated_at,
+    // The date it went out, never the row's last edit (any billing or QC write
+    // moved updated_at and showed as a fresh out date).
+    out_date: extra.repair_start_date || row.out_ts || null,
     expected_return_date: null,
     current_status: 'Out For Repare',
     remarks: row.remark || extra.action_remark || null,
@@ -1991,11 +1991,10 @@ async function listOutForRepairInventory({
     erpSearchSql += ' AND FALSE';
   }
   const erpDateClauses = appendDateRangeClauses({
-    column: 'updated_at',
+    expr: ERP_OUT_TS_SQL,
     dateFrom,
     dateTo,
     params: erpParams,
-    tableAlias: 'vsn',
   });
   if (erpDateClauses.length) {
     erpSearchSql += ` AND ${erpDateClauses.join(' AND ')}`;
@@ -2056,6 +2055,7 @@ async function listOutForRepairInventory({
     ),
     pool.query(
       `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.remark, vsn.updated_at,
+              ${ERP_OUT_TS_SQL} AS out_ts,
               vsn.extra AS vsn_extra,
               COALESCE(vsn.inventory_asset_code, vsn.extra->>'unique_product_serial') AS ttspl_id,
               vpd.brand AS pd_brand, vpd.model AS pd_model,
