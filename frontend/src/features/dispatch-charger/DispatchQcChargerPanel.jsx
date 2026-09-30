@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CheckCircle2, Loader2, PlugZap, Warehouse } from 'lucide-react';
 import ScanField from '../../components/ScanField';
+import { usePermission } from '../../hooks/usePermission';
 import {
   attachDispatchCharger,
   cancelChargerRequest,
@@ -11,6 +12,8 @@ import {
 } from './dispatchChargerApi';
 
 export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
+  const { canEdit } = usePermission();
+  const canResetNoCharger = canEdit('dispatch_charger_reset');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState(null);
@@ -159,6 +162,23 @@ export default function DispatchQcChargerPanel({ ticket, onReadyChange }) {
             {busy ? 'Attaching…' : 'Attach adapter + power cable'}
           </button>
         </div>
+      ) : null}
+
+      {charger?.status === 'already_with_customer' && canResetNoCharger ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            if (!window.confirm('Cancel "charger already with customer"? The technician can then raise a charger request to warehouse.')) return;
+            run(
+              () => cancelChargerRequest(charger.request_id, 'Cancelled "already with customer" choice'),
+              'Cancelled — choose charger option again'
+            );
+          }}
+          className="text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+        >
+          Cancel "already with customer" selection
+        </button>
       ) : null}
 
       {charger && !ready && charger.status !== 'pending' && charger.status !== 'handed_over' ? (

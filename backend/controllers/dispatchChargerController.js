@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const svc = require('../services/dispatchChargerService');
+const { hasPermission } = require('../services/permissionService');
 
 function sendError(res, err, fallback) {
   const status = err.status || 500;
@@ -70,8 +71,12 @@ exports.raiseRequest = async (req, res) => {
 
 exports.cancelRequest = async (req, res) => {
   try {
+    req.permissionCache = req.permissionCache || {};
+    const canResetNoCharger = await hasPermission(
+      req.user.user_id, req.user.role, 'dispatch_charger_reset', 'edit', req.permissionCache
+    );
     const row = await withTx((db) =>
-      svc.cancelRequest(db, Number(req.params.requestId), req.user, req.body?.remarks)
+      svc.cancelRequest(db, Number(req.params.requestId), req.user, req.body?.remarks, { canResetNoCharger })
     );
     res.json({ success: true, message: 'Charger request cancelled', data: svc.publicRequest(row) });
   } catch (e) {

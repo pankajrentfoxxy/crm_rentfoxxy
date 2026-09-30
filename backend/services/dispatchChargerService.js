@@ -349,7 +349,17 @@ async function cancelRequest(db, requestId, user, remarks, opts = {}) {
   if (['dispatched', 'returned'].includes(row.status)) {
     throw httpError('Cannot cancel a charger that has already been dispatched or returned');
   }
-  if (row.qc_scan_matched && !force) {
+  const isNoChargerChoice = row.disposition === 'already_with_customer';
+  if (isNoChargerChoice && !force) {
+    if (!opts.canResetNoCharger) {
+      throw httpError('Only an authorised user can cancel "charger already with customer". Ask your admin.', 403);
+    }
+    const ctx = await loadTicketContext(db, row.ticket_id);
+    if (!/dispatch\s*qc/i.test(ctx.stage_name || '')) {
+      throw httpError('This laptop has moved past Dispatch QC — the charger choice can no longer be changed');
+    }
+  }
+  if (row.qc_scan_matched && !force && !isNoChargerChoice) {
     throw httpError('Cannot cancel after Dispatch QC charger scan is complete');
   }
   const kitUnits = row.units?.length

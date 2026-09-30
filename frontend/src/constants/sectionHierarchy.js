@@ -41,7 +41,7 @@ export const MODULE_CHILDREN = {
     'delivery_my_deliveries',
     'payment_records',
   ],
-  floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'dispatch_charger', 'pending_inventory', 'diagnosis_failed'],
+  floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'dispatch_charger', 'dispatch_charger_reset', 'pending_inventory', 'diagnosis_failed'],
   vendor_management: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'],
   inventory_management: ['customer_inventory', 'ttspl_history', 'inventory_master_data', 'inventory_vendor_master_data', 'inventory_return_master_data', 'inventory_asset_movement', 'ready_to_rent_location'],
   parts_management: [
