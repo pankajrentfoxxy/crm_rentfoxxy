@@ -204,7 +204,7 @@ export default function SaleInPlaceModal({ open, customerId, canOpenSaleOrder = 
   };
 
   const subtotal = (prefill?.laptops || []).reduce((s, l) => s + (Number(prices[l.serial_id]) || 0), 0);
-  const supplyState = resolveSupplyStateFromShipping(shipping);
+  const supplyState = resolveSupplyStateFromShipping(shipping, '', gstNumber);
   const gst = computeGstBreakdown({ subtotal, supplyState });
   const vendorUnits = (prefill?.laptops || []).filter((l) => l.vendor_rented);
 

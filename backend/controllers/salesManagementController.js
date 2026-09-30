@@ -520,7 +520,9 @@ exports.storeQuotation = async (req, res) => {
     if (billing && companyName) {
       billing = { ...billing, name: companyName };
     }
-    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
 
     const quotationType = body.quotation_type || 'rental';
     const quoteCustomerId = toNullableInt(body.customer_id);
@@ -980,7 +982,9 @@ exports.storeSalesOrder = async (req, res) => {
     if (billing && body.customer_name) {
       billing = { ...billing, name: body.customer_name };
     }
-    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
     const customerId = toNullableInt(body.customer_id);
     const isWfh = body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1;
     // Sale in place: the customer keeps a unit they already hold on rent. Fulfilled
@@ -1294,7 +1298,9 @@ exports.updateSalesOrder = async (req, res) => {
     }
     const supplyState = resolveSupplyStateFromAddress(
       shipping,
-      body.supply_state || head.supply_state
+      body.supply_state || head.supply_state,
+      '',
+      body.GST_number || body.gst_number || billing?.gst_number || head.gst_number
     );
     const shippingJson = shipping ? JSON.stringify(shipping) : null;
     const billingJson = billing ? JSON.stringify(billing) : null;
@@ -2779,7 +2785,7 @@ exports.getDeliveryChallan = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', head.gst_number),
     });
 
     let assignmentHistory = [];
@@ -3015,17 +3021,21 @@ exports.storeDeliveryChallan = async (req, res) => {
     let dcNumber = null;
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
-    let supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    let supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
     if (!supplyState && body.sales_order_number) {
       const soRes = await pool.query(
-        `SELECT supply_state, customer_shipping_address
+        `SELECT supply_state, customer_shipping_address, gst_number
            FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
         [body.sales_order_number]
       );
       if (soRes.rows.length) {
         supplyState = resolveSupplyStateFromAddress(
           soRes.rows[0].customer_shipping_address,
-          soRes.rows[0].supply_state
+          soRes.rows[0].supply_state,
+          '',
+          soRes.rows[0].gst_number
         );
       }
     }
@@ -3519,7 +3529,9 @@ exports.createDcsByAddress = async (req, res) => {
       const groupSerials = ids.map((id) => allocMap[id]).filter(Boolean);
       const deliveryAddress = group.delivery_address
         || parseJsonSafe(soHead.customer_shipping_address) || billing || null;
-      const groupSupplyState = resolveSupplyStateFromAddress(deliveryAddress, soHead.supply_state);
+      const groupSupplyState = resolveSupplyStateFromAddress(
+        deliveryAddress, soHead.supply_state, '', soHead.gst_number || billing?.gst_number
+      );
 
       const groupSize = ids.length;
       const groupSecurity = computeDcSecurityFromSerials(groupSerials, soLines);
@@ -4713,7 +4725,9 @@ exports.getSoWithPayments = async (req, res) => {
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
       security: soSecurity,
-      supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
+      supplyState: resolveSupplyStateFromAddress(
+        lines[0].customer_shipping_address, lines[0].supply_state, '', lines[0].gst_number
+      ),
       gstOnShipping,
     });
     const soStatus = deriveSalesOrderListStatus({
@@ -6953,6 +6967,17 @@ exports.updateDcHsn = async (req, res) => {
 };
 
 /** PATCH /sales-orders/:soNumber/shipping-address — Super Admin only. */
+/** Buyer GSTIN on a sales order — it decides the place of supply when present. */
+async function soGstin(db, soNumber) {
+  const r = await db.query(
+    `SELECT NULLIF(TRIM(gst_number), '') AS gst_number
+       FROM sales_order_lines WHERE sales_order_number = $1
+      ORDER BY id LIMIT 1`,
+    [soNumber]
+  );
+  return r.rows[0]?.gst_number || '';
+}
+
 exports.updateSalesOrderShippingAddress = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -6967,7 +6992,9 @@ exports.updateSalesOrderShippingAddress = async (req, res) => {
       });
     }
 
-    const supplyState = resolveSupplyStateFromAddress(shipping, req.body?.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, req.body?.supply_state, '', await soGstin(client, soNumber)
+    );
     const shippingJson = JSON.stringify(shipping);
 
     await client.query('BEGIN');
@@ -7343,7 +7370,7 @@ exports.updateSoShipping = async (req, res) => {
           message: 'name, phone, address, city, state, and zip_code are required',
         });
       }
-      supplyState = resolveSupplyStateFromAddress(shipping, b.supply_state);
+      supplyState = resolveSupplyStateFromAddress(shipping, b.supply_state, '', await soGstin(client, soNumber));
     }
 
     await client.query('BEGIN');

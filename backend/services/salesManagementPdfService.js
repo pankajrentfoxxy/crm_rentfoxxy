@@ -342,7 +342,9 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const subtotal = +goods.toFixed(2);
   const supplyState = resolveSupplyStateFromAddress(
     header.customer_shipping_address || lines[0]?.customer_shipping_address,
-    header.supply_state || lines[0]?.supply_state
+    header.supply_state || lines[0]?.supply_state,
+    '',
+    header.gst_number || lines[0]?.gst_number
   );
   const gstOnShipping = (lines || []).some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
   const gst = computeGstBreakdown({ subtotal, shipping, security, supplyState, gstOnShipping });
@@ -1064,7 +1066,12 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
       email: header.customer_email || billing.email,
       phone: billing.phone || header.customer_phone,
       gst: String(header.gst_number || billing.gst_number || '').trim(),
-      pos: header.supply_state ? titleCaseState(header.supply_state) : null,
+      pos: (() => {
+        const pos = resolveSupplyStateFromAddress(
+          shippingAddr, header.supply_state, '', header.gst_number || billing.gst_number
+        );
+        return pos ? titleCaseState(pos) : null;
+      })(),
     });
     const rightEnd = addrBlock(L + colW + 12, 'Shipping Address:', shippingAddr.name || custName, {
       ...shippingAddr,

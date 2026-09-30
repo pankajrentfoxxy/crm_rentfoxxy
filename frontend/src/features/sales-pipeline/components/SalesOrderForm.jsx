@@ -344,8 +344,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     ? totalValue
     : (Number(form.security_amount) || 0);
   const supplyState = useMemo(
-    () => resolveSupplyStateFromShipping(selectedShippingAddress),
-    [selectedShippingAddress]
+    () => resolveSupplyStateFromShipping(selectedShippingAddress, '', form.GST_number),
+    [selectedShippingAddress, form.GST_number]
   );
   const gstTotals = useMemo(() => computeGstBreakdown({
     subtotal: totalValue,
@@ -774,7 +774,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             <p className="text-blue-800 font-medium">Grand Total: {formatCurrency(gstTotals.grand_total + (advanceRequired ? advance : 0))}</p>
             {selectedShippingAddress?.state ? (
               <p className="text-[11px] text-gray-500 pt-1">
-                GST for shipping state: {formatSupplyStateLabel(supplyState)}
+                Place of supply (GSTIN state, else shipping): {formatSupplyStateLabel(supplyState)}
                 {gstTotals.gst_type === 'inter' ? ' (IGST 18%)' : ' (CGST 9% + SGST 9%)'}
                 {isWfh ? ' · on goods + shipping' : ' · on goods only'}
               </p>
@@ -854,7 +854,7 @@ function SalesOrderPreview({
   const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
   const totals = gstTotals || computeGstBreakdown({
     subtotal, shipping, security,
-    supplyState: resolveSupplyStateFromShipping(shippingAddress),
+    supplyState: resolveSupplyStateFromShipping(shippingAddress, '', form.GST_number),
     gstOnShipping: isWfh,
   });
   const isGorefurbo = String(form.branch || '').toLowerCase() === 'gorefurbo'
@@ -887,7 +887,7 @@ function SalesOrderPreview({
               {fromQuote && form.quotation_number ? (
                 <p className="text-gray-500">From: {form.quotation_number}</p>
               ) : null}
-              <p className="text-gray-500">Supply state: {formatSupplyStateLabel(supplyState || resolveSupplyStateFromShipping(shippingAddress))}</p>
+              <p className="text-gray-500">Supply state: {formatSupplyStateLabel(supplyState || resolveSupplyStateFromShipping(shippingAddress, '', form.GST_number))}</p>
             </div>
           </div>
 

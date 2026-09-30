@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { STATE_NAMES } = require('../utils/invoiceItemFormatting');
 const { effectiveReplacementLineRemark } = require('../utils/replacementRemarkUtils');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
@@ -2632,8 +2633,14 @@ function normalizeStateForGst(state) {
 /**
  * Resolve the place of supply for GST.
  *
- * Order: shipping-address state -> stored supply_state -> `fallbackState`
- * (normally the customer's billing_state).
+ * Order: the buyer's GSTIN state -> shipping-address state -> stored supply_state
+ * -> `fallbackState` (normally the customer's billing_state).
+ *
+ * A registered buyer's GSTIN wins: rental is a service billed to the registered
+ * recipient, and a bill-to / ship-to sale is supplied to the billed party, so the
+ * delivery address must not decide the head. SO/26-27/1416 billed a Haryana GSTIN
+ * (06...) but shipped to Noida and printed IGST, while its monthly invoices (which
+ * already key off the GSTIN) print CGST+SGST.
  *
  * The fallback matters. The shipping-address JSON has no `state` key for
  * free-text addresses and lead-converted shell records, and when that happened
@@ -2644,7 +2651,16 @@ function normalizeStateForGst(state) {
  * under-reported IGST. The customer's state was in the database the whole time;
  * it simply was not consulted.
  */
-function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '') {
+function supplyStateFromGstin(gstin) {
+  const g = String(gstin || '').trim().toUpperCase();
+  if (!/^\d{2}[A-Z0-9]{13}$/.test(g)) return '';
+  const name = STATE_NAMES[g.slice(0, 2)];
+  return name ? normalizeStateForGst(name) : '';
+}
+
+function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '', gstin = '') {
+  const fromGstin = supplyStateFromGstin(gstin);
+  if (fromGstin) return fromGstin;
   const addr = parseAddressField(shippingAddress);
   const fromAddr = addr?.state;
   if (fromAddr && String(fromAddr).trim()) {
@@ -3177,6 +3193,7 @@ module.exports = {
   recalcSoSecurityIfOneMonthRental,
   syncDcSecurityForSo,
   resolveSupplyStateFromAddress,
+  supplyStateFromGstin,
   resolveCustomerDocumentName,
   parseAddressField,
   normalizeStateForGst,

@@ -307,7 +307,29 @@ export function isIntraStateGst(supplyState) {
   return false;
 }
 
-export function resolveSupplyStateFromShipping(shippingAddress, fallback = '') {
+const GSTIN_STATE_NAMES = {
+  '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
+  '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh',
+  '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur',
+  '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+  '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat',
+  '26': 'Dadra and Nagar Haveli and Daman and Diu', '27': 'Maharashtra', '29': 'Karnataka',
+  '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
+  '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh',
+};
+
+/** State from a GSTIN's first two digits, or '' when the GSTIN is missing/invalid. */
+export function supplyStateFromGstin(gstin) {
+  const g = String(gstin || '').trim().toUpperCase();
+  if (!/^\d{2}[A-Z0-9]{13}$/.test(g)) return '';
+  const name = GSTIN_STATE_NAMES[g.slice(0, 2)];
+  return name ? normalizeStateForGst(name) : '';
+}
+
+/** Place of supply: buyer's GSTIN state first (mirrors the backend), then the shipping state. */
+export function resolveSupplyStateFromShipping(shippingAddress, fallback = '', gstin = '') {
+  const fromGstin = supplyStateFromGstin(gstin);
+  if (fromGstin) return fromGstin;
   if (!shippingAddress?.state || !String(shippingAddress.state).trim()) {
     return normalizeStateForGst(fallback);
   }

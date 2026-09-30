@@ -154,7 +154,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const shippingAddr = parseDeliveryAddress(head.customer_shipping_address);
   const supplyStateLabel = formatSupplyStateLabel(
-    resolveSupplyStateFromShipping(shippingAddr, head.supply_state)
+    resolveSupplyStateFromShipping(shippingAddr, head.supply_state, head.gst_number)
   );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
   // Sale in place: the customer keeps laptops they already hold on rent (lost,
