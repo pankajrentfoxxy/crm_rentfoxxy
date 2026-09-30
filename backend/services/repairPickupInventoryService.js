@@ -92,10 +92,11 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
   }
 
   const deployed = ['rented', 'on_demo', 'sold', 'out_stock'].includes(serial.inventory_status);
-  const alreadyRemoved = !serial.current_customer_id
-    && ['returned', 'in_stock', 'in_repair'].includes(serial.inventory_status);
+  // Keyed on the warehouse-side status alone: the customer link is now kept
+  // across a repair, so "customer is NULL" can no longer mark a done removal.
+  const alreadyRemoved = ['returned', 'in_stock', 'in_repair'].includes(serial.inventory_status);
 
-  if (alreadyRemoved && serial.rent_end_date) {
+  if (alreadyRemoved) {
     return { skipped: true, reason: 'already_removed', serialId: serial.serial_id };
   }
 
@@ -115,18 +116,24 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
   }
 
   if (deployed) {
+    // rentEndDate stays null: a repair pickup is not the end of the rental.
+    // The customer is billed continuously while the laptop is away. If the
+    // pickup is answered with a replacement, billing stops at the warehouse
+    // receipt date instead (billingSchedulerService, repair_replaced).
     await inventorySM.markReturned(client, serial.serial_id, {
       reason: `Repair pickup from customer (support item #${item.id})`,
-      rentEndDate: new Date(),
+      rentEndDate: null,
       actorUserId: actor.user_id || actor.userId || null,
       actorName: actor.name || null,
     });
   }
 
+  // current_customer_id is kept: the customer still holds this rental while the
+  // laptop is away, and billing selects on it. The outbound DC no longer says
+  // where the laptop is, so current_dc_number is cleared.
   await client.query(
     `UPDATE vendor_serial_numbers
-        SET current_customer_id = NULL,
-            current_dc_number = NULL,
+        SET current_dc_number = NULL,
             updated_at = NOW()
       WHERE serial_id = $1`,
     [serial.serial_id]

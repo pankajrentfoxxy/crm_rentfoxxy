@@ -68,9 +68,65 @@ function isAllowed(from, to) {
   return (ALLOWED[from] || []).includes(to);
 }
 
+/**
+ * Away for repair: the laptop's latest pickup (within its current rental) is a
+ * repair that was NOT answered with a replacement. The rental continues until
+ * it goes back to the customer, so billing and the customer link must survive.
+ */
+async function isOnRepairHold(db, serial) {
+  const r = await db.query(
+    `SELECT 1
+       FROM (
+         SELECT sti.id, sti.pickup_type, sti.source_item_id
+           FROM support_ticket_items sti
+          WHERE sti.item_type = 'pickup'
+            AND COALESCE(sti.status, '') NOT IN ('cancelled')
+            AND (sti.ttspl_id = $2 OR sti.unique_serial_number = $2 OR sti.serial_number = $3)
+            AND sti.created_at >= COALESCE($4::timestamptz, $5::timestamptz, '1970-01-01'::timestamptz) - INTERVAL '1 day'
+          ORDER BY sti.created_at DESC
+          LIMIT 1
+       ) p
+      WHERE COALESCE(p.pickup_type, CASE WHEN p.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
+        AND NOT EXISTS (
+          SELECT 1 FROM support_replacement_orders ro
+           WHERE ro.status <> 'cancelled'
+             AND (ro.pickup_item_id = p.id OR ro.old_serial_id = $1)
+             AND ro.created_at >= COALESCE($4::timestamptz, $5::timestamptz, '1970-01-01'::timestamptz) - INTERVAL '1 day'
+        )
+      LIMIT 1`,
+    [serial.serial_id, serial.ttspl_id || '', serial.serial_number || '', serial.delivered_at || null, serial.cur_rent_start || null]
+  );
+  return r.rows.length > 0;
+}
+
+/**
+ * A replacement laptop (its current allocation is a support replacement order's
+ * line, or it is that order's new unit). Its rent starts on the warehouse
+ * dispatch date, whatever the delivery mode.
+ */
+async function isReplacementUnit(db, serialId, dcNumber) {
+  const r = await db.query(
+    `SELECT 1
+       FROM support_replacement_orders ro
+      WHERE ro.status <> 'cancelled'
+        AND (
+          ro.sales_order_line_id IN (
+            SELECT sos.line_id FROM sales_order_serials sos
+             WHERE sos.serial_id = $1 AND sos.status <> 'removed'
+               AND ($2::text IS NULL OR sos.dc_number = $2)
+          )
+          OR (ro.new_serial_id = $1 AND ro.created_at > NOW() - INTERVAL '60 days')
+        )
+      LIMIT 1`,
+    [serialId, dcNumber ? String(dcNumber) : null]
+  );
+  return r.rows.length > 0;
+}
+
 async function loadSerial(db, serialId) {
   const r = await db.query(
     `SELECT serial_id, serial_number, inventory_status, current_dc_number,
+            current_customer_id, delivered_at, dispatched_at, rent_start_date AS cur_rent_start,
             COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id
        FROM vendor_serial_numbers
       WHERE serial_id = $1 AND deleted_at IS NULL`,
@@ -115,6 +171,10 @@ async function transitionAsset(db, {
   if (!allowOverride && !isAllowed(from, toStatus)) {
     throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);
   }
+
+  const onRepairHold = toStatus === STATUS.IN_STOCK && serial.current_customer_id
+    ? await isOnRepairHold(client, serial)
+    : false;
 
   // Build the column updates relevant to this transition.
   const sets = ['inventory_status = $2', 'status_changed_at = NOW()', 'updated_at = NOW()'];
@@ -175,6 +235,13 @@ async function transitionAsset(db, {
       if (rentEndDate !== null) add('rent_end_date', rentEndDate);
       break;
     case STATUS.IN_STOCK:
+      if (onRepairHold) {
+        // Repaired laptop waiting to go back to the same customer: the rental
+        // continues (billed across the repair), so keep the customer and rent
+        // anchors; only the outbound DC no longer describes where it is.
+        add('current_dc_number', null);
+        break;
+      }
       // Back to the shelf: clear customer holding context + billing anchors so a
       // re-rental to a new customer starts a fresh prepaid cycle.
       add('current_customer_id', null);
@@ -320,10 +387,17 @@ const markDelivered = async (db, serialId, {
   // Demo + sale do not start rent; rental does.
   // If first invoice already ran at DC create (rent_billed_until set), keep that
   // rent_start_date — do not recompute courier T+3 and rewrite the billed anchor.
+  // A replacement laptop's rent starts on its warehouse dispatch date, whatever
+  // the delivery mode (courier T+3 does not apply to replacements).
+  const replacementDispatch = toStatus === STATUS.RENTED && await isReplacementUnit(client, serialId, dcNumber)
+    ? (dispatchedAt || serial.dispatched_at || null)
+    : null;
   const rentStartDate = toStatus === STATUS.RENTED
     ? (serial.rent_billed_until && serial.rent_start_date
       ? toDateStr(serial.rent_start_date)
-      : toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt })))
+      : replacementDispatch
+        ? toDateStr(replacementDispatch)
+        : toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt })))
     : null;
 
   const correctionReason = deliveryCorrection === 'demo'
@@ -395,7 +469,7 @@ async function findSerialByCode(db, code) {
   if (!code) return null;
   const client = db || pool;
   const r = await client.query(
-    `SELECT serial_id, inventory_status, rent_monthly_rate, current_entity
+    `SELECT serial_id, inventory_status, rent_monthly_rate, current_entity, dispatched_at
        FROM vendor_serial_numbers
       WHERE deleted_at IS NULL
         AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
@@ -416,13 +490,10 @@ async function bridgeSupportReplacement(db, {
   oldCode, newCode, customerId, dcNumber = null, actorUserId = null, actorName = null,
 }) {
   const result = { returned: null, replaced: null };
+  // The old laptop is NOT returned here: it keeps billing until the warehouse
+  // receives it back. Its pickup (return / repair pickup + warehouse receipt)
+  // ends the rent on the warehouse receipt date.
   const oldRow = await findSerialByCode(db, oldCode);
-  if (oldRow) {
-    await markReturned(db, oldRow.serial_id, {
-      reason: 'Returned via support replacement', actorUserId, actorName,
-    });
-    result.returned = oldRow.serial_id;
-  }
   const newRow = await findSerialByCode(db, newCode);
   if (newRow) {
     // A spare in stock (or reserved) must pass through in_transit before it can
@@ -443,7 +514,7 @@ async function bridgeSupportReplacement(db, {
       customerId,
       entityCode: oldRow?.current_entity || 'rentfoxxy',
       dispatchMode: 'inhouse',
-      dispatchedAt: new Date(),
+      dispatchedAt: newRow.dispatched_at || new Date(),
       deliveredAt: new Date(),
       rentMonthlyRate: oldRow?.rent_monthly_rate ?? null,
       actorUserId,

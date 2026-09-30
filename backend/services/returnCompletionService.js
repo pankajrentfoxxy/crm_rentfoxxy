@@ -154,10 +154,12 @@ async function processReturnedSerials(db, {
     const warehouseReceivedAt = pickupItem?.warehouse_received_at
       ? new Date(pickupItem.warehouse_received_at)
       : null;
-    const returnDate = warehouseReceivedAt || new Date();
+    // Rent runs until the warehouse receives the laptop. When it is only picked
+    // up so far, no end date is stamped: billing caps it at the warehouse
+    // receipt date once that is recorded (billingSchedulerService).
     await inventorySM.markReturned(db, serialId, {
       reason: dcNumber ? `Picked up via Return DC ${dcNumber}` : 'Picked up (customer return)',
-      rentEndDate: returnDate, actorUserId, actorName,
+      rentEndDate: warehouseReceivedAt || null, actorUserId, actorName,
     });
 
     // Re-enter QC so it appears in "QC Process Laptops" (qc_status <> 'passed').

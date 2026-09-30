@@ -677,11 +677,7 @@ export default function InvoiceListPage() {
           { key: 'actions', header: 'Actions', render: (r) => (
             <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
               <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">View</Link>
-              {(r.status === 'draft' || r.status === 'sent') && (
-                <PermissionGate section="customer_billing" action="edit">
-                  <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">Send</Link>
-                </PermissionGate>
-              )}
+              {/* No sending from the CRM: invoices stay draft, are downloaded and attached in Zoho. */}
               {r.status === 'sent' && (
                 <PermissionGate section="customer_billing" action="edit">
                   <button type="button" onClick={() => handleMarkPaid(r.invoice_id)} className="text-xs text-green-600 hover:underline">Paid</button>

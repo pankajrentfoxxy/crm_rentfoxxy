@@ -874,10 +874,10 @@ async function resolveBillingBranch(db, serialRow, pickupItem) {
     );
     passivated = !!ci.rows[0]?.passivated_at;
   }
-  const rentPaused = passivated
-    || !!serialRow.rent_end_date
-    || serialRow.inventory_status === inventorySM.STATUS.IN_STOCK
-    || serialRow.inventory_status === inventorySM.STATUS.RETURNED;
+  // Billing runs continuously across a repair (no pause), so the rental keeps
+  // its original rent start. Only a laptop whose rent anchor was wiped (old
+  // code cleared it at pickup / in stock) restarts rent on this delivery.
+  const rentPaused = !serialRow.rent_start_date;
   const preservedRate = serialRow.rent_monthly_rate != null
     ? Number(serialRow.rent_monthly_rate)
     : null;

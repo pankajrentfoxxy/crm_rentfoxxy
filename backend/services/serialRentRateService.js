@@ -18,10 +18,14 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
     params.push(String(dcNumber));
     dcClause = `AND sos.dc_number = $${params.length}`;
   }
+  // A replacement carries the returned laptop's rate (recorded on the
+  // replacement order), whatever its SO line was later edited to.
   const bySerial = await client.query(
-    `SELECT sol.rate, sol.quotation_type
+    `SELECT COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate) AS rate, sol.quotation_type
        FROM sales_order_serials sos
        JOIN sales_order_lines sol ON sol.id = sos.line_id
+       LEFT JOIN support_replacement_orders ro
+         ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
       WHERE sos.serial_id = $1
         AND sos.status <> 'removed'
         ${dcClause}
@@ -54,7 +58,8 @@ async function resolveSerialRentRate(db, serialId, dcNumber = null) {
  * SO when dcNumber is given, else the latest). A laptop's
  * vendor_serial_numbers.rent_monthly_rate is one field that outlives each
  * rental, so on a re-rented unit it can still hold the previous customer's
- * rate; the SO line cannot. Rs 1 placeholders (demo, draft SOs) don't count.
+ * rate; the SO line cannot. A replacement's line takes the returned laptop's
+ * rate from its replacement order. Rs 1 placeholders (demo, draft SOs) don't count.
  * Returns null when the customer has no such line for the unit.
  */
 async function resolveCustomerContractRate(db, serialId, customerId, { dcNumber = null } = {}) {
@@ -67,9 +72,11 @@ async function resolveCustomerContractRate(db, serialId, customerId, { dcNumber 
     dcClause = `AND sos.dc_number = $${params.length}`;
   }
   const r = await client.query(
-    `SELECT sol.rate
+    `SELECT COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate) AS rate
        FROM sales_order_serials sos
        JOIN sales_order_lines sol ON sol.id = sos.line_id
+       LEFT JOIN support_replacement_orders ro
+         ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
       WHERE sos.serial_id = $1
         AND sol.customer_id = $2
         AND sos.status <> 'removed'

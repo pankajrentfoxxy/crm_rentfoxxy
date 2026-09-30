@@ -235,9 +235,7 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <PermissionGate section="customer_billing" action="edit">
-            <Button onClick={() => setSendOpen(true)}>Send to Customer</Button>
-          </PermissionGate>
+          {/* No sending from the CRM: invoices stay draft; download the PDF and attach it in Zoho. */}
           <PermissionGate section="customer_billing" action="edit">
             <Button variant="secondary" onClick={() => setZohoOpen(true)}>Generated on Zoho</Button>
           </PermissionGate>
