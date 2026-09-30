@@ -11,7 +11,7 @@ import {
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
-  computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
+  computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel, gstinForDocument,
 } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderDetailPath } from '../salesOrderScope';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
@@ -83,6 +83,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [customers, setCustomers] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [fromQuote, setFromQuote] = useState(Boolean(prefillQuotation));
+  // Existing SO being edited: its date/number decide whether the GSTIN rule applies.
+  const [editDocMeta, setEditDocMeta] = useState(null);
   const [lines, setLines] = useState([emptyLineItem()]);
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -132,6 +134,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       const data = res.data;
       const soLines = data?.lines || [];
       const head = soLines[0] || {};
+      setEditDocMeta({ created_at: head.created_at, sales_order_number: head.sales_order_number });
       const lineWfh = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
       const delivery = parseAddress(head.delivery_address) || {};
       setIsWfh(Boolean(lineWfh));
@@ -309,8 +312,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     ? totalValue
     : (Number(form.security_amount) || 0);
   const supplyState = useMemo(
-    () => resolveSupplyStateFromShipping(selectedShippingAddress),
-    [selectedShippingAddress]
+    () => resolveSupplyStateFromShipping(
+      selectedShippingAddress, '',
+      isEdit ? gstinForDocument({ ...editDocMeta, gst_number: form.GST_number }) : form.GST_number
+    ),
+    [selectedShippingAddress, form.GST_number, isEdit, editDocMeta]
   );
   const gstTotals = useMemo(() => computeGstBreakdown({
     subtotal: totalValue,
@@ -740,7 +746,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             <p className="text-blue-800 font-medium">Grand Total: {formatCurrency(gstTotals.grand_total + (advanceRequired ? advance : 0))}</p>
             {selectedShippingAddress?.state ? (
               <p className="text-[11px] text-gray-500 pt-1">
-                GST for shipping state: {formatSupplyStateLabel(supplyState)}
+                Place of supply (GSTIN state, else shipping): {formatSupplyStateLabel(supplyState)}
                 {gstTotals.gst_type === 'inter' ? ' (IGST 18%)' : ' (CGST 9% + SGST 9%)'}
                 {isWfh ? ' · on goods + shipping' : ' · on goods only'}
               </p>
@@ -820,7 +826,7 @@ function SalesOrderPreview({
   const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
   const totals = gstTotals || computeGstBreakdown({
     subtotal, shipping, security,
-    supplyState: resolveSupplyStateFromShipping(shippingAddress),
+    supplyState: resolveSupplyStateFromShipping(shippingAddress, '', form.GST_number),
     gstOnShipping: isWfh,
   });
   const isGorefurbo = String(form.branch || '').toLowerCase() === 'gorefurbo'
@@ -853,7 +859,7 @@ function SalesOrderPreview({
               {fromQuote && form.quotation_number ? (
                 <p className="text-gray-500">From: {form.quotation_number}</p>
               ) : null}
-              <p className="text-gray-500">Supply state: {formatSupplyStateLabel(supplyState || resolveSupplyStateFromShipping(shippingAddress))}</p>
+              <p className="text-gray-500">Supply state: {formatSupplyStateLabel(supplyState || resolveSupplyStateFromShipping(shippingAddress, '', form.GST_number))}</p>
             </div>
           </div>
 

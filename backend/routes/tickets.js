@@ -1,4 +1,5 @@
 const express = require('express');
+const { rejectQcReadyTicketMove, rejectQcReadyBulkMove } = require('../services/qcReadyHoldService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -138,7 +139,7 @@ router.get('/my', floorAnyView, getMyTickets);
 const requireFloorLead = (req, res, next) => (require('../services/qcGateService').isManager(req.user)
   ? next()
   : res.status(403).json({ success: false, message: 'Only a floor manager or manager can do this.' }));
-router.post('/bulk-move', ftEdit, requireFloorLead, bulkMoveTickets);
+router.post('/bulk-move', ftEdit, requireFloorLead, rejectQcReadyBulkMove, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', floorAnyView, qcController.getQC2Assignees);
@@ -167,16 +168,18 @@ router.get('/:id/next-assignee', floorAnyView, getNextAssignee);
 router.get('/:id/production-history', ftView, getProductionHistory);
 router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', ttsplHistoryView, phase2.getTicketsByTtsplId);
-router.post('/:id/move-stage', floorAnyEdit, phase2.moveToStage);
-router.patch('/:id/chip-repair', floorAnyEdit, phase2.markChipRepairRequired);
-router.patch('/:id/body-paint', floorAnyEdit, phase2.markBodyPaintRequired);
+const qcReadyHold = rejectQcReadyTicketMove();
+router.post('/:id/move-stage', floorAnyEdit, qcReadyHold, phase2.moveToStage);
+router.patch('/:id/chip-repair', floorAnyEdit, qcReadyHold, phase2.markChipRepairRequired);
+router.patch('/:id/body-paint', floorAnyEdit, qcReadyHold, phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
   ftEdit,
   requireFloorLead,
+  qcReadyHold,
   phase2.markQcFailed
 );
-router.patch('/:id/diagnosis-failed', floorAnyEdit, phase2.markDiagnosisFailed);
+router.patch('/:id/diagnosis-failed', floorAnyEdit, qcReadyHold, phase2.markDiagnosisFailed);
 router.patch('/:id/config', ftConfigEdit, phase2.updateTtsplConfig);
 
 // Praman proof on Dispatch QC (migration 410): Device ID + report PDF, required to pass.
@@ -198,17 +201,17 @@ router.get('/:id', floorAnyView, getTicketById);
 // @route   PUT /api/tickets/:id
 // @desc    Update ticket details
 // @access  Private
-router.put('/:id', floorAnyEdit, updateTicket);
+router.put('/:id', floorAnyEdit, rejectQcReadyTicketMove({ onlyIfBodyHas: ['status', 'current_stage_id'] }), updateTicket);
 
 // @route   POST /api/tickets/:id/next-stage
 // @desc    Move ticket to next stage
 // @access  Private
-router.post('/:id/next-stage', floorAnyEdit, moveToNextStage);
+router.post('/:id/next-stage', floorAnyEdit, qcReadyHold, moveToNextStage);
 
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
 // @access  Private (Team Lead, Manager, Floor Manager, Admin)
-router.post('/:id/assign', ftAssign, assignTicket);
+router.post('/:id/assign', ftAssign, qcReadyHold, assignTicket);
 
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
@@ -269,7 +272,7 @@ router.post('/:id/stage-task', floorAnyEdit, saveStageTask);
 // QC Routes
 router.get('/:id/qc', floorAnyView, qcController.getQCData);
 router.post('/:id/qc/save', qcSubmit, qcController.saveQC);
-router.post('/:id/qc/submit', qcSubmit, qcController.submitQC);
+router.post('/:id/qc/submit', qcSubmit, qcReadyHold, qcController.submitQC);
 router.post('/qc/:qc_id/upload-photo', qcSubmit, wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
 router.get('/:ticket_id/qc/history', floorAnyView, qcController.getQCHistory);
 

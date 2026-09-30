@@ -6,6 +6,7 @@ const {
   computeGstBreakdown,
   resolveDcBilling,
   resolveSupplyStateFromAddress,
+  gstinForDocument,
 } = require('../services/salesManagementService');
 const {
   isSaleDc,
@@ -159,7 +160,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', gstinForDocument(head)),
     });
     const asset = await computeDcAssetValue(dcNumber, lines);
     const needsEway = requiresEwayBill(asset.total);
@@ -424,7 +425,7 @@ exports.sendAccountsNotification = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', gstinForDocument(head)),
     });
     const canSend = await canUploadSaleDcCompliance(req.user, req.permissionCache);
     const saleCompliance = buildSaleCompliance(
@@ -542,7 +543,9 @@ exports.requestDemoEway = async (req, res) => {
       subtotal,
       shipping: updated[0].shiping_charges,
       security: updated[0].security_amount,
-      supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
+      supplyState: resolveSupplyStateFromAddress(
+        updated[0].customer_shipping_address, updated[0].supply_state, '', gstinForDocument(updated[0])
+      ),
     });
     const canUpload = await canUploadDcValueEway(req.user, req.permissionCache);
     const demoEway = buildDemoEwayCompliance(
@@ -708,7 +711,9 @@ exports.uploadDemoEway = async (req, res) => {
       subtotal,
       shipping: updated[0].shiping_charges,
       security: updated[0].security_amount,
-      supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
+      supplyState: resolveSupplyStateFromAddress(
+        updated[0].customer_shipping_address, updated[0].supply_state, '', gstinForDocument(updated[0])
+      ),
     });
     const canUpload = await canUploadDcValueEway(req.user, req.permissionCache);
     const demoEway = buildDemoEwayCompliance(

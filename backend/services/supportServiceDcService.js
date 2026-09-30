@@ -324,6 +324,11 @@ async function assertTicketRepairContext(db, ticket) {
 async function evaluatePickupItemEligibility(db, item, ticket) {
   const reasons = [];
   if (!isRepairPickupItem(item)) reasons.push('not a repair pickup item');
+  // A closed ticket has ended the rental (billing stops at warehouse receipt).
+  // Sending the laptop back needs a new Sales Order, not a Service DC.
+  if (String(ticket?.status || '').toLowerCase() === 'closed' || item.status === 'closed') {
+    reasons.push('ticket is closed — create a Sales Order to send this laptop to the customer');
+  }
   if (!item.warehouse_received_at) reasons.push('warehouse receipt pending');
   if (!item.return_dc_number) reasons.push('return pickup not completed');
   if (item.service_dc_number) {
@@ -875,10 +880,10 @@ async function resolveBillingBranch(db, serialRow, pickupItem) {
     );
     passivated = !!ci.rows[0]?.passivated_at;
   }
-  const rentPaused = passivated
-    || !!serialRow.rent_end_date
-    || serialRow.inventory_status === inventorySM.STATUS.IN_STOCK
-    || serialRow.inventory_status === inventorySM.STATUS.RETURNED;
+  // Billing runs continuously across a repair (no pause), so the rental keeps
+  // its original rent start. Only a laptop whose rent anchor was wiped (old
+  // code cleared it at pickup / in stock) restarts rent on this delivery.
+  const rentPaused = !serialRow.rent_start_date;
   const preservedRate = serialRow.rent_monthly_rate != null
     ? Number(serialRow.rent_monthly_rate)
     : null;

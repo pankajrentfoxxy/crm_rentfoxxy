@@ -262,6 +262,36 @@ async function runBillingBatch(runName, fn) {
  * re-delivery to the same customer. Customer Active already uses this rule;
  * billing must too — VSN can stay `rented` after warehouse e-sign.
  */
+/**
+ * SQL: pickup `sti` is a repair that was NOT answered with a replacement. Such a
+ * laptop goes back to the same customer and is billed continuously, so its
+ * warehouse receipt is never a rent end or a return credit note. A repair
+ * answered with a replacement ends at the warehouse receipt like a return.
+ *
+ * So does a repair whose ticket was closed without a Service DC: support can no
+ * longer send that laptop back on the ticket (a new SO is needed), so it is not
+ * coming back to this rental (rule 2026-09-30).
+ */
+const REPAIR_CLOSED_WITHOUT_SDC_SQL = `(
+  sti.service_dc_number IS NULL
+  AND (
+    sti.status = 'closed'
+    OR EXISTS (SELECT 1 FROM support_tickets st WHERE st.id = sti.ticket_id AND st.status = 'closed')
+  )
+)`;
+
+const REPAIR_HOLD_PICKUP_SQL = `(
+  COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
+  AND NOT EXISTS (
+    SELECT 1 FROM support_replacement_orders ro
+     WHERE ro.status <> 'cancelled'
+       AND (ro.pickup_item_id = sti.id
+            OR ro.old_machine_serial IN (sti.ttspl_id, sti.unique_serial_number))
+       AND ro.created_at >= sti.created_at - INTERVAL '7 days'
+  )
+  AND NOT ${REPAIR_CLOSED_WITHOUT_SDC_SQL}
+)`;
+
 async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
   const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
   const bySerial = new Map();
@@ -274,12 +304,7 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
-        -- Permanent returns only. A repair receipt must not shorten the billed
-        -- window: the unit goes back to this customer and billing is continuous
-        -- across the repair. The comment below always claimed this; the SQL did
-        -- not implement it once current_customer_id had been cleared.
-        AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
-            IS DISTINCT FROM 'repair'
+        AND NOT ${REPAIR_HOLD_PICKUP_SQL}
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -474,6 +499,7 @@ async function buildCompletedOccupancyLines(client, {
           AND COALESCE(rl.status, '') NOT IN ('cancelled')
         WHERE sti.item_type = 'pickup'
           AND sti.warehouse_received_at IS NOT NULL
+          AND NOT ${REPAIR_HOLD_PICKUP_SQL}
      ),
      occ AS (
        SELECT DISTINCT ON (o.ttspl, o.delivery_date)
@@ -758,7 +784,8 @@ async function loadOutboundForLines(client, customerId, lines) {
  * The first bill of a rental uses it, because vendor_serial_numbers
  * .rent_monthly_rate outlives the rental and a re-rented laptop could arrive
  * still carrying its previous customer's rate (Sept 2026: 31 units billed at
- * the last renter's price).
+ * the last renter's price). A replacement takes the returned laptop's rate
+ * from its replacement order, not its (hand-editable) SO line.
  */
 async function loadCurrentDcContractRates(client, customerId, serialIds) {
   const ids = normalizeSerialIds(serialIds);
@@ -767,7 +794,7 @@ async function loadCurrentDcContractRates(client, customerId, serialIds) {
   const { rows } = await client.query(
     `SELECT DISTINCT ON (vsn.serial_id)
             vsn.serial_id,
-            sol.rate::numeric AS rate,
+            COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate)::numeric AS rate,
             sol.sales_order_number,
             EXISTS (
               SELECT 1 FROM customer_asset_activity a
@@ -786,6 +813,8 @@ async function loadCurrentDcContractRates(client, customerId, serialIds) {
         AND sol.customer_id = $1
         AND COALESCE(sol.quotation_type, 'rental') = 'rental'
         AND COALESCE(sol.rate, 0) > 1
+       LEFT JOIN support_replacement_orders ro
+         ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
       WHERE vsn.serial_id = ANY($2::int[])
       ORDER BY vsn.serial_id, sos.allocation_id DESC`,
     [customerId, ids]
@@ -831,16 +860,17 @@ async function buildCustomerInvoiceLines(client, {
             vsn.dispatched_at,
             vsn.rent_billed_until,
             CASE
-              -- Away for repair: the rental has not ended, so returned_at must not
-              -- be used as an end date. Billing runs continuously across the repair
-              -- and the warehouse days are credited back separately.
-              WHEN last_pickup.ptype = 'repair'
-                   AND vsn.inventory_status IN ('returned', 'in_stock', 'in_repair')
+              -- Away for repair (no replacement): the rental has not ended.
+              -- (An explicit end date, from an older process, still wins.)
+              WHEN lp.repair_hold AND vsn.inventory_status IN ('returned', 'in_stock', 'in_repair')
                 THEN vsn.rent_end_date
-              -- RT1: picked up but not yet received at the warehouse — rent runs
-              -- until the warehouse receives it (receive stamps rent_end_date).
-              WHEN vsn.inventory_status = 'returned' AND vsn.rent_end_date IS NULL AND open_return.pending
-                THEN NULL
+              -- Picked up but not yet received at the warehouse: keep billing.
+              WHEN lp.id IS NOT NULL AND lp.recv IS NULL AND vsn.inventory_status = 'returned'
+                THEN vsn.rent_end_date
+              -- Received back (return, or a repair answered with a replacement):
+              -- rent ends on the warehouse receipt date.
+              WHEN lp.recv IS NOT NULL AND vsn.inventory_status IN ('returned', 'in_stock', 'in_repair')
+                THEN lp.recv
               WHEN vsn.inventory_status = 'returned'
                 THEN COALESCE(vsn.rent_end_date, vsn.returned_at::date)
               ELSE vsn.rent_end_date
@@ -853,56 +883,44 @@ async function buildCustomerInvoiceLines(client, {
             COALESCE(vsn.extra->>'ram', '') AS ram,
             COALESCE(vsn.extra->>'storage', '') AS storage
        FROM vendor_serial_numbers vsn
-       -- Most recent warehouse receipt for this unit, whatever its type. If that
-       -- receipt was a repair and the unit is still warehouse-side, the unit is
-       -- away for repair rather than returned. service_dc_number is not usable as
-       -- the "sent back" marker: 581 of 587 repair items have it NULL, including
-       -- units long since back with the customer.
+       -- Latest pickup of this laptop within its current rental.
        LEFT JOIN LATERAL (
-         SELECT COALESCE(sti.pickup_type,
-                         CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) AS ptype,
-                (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv
+         SELECT sti.id,
+                (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv,
+                ${REPAIR_HOLD_PICKUP_SQL} AS repair_hold,
+                (COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
+                 AND ${REPAIR_CLOSED_WITHOUT_SDC_SQL}) AS repair_closed
            FROM support_ticket_items sti
           WHERE sti.item_type = 'pickup'
-            AND sti.warehouse_received_at IS NOT NULL
+            AND COALESCE(sti.status, '') NOT IN ('cancelled')
             AND (
               sti.ttspl_id = vsn.inventory_asset_code
               OR sti.unique_serial_number = vsn.inventory_asset_code
               OR sti.serial_number = vsn.serial_number
             )
-          ORDER BY sti.warehouse_received_at DESC
+            AND sti.created_at >= COALESCE(vsn.delivered_at, vsn.rent_start_date::timestamptz, '1970-01-01'::timestamptz)
+                                  - INTERVAL '1 day'
+          ORDER BY sti.created_at DESC
           LIMIT 1
-       ) last_pickup ON TRUE
-       -- A permanent return picked up from this customer and not yet received.
-       LEFT JOIN LATERAL (
-         SELECT TRUE AS pending
-           FROM support_ticket_items sti
-          WHERE sti.item_type = 'pickup'
-            AND sti.warehouse_received_at IS NULL
-            AND COALESCE(sti.status, '') NOT IN ('cancelled', 'removed')
-            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END, 'return') = 'return'
-            AND (
-              sti.ttspl_id = vsn.inventory_asset_code
-              OR sti.unique_serial_number = vsn.inventory_asset_code
-              OR sti.serial_number = vsn.serial_number
-            )
-          LIMIT 1
-       ) open_return ON TRUE
+       ) lp ON TRUE
       WHERE vsn.current_customer_id = $1
         AND vsn.deleted_at IS NULL
         -- in_transit: first bill can start at DC generate (dispatch), before POD.
+        -- A laptop away for repair keeps billing even once QC moved it to stock.
         AND (
           vsn.inventory_status IN ('rented', 'returned', 'in_transit')
-          -- A unit away for repair keeps billing even once QC has moved it to
-          -- in_stock. Gated on the repair check so ordinary stock is never billed.
-          OR (last_pickup.ptype = 'repair'
-              AND vsn.inventory_status IN ('in_stock', 'in_repair'))
+          OR (lp.repair_hold AND vsn.inventory_status IN ('in_stock', 'in_repair'))
+          -- Repair ticket closed without a Service DC: bill the days still owed
+          -- up to the warehouse receipt, and nothing after it.
+          OR (lp.repair_closed AND lp.recv IS NOT NULL
+              AND vsn.inventory_status IN ('in_stock', 'in_repair')
+              AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < lp.recv))
         )
         AND vsn.rent_start_date IS NOT NULL
         AND vsn.rent_start_date <= $2::date
         AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
         ${serialFilter}
-      FOR UPDATE`,
+      FOR UPDATE OF vsn`,
     params
   );
 
@@ -1030,7 +1048,13 @@ async function buildCustomerInvoiceLines(client, {
     // Skip the unit entirely instead. No line, and no watermark advance, so the
     // whole outstanding span is still owed and bills in full as soon as someone
     // sets the rate.
-    if (!(monthlyRate > 0)) {
+    //
+    // A rate set to exactly 0 is different: a laptop we deliberately give free
+    // (e.g. TTSPL1942 at Antino). It still belongs on the invoice as a Rs 0
+    // line, so only a missing (NULL) or negative rate is skipped.
+    const freeOfCharge = monthlyRate === 0
+      && row.rent_monthly_rate !== null && row.rent_monthly_rate !== undefined && row.rent_monthly_rate !== '';
+    if (!(monthlyRate > 0) && !freeOfCharge) {
       console.warn(
         `[billing] SKIPPED ${row.ttspl_id || `serial ${row.serial_id}`} for customer ${customerId}:`
         + ` no rent_monthly_rate. Nothing billed and rent_billed_until left at`
@@ -1163,9 +1187,11 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
                  LIMIT 1
               ),
               (
-                SELECT sol.rate
+                SELECT COALESCE(NULLIF(ro.old_rent_monthly_rate, 0), sol.rate)
                   FROM sales_order_serials sos
                   JOIN sales_order_lines sol ON sol.id = sos.line_id
+                  LEFT JOIN support_replacement_orders ro
+                    ON ro.sales_order_line_id = sol.id AND ro.status <> 'cancelled'
                  WHERE sos.serial_id = vsn.serial_id
                    AND sos.dc_number = vsn.current_dc_number
                    AND sos.status <> 'removed'
@@ -1300,16 +1326,20 @@ async function generatePostpaidCustomerInvoice(customerId, month, year) {
 
     // Invoice month is the issue month (1st of next month) so list/revenue
     // filters match invoice_date. Also pick up leftover drafts still stored
-    // under the occupancy month from the first postpaid rollout.
+    // under the occupancy month from the first postpaid rollout — drafts only:
+    // an issued invoice under that month is the PREVIOUS month's bill (issue
+    // month = occupancy month + 1), e.g. PPG's August INV-0974 under month 9.
+    // Matching it made the run skip the customer with "Invoice already exists".
     const existing = await client.query(
       `SELECT invoice_id, invoice_number, status, line_items, subtotal,
               gst_percent, credit_note_adjustment, from_date, to_date,
               invoice_month, invoice_year
          FROM customer_invoices
         WHERE customer_id = $1
+          AND LOWER(COALESCE(status, '')) <> 'cancelled'
           AND (
             (invoice_month = $2 AND invoice_year = $3)
-            OR (invoice_month = $4 AND invoice_year = $5)
+            OR (invoice_month = $4 AND invoice_year = $5 AND LOWER(COALESCE(status, '')) = 'draft')
           )
         ORDER BY CASE WHEN invoice_month = $2 AND invoice_year = $3 THEN 0 ELSE 1 END,
                  invoice_id DESC
@@ -2752,13 +2782,7 @@ async function createMissingReturnCreditNotes(client, {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
-        -- A repair pickup is NOT a return: the unit comes back to this same customer
-        -- on a Service DC. Without this filter a repair pickup was issued a permanent
-        -- return credit note crediting through rent_billed_until (usually month-end) —
-        -- far beyond the repair window — whenever this ran before the SDC was created.
-        -- The repair window is credited separately by createRepairWindowCreditNote.
-        AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
-            IS DISTINCT FROM 'repair'
+        AND NOT ${REPAIR_HOLD_PICKUP_SQL}
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -2969,9 +2993,7 @@ async function listCreditNoteEligibleCustomerIds(month, year) {
              ON sti.return_dc_number = rl.dc_number
             AND sti.item_type = 'pickup'
             AND sti.warehouse_received_at IS NOT NULL
-            -- Repair pickups are not returns; see createMissingReturnCreditNotes.
-            AND COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END)
-                IS DISTINCT FROM 'repair'
+            AND NOT ${REPAIR_HOLD_PICKUP_SQL}
           WHERE rl.movement_type = 'return'
             AND COALESCE(rl.status, '') NOT IN ('cancelled')
             AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date

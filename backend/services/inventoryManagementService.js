@@ -206,17 +206,14 @@ function buildListWhere(segment, params, alias = 's') {
     };
   }
 
-  // Migrated ERP rows often store out_for_repare as inventory_status = in_repair
-  // while qc_status / extra.action_status carry the ERP label.
+  // At a vendor: legacy ERP 'out_for_repare', or 'in_repair' (VRDC gate outward).
+  // The qc_status / extra.action_status labels are not used: they outlived the
+  // repair and listed laptops that were later rented or sold.
   if (cfg.status === 'out_for_repare') {
     params.push('in_repair');
     const j = params.length;
     return {
-      sql: ` AND ${alias}.po_id IS NOT NULL AND (
-        ${effectiveStatusSql(alias)} = $${i}
-        OR ${alias}.inventory_status IN ($${i}, $${j})
-        OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') = $${i}
-      )`,
+      sql: ` AND ${alias}.po_id IS NOT NULL AND ${alias}.inventory_status IN ($${i}, $${j})`,
       params,
     };
   }

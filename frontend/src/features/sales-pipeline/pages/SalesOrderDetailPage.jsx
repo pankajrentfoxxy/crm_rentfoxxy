@@ -20,7 +20,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { canEditSoLineRateConfig, canPartialCancelSalesOrder, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
-import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailTo, salesOrderDcNavState, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailTo, salesOrderDcNavState, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping, gstinForDocument } from '../salesPipelineUtils';
 import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
 
@@ -154,7 +154,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const shippingAddr = parseDeliveryAddress(head.customer_shipping_address);
   const supplyStateLabel = formatSupplyStateLabel(
-    resolveSupplyStateFromShipping(shippingAddr, head.supply_state)
+    resolveSupplyStateFromShipping(shippingAddr, head.supply_state, gstinForDocument(head))
   );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
   // Sale in place: the customer keeps laptops they already hold on rent (lost,

@@ -70,6 +70,9 @@ export default function DispatchChargerQueuePage() {
   const [cableScan, setCableScan] = useState('');
   const [adapterUnit, setAdapterUnit] = useState(null);
   const [cableUnit, setCableUnit] = useState(null);
+  const [kitType, setKitType] = useState('separate');
+  const [setScan, setSetScan] = useState('');
+  const [setUnit, setSetUnit] = useState(null);
   const [stock, setStock] = useState([]);
   const [stockQ, setStockQ] = useState('');
   const [saving, setSaving] = useState(false);
@@ -91,13 +94,15 @@ export default function DispatchChargerQueuePage() {
 
   const loadStock = useCallback(async (q) => {
     try {
-      const [adaptersRes, cablesRes] = await Promise.all([
+      const [setsRes, adaptersRes, cablesRes] = await Promise.all([
+        fetchAvailableChargers(q, { role: 'set', limit: 80 }),
         fetchAvailableChargers(q, { role: 'adapter', limit: 80 }),
         fetchAvailableChargers(q, { role: 'cable', limit: 80 }),
       ]);
+      const sets = setsRes.data?.data || [];
       const adapters = adaptersRes.data?.data || [];
       const cables = cablesRes.data?.data || [];
-      setStock([...adapters, ...cables]);
+      setStock([...sets, ...adapters, ...cables]);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load charger stock');
     }
@@ -112,11 +117,16 @@ export default function DispatchChargerQueuePage() {
     setCableScan('');
     setAdapterUnit(null);
     setCableUnit(null);
+    setSetScan('');
+    setSetUnit(null);
   };
 
   const pickUnit = (unit) => {
     const role = unit.kit_role || kitRoleOf(unit);
-    if (role === 'cable') {
+    if (role === 'set') {
+      setSetUnit(unit);
+      setSetScan(unit.prt_id || unit.asset_code || '');
+    } else if (role === 'cable') {
       setCableUnit(unit);
       setCableScan(unit.prt_id || unit.asset_code || '');
     } else {
@@ -131,7 +141,10 @@ export default function DispatchChargerQueuePage() {
       return codes.includes(String(code || '').toUpperCase());
     });
     const role = preferredRole || hit?.kit_role || kitRoleOf(hit || { part_name: code });
-    if (role === 'cable') {
+    if (role === 'set') {
+      setSetScan(code);
+      setSetUnit(hit || { prt_id: code, kit_role: 'set' });
+    } else if (role === 'cable') {
       setCableScan(code);
       setCableUnit(hit || { prt_id: code, kit_role: 'cable' });
     } else {
@@ -142,6 +155,9 @@ export default function DispatchChargerQueuePage() {
 
   const adapters = useMemo(() => stock.filter((u) => (u.kit_role || kitRoleOf(u)) === 'adapter'), [stock]);
   const cables = useMemo(() => stock.filter((u) => (u.kit_role || kitRoleOf(u)) === 'cable'), [stock]);
+  const chargerSets = useMemo(() => stock.filter((u) => u.kit_role === 'set'), [stock]);
+  const isSet = kitType === 'set';
+  const kitReady = isSet ? Boolean(setScan.trim()) : Boolean(adapterScan.trim() && cableScan.trim());
   const visibleRows = useMemo(() => {
     if (tab !== 'attached' && tab !== 'all') return rows;
     if (!dayFilter) return rows;
@@ -154,13 +170,16 @@ export default function DispatchChargerQueuePage() {
 
   const handOver = async () => {
     if (!active) return;
-    if (!adapterScan.trim() || !cableScan.trim()) {
-      toast.error('Scan both Laptop Charger Power Adapter and Power cable');
+    if (!kitReady) {
+      toast.error(isSet ? 'Scan or select the charger set' : 'Scan both Laptop Charger Power Adapter and Power cable');
       return;
     }
     setSaving(true);
     try {
-      const payload = {
+      const payload = isSet ? {
+        kit_type: 'set',
+        set: setUnit?.instance_id ? { instance_id: setUnit.instance_id } : { scan_code: setScan },
+      } : {
         adapter: adapterUnit?.instance_id
           ? { instance_id: adapterUnit.instance_id }
           : { scan_code: adapterScan },
@@ -169,7 +188,7 @@ export default function DispatchChargerQueuePage() {
           : { scan_code: cableScan },
       };
       const { data } = await approveChargerHandover(active.request_id, payload);
-      toast.success(data.message || 'Adapter and power cable handed over');
+      toast.success(isSet ? 'Charger set handed over' : (data.message || 'Adapter and power cable handed over'));
       setActive(null);
       resetKit();
       await load();
@@ -188,7 +207,7 @@ export default function DispatchChargerQueuePage() {
             <PlugZap className="w-5 h-5 text-amber-600" /> Dispatch chargers
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Hand over both products: Laptop Charger Power Adapter and Power cable.
+            Hand over a charger set (cable built in, e.g. C type), or a Laptop Charger Power Adapter and Power cable separately.
           </p>
         </div>
         <button type="button" onClick={load} className="inline-flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm">
@@ -267,9 +286,9 @@ export default function DispatchChargerQueuePage() {
                   <td className="px-3 py-2">{r.brand || '—'}</td>
                   <td className="px-3 py-2">{r.model || '—'}</td>
                   <td className="px-3 py-2 font-mono text-xs">{r.adapter_label || '—'}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.cable_label || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{r.cable_label || (r.kit_type === 'set' && r.adapter_label ? 'Charger set' : '—')}</td>
                   <td className="px-3 py-2">
-                    {r.sales_order_number || '—'}
+                    {r.sales_order_number || r.ticket_so || '—'}
                     {r.customer_name ? <span className="block text-xs text-slate-500">{r.customer_name}</span> : null}
                   </td>
                   <td className="px-3 py-2">
@@ -285,7 +304,7 @@ export default function DispatchChargerQueuePage() {
                     {r.status === 'pending' && r.can_hand_over ? (
                       <button
                         type="button"
-                        onClick={() => { setActive(r); resetKit(); }}
+                        onClick={() => { setActive(r); resetKit(); setKitType('separate'); }}
                         className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold"
                       >
                         Approve &amp; hand over
@@ -305,46 +324,86 @@ export default function DispatchChargerQueuePage() {
           <div className="relative w-full max-w-2xl rounded-xl bg-white shadow-xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
             <h3 className="font-semibold text-slate-900">Hand over kit for {active.ttspl_id || 'laptop'}</h3>
             <p className="text-sm text-slate-700">{laptopSpec(active)}</p>
-            <p className="text-xs text-slate-500">Scan or select both products. Handover is not complete until both are chosen.</p>
-
-            <div className="grid md:grid-cols-2 gap-3">
-              <div className="rounded-lg border border-slate-200 p-3 space-y-2">
-                <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
-                  {adapterUnit ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : null}
-                  1. Laptop charger / adapter
-                </p>
-                <ScanField
-                  value={adapterScan}
-                  onChange={setAdapterScan}
-                  onScan={(code) => assignScan(code, 'adapter')}
-                  placeholder="Scan adapter PRT"
-                  aria-label="Scan adapter"
-                />
-                <p className="text-[11px] text-slate-500">{adapterUnit?.part_name || 'Not selected yet'}</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 p-3 space-y-2">
-                <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
-                  {cableUnit ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : null}
-                  2. Power cable
-                </p>
-                <ScanField
-                  value={cableScan}
-                  onChange={setCableScan}
-                  onScan={(code) => assignScan(code, 'cable')}
-                  placeholder="Scan power cable PRT"
-                  aria-label="Scan power cable"
-                />
-                <p className="text-[11px] text-slate-500">{cableUnit?.part_name || 'Not selected yet'}</p>
-              </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { id: 'set', label: 'Charger set', hint: 'Adapter + cable combined (e.g. C type)' },
+                { id: 'separate', label: 'Adapter and cable separate', hint: 'Two products' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => { setKitType(opt.id); resetKit(); }}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    kitType === opt.id ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 text-slate-700'
+                  }`}
+                >
+                  <span className="font-semibold block">{opt.label}</span>
+                  <span className="text-xs text-slate-500">{opt.hint}</span>
+                </button>
+              ))}
             </div>
+
+            {isSet ? (
+              <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+                <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                  {setUnit ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : null}
+                  Charger set
+                </p>
+                <ScanField
+                  value={setScan}
+                  onChange={setSetScan}
+                  onScan={(code) => assignScan(code, 'set')}
+                  placeholder="Scan charger set PRT"
+                  aria-label="Scan charger set"
+                />
+                <p className="text-[11px] text-slate-500">
+                  {setUnit?.part_name ? [setUnit.part_name, setUnit.description].filter(Boolean).join(' — ') : 'Not selected yet'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500">Scan or select both products. Handover is not complete until both are chosen.</p>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+                    <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                      {adapterUnit ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : null}
+                      1. Laptop charger / adapter
+                    </p>
+                    <ScanField
+                      value={adapterScan}
+                      onChange={setAdapterScan}
+                      onScan={(code) => assignScan(code, 'adapter')}
+                      placeholder="Scan adapter PRT"
+                      aria-label="Scan adapter"
+                    />
+                    <p className="text-[11px] text-slate-500">{adapterUnit?.part_name || 'Not selected yet'}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+                    <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                      {cableUnit ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : null}
+                      2. Power cable
+                    </p>
+                    <ScanField
+                      value={cableScan}
+                      onChange={setCableScan}
+                      onScan={(code) => assignScan(code, 'cable')}
+                      placeholder="Scan power cable PRT"
+                      aria-label="Scan power cable"
+                    />
+                    <p className="text-[11px] text-slate-500">{cableUnit?.part_name || 'Not selected yet'}</p>
+                  </div>
+                </div>
+              </>
+            )}
 
             <button
               type="button"
-              disabled={saving || !adapterScan.trim() || !cableScan.trim()}
+              disabled={saving || !kitReady}
               onClick={handOver}
               className="w-full px-3 py-2.5 rounded-lg bg-amber-600 text-white text-sm font-semibold disabled:opacity-50"
             >
-              {saving ? 'Saving…' : 'Hand over adapter + power cable'}
+              {saving ? 'Saving…' : (isSet ? 'Hand over charger set' : 'Hand over adapter + power cable')}
             </button>
 
             <div className="relative">
@@ -352,10 +411,43 @@ export default function DispatchChargerQueuePage() {
               <input
                 value={stockQ}
                 onChange={(e) => setStockQ(e.target.value)}
-                placeholder="Search in-stock adapters and cables"
+                placeholder={isSet ? 'Search in-stock charger sets' : 'Search in-stock adapters and cables'}
                 className="w-full border rounded-lg pl-8 pr-3 py-2 text-sm"
               />
             </div>
+            {isSet ? (
+              <div className="max-h-64 overflow-y-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-[11px] uppercase text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-1.5">PRT</th>
+                      <th className="px-3 py-1.5">Part Name</th>
+                      <th className="px-3 py-1.5">Category</th>
+                      <th className="px-3 py-1.5">Specifications</th>
+                      <th className="px-3 py-1.5" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {chargerSets.map((u) => (
+                      <tr key={u.instance_id} className={setUnit?.instance_id === u.instance_id ? 'bg-amber-50' : ''}>
+                        <td className="px-3 py-2 font-mono text-xs">{u.prt_id || u.asset_code}</td>
+                        <td className="px-3 py-2">{u.part_name}</td>
+                        <td className="px-3 py-2">{u.category === 'power' ? 'Power / Charger' : (u.category || '—')}</td>
+                        <td className="px-3 py-2 text-xs text-slate-600">{u.description || '—'}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button type="button" disabled={saving} onClick={() => pickUnit(u)} className="text-xs font-semibold text-amber-700 hover:underline disabled:opacity-50">
+                            Select
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!chargerSets.length ? (
+                      <tr><td colSpan={5} className="px-3 py-3 text-xs text-slate-500">No charger sets in stock.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
             <div className="grid md:grid-cols-2 gap-3">
               <ul className="max-h-48 overflow-y-auto divide-y border rounded-lg">
                 <li className="px-3 py-1.5 text-[11px] font-semibold uppercase text-slate-500 bg-slate-50">Adapters</li>
@@ -388,6 +480,7 @@ export default function DispatchChargerQueuePage() {
                 {!cables.length ? <li className="px-3 py-3 text-xs text-slate-500">No power cables in stock.</li> : null}
               </ul>
             </div>
+            )}
           </div>
         </div>
       ) : null}

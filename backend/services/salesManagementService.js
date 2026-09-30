@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { STATE_NAMES } = require('../utils/invoiceItemFormatting');
 const { effectiveReplacementLineRemark } = require('../utils/replacementRemarkUtils');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
@@ -1452,6 +1453,19 @@ function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
   return true;
 }
 
+/**
+ * A pickup line the technician has not collected yet (customer asked them to come
+ * back). A multi-laptop Return DC can be picked up over several visits: such lines
+ * are skipped by the guard inward and the warehouse e-sign until they are picked up.
+ * Mirrors pickupReadyForGateInward in guardGateValidationService.
+ */
+function isPickupStillWithCustomer(item) {
+  if (!item || item.warehouse_received_at || item.gate_inward_at) return false;
+  const method = String(item.pickup_method || '').toLowerCase();
+  if (method === 'courier' || method === 'porter') return false;
+  return !item.customer_otp_verified_at && !item.picked_up_at;
+}
+
 const RETURN_DC_WAREHOUSE_ROLES = [
   'warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin',
 ];
@@ -1465,8 +1479,10 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
   }
   const returnCustomerId = dcl?.customer_id ?? null;
+  const withCustomer = (pickupItems || []).filter(isPickupStillWithCustomer);
   const pendingItems = (pickupItems || []).filter(
-    (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId)
+    (i) => (!i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId))
+      && !isPickupStillWithCustomer(i)
   );
   const fullyDone = pickupItems.length > 0
     && pickupItems.every((i) => i.warehouse_received_at && !isIncompleteWarehouseReceive(i, returnCustomerId));
@@ -1477,7 +1493,14 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
   const hasUnits = (units || []).length > 0;
   const needsReceive = pendingItems.length > 0 || (pickupItems.length === 0 && hasUnits);
   if (!needsReceive) {
-    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+    return {
+      can_warehouse_confirm: false,
+      warehouse_block_reason: withCustomer.length
+        ? `${withCustomer.length} laptop(s) not picked up from the customer yet. Warehouse e-sign opens once they are picked up and guard-scanned.`
+        : null,
+      warehouse_receive_pending: withCustomer.length > 0,
+      units_with_customer: withCustomer.length,
+    };
   }
 
   const isDelivered = dcl.status === 'delivered' || !!dcl.delivered_at;
@@ -1509,6 +1532,8 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl, opts = {}) {
     can_warehouse_confirm: roleAllowed && !otpBlocked && !gateBlocked && !configBlocked && !serialBlocked,
     warehouse_block_reason,
     warehouse_receive_pending: true,
+    units_to_receive: pendingItems.length,
+    units_with_customer: withCustomer.length,
   };
 }
 
@@ -2254,6 +2279,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     ).catch(() => ({ rows: [] }));
     siblingRdcs = sib.rows;
   }
+  const collectedItems = pickupItems.filter((i) => !isPickupStillWithCustomer(i));
 
   return {
     return_dc_number: rdcNumber,
@@ -2276,12 +2302,15 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     unit_count: pickupItems.length || dcl.quantity || 1,
     units,
     customer_otp_code: pickupItems[0]?.customer_otp_code || pickupItems[0]?.otp_code || null,
-    customer_otp_verified_at: pickupItems.length && pickupItems.every((i) => i.customer_otp_verified_at)
-      ? pickupItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
+    // RDC-level OTP / guard-inward flags cover the laptops collected so far; a laptop
+    // still with the customer (second visit pending) must not hold them back.
+    customer_otp_verified_at: collectedItems.length && collectedItems.every((i) => i.customer_otp_verified_at)
+      ? collectedItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
       : null,
-    gate_inward_at: pickupItems.length && pickupItems.every((i) => i.gate_inward_at)
-      ? pickupItems.find((i) => i.gate_inward_at)?.gate_inward_at
+    gate_inward_at: collectedItems.length && collectedItems.every((i) => i.gate_inward_at)
+      ? collectedItems.find((i) => i.gate_inward_at)?.gate_inward_at
       : null,
+    units_with_customer: pickupItems.length - collectedItems.length,
     pickup_items: pickupItems.map((i) => ({
       id: i.id,
       serial_number: i.serial_number,
@@ -2304,6 +2333,7 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
       warehouse_receiver_name: i.warehouse_receiver_name,
       customer_otp_verified_at: i.customer_otp_verified_at,
       gate_inward_at: i.gate_inward_at,
+      still_with_customer: isPickupStillWithCustomer(i),
       floor_ticket_id: i.floor_ticket_id,
       return_config_verified_at: i.return_config_verified_at || null,
       return_captured_serial: i.return_captured_serial || null,
@@ -2733,8 +2763,14 @@ function normalizeStateForGst(state) {
 /**
  * Resolve the place of supply for GST.
  *
- * Order: shipping-address state -> stored supply_state -> `fallbackState`
- * (normally the customer's billing_state).
+ * Order: the buyer's GSTIN state -> shipping-address state -> stored supply_state
+ * -> `fallbackState` (normally the customer's billing_state).
+ *
+ * A registered buyer's GSTIN wins: rental is a service billed to the registered
+ * recipient, and a bill-to / ship-to sale is supplied to the billed party, so the
+ * delivery address must not decide the head. SO/26-27/1416 billed a Haryana GSTIN
+ * (06...) but shipped to Noida and printed IGST, while its monthly invoices (which
+ * already key off the GSTIN) print CGST+SGST.
  *
  * The fallback matters. The shipping-address JSON has no `state` key for
  * free-text addresses and lead-converted shell records, and when that happened
@@ -2745,7 +2781,32 @@ function normalizeStateForGst(state) {
  * under-reported IGST. The customer's state was in the database the whole time;
  * it simply was not consulted.
  */
-function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '') {
+function supplyStateFromGstin(gstin) {
+  const g = String(gstin || '').trim().toUpperCase();
+  if (!/^\d{2}[A-Z0-9]{13}$/.test(g)) return '';
+  const name = STATE_NAMES[g.slice(0, 2)];
+  return name ? normalizeStateForGst(name) : '';
+}
+
+// Documents created before this keep the head they were issued with (shipping-first);
+// 510 already-issued DCs would otherwise re-render with a different GST head.
+const GSTIN_PLACE_OF_SUPPLY_FROM = new Date('2026-09-30T00:00:00+05:30');
+
+// Older orders moved onto the GSTIN rule on request (corrected 2026-09-30).
+const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416']);
+
+/** The buyer GSTIN to use for a stored document's place of supply ('' for older documents). */
+function gstinForDocument(row) {
+  if (!row) return '';
+  if (GSTIN_PLACE_OF_SUPPLY_ORDERS.has(row.sales_order_number)) return row.gst_number || '';
+  const created = row.created_at ? new Date(row.created_at) : null;
+  if (created && !Number.isNaN(created.getTime()) && created < GSTIN_PLACE_OF_SUPPLY_FROM) return '';
+  return row.gst_number || '';
+}
+
+function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '', fallbackState = '', gstin = '') {
+  const fromGstin = supplyStateFromGstin(gstin);
+  if (fromGstin) return fromGstin;
   const addr = parseAddressField(shippingAddress);
   const fromAddr = addr?.state;
   if (fromAddr && String(fromAddr).trim()) {
@@ -3286,6 +3347,8 @@ module.exports = {
   recalcSoSecurityIfOneMonthRental,
   syncDcSecurityForSo,
   resolveSupplyStateFromAddress,
+  supplyStateFromGstin,
+  gstinForDocument,
   resolveCustomerDocumentName,
   parseAddressField,
   normalizeStateForGst,
@@ -3331,6 +3394,7 @@ module.exports = {
   healReturnDcPickupLinks,
   ensureReturnDcPickupItems,
   evaluateReturnDcWarehouseConfirm,
+  isPickupStillWithCustomer,
   userCanConfirmReturnDcWarehouse,
   RETURN_DC_WAREHOUSE_ROLES,
   getOperationCounts,

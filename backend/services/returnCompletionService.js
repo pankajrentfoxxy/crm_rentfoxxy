@@ -175,7 +175,7 @@ async function processReturnedSerials(db, {
     // rent (billingSchedulerService: open return pickup → no end date).
     await inventorySM.markReturned(db, serialId, {
       reason: dcNumber ? `Picked up via Return DC ${dcNumber}` : 'Picked up (customer return)',
-      rentEndDate: warehouseReceivedAt, actorUserId, actorName,
+      rentEndDate: warehouseReceivedAt || null, actorUserId, actorName,
     });
 
     // Re-enter QC so it appears in "QC Process Laptops" (qc_status <> 'passed').

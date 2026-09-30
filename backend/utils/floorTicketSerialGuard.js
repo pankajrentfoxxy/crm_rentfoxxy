@@ -23,6 +23,9 @@ function serialIdentityKey({
 
 function blockingTicketMessage(blocking) {
   if (!blocking) return '';
+  if (blocking.stage_name === 'Pending Inventory') {
+    return `Laptop is waiting in QC Ready (ticket #${blocking.ticket_id}). The warehouse must receive it into a carret before a new ticket can be opened.`;
+  }
   if (blocking.status === 'diagnosis_failed') {
     return `Laptop already has Diagnosis Failed ticket #${blocking.ticket_id}. Send it to vendor repair or resolve it before opening another ticket.`;
   }
@@ -59,7 +62,8 @@ async function findBlockingTicket(db, {
 
   params.push(BLOCKING_STATUSES);
   let sql = `
-    SELECT t.ticket_id, t.status, t.serial_number, t.ttspl_id, t.vendor_serial_id
+    SELECT t.ticket_id, t.status, t.serial_number, t.ttspl_id, t.vendor_serial_id,
+           (SELECT st.stage_name FROM stages st WHERE st.stage_id = t.current_stage_id) AS stage_name
       FROM tickets t
      WHERE (${clauses.join(' OR ')})
        AND t.status = ANY($${params.length})`;

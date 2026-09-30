@@ -1,4 +1,5 @@
 const express = require('express');
+const { rejectQcReadyTicketMove } = require('../services/qcReadyHoldService');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const {
@@ -12,6 +13,6 @@ router.use(authMiddleware);
 // F12: these needed only a login.
 router.get('/ticket/:id', checkSectionPermission('chip_level_repair', 'view'), getChipRepair);
 router.post('/ticket/:id', checkSectionPermission('chip_level_repair', 'edit'), saveChipRepair);
-router.post('/ticket/:id/submit', checkSectionPermission('chip_level_repair', 'edit'), submitChipRepair);
+router.post('/ticket/:id/submit', checkSectionPermission('chip_level_repair', 'edit'), rejectQcReadyTicketMove(), submitChipRepair);
 
 module.exports = router;

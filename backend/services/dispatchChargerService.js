@@ -89,8 +89,23 @@ function kitRoleFromUnit(unit) {
   return 'adapter';
 }
 
+// A charger set (e.g. USB-C) is one unit with the cable built in — no separate power cable.
+const CHARGER_SET_RE = /(c[\s-]?type|type[\s-]?c|usb[\s-]?c|charger\s*set|combined)/i;
+const CHARGER_SET_SQL = `(c[ -]?type|type[ -]?c|usb[ -]?c|charger ?set|combined)`;
+
+function unitKind(unit) {
+  if (kitRoleFromUnit(unit) === 'cable') return 'cable';
+  const text = `${unit?.part_name || ''} ${unit?.description || ''}`;
+  return CHARGER_SET_RE.test(text) ? 'set' : 'adapter';
+}
+
 function kitRoleLabel(role) {
+  if (role === 'set') return 'Charger set';
   return role === 'cable' ? 'Power cable' : 'Laptop charger / adapter';
+}
+
+function kitTypeOf(row) {
+  return row?.extra?.kit_type === 'set' ? 'set' : 'separate';
 }
 
 function unitCodes(unit) {
@@ -165,6 +180,7 @@ function publicRequest(row) {
     ...row,
     brand: row.brand || null,
     model: row.model || null,
+    kit_type: kitTypeOf(row),
     can_start_dispatch_qc: canStartDispatchQc(row),
     charger_sent: chargerWasSent(row),
     charger_label: kitLabel(row),
@@ -349,7 +365,17 @@ async function cancelRequest(db, requestId, user, remarks, opts = {}) {
   if (['dispatched', 'returned'].includes(row.status)) {
     throw httpError('Cannot cancel a charger that has already been dispatched or returned');
   }
-  if (row.qc_scan_matched && !force) {
+  const isNoChargerChoice = row.disposition === 'already_with_customer';
+  if (isNoChargerChoice && !force) {
+    if (!opts.canResetNoCharger) {
+      throw httpError('Only an authorised user can cancel "charger already with customer". Ask your admin.', 403);
+    }
+    const ctx = await loadTicketContext(db, row.ticket_id);
+    if (!/dispatch\s*qc/i.test(ctx.stage_name || '')) {
+      throw httpError('This laptop has moved past Dispatch QC — the charger choice can no longer be changed');
+    }
+  }
+  if (row.qc_scan_matched && !force && !isNoChargerChoice) {
     throw httpError('Cannot cancel after Dispatch QC charger scan is complete');
   }
   const kitUnits = row.units?.length
@@ -502,6 +528,7 @@ async function undoHandover(db, requestId, user, remarks) {
   const extra = { ...(row.extra || {}) };
   delete extra.cable_prt_id;
   delete extra.cable_part_name;
+  delete extra.kit_type;
   const r = await db.query(
     `UPDATE dispatch_charger_requests
         SET status = 'pending',
@@ -531,7 +558,7 @@ async function lookupChargerUnit(db, rawCode) {
   if (!code) throw httpError('Scan a charger PRT ID, asset code, or serial');
   const r = await db.query(
     `SELECT pi.instance_id, pi.prt_id, pi.asset_code, pi.serial_number, pi.status,
-            pi.part_id, p.part_name, p.category
+            pi.part_id, p.part_name, p.category, p.description
        FROM part_instances pi
        JOIN parts p ON p.part_id = pi.part_id
       WHERE UPPER(pi.prt_id) = $1
@@ -564,39 +591,36 @@ async function listAvailableChargers(db, search, opts = {}) {
       OR pi.asset_code ILIKE $${params.length}
       OR pi.serial_number ILIKE $${params.length}
       OR p.part_name ILIKE $${params.length}
+      OR p.description ILIKE $${params.length}
     )`;
   }
+  const kindSql = `CASE
+                  WHEN LOWER(p.part_name) ~ '(cable|cord)' THEN 'cable'
+                  WHEN LOWER(p.part_name || ' ' || COALESCE(p.description, '')) ~ '${CHARGER_SET_SQL}' THEN 'set'
+                  ELSE 'adapter'
+                END`;
   const role = String(opts.role || '').toLowerCase();
-  if (role === 'cable') {
-    where += ` AND LOWER(p.part_name) ~ '(cable|cord)'`;
-  } else if (role === 'adapter') {
-    where += ` AND LOWER(p.part_name) !~ '(cable|cord)'`;
-  }
+  let roleFilter = '';
+  if (['cable', 'adapter', 'set'].includes(role)) roleFilter = `AND kit_role = '${role}'`;
   const perRole = Math.min(Math.max(Number(opts.limit) || 80, 10), 200);
   params.push(perRole);
   const r = await db.query(
     `SELECT instance_id, prt_id, asset_code, serial_number, status,
-            part_id, part_name, category, kit_role
+            part_id, part_name, category, description, kit_role
        FROM (
          SELECT pi.instance_id, pi.prt_id, pi.asset_code, pi.serial_number, pi.status,
-                pi.part_id, p.part_name, p.category,
-                CASE
-                  WHEN LOWER(p.part_name) ~ '(cable|cord)' THEN 'cable'
-                  ELSE 'adapter'
-                END AS kit_role,
+                pi.part_id, p.part_name, p.category, p.description,
+                ${kindSql} AS kit_role,
                 ROW_NUMBER() OVER (
-                  PARTITION BY CASE
-                    WHEN LOWER(p.part_name) ~ '(cable|cord)' THEN 'cable'
-                    ELSE 'adapter'
-                  END
+                  PARTITION BY ${kindSql}
                   ORDER BY pi.received_at ASC NULLS LAST, pi.instance_id ASC
                 ) AS rn
            FROM part_instances pi
            JOIN parts p ON p.part_id = pi.part_id
           WHERE ${where}
        ) ranked
-      WHERE rn <= $${params.length}
-      ORDER BY CASE kit_role WHEN 'adapter' THEN 0 ELSE 1 END, instance_id ASC`,
+      WHERE rn <= $${params.length} ${roleFilter}
+      ORDER BY CASE kit_role WHEN 'set' THEN 0 WHEN 'adapter' THEN 1 ELSE 2 END, instance_id ASC`,
     params
   );
   return r.rows;
@@ -753,7 +777,7 @@ async function loadStockUnit(db, input = {}) {
   if (input.instance_id) {
     const r = await db.query(
       `SELECT pi.instance_id, pi.prt_id, pi.asset_code, pi.serial_number, pi.status,
-              pi.part_id, p.part_name, p.category
+              pi.part_id, p.part_name, p.category, p.description
          FROM part_instances pi
          JOIN parts p ON p.part_id = pi.part_id
         WHERE pi.instance_id = $1`,
@@ -766,10 +790,14 @@ async function loadStockUnit(db, input = {}) {
   return null;
 }
 
-async function reserveKitUnit(db, row, unit, role, user) {
+async function reserveKitUnit(db, row, unit, role, user, kind = role) {
   assertPowerCategory(unit);
-  if (kitRoleFromUnit(unit) !== role) {
-    throw httpError(`Scan a ${kitRoleLabel(role).toLowerCase()}, not ${unit.part_name}`);
+  const actual = unitKind(unit);
+  if (actual !== kind) {
+    if (actual === 'set') {
+      throw httpError(`${unit.prt_id || unit.part_name} is a charger set (cable built in) — choose "Charger set" instead`);
+    }
+    throw httpError(`Scan a ${kitRoleLabel(kind).toLowerCase()}, not ${unit.part_name}`);
   }
   if (unit.status !== 'in_stock') {
     throw httpError(`${unit.prt_id || unit.asset_code} is ${unit.status}, not in stock`);
@@ -881,6 +909,8 @@ async function approveAndHandover(db, requestId, user, body = {}) {
     throw httpError(`Cannot hand over ${row.request_number}: ${blockers.join('; ')}`, 409);
   }
 
+  if (body.kit_type === 'set') return handoverChargerSet(db, row, user, body);
+
   const scans = kitScanPayload(body);
   const adapter = await loadStockUnit(db, scans.adapter);
   const cable = await loadStockUnit(db, scans.cable);
@@ -929,6 +959,46 @@ async function approveAndHandover(db, requestId, user, body = {}) {
   await auditCharger(db, row, user, 'dispatch_charger_handed_over',
     `Warehouse handed over adapter ${adapter.prt_id} and cable ${cable.prt_id} for ${row.ttspl_id || 'laptop'}`,
     { request_number: row.request_number, adapter_prt: adapter.prt_id, cable_prt: cable.prt_id });
+  return hydrateRequest(db, updated.rows[0]);
+}
+
+async function handoverChargerSet(db, row, user, body = {}) {
+  const unit = await loadStockUnit(db, body.set || kitScanPayload(body).adapter);
+  if (!unit) throw httpError('Scan or select the charger set');
+
+  // The set occupies the adapter slot; there is no cable unit, so every later scan asks for one product.
+  await reserveKitUnit(db, row, unit, 'adapter', user, 'set');
+
+  const updated = await db.query(
+    `UPDATE dispatch_charger_requests
+        SET status = 'handed_over',
+            part_id = $2,
+            part_instance_id = $3,
+            prt_id = $4,
+            charger_asset_code = $5,
+            charger_serial = $6,
+            charger_part_name = $7,
+            handed_over_by = $8,
+            handed_over_at = NOW(),
+            extra = COALESCE(extra, '{}'::jsonb) || jsonb_build_object('kit_type', 'set'),
+            updated_at = NOW()
+      WHERE request_id = $1
+      RETURNING *`,
+    [
+      row.request_id,
+      unit.part_id,
+      unit.instance_id,
+      unit.prt_id,
+      unit.asset_code,
+      unit.serial_number,
+      unit.part_name,
+      user?.user_id || null,
+    ]
+  );
+
+  await auditCharger(db, row, user, 'dispatch_charger_handed_over',
+    `Warehouse handed over charger set ${unit.prt_id} for ${row.ttspl_id || 'laptop'}`,
+    { request_number: row.request_number, set_prt: unit.prt_id, kit_type: 'set' });
   return hydrateRequest(db, updated.rows[0]);
 }
 

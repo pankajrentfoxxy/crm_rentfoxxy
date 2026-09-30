@@ -92,10 +92,8 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
   }
 
   const deployed = ['rented', 'on_demo', 'sold', 'out_stock'].includes(serial.inventory_status);
-  // Keyed on the warehouse-side status alone. It used to also require
-  // current_customer_id to be NULL, but the customer link is now deliberately
-  // kept across a repair, so that condition would never hold and this would
-  // re-run on every receipt attempt.
+  // Keyed on the warehouse-side status alone: the customer link is now kept
+  // across a repair, so "customer is NULL" can no longer mark a done removal.
   const alreadyRemoved = ['returned', 'in_stock', 'in_repair'].includes(serial.inventory_status);
 
   if (alreadyRemoved) {
@@ -118,14 +116,10 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
   }
 
   if (deployed) {
-    // rentEndDate stays null on purpose. A repair pickup is not the end of the
-    // rental: the unit returns to this same customer on a Service DC, and the
-    // customer is billed continuously across the repair. The days it actually
-    // sat in the warehouse are credited back instead, by
-    // createRepairWindowCreditNote, so the customer pays for the two transit
-    // legs and nothing more. Stamping rent_end_date here silently stopped
-    // billing from the pickup date, with no credit note and nothing on the
-    // invoice for finance to see.
+    // rentEndDate stays null: a repair pickup is not the end of the rental.
+    // The customer is billed continuously while the laptop is away. If the
+    // pickup is answered with a replacement, billing stops at the warehouse
+    // receipt date instead (billingSchedulerService, repair_replaced).
     await inventorySM.markReturned(client, serial.serial_id, {
       reason: `Repair pickup from customer (support item #${item.id})`,
       rentEndDate: null,
@@ -134,10 +128,9 @@ async function removeRepairPickupFromCustomer(client, item, actor = {}) {
     });
   }
 
-  // current_customer_id deliberately kept: the customer still holds this rental
-  // while the unit is away for repair, and billing selects on that column.
-  // current_dc_number is cleared because the outbound DC no longer describes
-  // where the unit physically is.
+  // current_customer_id is kept: the customer still holds this rental while the
+  // laptop is away, and billing selects on it. The outbound DC no longer says
+  // where the laptop is, so current_dc_number is cleared.
   await client.query(
     `UPDATE vendor_serial_numbers
         SET current_dc_number = NULL,

@@ -71,10 +71,10 @@ describe('floor permissions and transactions (rolled back)', () => {
 
   it('F10: bulk move and floor-manager fail need a floor manager; chip routes need a permission', () => {
     const t = fs.readFileSync(require.resolve('../routes/tickets.js'), 'utf8');
-    assert.match(t, /router\.post\('\/bulk-move', ftEdit, requireFloorLead, bulkMoveTickets\)/);
+    assert.match(t, /router\.post\('\/bulk-move', ftEdit, requireFloorLead, rejectQcReadyBulkMove, bulkMoveTickets\)/);
     assert.match(t, /'\/:id\/floor-manager-fail',\n\s+ftEdit,\n\s+requireFloorLead,/);
     const c = fs.readFileSync(require.resolve('../routes/chipLevel.js'), 'utf8');
-    assert.match(c, /checkSectionPermission\('chip_level_repair', 'edit'\), submitChipRepair/);
+    assert.match(c, /checkSectionPermission\('chip_level_repair', 'edit'\), rejectQcReadyTicketMove\(\), submitChipRepair/);
   });
 
   it('F14: next-stage runs in one transaction and a refused move writes nothing', async () => {

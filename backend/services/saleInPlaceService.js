@@ -862,7 +862,7 @@ async function createInPlaceSale({
 
     const specs = await client.query(SERIAL_SPEC_SQL, [ids]);
     const soNumber = await nextFinancialYearNumber('sales_order', client);
-    const supplyState = resolveSupplyStateFromAddress(shipping);
+    const supplyState = resolveSupplyStateFromAddress(shipping, '', '', gstNumber || cust.gst_no);
     const hsn = resolveHsnForPersist({ quotationType: 'sale', role: actorRole });
     // Trade name first, as on every other customer-facing document.
     const customerName = String(cust.trade_name || '').trim()

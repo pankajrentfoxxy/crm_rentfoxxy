@@ -124,7 +124,7 @@ async function resolveTicketPartDcContext(client, ticketId, ttsplId = null) {
     gstNumber,
     billing,
     shipping,
-    supplyState: resolveSupplyStateFromAddress(shipping, billing?.state),
+    supplyState: resolveSupplyStateFromAddress(shipping, billing?.state, '', gstNumber || billing?.gst_number),
     entityCode: entityForQuotationType(quotationType),
     quotationType,
   };
@@ -212,7 +212,9 @@ async function createSupportPartCustomerDc(client, {
 
   const billing = billingOverride || ctx.billing;
   const shipping = shippingOverride || ctx.shipping;
-  const supplyState = resolveSupplyStateFromAddress(shipping, ctx.supplyState);
+  const supplyState = resolveSupplyStateFromAddress(
+    shipping, ctx.supplyState, '', ctx.gstNumber || billing?.gst_number
+  );
   const dcNumber = await nextFinancialYearNumber('part_dc', client);
   const dispatchMode = shipBy === 'by_hand' ? 'inhouse' : 'courier';
   const hasCourierDetails = shipBy === 'by_courier' && Boolean(String(courierName || '').trim());

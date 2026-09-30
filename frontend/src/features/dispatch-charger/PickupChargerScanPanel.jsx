@@ -87,14 +87,17 @@ export default function PickupChargerScanPanel({
     }
   };
 
+  const pickupNeedsCable = Boolean(state.charger?.cable_label || state.charger?.needs_both_kit_scans);
+
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 space-y-2">
       <p className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
         <PlugZap className="w-4 h-4 text-amber-700" />
-        Scan TTSPL ID, charger, and power cable we sent
+        {pickupNeedsCable ? 'Scan TTSPL ID, charger, and power cable we sent' : 'Scan TTSPL ID and charger we sent'}
       </p>
       <p className="text-xs text-gray-600">
-        Laptop {state.ttspl_id || 'TTSPL'} · adapter {state.charger?.adapter_label || 'PRT'} · cable {state.charger?.cable_label || 'PRT'}
+        Laptop {state.ttspl_id || 'TTSPL'} · {pickupNeedsCable ? 'adapter' : 'charger'} {state.charger?.adapter_label || 'PRT'}
+        {pickupNeedsCable ? ` · cable ${state.charger?.cable_label || 'PRT'}` : ''}
       </p>
       <ScanField
         value={ttspl}
@@ -108,19 +111,21 @@ export default function PickupChargerScanPanel({
         placeholder="Scan charger / adapter we sent"
         aria-label="Scan charger"
       />
-      <ScanField
-        value={cableScan}
-        onChange={setCableScan}
-        placeholder="Scan power cable we sent"
-        aria-label="Scan power cable"
-      />
+      {pickupNeedsCable ? (
+        <ScanField
+          value={cableScan}
+          onChange={setCableScan}
+          placeholder="Scan power cable we sent"
+          aria-label="Scan power cable"
+        />
+      ) : null}
       <button
         type="button"
         disabled={busy}
         onClick={submit}
         className="w-full py-3 bg-amber-600 text-white rounded-xl font-semibold text-sm disabled:opacity-50"
       >
-        {busy ? 'Checking…' : 'Confirm laptop + charger + cable'}
+        {busy ? 'Checking…' : (pickupNeedsCable ? 'Confirm laptop + charger + cable' : 'Confirm laptop + charger')}
       </button>
     </div>
   );

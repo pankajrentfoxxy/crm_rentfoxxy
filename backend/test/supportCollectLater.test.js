@@ -165,12 +165,12 @@ describe('support pickup: collect later', () => {
     assert.equal((await item(items[2])).technician_esign_at, null, 'uncollected sibling stays unsigned');
   });
 
-  it('the guard names the kept laptop instead of a generic block, and does not treat an e-sign as collected', async () => {
+  it('the guard inwards the collected laptops, names the kept one, and does not treat an e-sign as collected', async () => {
     await collect(items[0], TECH); // A collected — C stays with the customer
     const ctx = await guard.loadReturnDc(C, rdc);
-    assert.equal(ctx.active, false);
-    assert.match(ctx.inactive_reason, /2 laptops ready; 1 not collected/);
-    assert.match(ctx.inactive_reason, /Collect later/);
+    // Live (52fa5bb1): a Return DC can be gate-inwarded in parts.
+    assert.equal(ctx.active, true);
+    assert.match(ctx.purpose, /2 laptop\(s\) picked up; 1 still with the customer/);
     assert.ok(ctx.not_collected_codes.includes(codes[2]));
     assert.ok(!ctx.not_collected_codes.includes(codes[0]) && !ctx.not_collected_codes.includes(codes[1]));
     assert.equal(guard.pickupReadyForGateInward({ technician_esign_at: new Date() }), false);

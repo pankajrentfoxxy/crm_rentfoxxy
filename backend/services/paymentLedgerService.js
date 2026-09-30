@@ -69,10 +69,10 @@ function normaliseKey(raw) {
   return s;
 }
 
+// Today in IST. The server runs on UTC, so between 00:00 and 05:30 IST the
+// server-local date is still yesterday and refused a payment dated today.
 function todayYmd() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 function normaliseDate(raw) {

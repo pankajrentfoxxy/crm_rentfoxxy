@@ -817,6 +817,7 @@ async function receiveIntoInventory(db, productionAssetId, {
   warehouseCarretSlot,
   actorUserId,
   actorName,
+  allowNoLocation = false,
 }) {
   await ensureTables(db);
   let pa = await getById(db, productionAssetId);
@@ -919,12 +920,10 @@ async function receiveIntoInventory(db, productionAssetId, {
     throw err;
   }
 
-  const location = await assignWarehouseLocation(
-    db,
-    pa.vendor_serial_id,
-    warehouseCarret,
-    warehouseCarretSlot
-  );
+  // allowNoLocation: admin bulk receive only — keeps whatever carret/slot the unit already has.
+  const location = (allowNoLocation && (warehouseCarret == null || warehouseCarretSlot == null))
+    ? { carret: null, slot: null, label: 'no carret (bulk receive)' }
+    : await assignWarehouseLocation(db, pa.vendor_serial_id, warehouseCarret, warehouseCarretSlot);
 
   const inventoryTag = pa.inventory_tag || null;
   const cfg = workingToCompareShape(pa);

@@ -4,6 +4,7 @@
  * DC generation later pulls the attached + QC-passed serials (no re-selection).
  */
 const pool = require('../config/db');
+const { findQcReadyHold, holdMessage } = require('../services/qcReadyHoldService');
 const inventorySM = require('../services/inventoryStateMachine');
 const saleInPlace = require('../services/saleInPlaceService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
@@ -263,6 +264,16 @@ exports.attachSerial = async (req, res) => {
           + 'It may be on another order, out on a ticket, or not yet through GRN.',
       });
     }
+
+    const qcReadyHold = await findQcReadyHold(client, {
+      vendorSerialId: freshSerial.serial_id,
+      serialNumber: freshSerial.serial_number,
+      ttsplId: freshSerial.inventory_asset_code,
+    });
+    if (qcReadyHold) {
+      return res.status(409).json({ success: false, message: holdMessage(qcReadyHold) });
+    }
+
     const serialForAttach = freshSerial;
 
     // Already attached somewhere active?

@@ -53,6 +53,7 @@ async function regenerateServiceDcPdfByNumber(db, sdcNumber) {
         dispatch_mode: dcl.dispatch_mode,
         remarks: dcl.remarks,
         dc_date: dcl.dc_date || dcl.created_at,
+        created_at: dcl.created_at,
         dispatched_at: dcl.dispatched_at,
         delivered_at: dcl.delivered_at || dcl.delivery_completed_at,
         courier_name: dcl.courier_name,

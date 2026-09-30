@@ -14,6 +14,7 @@ const {
   peekFinancialYearNumber,
   computeGstBreakdown,
   resolveSupplyStateFromAddress,
+  gstinForDocument,
   resolveCustomerDocumentName,
   resolveDcBilling,
   entityForQuotationType,
@@ -565,7 +566,9 @@ exports.storeQuotation = async (req, res) => {
     if (billing && companyName) {
       billing = { ...billing, name: companyName };
     }
-    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
 
     const quotationType = body.quotation_type || 'rental';
     const quoteCustomerId = toNullableInt(body.customer_id);
@@ -1176,7 +1179,9 @@ exports.storeSalesOrder = async (req, res) => {
     if (billing && body.customer_name) {
       billing = { ...billing, name: body.customer_name };
     }
-    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
     const customerId = toNullableInt(body.customer_id);
     const isWfh = body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1;
     // Sale in place: the customer keeps a unit they already hold on rent. Fulfilled
@@ -1541,7 +1546,9 @@ exports.updateSalesOrder = async (req, res) => {
     }
     const supplyState = resolveSupplyStateFromAddress(
       shipping,
-      body.supply_state || head.supply_state
+      body.supply_state || head.supply_state,
+      '',
+      gstinForDocument(head) ? (body.GST_number || body.gst_number || billing?.gst_number || head.gst_number) : ''
     );
     const shippingJson = shipping ? JSON.stringify(shipping) : null;
     const billingJson = billing ? JSON.stringify(billing) : null;
@@ -3035,7 +3042,7 @@ exports.getDeliveryChallan = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state, '', gstinForDocument(head)),
     });
 
     let assignmentHistory = [];
@@ -3271,17 +3278,21 @@ exports.storeDeliveryChallan = async (req, res) => {
     let dcNumber = null;
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
-    let supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    let supplyState = resolveSupplyStateFromAddress(
+      shipping, body.supply_state, '', body.GST_number || body.gst_number || billing?.gst_number
+    );
     if (!supplyState && body.sales_order_number) {
       const soRes = await pool.query(
-        `SELECT supply_state, customer_shipping_address
+        `SELECT supply_state, customer_shipping_address, gst_number
            FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
         [body.sales_order_number]
       );
       if (soRes.rows.length) {
         supplyState = resolveSupplyStateFromAddress(
           soRes.rows[0].customer_shipping_address,
-          soRes.rows[0].supply_state
+          soRes.rows[0].supply_state,
+          '',
+          soRes.rows[0].gst_number
         );
       }
     }
@@ -3805,7 +3816,9 @@ exports.createDcsByAddress = async (req, res) => {
       const groupSerials = ids.map((id) => allocMap[id]).filter(Boolean);
       const deliveryAddress = group.delivery_address
         || parseJsonSafe(soHead.customer_shipping_address) || billing || null;
-      const groupSupplyState = resolveSupplyStateFromAddress(deliveryAddress, soHead.supply_state);
+      const groupSupplyState = resolveSupplyStateFromAddress(
+        deliveryAddress, soHead.supply_state, '', soHead.gst_number || billing?.gst_number
+      );
 
       const groupSize = ids.length;
       const groupSecurity = computeDcSecurityFromSerials(groupSerials, soLines);
@@ -5150,7 +5163,9 @@ exports.getSoWithPayments = async (req, res) => {
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
       security: soSecurity,
-      supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
+      supplyState: resolveSupplyStateFromAddress(
+        lines[0].customer_shipping_address, lines[0].supply_state, '', gstinForDocument(lines[0])
+      ),
       gstOnShipping,
     });
     const soStatus = deriveSalesOrderListStatus({
@@ -7236,6 +7251,34 @@ exports.updateSoLineRate = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
     }
 
+    // A replacement bills at the returned laptop's rate, so its SO line is not
+    // priced by hand: SO/26-27/1342 was edited from 1300 to 1999 and the
+    // replacement would have billed 1999. Only a super admin may correct it, and
+    // that correction becomes the replacement order's carried rate too.
+    const replacementRes = await client.query(
+      `SELECT id, old_machine_serial, old_rent_monthly_rate
+         FROM support_replacement_orders
+        WHERE sales_order_line_id = $1 AND status <> 'cancelled'`,
+      [lineId]
+    );
+    if (replacementRes.rows.length) {
+      const ro = replacementRes.rows[0];
+      const oldRate = Number(ro.old_rent_monthly_rate || 0);
+      if (oldRate > 0 && roundedRate !== oldRate && req.user?.role !== 'super_admin') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `This is a replacement for ${ro.old_machine_serial || 'the returned laptop'}, `
+            + `so its rate stays at that laptop's ₹${oldRate}. Ask a super admin if that rate is wrong.`,
+        });
+      }
+      await client.query(
+        `UPDATE support_replacement_orders SET old_rent_monthly_rate = $1
+          WHERE sales_order_line_id = $2 AND status <> 'cancelled'`,
+        [roundedRate, lineId]
+      );
+    }
+
     const upd = await client.query(
       `UPDATE sales_order_lines SET rate = $1, updated_at = NOW()
         WHERE id = $2
@@ -7459,6 +7502,17 @@ exports.updateDcHsn = async (req, res) => {
 };
 
 /** PATCH /sales-orders/:soNumber/shipping-address — Super Admin only. */
+/** Buyer GSTIN on a sales order — it decides the place of supply when present. */
+async function soGstin(db, soNumber) {
+  const r = await db.query(
+    `SELECT NULLIF(TRIM(gst_number), '') AS gst_number, created_at
+       FROM sales_order_lines WHERE sales_order_number = $1
+      ORDER BY id LIMIT 1`,
+    [soNumber]
+  );
+  return gstinForDocument(r.rows[0]);
+}
+
 exports.updateSalesOrderShippingAddress = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -7473,7 +7527,9 @@ exports.updateSalesOrderShippingAddress = async (req, res) => {
       });
     }
 
-    const supplyState = resolveSupplyStateFromAddress(shipping, req.body?.supply_state);
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping, req.body?.supply_state, '', await soGstin(client, soNumber)
+    );
     const shippingJson = JSON.stringify(shipping);
 
     await client.query('BEGIN');
@@ -7890,7 +7946,7 @@ exports.updateSoShipping = async (req, res) => {
           message: 'name, phone, address, city, state, and zip_code are required',
         });
       }
-      supplyState = resolveSupplyStateFromAddress(shipping, b.supply_state);
+      supplyState = resolveSupplyStateFromAddress(shipping, b.supply_state, '', await soGstin(client, soNumber));
     }
 
     await client.query('BEGIN');

@@ -26,7 +26,7 @@ const {
   ticketHasRepairAwaitingSdc,
 } = require('../services/repairPickupInventoryService');
 const { createFloorTicketFromSupportPickup, resetVendorSerialForQcReentry } = require('../services/grnTicketService');
-const { nextDocumentNumber, ensureReturnDcPickupItems } = require('../services/salesManagementService');
+const { nextDocumentNumber, ensureReturnDcPickupItems, isPickupStillWithCustomer } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
@@ -4068,6 +4068,17 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
             [triggerItem.return_dc_number, triggerItem.id]
         );
         if (sibRes.rows.length) siblings = sibRes.rows;
+        // A laptop the technician has not collected yet (customer asked them to come
+        // back) is left open on the RDC; the warehouse signs for what arrived.
+        siblings = siblings.filter(
+            (s) => String(s.status || '') !== 'cancelled' && !isPickupStillWithCustomer(s)
+        );
+        if (!siblings.length) {
+            throw Object.assign(
+                new Error('This laptop has not been picked up from the customer yet. Warehouse e-sign opens after pickup and guard inward.'),
+                { status: 400 }
+            );
+        }
         // Clear stale incomplete timestamps so warehouseReceiveSinglePickupItem can re-run.
         for (const s of siblings) {
             const needsClear = s.warehouse_received_at
@@ -4134,11 +4145,20 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         }
     }
 
+    // Close the RDC only once every laptop on it is in. Marking it delivered early
+    // would also waive the customer-OTP check for the laptops still to be picked up.
     if (triggerItem.return_dc_number) {
         await client.query(
             `UPDATE delivery_challan_lines SET
                 status = 'delivered', delivered_at = NOW(), updated_at = NOW()
-             WHERE dc_number = $1 AND movement_type = 'return'`,
+             WHERE dc_number = $1 AND movement_type = 'return'
+               AND NOT EXISTS (
+                 SELECT 1 FROM support_ticket_items sti
+                  WHERE sti.return_dc_number = $1
+                    AND sti.item_type = 'pickup'
+                    AND COALESCE(sti.status, '') <> 'cancelled'
+                    AND sti.warehouse_received_at IS NULL
+               )`,
             [triggerItem.return_dc_number]
         );
     }
@@ -4326,11 +4346,23 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                   sti.warehouse_received_at IS NOT NULL
                   AND COALESCE(vsn.inventory_status, '') IN ('scrapped', 'sold')
                 )
+                AND COALESCE(sti.status, '') <> 'cancelled'
+                -- Not yet picked up from the customer (see isPickupStillWithCustomer).
+                AND NOT (
+                  sti.warehouse_received_at IS NULL
+                  AND sti.gate_inward_at IS NULL
+                  AND LOWER(COALESCE(sti.pickup_method, '')) NOT IN ('courier', 'porter')
+                  AND sti.customer_otp_verified_at IS NULL
+                  AND sti.picked_up_at IS NULL
+                )
               ORDER BY sti.id ASC LIMIT 1`,
             [rdcNumber]
         );
         if (!pendingRes.rows.length) {
-            throw Object.assign(new Error('All units on this Return DC are already received'), { status: 400 });
+            throw Object.assign(
+                new Error('Nothing to receive: every unit on this Return DC is either received or not yet picked up from the customer'),
+                { status: 400 }
+            );
         }
         const trigger = pendingRes.rows[0];
         if (trigger.warehouse_received_at) {

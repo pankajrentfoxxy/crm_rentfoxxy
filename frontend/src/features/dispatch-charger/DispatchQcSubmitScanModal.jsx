@@ -62,7 +62,9 @@ export default function DispatchQcSubmitScanModal({
         </div>
         <p className="text-sm text-slate-600">
           {needsCharger
-            ? `Scan ${charger?.ttspl_id || 'the laptop TTSPL'}, adapter ${charger?.adapter_label || ''}, and power cable ${charger?.cable_label || ''}.`
+            ? (needsCable
+              ? `Scan ${charger?.ttspl_id || 'the laptop TTSPL'}, adapter ${charger?.adapter_label || ''}, and power cable ${charger?.cable_label || ''}.`
+              : `Scan ${charger?.ttspl_id || 'the laptop TTSPL'} and charger ${charger?.adapter_label || ''}.`)
             : `Scan ${charger?.ttspl_id || 'the laptop TTSPL ID'} to confirm this unit.`}
         </p>
         <label className="block text-sm">
@@ -79,7 +81,7 @@ export default function DispatchQcSubmitScanModal({
         {needsCharger ? (
           <>
             <label className="block text-sm">
-              <span className="text-xs font-medium text-slate-600">Laptop charger / adapter</span>
+              <span className="text-xs font-medium text-slate-600">{charger?.kit_type === 'set' ? 'Charger set' : 'Laptop charger / adapter'}</span>
               <ScanField
                 value={chargerScan}
                 onChange={setChargerScan}
