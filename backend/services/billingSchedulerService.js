@@ -221,7 +221,19 @@ async function runBillingBatch(runName, fn) {
  * laptop goes back to the same customer and is billed continuously, so its
  * warehouse receipt is never a rent end or a return credit note. A repair
  * answered with a replacement ends at the warehouse receipt like a return.
+ *
+ * So does a repair whose ticket was closed without a Service DC: support can no
+ * longer send that laptop back on the ticket (a new SO is needed), so it is not
+ * coming back to this rental (rule 2026-09-30).
  */
+const REPAIR_CLOSED_WITHOUT_SDC_SQL = `(
+  sti.service_dc_number IS NULL
+  AND (
+    sti.status = 'closed'
+    OR EXISTS (SELECT 1 FROM support_tickets st WHERE st.id = sti.ticket_id AND st.status = 'closed')
+  )
+)`;
+
 const REPAIR_HOLD_PICKUP_SQL = `(
   COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
   AND NOT EXISTS (
@@ -231,6 +243,7 @@ const REPAIR_HOLD_PICKUP_SQL = `(
             OR ro.old_machine_serial IN (sti.ttspl_id, sti.unique_serial_number))
        AND ro.created_at >= sti.created_at - INTERVAL '7 days'
   )
+  AND NOT ${REPAIR_CLOSED_WITHOUT_SDC_SQL}
 )`;
 
 async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
@@ -828,7 +841,9 @@ async function buildCustomerInvoiceLines(client, {
        LEFT JOIN LATERAL (
          SELECT sti.id,
                 (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv,
-                ${REPAIR_HOLD_PICKUP_SQL} AS repair_hold
+                ${REPAIR_HOLD_PICKUP_SQL} AS repair_hold,
+                (COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
+                 AND ${REPAIR_CLOSED_WITHOUT_SDC_SQL}) AS repair_closed
            FROM support_ticket_items sti
           WHERE sti.item_type = 'pickup'
             AND COALESCE(sti.status, '') NOT IN ('cancelled')
@@ -849,6 +864,11 @@ async function buildCustomerInvoiceLines(client, {
         AND (
           vsn.inventory_status IN ('rented', 'returned', 'in_transit')
           OR (lp.repair_hold AND vsn.inventory_status IN ('in_stock', 'in_repair'))
+          -- Repair ticket closed without a Service DC: bill the days still owed
+          -- up to the warehouse receipt, and nothing after it.
+          OR (lp.repair_closed AND lp.recv IS NOT NULL
+              AND vsn.inventory_status IN ('in_stock', 'in_repair')
+              AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < lp.recv))
         )
         AND vsn.rent_start_date IS NOT NULL
         AND vsn.rent_start_date <= $2::date

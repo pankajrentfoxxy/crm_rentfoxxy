@@ -324,6 +324,11 @@ async function assertTicketRepairContext(db, ticket) {
 async function evaluatePickupItemEligibility(db, item, ticket) {
   const reasons = [];
   if (!isRepairPickupItem(item)) reasons.push('not a repair pickup item');
+  // A closed ticket has ended the rental (billing stops at warehouse receipt).
+  // Sending the laptop back needs a new Sales Order, not a Service DC.
+  if (String(ticket?.status || '').toLowerCase() === 'closed' || item.status === 'closed') {
+    reasons.push('ticket is closed — create a Sales Order to send this laptop to the customer');
+  }
   if (!item.warehouse_received_at) reasons.push('warehouse receipt pending');
   if (!item.return_dc_number) reasons.push('return pickup not completed');
   if (item.service_dc_number) {
