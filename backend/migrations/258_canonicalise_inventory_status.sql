@@ -20,6 +20,8 @@
 -- WHAT IS MIGRATED — 120 rows, 1.65% of the live fleet:
 --   out_stock      (95) -> rented      read in 12 places as "deployed"; written
 --                                      by no current code, an ERP import artefact
+--                                      CORRECTED by 412: they were all SOLD in
+--                                      ERP (sale-order DCs Feb-Jun 2026), not rented.
 --   out_for_repare (19) -> in_repair   misspelling of an existing family
 --   out_for_return  (6) -> returned
 --
