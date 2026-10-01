@@ -1815,8 +1815,85 @@ async function attachScanState(db, session, laptops, ctx) {
       }),
       scanned_at: hit?.scan_time || null,
       already_confirmed: Boolean(hit?.confirmed_at),
+      replacement_scan: hit?.validation_result === 'valid' ? (parseJson(hit?.metadata, {})?.replacement_scan || null) : null,
     };
   });
+}
+
+/**
+ * Vendor repair INWARD: a laptop that is not on the DC may be the vendor's
+ * replacement for one we sent. Offer the guard the laptops still at the vendor
+ * to pick from instead of rejecting it outright.
+ */
+async function vrdcReplacementCandidate(db, { session, ctx, raw, serial }) {
+  if (!ctx?.require_unit_scan || ctx.reference_type !== 'vrdc') return null;
+  if (serial && (ctx.laptops || []).some((l) => laptopMatches(l, serial))) return null;
+  if (serial?.serial_id) {
+    // A laptop that was on this DC (e.g. already brought in) is not a replacement.
+    const own = await db.query(
+      `SELECT 1 FROM vendor_repair_dc_items WHERE dc_number = $1 AND serial_id = $2 LIMIT 1`,
+      [ctx.reference_number, serial.serial_id]
+    );
+    if (own.rows.length) return null;
+  }
+  const view = await sessionView(db, session, ctx);
+  const options = (view.laptops || []).filter((l) => !l.verified).map((l) => ({
+    serial_id: l.serial_id, ttspl: l.ttspl, serial_number: l.serial_number, configuration: l.configuration,
+  }));
+  if (!options.length) return null;
+  return {
+    ok: true,
+    valid: false,
+    kind: 'replacement_candidate',
+    scanned_code: raw,
+    replacement_options: options,
+    message: `${raw} is not on this repair DC. If the vendor sent it as a replacement, choose which laptop it replaces.`,
+    ...view,
+  };
+}
+
+/** Guard records the vendor's replacement laptop against the original it stands in for. */
+async function recordVrdcReplacement({ sessionId, scan, replacesSerialId, user }) {
+  const raw = normalizeScan(scan);
+  if (!raw) return { ok: false, message: 'Scan the replacement laptop serial.' };
+  const db = pool;
+  const actor = await getActor(db, user);
+  const session = (await db.query(`SELECT * FROM gate_scan_sessions WHERE session_id = $1`, [sessionId])).rows[0];
+  if (!session) return { ok: false, message: 'Scan session not found.' };
+  if (session.status !== 'open') return { ok: false, message: 'This gate session is no longer open.' };
+  const ctx = await reloadContextForSession(db, session);
+  if (!ctx?.require_unit_scan || ctx.reference_type !== 'vrdc' || ctx.direction !== 'inward') {
+    return { ok: false, message: 'Replacements can only be recorded on a vendor repair INWARD scan.' };
+  }
+  if (ctx.active === false) return { ok: false, message: ctx.inactive_reason || 'This movement is no longer active.' };
+  const target = (ctx.laptops || []).find((l) => Number(l.serial_id) === Number(replacesSerialId));
+  if (!target) return { ok: false, message: 'Pick a laptop that is still at the vendor.' };
+  if (await scannedInSession(db, session.session_id, target.serial_id)) {
+    return { ok: false, message: `${target.ttspl} is already scanned in this session. Remove it first.` };
+  }
+  await recordMovement(db, {
+    session,
+    ctx,
+    serial: {
+      serial_id: target.serial_id,
+      ttspl: target.ttspl,
+      serial_number: target.serial_number,
+      configuration: target.configuration,
+    },
+    actor,
+    awb: session.awb_number,
+    result: 'valid',
+    message: `Vendor replacement ${raw} received in place of ${target.ttspl}`,
+    extraMeta: { replacement: true, replacement_scan: raw, replaces_ttspl: target.ttspl },
+  });
+  const view = await sessionView(db, session, ctx);
+  return {
+    ok: true,
+    valid: true,
+    kind: 'unit',
+    message: `${raw} recorded as the vendor's replacement for ${target.ttspl}. The warehouse completes it as a replacement.`,
+    ...view,
+  };
 }
 
 async function openOrReuseSession(db, ctx, actor) {
@@ -2414,6 +2491,9 @@ async function scanUnit({ sessionId, scan, user }) {
       serial = await findSerial(db, byAwb.ttspl || byAwb.serial_number);
     }
   }
+  const replacementOffer = await vrdcReplacementCandidate(db, { session, ctx, raw, serial });
+  if (replacementOffer) return replacementOffer;
+
   if (!serial) {
     await recordMovement(db, {
       session, ctx, serial: { ttspl: normalizeTtspl(raw), serial_number: raw }, actor,
@@ -3066,6 +3146,7 @@ async function getHistory({ userId, role, limit = 50, search } = {}) {
 }
 
 module.exports = {
+  recordVrdcReplacement,
   unscanUnit,
   cancelSession,
   resolveScan,

@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import ScanField from '../../components/ScanField';
 import {
-  cancelGateSession, confirmGateSession, getGateSession, resolveGateScan, scanGateUnit, unscanGateUnit,
+  cancelGateSession, confirmGateSession, getGateSession, recordGateReplacement, resolveGateScan, scanGateUnit,
+  unscanGateUnit,
 } from './guardGateApi';
 
 const SOURCE_LABELS = {
@@ -101,6 +102,8 @@ export default function GuardScannerPage() {
   const [flash, setFlash] = useState(null);
   const [session, setSession] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  // Vendor repair INWARD: a scanned laptop not on the DC, offered as a replacement.
+  const [replacementOffer, setReplacementOffer] = useState(null);
 
   const applySession = (data) => {
     const nextDir = sessionDirection(data);
@@ -190,6 +193,12 @@ export default function GuardScannerPage() {
     setFlash(null);
     try {
       const { data } = await scanGateUnit(session.session_id, { scan });
+      if (data?.kind === 'replacement_candidate') {
+        applySession(data);
+        setReplacementOffer({ scan: data.scanned_code || scan, options: data.replacement_options || [] });
+        setFlash({ tone: 'info', title: 'Not on this DC', message: data.message });
+        return;
+      }
       if (data?.kind === 'verification' && data?.session_id) {
         applySession(data);
         setFlash({
@@ -311,10 +320,29 @@ export default function GuardScannerPage() {
   };
 
   const reset = () => {
+    setReplacementOffer(null);
     setSession(null);
     setFlash(null);
     setCode('');
     setSearchParams({}, { replace: true });
+  };
+
+  const handlePickReplacement = async (option) => {
+    if (!session?.session_id || !replacementOffer || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await recordGateReplacement(session.session_id, {
+        scan: replacementOffer.scan,
+        replaces_serial_id: option.serial_id,
+      });
+      applySession(data);
+      setReplacementOffer(null);
+      setFlash({ tone: 'success', title: 'Replacement recorded', message: data.message });
+    } catch (err) {
+      setFlash({ tone: 'error', title: 'Not recorded', message: err.response?.data?.message || 'Could not record the replacement.' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Take a laptop back out of this scan (it did not actually come through the gate).
@@ -448,6 +476,30 @@ export default function GuardScannerPage() {
         aria-label="Gate scanner"
       />
 
+      {replacementOffer && session?.status === 'open' ? (
+        <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 space-y-2">
+          <p className="text-sm font-bold text-violet-900">
+            Vendor replacement? <span className="font-mono">{replacementOffer.scan}</span> is not on this DC.
+          </p>
+          <p className="text-xs text-violet-800">Tap the laptop it replaces. Only do this if the vendor says it is a replacement.</p>
+          {replacementOffer.options.map((o) => (
+            <button
+              key={o.serial_id || o.ttspl}
+              type="button"
+              disabled={busy}
+              onClick={() => handlePickReplacement(o)}
+              className="w-full text-left bg-white border border-violet-200 rounded-xl px-3 py-2 text-sm disabled:opacity-50"
+            >
+              <span className="font-mono font-semibold">{o.ttspl}</span>
+              <span className="text-xs text-slate-500 ml-2">{o.serial_number}{o.configuration ? ` · ${o.configuration}` : ''}</span>
+            </button>
+          ))}
+          <button type="button" onClick={() => setReplacementOffer(null)} className="text-xs text-slate-600 underline">
+            Not a replacement — ignore
+          </button>
+        </div>
+      ) : null}
+
       {flash ? (
         <div className={`rounded-2xl px-4 py-3 flex items-start gap-3 ${flashClass}`}>
           {flash.tone === 'error'
@@ -554,6 +606,9 @@ export default function GuardScannerPage() {
                       {laptop.ttspl || '—'}
                     </p>
                     <p className="text-xs text-slate-500 truncate">{laptop.serial_number || '—'}</p>
+                    {laptop.replacement_scan ? (
+                      <p className="text-[11px] font-semibold text-violet-700 truncate">Replaced by vendor: {laptop.replacement_scan}</p>
+                    ) : null}
                     {laptop.awb_number ? (
                       <p className="text-[11px] font-medium text-slate-500 truncate">AWB {laptop.awb_number}</p>
                     ) : null}

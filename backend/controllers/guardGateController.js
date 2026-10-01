@@ -91,6 +91,21 @@ exports.unscanUnit = async (req, res) => {
   }
 };
 
+exports.recordReplacement = async (req, res) => {
+  try {
+    const result = await gate.recordVrdcReplacement({
+      sessionId: req.params.sessionId,
+      scan: req.body?.scan || req.body?.serial_number || '',
+      replacesSerialId: req.body?.replaces_serial_id,
+      user: actorFromReq(req),
+    });
+    return res.status(result.ok ? 200 : 400).json({ success: Boolean(result.ok), ...result });
+  } catch (err) {
+    console.error('guardGate.recordReplacement', err);
+    return res.status(500).json({ success: false, message: 'Unable to record the replacement laptop.' });
+  }
+};
+
 exports.cancelSession = async (req, res) => {
   try {
     const result = await gate.cancelSession({

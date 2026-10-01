@@ -272,14 +272,16 @@ export default function VendorRepairDcDetailPage() {
   const openReceiveForItem = (item) => {
     const cfg = parseVrdcItemConfig(item);
     setReceiveTargetItem(item);
+    // The guard recorded a vendor replacement for this laptop: start on Replacement.
+    const guardReplacement = item.gate_replacement_serial || '';
     setReceiveForm({
-      receive_mode: 'repaired',
+      receive_mode: guardReplacement ? 'replacement' : 'repaired',
       laptop_condition: DEFAULT_CONDITION,
       bypass_gate_flow: false,
       verified_serial: '',
       wh_signer_name: user?.name || user?.email || '',
       wh_esign: null,
-      replacement_serial_number: '',
+      replacement_serial_number: guardReplacement,
       replacement_brand: cfg.brand,
       replacement_model: cfg.model,
       replacement_generation: cfg.generation,
@@ -810,6 +812,9 @@ export default function VendorRepairDcDetailPage() {
                     ) : item.item_status === 'dispatch_ready' ? (
                       <p className="text-amber-700">Awaiting Guard outward</p>
                     ) : null}
+                    {item.gate_replacement_serial && !['received', 'replacement_received'].includes(item.item_status) ? (
+                      <p className="text-violet-700">Vendor sent replacement {item.gate_replacement_serial} (guard)</p>
+                    ) : null}
                     {item.gate_inward_at ? (
                       <p className="text-emerald-700">Guard inward done</p>
                     ) : item.item_status === 'dispatched' ? (
@@ -1030,6 +1035,9 @@ export default function VendorRepairDcDetailPage() {
                               <p className="text-amber-700">Awaiting Guard inward</p>
                             ) : scriptPending ? (
                               <p className="text-amber-700">ON receive: run vendor-return script for serial + specs</p>
+                            ) : null}
+                            {item.gate_replacement_serial ? (
+                              <p className="text-violet-700 font-medium">Vendor replacement at gate: {item.gate_replacement_serial}</p>
                             ) : dc.gate_legacy && item.gate_inward_at ? (
                               <p className="text-emerald-700">Guard inward done</p>
                             ) : dc.gate_legacy ? (
