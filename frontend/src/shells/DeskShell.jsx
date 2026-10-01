@@ -45,11 +45,31 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { pathname, search } = useLocation();
-  const here = pathname + search;
+
+  // The ONE menu link for this page: its path is a prefix of the current path
+  // (so a record page keeps its list lit) and every query it carries matches.
+  // The longest path wins, then the most query terms. Comparing paths alone lit
+  // two links at once (Assets and Assets?view=…).
+  const currentTo = useMemo(() => {
+    const qs = new URLSearchParams(search);
+    let best = null;
+    let bestScore = -1;
+    for (const s of SECTIONS) {
+      for (const i of s.items) {
+        const [path, query = ''] = i.to.split('?');
+        if (pathname !== path && !pathname.startsWith(`${path}/`)) continue;
+        const want = [...new URLSearchParams(query)];
+        if (!want.every(([k, v]) => qs.get(k) === v)) continue;
+        const score = path.length * 10 + want.length;
+        if (score > bestScore) { best = i.to; bestScore = score; }
+      }
+    }
+    return best;
+  }, [pathname, search]);
   const { hasPermission, user } = usePermission();
 
   const [openSection, setOpenSection] = useState(() => {
-    const match = SECTIONS.find((s) => s.items.some((i) => here.startsWith(i.to.split('?')[0])));
+    const match = SECTIONS.find((s) => s.items.some((i) => i.to === currentTo));
     return match?.key || SECTIONS[0].key;
   });
 
@@ -116,7 +136,7 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
             {!collapsed && <div className="c-nav-label">Workspace</div>}
             {visible.map((s) => {
               const open = openSection === s.key;
-              const isHere = s.items.some((i) => here.startsWith(i.to.split('?')[0]));
+              const isHere = s.items.some((i) => i.to === currentTo);
               const Icon = SECTION_ICONS[s.key] || LayoutGrid;
               return (
                 <div key={s.key}>
@@ -138,7 +158,7 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
                         <React.Fragment key={g.name || '_'}>
                           {g.name && <li className="c-nav-group">{g.name}</li>}
                           {g.items.map((i) => {
-                            const active = here.startsWith(i.to.split('?')[0]);
+                            const active = i.to === currentTo;
                             return (
                               <li key={i.to}>
                                 <Link

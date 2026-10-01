@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../shells/DeskShell';
 import {
   Button, DataTable, DateTime, DocNumber, EmptyState, Input, Money, Notice, Segmented, Select, StatusChip,
 } from '../../components/carret';
 import { ASSET_STATUSES } from '../../config/statuses';
+import { usePermission } from '../../hooks/usePermission';
 import { errMsg, fetchAssetCounts, fetchAssets, TAG_OPTIONS } from './stock/stockApi';
 
 /**
@@ -21,11 +22,21 @@ const VIEWS = [
   { value: 'with_customer', label: 'With customers' },
   { value: 'on_floor', label: 'Not ready yet' },
 ];
+// Each list has one home (2 Oct 2026): ready laptops are Stock → Ready Stock,
+// laptops with customers are Stock → With Customers. Those views are not
+// repeated here as tabs; the counts above the list link to them. The With
+// customers tab stays only for people without customer_inventory (sales,
+// warehouse, procurement), who cannot open that page.
+const READY_TO = '/carret/stock/ready';
+const WITH_CUSTOMERS_TO = '/carret/stock/with-customers';
 const LIMIT = 50;
 
 export default function AssetsListPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { hasPermission } = usePermission();
+  const canFleet = hasPermission('customer_inventory', 'view');
+  const views = VIEWS.filter((v) => v.value !== 'ready' && !(v.value === 'with_customer' && canFleet));
   const [view, setView] = useState(VIEWS.some((v) => v.value === params.get('view')) ? params.get('view') : '');
   const [status, setStatus] = useState(ASSET_STATUSES.some((s) => s.value === params.get('status')) ? params.get('status') : '');
   // From the Today dashboard: laptops that moved into a state on an IST day
@@ -64,6 +75,10 @@ export default function AssetsListPage() {
     { key: 'u', header: 'Since', render: (r) => <DateTime value={r.status_changed_at || r.updated_at} /> },
   ];
 
+  // Old links (?view=ready, the Today tile's ?view=with_customer) open the list's home.
+  if (view === 'ready') return <Navigate to={READY_TO} replace />;
+  if (view === 'with_customer' && canFleet) return <Navigate to={WITH_CUSTOMERS_TO} replace />;
+
   const pages = res ? Math.max(1, Math.ceil((res.total || 0) / LIMIT)) : 1;
   const by = counts?.by_status || {};
   return (
@@ -71,8 +86,11 @@ export default function AssetsListPage() {
       <div className="c-stack">
         {counts && (
           <p className="text-ink-3">
-            {counts.total.toLocaleString('en-IN')} laptops · {counts.with_customer.toLocaleString('en-IN')} with customers ·
-            {' '}{counts.ready} ready · {(by.in_stock || 0) - counts.ready} in stock not ready · {by.in_repair || 0} in repair ·
+            {counts.total.toLocaleString('en-IN')} laptops ·{' '}
+            {canFleet
+              ? <Link to={WITH_CUSTOMERS_TO} className="text-accent hover:underline">{counts.with_customer.toLocaleString('en-IN')} with customers</Link>
+              : `${counts.with_customer.toLocaleString('en-IN')} with customers`} ·
+            {' '}<Link to={READY_TO} className="text-accent hover:underline">{counts.ready} ready</Link> · {(by.in_stock || 0) - counts.ready} in stock not ready · {by.in_repair || 0} in repair ·
             {' '}{by.returned || 0} returned · {by.scrapped || 0} scrapped
           </p>
         )}
@@ -85,7 +103,7 @@ export default function AssetsListPage() {
           </Notice>
         )}
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
-          <Segmented label="View" value={view} onChange={(v) => { setView(v); setPage(1); }} options={VIEWS} />
+          <Segmented label="View" value={view} onChange={(v) => { setView(v); setPage(1); }} options={views} />
           <Input type="search" placeholder="TTSPL, serial, PO, customer or model" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: '20rem' }} />
           <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} placeholder="Any state" options={ASSET_STATUSES.map((s) => ({ value: s.value, label: s.label }))} style={{ maxWidth: '12rem' }} />
           <Select value={tag} onChange={(e) => { setTag(e.target.value); setPage(1); }} placeholder="Any tag" options={[...TAG_OPTIONS, { value: 'none', label: 'Not tagged' }]} style={{ maxWidth: '10rem' }} />
