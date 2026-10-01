@@ -1,6 +1,7 @@
 /** Stock screens in the new UI (services/stockService.js, claude/carret-stock.md). */
 const pool = require('../config/db');
 const svc = require('../services/stockService');
+const lifecycleSvc = require('../services/assetLifecycleService');
 const { getCarretOccupancy } = require('../services/warehouseLocationService');
 
 function sendError(res, e, where) {
@@ -92,4 +93,12 @@ exports.scrappedAwaitingChallan = wrap('stock.scrappedAwaitingChallan', async (r
 
 exports.notEarning = wrap('stock.notEarning', async (req, res) => {
   res.json({ success: true, ...(await svc.notEarning({ days: req.query.days })) });
+});
+
+exports.lifecycle = wrap('stock.lifecycle', async (req, res) => {
+  const code = String(req.params.code || '').trim();
+  if (!code || code.length > 64) return res.status(400).json({ success: false, message: 'Give a TTSPL code or serial number' });
+  const data = await lifecycleSvc.getLifecycle(code);
+  if (!data) return res.status(404).json({ success: false, message: `No laptop found for ${code}` });
+  return res.json({ success: true, data });
 });

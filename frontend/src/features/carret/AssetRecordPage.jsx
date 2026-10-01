@@ -91,7 +91,12 @@ export default function AssetRecordPage() {
     <DeskShell
       title={asset?.ttspl_id || ttspl}
       breadcrumb="Stock / Assets"
-      actions={<Button variant="secondary" onClick={() => window.print()}>Print</Button>}
+      actions={(
+        <div className="flex" style={{ gap: '6px' }}>
+          <Link to={`/carret/stock/lifecycle/${encodeURIComponent(asset?.ttspl_id || ttspl)}`} className="c-btn">Lifecycle</Link>
+          <Button variant="secondary" onClick={() => window.print()}>Print</Button>
+        </div>
+      )}
     >
       <div style={{ display: 'grid', gap: '16px' }}>
         <DocumentHeader

@@ -67,13 +67,14 @@ async function listBoard(req, q = {}) {
   if (q.view === 'unassigned') filters.push('t.assigned_user_id IS NULL');
   if (q.search) {
     fp.push(`%${String(q.search).trim()}%`);
-    filters.push(`(t.ttspl_id ILIKE $${fp.length} OR t.serial_number ILIKE $${fp.length} OR t.model ILIKE $${fp.length})`);
+    filters.push(`(t.ttspl_id ILIKE $${fp.length} OR t.serial_number ILIKE $${fp.length} OR v.serial_number ILIKE $${fp.length} OR t.model ILIKE $${fp.length})`);
   }
   const entered = `COALESCE((SELECT MAX(h.created_at) FROM production_ticket_history h WHERE h.ticket_id = t.ticket_id AND h.current_stage = s.stage_name), t.created_at)`;
   if (q.view === 'stuck') filters.push(`${entered} < NOW() - interval '${STUCK_DAYS} days'`);
 
   const rows = await db.query(
-    `SELECT t.ticket_id, t.ttspl_id, t.serial_number, t.brand, t.model, t.processor, t.ram, t.storage,
+    `SELECT t.ticket_id, t.ttspl_id, COALESCE(NULLIF(TRIM(t.serial_number), ''), v.serial_number) AS serial_number,
+            t.brand, t.model, t.processor, t.generation, t.ram, t.storage,
             t.status, t.ticket_type, t.priority, t.highlighted, t.highlighted_reason, t.qc_fail_count,
             t.received_condition, t.hold_reason, t.hold_from_stage_name, t.created_at,
             t.assigned_user_id, u.name AS assigned_name, t.assigned_team_id,

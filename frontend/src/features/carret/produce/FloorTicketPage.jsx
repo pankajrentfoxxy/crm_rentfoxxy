@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, KeyValue, Notice, Section, Select, Tabs, Textarea,
+  Button, DateTime, DocNumber, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, Notice, Section, Select, StatusChip, Tabs, Textarea,
 } from '../../../components/carret';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -50,6 +50,8 @@ export default function FloorTicketPage() {
   const [form, setForm] = useState({});
   const [assignOpen, setAssignOpen] = useState(false);
   const [partHits, setPartHits] = useState([]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [showCost, setShowCost] = useState(false);
 
   const load = useCallback(() => {
     fetchTicket(ticketId).then(({ data: d }) => setData(d)).catch((e) => setError(errMsg(e, 'Could not load the ticket.')));
@@ -105,10 +107,10 @@ export default function FloorTicketPage() {
     return null;
   })();
 
+  // Assign / Reassign sits next to the assignee in the header, not here.
   const actions = (
     <>
       {mine && work && <Button onClick={() => run('stop', () => endWork(t.ticket_id), 'Timer stopped')}>Stop work</Button>}
-      {canAssign && !closed && <Button onClick={() => setAssignOpen(true)}>{t.assigned_user_id ? 'Reassign' : 'Assign'}</Button>}
       {lead && !closed && stage !== 'Hold' && <Button variant="quiet" onClick={() => setDrawer('hold')}>Hold</Button>}
       {lead && !closed && ['Diagnosis', 'Floor Manager'].includes(stage) && <Button variant="quiet" onClick={() => setDrawer('toDismantle')}>Break for parts</Button>}
       {lead && !closed && t.vendor_serial_id && <Button variant="quiet" onClick={() => setDrawer('fail')}>Send back to vendor</Button>}
@@ -117,129 +119,189 @@ export default function FloorTicketPage() {
 
   const acts = data.activities || [];
   const cc = data.config_check?.config || {};
+  const disagreements = data.config_check?.disagreements || [];
   const cost = data.laptop_cost;
   const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
+  // The laptop, once, in the header (1 Oct 2026: the "Laptop" tab repeated the
+  // header's TTSPL / serial and dumped the config, cost and grade; the full
+  // story of the laptop now lives on its Lifecycle page).
+  const serial = [t.resolved_serial_number, t.serial_number].find((s) => s && s !== 'NOT_ON') || null;
+  const cfg = configText({ ...t, ...Object.fromEntries(Object.entries(cc).filter(([, v]) => v)) });
+  const lifeKey = t.ttspl_id || serial;
+  const days = t.stage_entered_at ? Math.max(0, Math.floor((Date.now() - new Date(t.stage_entered_at)) / 86400000)) : null;
+  const daysTone = days == null ? undefined : days > 7 ? 'var(--alert-crit)' : days > 3 ? 'var(--alert-warn)' : undefined;
+  const stageChip = closed
+    ? <StatusChip status={t.status} />
+    : stage === 'Hold'
+      ? <StatusChip status="pending" label="On hold" />
+      : <StatusChip status="processing" label={stageLabel(stage)} />;
+  const arrived = t.received_condition === 'not_on' ? "Won't power on" : t.received_condition === 'part_missing' ? 'Part missing' : 'Powers on';
+  const meta = [
+    { label: 'At this stage', value: closed || days == null ? '—' : <span style={{ color: daysTone, fontWeight: daysTone ? 600 : undefined }}>{days === 0 ? 'Since today' : `${days} day${days === 1 ? '' : 's'}`}</span> },
+    {
+      label: 'Assigned to',
+      value: (
+        <span className="flex items-center flex-wrap" style={{ gap: '4px 10px' }}>
+          <span>{t.assigned_user_name || <span className="text-ink-3">Nobody yet</span>}</span>
+          {canAssign && !closed && (
+            <Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setAssignOpen(true)}>
+              {stage === 'Floor Manager' && !t.assigned_user_id ? 'Triage' : t.assigned_user_id ? 'Reassign' : 'Assign'}
+            </Button>
+          )}
+        </span>
+      ),
+    },
+    { label: 'Arrived', value: arrived },
+    { label: 'Opened', value: <DateTime value={t.created_at} /> },
+    ...(t.final_grade ? [{ label: 'Grade', value: t.final_grade }] : []),
+    ...(t.qc_fail_count > 0 ? [{ label: 'QC failures', value: <span style={{ color: 'var(--alert-crit)', fontWeight: 600 }}>{t.qc_fail_count}</span> }] : []),
+  ];
+  const shownActs = showAllHistory ? acts : acts.slice(0, 8);
+  const partsTab = stage !== 'Dispatch QC' || activePartRequests(data.part_requests).length > 0;
+
   return (
-    <DeskShell title={t.ttspl_id || `Ticket #${t.ticket_id}`} breadcrumb="Production / Floor" subtitle={configText({ ...t, ...Object.fromEntries(Object.entries(cc).filter(([, v]) => v)) })}>
+    <DeskShell title={`Floor ticket #${t.ticket_id}`} breadcrumb="Production / Floor">
       <div className="c-stack">
-        <DocumentHeader
-          docNumber={t.ttspl_id || `#${t.ticket_id}`}
-          type={`Floor ticket #${t.ticket_id}${t.ticket_type === 'sales_order_qc' ? ' · sales-order check' : ''}`}
-          status={closed ? t.status : 'processing'}
-          actions={actions}
-          meta={[
-            { label: 'Stage', value: stageLabel(stage) },
-            { label: 'Technician', value: t.assigned_user_name || 'nobody yet' },
-            { label: 'Serial', value: t.serial_number },
-            { label: 'Arrived', value: t.received_condition === 'not_on' ? "Won't power on" : t.received_condition === 'part_missing' ? 'Part missing' : 'Powers on' },
-            { label: 'Opened', value: <DateTime value={t.created_at} /> },
-          ]}
-        />
+        <header className="c-card" style={{ padding: '18px 20px' }}>
+          <div className="flex flex-wrap items-start" style={{ gap: '12px 20px' }}>
+            <div className="min-w-0" style={{ flex: '1 1 22rem' }}>
+              <div className="text-ink-3 font-ui uppercase tracking-wide" style={{ fontSize: 'var(--d-sm)' }}>
+                Floor ticket #{t.ticket_id}{t.ticket_type === 'sales_order_qc' ? ` · sales-order check${t.sales_order_number ? ` ${t.sales_order_number}` : ''}` : ''}
+              </div>
+              <div className="flex flex-wrap items-center" style={{ gap: '8px 12px', marginTop: '4px' }}>
+                <span className="text-ink" style={{ fontSize: '20px', fontWeight: 600 }}><DocNumber value={t.ttspl_id || serial || `#${t.ticket_id}`} /></span>
+                {stageChip}
+              </div>
+              <div className="c-idstrip">
+                {serial && t.ttspl_id && <span><span className="c-idstrip-k">S/N</span><span className="font-mono">{serial}</span></span>}
+                {cfg && <span className="text-ink">{cfg}</span>}
+                {t.po_number && <span><span className="c-idstrip-k">PO</span><span className="font-mono">{t.po_number}</span></span>}
+                {lifeKey && <Link to={`/carret/stock/lifecycle/${encodeURIComponent(lifeKey)}`} className="text-accent" style={{ fontWeight: 500 }}>Lifecycle →</Link>}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center" style={{ gap: 'var(--d-gap)' }}>{actions}</div>
+          </div>
+          <dl
+            className="grid border-t border-rule"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px 20px', marginTop: '14px', paddingTop: '14px', marginBottom: 0 }}
+          >
+            {meta.map((m) => (
+              <div key={m.label} className="min-w-0">
+                <dt className="text-ink-3 font-ui" style={{ fontSize: '13px', fontWeight: 500 }}>{m.label}</dt>
+                <dd className="text-ink font-ui m-0" style={{ fontSize: 'var(--d-base)', marginTop: '2px' }}>{m.value ?? '—'}</dd>
+              </div>
+            ))}
+          </dl>
+        </header>
+
         <FlowSteps steps={flow} />
         {t.highlighted && <Notice tone="warn" title="Needs attention">{t.highlighted_reason}</Notice>}
+        {/* Kept from the old Laptop tab: records that disagree about the config are worth fixing before QC. */}
+        {disagreements.length > 0 && !closed && (
+          <Notice tone="warn" title="Records disagree about this laptop's configuration">
+            {disagreements.map((d) => `${d.field}: ${({ floor: 'floor copy', legacy: 'old inventory', last_confirmed: 'last check' })[d.where] || d.where} says "${d.value}", record says "${d.current}"`).join(' · ')}
+          </Notice>
+        )}
         {next}
 
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { key: 'work', label: `Work — ${stageLabel(stage)}` },
-            // A laptop reaches Dispatch QC fully ready: no part requests there.
-            // Earlier requests stay visible (read-only) if there are any.
-            ...(stage !== 'Dispatch QC' || activePartRequests(data.part_requests).length
-              ? [{ key: 'parts', label: 'Parts', count: activePartRequests(data.part_requests).length }] : []),
-            { key: 'laptop', label: 'Laptop' },
-            { key: 'history', label: 'History', count: acts.length },
-          ]}
-        />
-        {tab === 'work' && (
-          workForm
-            // The assigned technician sees the task only after Start work
-            // (TTSPL + serial scanned, timer running) — the server insists too.
-            ? (mine && WORK_STAGES.includes(stage) && !work
-              ? (
-                <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
-                  Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the {stageLabel(stage)} task opens.
-                </Notice>
-              )
-              : (mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
-            : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
-        )}
-        {tab === 'parts' && (
-          <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && stage !== 'Dispatch QC' && (mine || lead)} onChanged={done} />
-        )}
-        {tab === 'laptop' && (
-          <div className="c-stack">
-            <Section title="Configuration">
-              <KeyValue items={[
-                { label: 'TTSPL', value: t.ttspl_id }, { label: 'Serial', value: t.serial_number },
-                { label: 'Brand / model', value: [cc.brand || t.brand, cc.model || t.model].filter(Boolean).join(' ') },
-                { label: 'Processor', value: [cc.processor || t.processor, cc.generation].filter(Boolean).join(' · ') },
-                { label: 'RAM', value: cc.ram || t.ram }, { label: 'Drive', value: cc.storage || t.storage },
-                { label: 'Grade', value: t.final_grade }, { label: 'QC failures', value: t.qc_fail_count || 0 },
-                { label: 'Last confirmed', value: data.config_check?.confirmed ? <>{data.config_check.confirmed.source === 'qc2_script' ? 'QC2 check' : data.config_check.confirmed.source === 'part_fit' ? 'Part fitted' : data.config_check.confirmed.source} · <DateTime value={data.config_check.confirmed.at} /></> : 'Not yet' },
+        <div className="c-split">
+          <div className="c-stack min-w-0">
+            <Tabs
+              value={partsTab ? tab : 'work'}
+              onChange={setTab}
+              tabs={[
+                { key: 'work', label: `Work — ${stageLabel(stage)}` },
+                // A laptop reaches Dispatch QC fully ready: no part requests there.
+                // Earlier requests stay visible (read-only) if there are any.
+                ...(partsTab ? [{ key: 'parts', label: 'Parts', count: activePartRequests(data.part_requests).length }] : []),
               ]}
-              />
-              {(data.config_check?.disagreements || []).length > 0 && (
-                <Notice tone="warn" title="Records disagree about this laptop" className="mt-3">
-                  {data.config_check.disagreements.map((d) => `${d.field}: ${({ floor: 'floor copy', legacy: 'old inventory', last_confirmed: 'last check' })[d.where] || d.where} says "${d.value}", record says "${d.current}"`).join(' · ')}
-                </Notice>
-              )}
-              {t.ttspl_id && <p style={{ marginTop: '8px' }}><Button variant="quiet" onClick={() => navigate(`/carret/stock/assets/${encodeURIComponent(t.ttspl_id)}`)}>Open the laptop's full record</Button></p>}
-            </Section>
-            {cost && (
-              <Section title="Cost of this laptop">
-                <div className="c-totals">
-                  {cost.base.kind === 'monthly_rent' ? (
-                    <>
-                      <div>
-                        <span>
-                          Purchase-equivalent (rented on {cost.base.po_number || 'its PO'})
-                          {' — '}
-                          {{ asset_value: 'asset value on the PO', po_rate: 'price on the PO', same_model_purchases: `what we paid for the same model (${cost.base.purchase_equivalent?.lines || 0} purchase line(s))` }[cost.base.purchase_equivalent?.source] || 'no price on record'}
-                        </span>
-                        <span>{cost.base.purchase_equivalent?.amount != null ? money(cost.base.purchase_equivalent.amount) : '—'}</span>
-                      </div>
-                      <div className="text-ink-3"><span>Monthly rent to the vendor (not in the total)</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'not found'}</span></div>
-                      {cost.rent_paid && (
-                        <div className="text-ink-3">
-                          <span>
-                            {cost.rent_paid.start_in_future
-                              ? 'Rent paid so far — rent start date is wrong (in the future), cannot work it out'
-                              : `Rent paid so far — ${cost.rent_paid.days} day(s)${cost.rent_paid.ended ? ', rent ended' : ''} (not in the total)`}
-                          </span>
-                          <span>{cost.rent_paid.start_in_future ? '—' : money(cost.rent_paid.amount)}</span>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div><span>Bought on {cost.base.po_number || 'its PO'}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
-                  )}
-                  {cost.lines.map((l, i) => (
-                    // eslint-disable-next-line react/no-array-index-key
-                    <div key={i}><span>{l.label}{l.ref ? ` · ${l.ref}` : ''}{l.no_cost ? ' (no cost recorded)' : ''}</span><span>{money(l.amount)}</span></div>
-                  ))}
-                  <div className="is-grand"><span>Total so far</span><span>{money(cost.total)}</span></div>
-                </div>
-              </Section>
+            />
+            {(tab === 'work' || !partsTab) && (
+              workForm
+                // The assigned technician sees the task only after Start work
+                // (TTSPL + serial scanned, timer running) — the server insists too.
+                ? (mine && WORK_STAGES.includes(stage) && !work
+                  ? (
+                    <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
+                      Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the {stageLabel(stage)} task opens.
+                    </Notice>
+                  )
+                  : (mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
+                : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
+            )}
+            {tab === 'parts' && partsTab && (
+              <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && stage !== 'Dispatch QC' && (mine || lead)} onChanged={done} />
             )}
           </div>
-        )}
-        {tab === 'history' && (
-          <Section title="History">
-            <DataTable
-              rows={acts}
-              rowKey={(a, i) => a.activity_id || i}
-              columns={[
-                { key: 'w', header: 'When', render: (a) => <DateTime value={a.created_at} /> },
-                { key: 'a', header: 'What', render: (a) => String(a.action || '').replace(/_/g, ' '), sub: (a) => a.notes || null },
-                { key: 'u', header: 'Who', render: (a) => a.user_name || 'system' },
-              ]}
-              empty={<EmptyState title="Nothing yet" />}
-            />
-          </Section>
-        )}
+
+          <aside className="c-stack min-w-0">
+            <Section title={`History${acts.length ? ` (${acts.length})` : ''}`}>
+              {!acts.length ? <p className="text-ink-3" style={{ margin: 0 }}>Nothing yet.</p> : (
+                <ol className="list-none p-0 m-0 font-ui">
+                  {shownActs.map((a, i) => (
+                    <li key={a.activity_id || i} style={{ padding: '8px 0', borderTop: i ? '1px solid var(--rule)' : 0 }}>
+                      <div className="text-ink" style={{ fontWeight: 500, textTransform: 'capitalize' }}>{String(a.action || '').replace(/_/g, ' ')}</div>
+                      {a.notes && (
+                        <div className="text-ink-2" title={a.notes} style={{ fontSize: '13px', marginTop: '2px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>
+                          {a.notes}
+                        </div>
+                      )}
+                      <div className="text-ink-3" style={{ fontSize: '12.5px', marginTop: '2px' }}>{a.user_name || 'system'} · <DateTime value={a.created_at} /></div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {acts.length > 8 && (
+                <Button variant="quiet" style={{ marginTop: '6px' }} onClick={() => setShowAllHistory((v) => !v)}>
+                  {showAllHistory ? 'Show the latest only' : `Show all ${acts.length}`}
+                </Button>
+              )}
+            </Section>
+            {/* PD15 cost, for floor leads only and folded away: it is not floor work. */}
+            {lead && cost && (
+              <Section
+                title="Cost so far"
+                actions={<Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setShowCost((v) => !v)}>{showCost ? 'Hide' : money(cost.total)}</Button>}
+              >
+                {!showCost ? <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>PO line plus parts fitted, less old parts collected.</p> : (
+                  <div className="c-totals">
+                    {cost.base.kind === 'monthly_rent' ? (
+                      <>
+                        <div>
+                          <span>
+                            Purchase-equivalent (rented on {cost.base.po_number || 'its PO'})
+                            {' — '}
+                            {{ asset_value: 'asset value on the PO', po_rate: 'price on the PO', same_model_purchases: `what we paid for the same model (${cost.base.purchase_equivalent?.lines || 0} purchase line(s))` }[cost.base.purchase_equivalent?.source] || 'no price on record'}
+                          </span>
+                          <span>{cost.base.purchase_equivalent?.amount != null ? money(cost.base.purchase_equivalent.amount) : '—'}</span>
+                        </div>
+                        <div className="text-ink-3"><span>Monthly rent to the vendor (not in the total)</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'not found'}</span></div>
+                        {cost.rent_paid && (
+                          <div className="text-ink-3">
+                            <span>
+                              {cost.rent_paid.start_in_future
+                                ? 'Rent paid so far — rent start date is wrong (in the future), cannot work it out'
+                                : `Rent paid so far — ${cost.rent_paid.days} day(s)${cost.rent_paid.ended ? ', rent ended' : ''} (not in the total)`}
+                            </span>
+                            <span>{cost.rent_paid.start_in_future ? '—' : money(cost.rent_paid.amount)}</span>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div><span>Bought on {cost.base.po_number || 'its PO'}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
+                    )}
+                    {cost.lines.map((l, i) => (
+                      // eslint-disable-next-line react/no-array-index-key
+                      <div key={i}><span>{l.label}{l.ref ? ` · ${l.ref}` : ''}{l.no_cost ? ' (no cost recorded)' : ''}</span><span>{money(l.amount)}</span></div>
+                    ))}
+                    <div className="is-grand"><span>Total so far</span><span>{money(cost.total)}</span></div>
+                  </div>
+                )}
+              </Section>
+            )}
+          </aside>
+        </div>
       </div>
 
       <AssignDrawer ticket={t} open={assignOpen} onClose={() => setAssignOpen(false)} onDone={() => { setAssignOpen(false); load(); }} />

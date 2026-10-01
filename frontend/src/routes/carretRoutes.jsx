@@ -28,6 +28,8 @@ const AssetsListPage = React.lazy(() => import('../features/carret/AssetsListPag
 const ReadyStockPage = React.lazy(() => import('../features/carret/stock/ReadyStockPage'));
 const NotEarningPage = React.lazy(() => import('../features/carret/stock/NotEarningPage'));
 const ScrapPage = React.lazy(() => import('../features/carret/stock/ScrapPage'));
+const LifecycleSearchPage = React.lazy(() => import('../features/carret/stock/LifecycleSearchPage'));
+const LifecyclePage = React.lazy(() => import('../features/carret/stock/LifecyclePage'));
 const CustomersListPage = React.lazy(() => import('../features/carret/sell/customers/CustomersListPage'));
 const CustomerRecordPage = React.lazy(() => import('../features/carret/sell/customers/CustomerRecordPage'));
 const ReturnChallansPage = React.lazy(() => import('../features/carret/move/ReturnChallansPage'));
@@ -136,6 +138,9 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/stock/ready', element: guardAny(['inventory_management', 'ready_to_rent_location'], 'view', <ReadyStockPage />) },
       { path: '/carret/stock/not-earning', element: guard('inventory_management', 'view', <NotEarningPage />) },
       { path: '/carret/stock/scrap', element: guardAny(['inventory_management', 'scrap_approval', 'scrap_challans'], 'view', <ScrapPage />) },
+      // Laptop lifecycle: one laptop's whole history, milestones, rentals and money (read-only).
+      { path: '/carret/stock/lifecycle', element: guard('inventory_management', 'view', <LifecycleSearchPage />) },
+      { path: '/carret/stock/lifecycle/:code', element: guard('inventory_management', 'view', <LifecyclePage />) },
 
       // Move (Part 3.7). The gate is the load-bearing screen under Decision 4,
       // so it gets the floor-density shell rather than a cut-down desk page.

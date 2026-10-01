@@ -29,4 +29,7 @@ router.get('/scrap/awaiting-challan', scrapView, ctrl.scrappedAwaitingChallan);
 
 router.get('/not-earning', invView, ctrl.notEarning);
 
+// Laptop lifecycle (services/assetLifecycleService.js): read-only, same grant as the asset record.
+router.get('/lifecycle/:code', invView, ctrl.lifecycle);
+
 module.exports = router;

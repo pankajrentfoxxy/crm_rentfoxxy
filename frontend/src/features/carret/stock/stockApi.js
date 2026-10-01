@@ -4,6 +4,8 @@ import api from '../../../utils/api';
 export const fetchAssets = (params) => api.get('/stock/assets', { params });
 export const fetchAssetCounts = () => api.get('/stock/assets/counts');
 export const fetchAsset = (id) => api.get(`/stock/assets/${encodeURIComponent(id)}`);
+/** One laptop's whole life: milestones, activity, rentals, money (backend services/assetLifecycleService.js). */
+export const fetchLifecycle = (code) => api.get(`/stock/lifecycle/${encodeURIComponent(code)}`);
 export const fetchReadyStock = () => api.get('/stock/ready');
 export const fetchCarret = (carret) => api.get('/stock/carrets', { params: { carret } });
 export const retag = (serialIds, tag, reason) => api.post('/stock/retag', { serial_ids: serialIds, tag, reason });

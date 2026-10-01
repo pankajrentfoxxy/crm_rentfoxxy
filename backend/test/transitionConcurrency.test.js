@@ -23,8 +23,16 @@ const assert = require('node:assert/strict');
 require('dotenv').config({ path: `${__dirname}/../.env` });
 
 const hasDb = Boolean(process.env.DATABASE_URL || process.env.DB_HOST || process.env.PGHOST);
+// This test COMMITS real transitions on a real in_stock laptop (audit rows,
+// events, status_changed_at). backend/.env points at a working database (QA on
+// the staging box), so it must never run by default: on 2 Oct 2026 routine
+// `npm run test:unit` runs had left ~77 "concurrency test" rows on TTSPL2462.
+// Opt in with RUN_DB_WRITE_TESTS=1 against a throwaway database only.
+const allowWrites = process.env.RUN_DB_WRITE_TESTS === '1';
+const skipReason = !hasDb ? 'no database configured'
+  : (!allowWrites ? 'writes to the database; set RUN_DB_WRITE_TESTS=1 on a throwaway DB' : false);
 
-describe('Part 2 acceptance 6 — two simultaneous transitions on one serial', { skip: !hasDb ? 'no database configured' : false }, () => {
+describe('Part 2 acceptance 6 — two simultaneous transitions on one serial', { skip: skipReason }, () => {
   let pool;
   let transitionAsset;
   let isTransitionRefused;

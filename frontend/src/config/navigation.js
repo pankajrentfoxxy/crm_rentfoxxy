@@ -67,6 +67,7 @@ export const SECTIONS = [
     groups: ['Stock', 'Reports & setup'],
     items: [
       { group: 'Stock', to: '/carret/stock/assets', label: 'Assets', section: 'inventory_management', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/lifecycle', label: 'Laptop Lifecycle', section: 'inventory_management', action: 'view' },
       { group: 'Stock', to: '/carret/stock/ready', label: 'Ready Stock', sections: ['inventory_management', 'ready_to_rent_location'], section: 'inventory_management', action: 'view' },
       { group: 'Stock', to: '/carret/stock/with-customers', label: 'With Customers', section: 'customer_assets', action: 'view' },
       { group: 'Stock', to: '/carret/stock/not-earning', label: 'Not Earning', section: 'inventory_management', action: 'view' },

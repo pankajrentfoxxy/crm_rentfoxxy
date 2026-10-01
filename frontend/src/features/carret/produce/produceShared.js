@@ -24,6 +24,13 @@ export const stageLabel = (s) => ({
   'Pending Inventory': 'Waiting to go into stock',
   'Assembly & Software': 'Assembly & software',
 }[s] || s);
+/** One or two words, for pills and table cells where the long label wraps. */
+export const shortStageLabel = (s) => ({
+  'Floor Manager': 'Triage',
+  'Pending Inventory': 'Into stock',
+  'Assembly & Software': 'Assembly',
+  'Chip Level Repair': 'Chip repair',
+}[s] || s);
 
 /**
  * "Dell Latitude 5420 · i7 · 11th Gen · 16 GB · 512 SSD". Generation was

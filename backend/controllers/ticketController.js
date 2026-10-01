@@ -624,6 +624,9 @@ exports.getTicketById = async (req, res) => {
               ) AS ttspl_display,
               vsn.serial_number AS vsn_serial_number,
               vpo.purchase_order_type,
+              vpo.purchase_order_number AS po_number,
+              COALESCE((SELECT MAX(h.created_at) FROM production_ticket_history h
+                         WHERE h.ticket_id = t.ticket_id AND h.current_stage = s.stage_name), t.created_at) AS stage_entered_at,
               NULLIF(TRIM(vsn.extra->>'inventory_tag_override'), '') AS inventory_tag_override,
               COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS resolved_serial_number,
               vsn.extra AS vsn_extra
