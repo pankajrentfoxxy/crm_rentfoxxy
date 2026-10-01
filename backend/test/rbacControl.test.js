@@ -181,7 +181,20 @@ describe('permission catalogue', () => {
     const visible = new Set(catalog.SECTION_GROUPS.flatMap((g) => g.sections));
     for (const s of ['delivery_my_deliveries', 'delivery_technicians', 'kyc_management', 'demo_management',
       'vendor_return_to_vendor', 'vendor_return_ticket', 'customer_management', 'follow_ups', 'lead_orders']) {
-      assert.ok(visible.has(s), s);
+      // Grantable directly, or through the section it was merged into (migration 411).
+      assert.ok(visible.has(s) || visible.has(catalog.MERGED_SECTIONS[s]), s);
+    }
+  });
+
+  it('a merged section is hidden, its kept section is visible, and checks on it read the kept one', () => {
+    const visible = new Set(catalog.SECTION_GROUPS.flatMap((g) => g.sections));
+    for (const [old, kept] of Object.entries(catalog.MERGED_SECTIONS)) {
+      assert.ok(catalog.HIDDEN_SECTIONS.includes(old), `${old} hidden`);
+      assert.ok(visible.has(kept), `${kept} visible`);
+      // delivery_* are deliberately not aliased (their checks moved to technician_bucket).
+      if (!old.startsWith('delivery_')) {
+        assert.ok((catalog.SECTION_ALIASES[old] || []).includes(kept), `${old} aliases ${kept}`);
+      }
     }
   });
 

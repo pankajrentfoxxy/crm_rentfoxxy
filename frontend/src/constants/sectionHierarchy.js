@@ -5,6 +5,13 @@
  */
 
 export const SECTION_ALIASES = {
+  // Merged duplicates (backend migration 411 / permissionCatalog MERGED_SECTIONS):
+  // the old name's grants moved to the kept section, so a check on it reads that.
+  customer_management: ['customer_management', 'customers'],
+  customer_inventory: ['customer_inventory', 'customer_assets'],
+  procurement: ['procurement', 'vendor_management'],
+  inventory: ['inventory', 'inventory_management'],
+  tickets: ['tickets', 'floor_tickets'],
   reports_access: ['reports_access', 'reports'],
   reports: ['reports', 'reports_access'],
   follow_ups: ['follow_ups', 'lead_follow_ups'],

@@ -68,7 +68,7 @@ export const SECTIONS = [
     items: [
       { group: 'Stock', to: '/carret/stock/assets', label: 'Assets', section: 'inventory_management', action: 'view' },
       { group: 'Stock', to: '/carret/stock/ready', label: 'Ready Stock', sections: ['inventory_management', 'ready_to_rent_location'], section: 'inventory_management', action: 'view' },
-      { group: 'Stock', to: '/carret/stock/with-customers', label: 'With Customers', section: 'customer_inventory', action: 'view' },
+      { group: 'Stock', to: '/carret/stock/with-customers', label: 'With Customers', section: 'customer_assets', action: 'view' },
       { group: 'Stock', to: '/carret/stock/not-earning', label: 'Not Earning', section: 'inventory_management', action: 'view' },
       { group: 'Stock', to: '/carret/stock/scrap', label: 'Scrap', sections: ['inventory_management', 'scrap_approval', 'scrap_challans'], section: 'inventory_management', action: 'view' },
       { group: 'Reports & setup', to: '/carret/stock/master-data', label: 'Master Data', sections: ['inventory_master_data', 'inventory_vendor_master_data', 'inventory_return_master_data'], section: 'inventory_master_data', action: 'view' },

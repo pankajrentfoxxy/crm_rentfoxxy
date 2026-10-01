@@ -17,7 +17,7 @@ const qcWrite = checkAnySectionPermission(
 const warehouseView = checkSectionPermission('dispatch_charger_warehouse', 'view');
 const warehouseEdit = checkSectionPermission('dispatch_charger_warehouse', 'edit');
 const pickupAccess = checkAnySectionPermission(
-  ['dispatch_charger', 'support_tickets', 'delivery_my_deliveries'],
+  ['dispatch_charger', 'support_tickets'],
   'view'
 );
 

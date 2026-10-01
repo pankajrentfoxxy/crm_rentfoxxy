@@ -100,7 +100,7 @@ function ReturnChargerScans({ rdcNumber, canScan, missingReason, onMissingReason
 export function PickupCard({ dc, onChanged }) {
   const { hasPermission } = usePermission();
   const canAct = hasPermission('technician_bucket', 'edit');
-  const canScanCharger = ['dispatch_charger', 'support_tickets', 'delivery_my_deliveries'].some((s) => hasPermission(s, 'view'));
+  const canScanCharger = ['dispatch_charger', 'support_tickets'].some((s) => hasPermission(s, 'view'));
   const canDamage = ['damage_charges', 'support_tickets', 'return_dc'].some((s) => hasPermission(s, 'create'));
   const [scanned, setScanned] = useState({});
   const [chargersPending, setChargersPending] = useState(0);

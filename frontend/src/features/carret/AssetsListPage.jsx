@@ -25,8 +25,8 @@ const VIEWS = [
 // Each list has one home (2 Oct 2026): ready laptops are Stock → Ready Stock,
 // laptops with customers are Stock → With Customers. Those views are not
 // repeated here as tabs; the counts above the list link to them. The With
-// customers tab stays only for people without customer_inventory (sales,
-// warehouse, procurement), who cannot open that page.
+// customers tab stays only for people without customer_assets (warehouse,
+// procurement), who cannot open that page.
 const READY_TO = '/carret/stock/ready';
 const WITH_CUSTOMERS_TO = '/carret/stock/with-customers';
 const LIMIT = 50;
@@ -35,7 +35,7 @@ export default function AssetsListPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { hasPermission } = usePermission();
-  const canFleet = hasPermission('customer_inventory', 'view');
+  const canFleet = hasPermission('customer_assets', 'view');
   const views = VIEWS.filter((v) => v.value !== 'ready' && !(v.value === 'with_customer' && canFleet));
   const [view, setView] = useState(VIEWS.some((v) => v.value === params.get('view')) ? params.get('view') : '');
   const [status, setStatus] = useState(ASSET_STATUSES.some((s) => s.value === params.get('status')) ? params.get('status') : '');

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { MERGED_SECTIONS } = require('../constants/permissionCatalog');
 
 const FINANCIAL_NO_DELETE = [
   'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes', 'security_deposits',
@@ -6,6 +7,8 @@ const FINANCIAL_NO_DELETE = [
 
 // Sections a reset of the blanket admin role must not pick up: they belong to one team.
 const ADMIN_EXCLUDED_SECTIONS = ['sale_in_place'];
+// Merged into another section (migration 411): never re-created by a reset.
+const MERGED_OLD_SECTIONS = Object.keys(MERGED_SECTIONS);
 
 const ROLE_ROW_DEFAULTS = {
   manager: [
@@ -182,7 +185,13 @@ function defaultRowsFor(role) {
   const rows = ROLE_ROW_DEFAULTS[role];
   if (!rows) return null;
   const merged = new Map();
-  for (const [section, create, edit, del] of rows) {
+  for (const [rawSection, create, edit, del] of rows) {
+    // A merged name's default lands on the section it was merged into (view only,
+    // as migration 411 did: the old names gated nothing beyond view).
+    const isMerged = Object.prototype.hasOwnProperty.call(MERGED_SECTIONS, rawSection);
+    const section = isMerged ? MERGED_SECTIONS[rawSection] : rawSection;
+    if (isMerged && merged.has(section)) continue;
+    if (isMerged) { merged.set(section, [section, false, false, false]); continue; }
     const prev = merged.get(section);
     merged.set(section, prev
       ? [section, prev[1] || create, prev[2] || edit, prev[3] || del]
@@ -224,19 +233,21 @@ async function seedRoleDefaults(client, role) {
               CASE WHEN $2::boolean AND ps.section = ANY($3::text[]) THEN false ELSE true END
          FROM permission_sections ps
         WHERE NOT ($2::boolean AND ps.section = ANY($4::text[]))
+          AND NOT (ps.section = ANY($5::text[]))
        ON CONFLICT (role, section) DO UPDATE SET
          can_view = EXCLUDED.can_view,
          can_create = EXCLUDED.can_create,
          can_edit = EXCLUDED.can_edit,
          can_delete = EXCLUDED.can_delete`,
-      [role, isAdmin, FINANCIAL_NO_DELETE, ADMIN_EXCLUDED_SECTIONS]
+      [role, isAdmin, FINANCIAL_NO_DELETE, ADMIN_EXCLUDED_SECTIONS, MERGED_OLD_SECTIONS]
     );
     await client.query(
       `DELETE FROM role_permissions rp
         WHERE rp.role = $1
           AND (NOT EXISTS (SELECT 1 FROM permission_sections ps WHERE ps.section = rp.section)
-               OR ($2::boolean AND rp.section = ANY($3::text[])))`,
-      [role, isAdmin, ADMIN_EXCLUDED_SECTIONS]
+               OR ($2::boolean AND rp.section = ANY($3::text[]))
+               OR rp.section = ANY($4::text[]))`,
+      [role, isAdmin, ADMIN_EXCLUDED_SECTIONS, MERGED_OLD_SECTIONS]
     );
     return;
   }

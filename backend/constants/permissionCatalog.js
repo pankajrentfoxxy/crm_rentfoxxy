@@ -18,7 +18,31 @@
  * Permission resolution aliases: a grant on any listed section satisfies a
  * check on the key. Used by permissionService.hasPermission.
  */
+/**
+ * Duplicate sections merged on 2 Oct 2026 (migration 411): old -> kept. The old
+ * name's grants were copied onto the kept one and removed; the old name is
+ * hidden from the matrix and every check on it resolves to the kept section
+ * (SECTION_ALIASES below), so old screens keep working on the kept grant.
+ * delivery_technicians / delivery_my_deliveries are not aliased: only
+ * super_admin held them, and their checks were moved to technician_bucket
+ * (aliasing would have handed the charger scan to every bucket holder).
+ */
+const MERGED_SECTIONS = Object.freeze({
+  customer_management: 'customers',
+  customer_inventory: 'customer_assets',
+  follow_ups: 'lead_follow_ups',
+  delivery_technicians: 'technician_bucket',
+  delivery_my_deliveries: 'technician_bucket',
+  tickets: 'floor_tickets',
+  procurement: 'vendor_management',
+  inventory: 'inventory_management',
+});
+
 const SECTION_ALIASES = Object.freeze({
+  customer_management: ['customer_management', 'customers'],
+  customer_inventory: ['customer_inventory', 'customer_assets'],
+  procurement: ['procurement', 'vendor_management'],
+  inventory: ['inventory', 'inventory_management'],
   reports_access: ['reports_access', 'reports'],
   reports: ['reports', 'reports_access'],
   follow_ups: ['follow_ups', 'lead_follow_ups'],
@@ -32,6 +56,7 @@ const SECTION_ALIASES = Object.freeze({
   replacement_so_laptop_qc: ['replacement_so_laptop_qc'],
   so_laptop_qc: ['so_laptop_qc'],
   sales_order_cancel: ['sales_order_cancel'],
+  tickets: ['tickets', 'floor_tickets'],
 });
 
 /**
@@ -106,13 +131,13 @@ const SECTION_GROUPS = Object.freeze([
     key: 'sales',
     label: 'Lead & Sales CRM',
     sections: [
-      'leads', 'lead_assignee_change', 'lead_follow_ups', 'follow_ups', 'lead_conversion', 'lead_orders',
-      'customers', 'customer_management', 'customer_documents', 'kyc_management', 'demo_management',
+      'leads', 'lead_assignee_change', 'lead_follow_ups', 'lead_conversion', 'lead_orders',
+      'customers', 'customer_documents', 'kyc_management', 'demo_management',
       'sales_quotations', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement',
       'replacement_so_laptop_qc', 'so_laptop_qc', 'so_line_rate_config_edit', 'sales_order_cancel',
       'delivery_challans', 'bluedart_awb_tracking', 'return_dc',
-      'delivery_register_management', 'delivery_register_otp', 'technician_bucket', 'delivery_technicians',
-      'delivery_my_deliveries', 'technicians_bucket_list', 'payment_records',
+      'delivery_register_management', 'delivery_register_otp', 'technician_bucket',
+      'technicians_bucket_list', 'payment_records',
     ],
   },
   {
@@ -120,7 +145,7 @@ const SECTION_GROUPS = Object.freeze([
     label: 'Vendor & Procurement',
     sections: [
       'vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch', 'vendor_return_to_vendor',
-      'vendor_return_ticket', 'procurement', 'sales_pipeline',
+      'vendor_return_ticket', 'sales_pipeline',
     ],
   },
   {
@@ -133,15 +158,15 @@ const SECTION_GROUPS = Object.freeze([
     label: 'Floor & Quality',
     sections: [
       'floor_pipeline', 'floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management',
-      'dispatch_qc', 'dispatch_charger', 'pending_inventory', 'diagnosis_failed', 'tickets',
+      'dispatch_qc', 'dispatch_charger', 'pending_inventory', 'diagnosis_failed',
     ],
   },
   {
     key: 'inventory',
     label: 'Inventory',
     sections: [
-      'inventory', 'inventory_management', 'inventory_asset_movement', 'qc_move_to_ticket',
-      'qc_create_production_ticket', 'ready_to_rent_location', 'customer_inventory', 'customer_assets',
+      'inventory_management', 'inventory_asset_movement', 'qc_move_to_ticket',
+      'qc_create_production_ticket', 'ready_to_rent_location', 'customer_assets',
       'ttspl_history',
     ],
   },
@@ -208,6 +233,9 @@ const HIDDEN_SECTIONS = Object.freeze([
   'support_parts_approve', 'support_charges', 'support_approvals', 'support_dispatch', 'support_bucket',
   'support_groups', 'support_customer_portal', 'support_reports', 'support_sla_admin', 'support_taxonomy',
   'support_charges_billing', 'support_warehouse_receipt',
+  // Merged into another section (MERGED_SECTIONS, 2 Oct 2026).
+  'customer_management', 'customer_inventory', 'follow_ups', 'delivery_technicians',
+  'delivery_my_deliveries', 'tickets', 'procurement', 'inventory',
 ]);
 
 const SECTION_LABELS = Object.freeze({
@@ -290,7 +318,7 @@ const SECTION_LABELS = Object.freeze({
   support_part_challan: 'Support Part Queue',
   support_part_requests: 'Technician Parts Bucket',
   customer_inventory: 'Customer Inventory',
-  customer_assets: 'Customer Assets (edit rate / export)',
+  customer_assets: 'Customer Assets — With Customers list, edit rate / export',
   dispatch_workflow: 'Dispatch Workflow',
   dispatch_pending_orders: 'Dispatch Pending Orders',
   ttspl_history: 'TTSPL History',
@@ -417,6 +445,7 @@ function buildCatalogue(dbRows = []) {
 }
 
 module.exports = {
+  MERGED_SECTIONS,
   SECTION_ALIASES,
   DATA_SCOPE_SECTION_ALIASES,
   DATA_SCOPE_SECTIONS,

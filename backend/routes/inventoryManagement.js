@@ -53,7 +53,7 @@ const assetMovementAccess = [
   checkAnySectionPermission(['inventory_asset_movement'], 'edit')
 ];
 const superAdminOnly = [authMiddleware, checkRole('super_admin')];
-const custInvView = [authMiddleware, checkSectionPermission('customer_inventory', 'view')];
+const custInvView = [authMiddleware, checkSectionPermission('customer_assets', 'view')];
 const moduleEntry = [
   authMiddleware,
   checkAnySectionPermission(

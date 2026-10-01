@@ -33,7 +33,7 @@ export const stockSetupRouteDefs = [
   { path: '/carret/stock/part-repairs/:dcNumber', sections: PART_REPAIR_SECTIONS, action: 'view', element: <PartRepairRecordPage /> },
   { path: '/carret/stock/master-data', sections: MASTER_DATA_SECTIONS, action: 'view', element: <MasterDataPage /> },
   { path: '/carret/stock/asset-configuration', section: 'asset_configuration', action: 'view', element: <AssetConfigPage /> },
-  { path: '/carret/stock/with-customers', section: 'customer_inventory', action: 'view', element: <DeployedFleetPage /> },
+  { path: '/carret/stock/with-customers', section: 'customer_assets', action: 'view', element: <DeployedFleetPage /> },
 ];
 
 const wrap = ({ path, section, sections, action, element }) => ({
