@@ -1232,9 +1232,11 @@ async function initiateReturnRedelivery(client, {
     );
   }
 
-  if (ticket.sales_order_number) {
-    await detachReturnedSerialsForResend(client, ticketId, ticket.sales_order_number);
-  }
+  // No detach from ticket.sales_order_number here (unlike initiateResendLaptop,
+  // which reuses its SO): the replacement always goes on a fresh rental SO, or for
+  // a sold laptop placeReplacementLines already frees its sale slot. Detaching
+  // the returned unit from the customer's original order dropped its delivered
+  // count and showed a delivered order as Pending with a slot open to re-dispatch.
 
   await client.query(
     `UPDATE support_tickets SET
