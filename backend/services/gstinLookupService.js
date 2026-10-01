@@ -63,19 +63,29 @@ function panFromGstin(gstin) {
   return g.length === 15 ? g.slice(2, 12) : '';
 }
 
+/**
+ * The street part of a GST address: floor, building no., building name, street,
+ * locality and place. District, state and PIN code are NOT in it — they are
+ * returned as city / state / pincode, and every document prints the address
+ * followed by those fields, so including them here printed them twice.
+ * The place (loc) is kept only when it is not what we use as the city.
+ */
 function joinAddressParts(addr = {}) {
-  const parts = [
-    addr.flno,
-    addr.bno,
-    addr.bnm,
-    addr.st,
-    addr.locality,
-    addr.loc,
-    addr.dst,
-    addr.stcd,
-    addr.pncd,
-  ].map((p) => String(p || '').trim()).filter(Boolean);
+  const city = cityFromAddress(addr);
+  const seen = new Set();
+  const parts = [addr.flno, addr.bno, addr.bnm, addr.st, addr.locality, addr.loc]
+    .map((p) => String(p || '').trim())
+    .filter((p) => {
+      const key = p.toLowerCase();
+      if (!p || seen.has(key) || key === city.toLowerCase()) return false;
+      seen.add(key);
+      return true;
+    });
   return parts.join(', ');
+}
+
+function cityFromAddress(addr = {}) {
+  return String(addr.dst || addr.loc || '').trim();
 }
 
 function mapConstitutionToCompanyType(value) {
@@ -102,7 +112,7 @@ function normalizeGstPayload(raw, gstin) {
     trade_name: tradeName,
     company_type: mapConstitutionToCompanyType(data.constitution_of_business),
     address: joinAddressParts(primary),
-    city: primary.dst || primary.loc || '',
+    city: cityFromAddress(primary),
     state: primary.stcd || '',
     pincode: String(primary.pncd || '').replace(/\D/g, '').slice(0, 6),
     pan_number: panFromGstin(data.gstin || gstin),
