@@ -33,8 +33,9 @@ const today = () => new Date().toISOString().slice(0, 10);
 const normState = (s) => String(s || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 const blankLine = () => ({
   brand: '', model: '', processor: '', generation: '', ram: '', storage: '', gpu: '', screen_size: '',
-  quantity: 1, rate: '', asset_value: '', months: '', remarks: '', allowed_conditions: ['on'],
+  quantity: 1, rate: '', asset_value: '', months: '', tenure_months: '', remarks: '', allowed_conditions: ['on'],
 });
+const isRtoType = (t) => String(t || '').toLowerCase() === 'rent_to_own';
 const withValue = (list, v) => (v && !list.includes(v) ? [v, ...list] : list);
 
 function lineFromPo(l, type) {
@@ -46,6 +47,8 @@ function lineFromPo(l, type) {
     rate: String((isRentalType(type) ? (Number(l.monthly_rental_amount) || l.rate) : l.rate) ?? ''),
     asset_value: l.asset_value != null ? String(l.asset_value) : '',
     months: String((isRentalType(type) ? (l.vendor_locking_period ?? l.locking_period) : (l.warranty ?? l.warranty_months)) ?? ''),
+    // Rent to own: the tenure is the line's term (the old screen sent it as the lock-in too).
+    tenure_months: String((l.tenure_months ?? (isRtoType(type) ? (l.vendor_locking_period ?? l.locking_period) : '')) ?? ''),
     remarks: l.remarks || '',
     allowed_conditions: Array.isArray(l.allowed_conditions) && l.allowed_conditions.length ? l.allowed_conditions : ['on'],
   };
@@ -117,6 +120,7 @@ export default function PurchaseOrderFormPage() {
   const vendors = meta?.vendors || [];
   const vendor = vendors.find((v) => String(v.id) === String(form.vendor_id));
   const rental = isRentalType(form.purchase_order_type);
+  const rto = isRtoType(form.purchase_order_type);
   const sameState = vendor && (vendor.gst_state || normState(vendor.state)) === normState(form.po_state);
   const subtotal = form.lines.reduce((n, l) => n + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0);
   const total = Math.round(subtotal * 118) / 100;
@@ -154,6 +158,7 @@ export default function PurchaseOrderFormPage() {
       if (!l.brand || !l.processor || !l.ram || !l.storage) e[`line${i}`] = 'Brand, processor, RAM and storage are needed — the receiving check compares against them.';
       else if (!(Number(l.quantity) > 0)) e[`line${i}`] = 'Quantity must be at least 1.';
       else if (!(Number(l.rate) > 0)) e[`line${i}`] = rental ? 'Enter the monthly rent per laptop.' : 'Enter the price per laptop.';
+      else if (rto && !(Number(l.tenure_months) > 0)) e[`line${i}`] = 'Enter the rent-to-own tenure in months.';
     });
     return e;
   };
@@ -173,7 +178,13 @@ export default function PurchaseOrderFormPage() {
         brand: l.brand, model: l.model, processor: l.processor, generation: l.generation, ram: l.ram, storage: l.storage,
         gpu: l.gpu, screen_size: l.screen_size, quantity: Number(l.quantity), rate: Number(l.rate),
         ...(rental
-          ? { monthly_rental_amount: Number(l.rate), asset_value: l.asset_value ? Number(l.asset_value) : null, vendor_locking_period: l.months === '' ? null : Number(l.months) }
+          ? {
+            monthly_rental_amount: Number(l.rate),
+            asset_value: l.asset_value ? Number(l.asset_value) : null,
+            // Rent to own has no separate lock-in: the tenure stands in for it (as on the old screen).
+            vendor_locking_period: rto ? Number(l.tenure_months) : (l.months === '' ? null : Number(l.months)),
+            ...(rto ? { tenure_months: Number(l.tenure_months) } : {}),
+          }
           : { warranty: l.months === '' ? null : Number(l.months) }),
         remarks: l.remarks || null,
         allowed_conditions: l.allowed_conditions,
@@ -272,9 +283,15 @@ export default function PurchaseOrderFormPage() {
                     <Field label={rental ? 'Monthly rent per laptop' : 'Price per laptop'} required hint={rental ? 'What the vendor bills us each month' : 'Before GST'}>
                       <Input type="number" min={0} step="0.01" value={l.rate} onChange={(e) => setLine(i, 'rate', e.target.value)} />
                     </Field>
-                    <Field label={rental ? 'Lock-in (months)' : 'Warranty (months)'}>
-                      <Input type="number" min={0} value={l.months} onChange={(e) => setLine(i, 'months', e.target.value)} />
-                    </Field>
+                    {rto ? (
+                      <Field label="Tenure (months)" required hint="Rent-to-own term; also the lock-in">
+                        <Input type="number" min={1} value={l.tenure_months} onChange={(e) => setLine(i, 'tenure_months', e.target.value)} />
+                      </Field>
+                    ) : (
+                      <Field label={rental ? 'Lock-in (months)' : 'Warranty (months)'}>
+                        <Input type="number" min={0} value={l.months} onChange={(e) => setLine(i, 'months', e.target.value)} />
+                      </Field>
+                    )}
                     {rental
                       ? <Field label="Asset value per laptop" hint="For e-way bills and insurance; not billed"><Input type="number" min={0} value={l.asset_value} onChange={(e) => setLine(i, 'asset_value', e.target.value)} /></Field>
                       : <div />}

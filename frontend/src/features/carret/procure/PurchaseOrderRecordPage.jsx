@@ -3,20 +3,22 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, KeyValue, Money,
-  Notice, Section, StatusChip, Tabs, Textarea,
+  Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, KeyValue, Money,
+  Notice, Section, Tabs, Textarea,
 } from '../../../components/carret';
+import { LAPTOP_CONDITIONS } from '../../../constants/laptopConditions';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import {
-  fetchGrns, fetchPurchaseOrder, listPoActivities, patchPurchaseOrderStatus,
+  fetchGeneratedGrnOverview, fetchGrns, fetchPurchaseOrder, listPoActivities, patchPurchaseOrderStatus,
 } from '../../vendor-management/vendorManagementApi';
 import { isManagerUser } from '../../vendor-management/vendorMgmtUi';
 import { errMsg } from './procureShared';
 import {
-  PO_BASE, isRentalType, lineConfig, openPoPdf, poQty, poStatus, poTypeLabel,
+  PO_BASE, isRentalType, isSuperAdmin, lineConfig, lineRate, openPoPdf, parseBillFiles, poBillInfo, poQty, poStatus, poTypeLabel,
 } from './poShared';
+import { LineSpecsDrawer, PoBillsSection, PoReplacementsSection } from './PoRecordParts';
 
 /**
  * Procure → Purchase order record.
@@ -33,6 +35,9 @@ const REASON_ACTIONS = {
   cancel: { title: 'Cancel this purchase order', label: 'Cancel PO', hint: 'Nothing has been received on it. Orders waiting on it go back to “no PO yet” on the To-buy list.' },
   close: { title: 'Short-close this purchase order', label: 'Short-close', hint: 'What was received stays. No more laptops will be received on this PO.' },
 };
+const DRAFT_STATES = ['draft', 'pending', ''];
+const conditionLabel = (c) => LAPTOP_CONDITIONS.find((x) => x.value === c)?.label || String(c).replace(/_/g, ' ');
+const lineReceived = (l) => Number(l.receivedQty ?? l.received_qty) || 0;
 
 export default function PurchaseOrderRecordPage() {
   const { poId } = useParams();
@@ -40,7 +45,9 @@ export default function PurchaseOrderRecordPage() {
   const { user } = useAuth();
   const { hasPermission } = usePermission();
   const canEdit = hasPermission('vendor_management', 'edit');
+  const canDelete = hasPermission('vendor_management', 'delete');
   const manager = isManagerUser(user);
+  const superAdmin = isSuperAdmin(user);
 
   const [state, setState] = useState({ loading: true, error: null, po: null });
   const [tab, setTab] = useState('lines');
@@ -50,20 +57,27 @@ export default function PurchaseOrderRecordPage() {
   const [reasonFor, setReasonFor] = useState(null);
   const [reason, setReason] = useState('');
   const [openDeliveries, setOpenDeliveries] = useState(null);
+  const [grnStats, setGrnStats] = useState({});
+  const [specLine, setSpecLine] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(() => {
     fetchPurchaseOrder(poId)
       .then(({ data }) => setState({ loading: false, error: null, po: data.data }))
       .catch((e) => setState({ loading: false, error: errMsg(e, 'Could not load the purchase order.'), po: null }));
     fetchGrns(poId).then(({ data }) => setGrns(data.data || [])).catch(() => setGrns([]));
+    // Units received per GRN (the plain GRN list has no counts).
+    fetchGeneratedGrnOverview(poId)
+      .then(({ data }) => setGrnStats(Object.fromEntries((data.data?.grn_rows || []).map((g) => [String(g.grn_id), g]))))
+      .catch(() => setGrnStats({}));
     api.get('/vendor-management/deliveries', { params: { po_id: poId, status: 'arrived,receiving' } })
       .then(({ data }) => setOpenDeliveries(data.data || [])).catch(() => setOpenDeliveries([]));
   }, [poId]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (tab !== 'activity') return;
+    if (!['activity', 'details'].includes(tab) || activity !== null) return;
     listPoActivities(poId, { limit: 100 }).then(({ data }) => setActivity(data.activities || [])).catch(() => setActivity([]));
-  }, [tab, poId]);
+  }, [tab, poId, activity]);
 
   const po = state.po;
   const st = poStatus(po);
@@ -78,6 +92,18 @@ export default function PurchaseOrderRecordPage() {
   const submit = () => run('submit', () => patchPurchaseOrderStatus(poId, 'pending_approval'), 'Sent for approval');
   const approve = () => run('approve', () => patchPurchaseOrderStatus(poId, 'approved'), 'Approved — the PO is emailed to the vendor');
   const pdf = () => run('pdf', () => openPoPdf(poId));
+  const deleteDraft = async () => {
+    setBusy('delete');
+    try {
+      await api.delete(`${PO_BASE}/${poId}`);
+      toast.success('Draft purchase order deleted');
+      navigate('/carret/procure/purchase-orders');
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not delete the draft'));
+    } finally {
+      setBusy('');
+    }
+  };
 
   const confirmReason = async () => {
     const r = reason.trim();
@@ -149,6 +175,9 @@ export default function PurchaseOrderRecordPage() {
       )}
       {manager && canEdit && OPEN_STATES.includes(st) && qty.received > 0 && <Button variant="quiet" onClick={() => setReasonFor('close')}>Short-close</Button>}
       {canCancel && <Button variant="quiet" onClick={() => setReasonFor('cancel')}>Cancel PO</Button>}
+      {canDelete && DRAFT_STATES.includes(st) && qty.received === 0 && (
+        <Button variant="quiet" disabled={busy === 'delete'} onClick={() => setConfirmDelete(true)}>Delete draft</Button>
+      )}
     </>
   );
 
@@ -160,25 +189,57 @@ export default function PurchaseOrderRecordPage() {
     { key: 'c', label: st === 'closed' ? 'Short-closed' : 'Received', state: ['completed', 'closed'].includes(st) ? 'done' : 'todo' },
   ].map((s) => (st === 'cancelled' ? { ...s, state: 'blocked' } : s));
 
+  const rto = String(po?.purchase_order_type || '').toLowerCase() === 'rent_to_own';
   const lineCols = [
-    { key: 'cfg', header: 'Laptop', render: (l) => lineConfig(l) || '—', sub: (l) => l.remarks || null },
+    {
+      key: 'cfg',
+      header: 'Laptop',
+      render: (l) => lineConfig(l) || '—',
+      sub: (l) => [
+        Array.isArray(l.allowed_conditions) && l.allowed_conditions.length ? `accepts: ${l.allowed_conditions.map(conditionLabel).join(', ')}` : null,
+        l.remarks || null,
+      ].filter(Boolean).join(' · ') || null,
+    },
     { key: 'qty', header: 'Ordered', numeric: true, render: (l) => l.quantity },
     {
       key: 'got',
       header: 'Received',
       numeric: true,
       render: (l) => {
-        const got = Number(l.receivedQty) || 0;
+        const got = lineReceived(l);
         const want = Number(l.quantity) || 0;
         return <span style={{ color: got >= want ? 'var(--alert-good)' : got ? 'var(--alert-warn)' : 'var(--ink-3)' }}>{got}</span>;
       },
     },
-    { key: 'rate', header: rental ? 'Rent / month' : 'Price', numeric: true, render: (l) => <Money value={l.rate} /> },
+    { key: 'rem', header: 'Remaining', numeric: true, render: (l) => Math.max(0, (Number(l.quantity) || 0) - lineReceived(l)) },
+    {
+      key: 'rate',
+      header: rental ? 'Rent / month' : 'Price',
+      numeric: true,
+      render: (l) => (
+        <>
+          <Money value={lineRate(l, po?.purchase_order_type)} />
+          {rental && Number(l.asset_value) > 0 && <span className="block text-ink-3" style={{ fontSize: '12.5px' }}>asset <Money value={l.asset_value} /></span>}
+        </>
+      ),
+    },
     rental
-      ? { key: 'm', header: 'Lock-in', render: (l) => (l.vendor_locking_period ? `${l.vendor_locking_period} months` : '—'), sub: (l) => (l.asset_value ? <>asset <Money value={l.asset_value} /></> : null) }
+      ? { key: 'm', header: 'Lock-in', render: (l) => (l.vendor_locking_period ? `${l.vendor_locking_period} months` : '—') }
       : { key: 'w', header: 'Warranty', render: (l) => (l.warranty ? `${l.warranty} months` : '—') },
-    { key: 'amt', header: 'Amount', numeric: true, render: (l) => <Money value={(Number(l.quantity) || 0) * (Number(l.rate) || 0)} /> },
+    ...((rto || lines.some((l) => l.tenure_months != null && l.tenure_months !== ''))
+      ? [{ key: 't', header: 'Tenure', render: (l) => (l.tenure_months != null && l.tenure_months !== '' ? `${l.tenure_months} months` : '—') }]
+      : []),
+    { key: 'amt', header: 'Amount', numeric: true, render: (l) => <Money value={(Number(l.quantity) || 0) * lineRate(l, po?.purchase_order_type)} /> },
+    ...(superAdmin ? [{
+      key: 'spec',
+      header: '',
+      align: 'right',
+      render: (_l, i) => <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setSpecLine(i); }}>Fix specs</Button>,
+    }] : []),
   ];
+
+  // Who approved / sent it back: the PO row only keeps who raised it, the activity log keeps the decision.
+  const decision = (activity || []).find((a) => ['approved', 'rejected'].includes(a.action)) || null;
 
   const gst = po ? Number(po.total_amount || 0) - Number(po.sub_total_amount || 0) : 0;
 
@@ -210,6 +271,7 @@ export default function PurchaseOrderRecordPage() {
             tabs={[
               { key: 'lines', label: 'Laptops', count: qty.ordered },
               { key: 'grns', label: 'Receipts (GRN)', count: grns ? grns.length : undefined },
+              { key: 'bill', label: 'Bill', count: poBillInfo(po).files.length || undefined },
               { key: 'details', label: 'Details' },
               { key: 'activity', label: 'Activity' },
             ]}
@@ -227,20 +289,46 @@ export default function PurchaseOrderRecordPage() {
               </div>
             </Section>
           )}
+          {tab === 'lines' && <PoReplacementsSection replacements={po.replacements} />}
+
+          {tab === 'bill' && (
+            <PoBillsSection po={po} canUpload={canEdit} canRemove={canDelete && superAdmin} onChanged={() => { setActivity(null); load(); }} />
+          )}
 
           {tab === 'grns' && (
             <Section title="Receipts against this PO">
               {grns === null ? <EmptyState title="Loading…" /> : (
                 <DataTable
                   columns={[
-                    { key: 'no', header: 'GRN', render: (g) => <DocNumber value={g.grn_number || `GRN-${g.grn_id}`} /> },
+                    { key: 'no', header: 'GRN', render: (g) => <DocNumber value={g.grn_number || grnStats[String(g.grn_id)]?.grn_number || `GRN-${g.grn_id}`} /> },
                     { key: 'when', header: 'Received', render: (g) => <DateTime value={g.created_at} /> },
-                    { key: 'dl', header: 'Delivery', render: (g) => g.meta?.delivery_number || (g.delivery_id ? `#${g.delivery_id}` : <span className="text-ink-3">before gate logging</span>), sub: (g) => g.vendor_challan_no || null },
-                    { key: 'bill', header: 'Vendor invoice', render: (g) => g.vendor_invoice_no || g.bill_name || <span className="text-ink-3">not given</span> },
+                    {
+                      key: 'units',
+                      header: 'Laptops',
+                      numeric: true,
+                      render: (g) => {
+                        const s2 = grnStats[String(g.grn_id)];
+                        return s2 ? (Number(s2.received_qty) || 0) : '—';
+                      },
+                      sub: (g) => (Number(grnStats[String(g.grn_id)]?.replacement_qty) > 0 ? `+${grnStats[String(g.grn_id)].replacement_qty} replacement` : null),
+                    },
+                    { key: 'dl', header: 'Delivery', render: (g) => g.meta?.delivery_number || (g.delivery_id ? `#${g.delivery_id}` : <span className="text-ink-3">before gate logging</span>), sub: (g) => g.vendor_challan_no || g.meta?.vendor_challan_no || null },
+                    {
+                      key: 'bill',
+                      header: 'Bill',
+                      render: (g) => {
+                        const received = String(g.bill_status || '').toLowerCase() === 'received' || Boolean(g.bill_name);
+                        return received ? (g.bill_name || g.vendor_invoice_no || 'Received') : <span className="text-ink-3">{g.vendor_invoice_no || 'pending'}</span>;
+                      },
+                      sub: (g) => {
+                        const n = parseBillFiles(g.bill_files).length;
+                        return n ? `${n} file${n === 1 ? '' : 's'}` : null;
+                      },
+                    },
                   ]}
                   rows={grns}
                   rowKey={(g) => g.grn_id}
-                  onRowClick={(g) => navigate(g.delivery_id ? `/carret/procure/arrivals/${g.delivery_id}` : `/vendor-management/purchase-orders/${poId}/grn-detail`)}
+                  onRowClick={(g) => navigate(`/carret/procure/purchase-orders/${poId}/grns/${g.grn_id}`)}
                   empty={<EmptyState title="Nothing received yet" />}
                 />
               )}
@@ -253,12 +341,24 @@ export default function PurchaseOrderRecordPage() {
                 { label: 'Vendor', value: po.vendor_display_name },
                 { label: 'Vendor email', value: po.vendor_email },
                 { label: 'Vendor phone', value: po.vendor_phone },
+                { label: 'Vendor address', value: po.vendor_address },
+                { label: 'Vendor state', value: po.vendor_state ? String(po.vendor_state).replace(/_/g, ' ') : null },
                 { label: 'Deliver to (state)', value: String(po.po_state || '').replace(/_/g, ' ') },
                 { label: 'GST', value: po.is_same_state ? 'CGST + SGST (same state)' : 'IGST (other state)' },
+                { label: 'Created', value: po.created_at ? <DateTime value={po.created_at} /> : null },
                 { label: 'Submitted', value: po.submitted_at ? <DateTime value={po.submitted_at} /> : null },
                 { label: 'Approved', value: po.approved_at ? <DateTime value={po.approved_at} /> : null },
+                { label: 'Raised by', value: po.status_updated_by_name },
+                decision && {
+                  label: decision.action === 'approved' ? 'Approved by' : 'Sent back by',
+                  value: <>{decision.created_by_name || 'someone'} · <DateTime value={decision.created_at} /></>,
+                },
                 { label: 'Sent to vendor', value: po.sent_to_vendor_at ? <DateTime value={po.sent_to_vendor_at} /> : null },
+                Number(po.amendment_no) > 0 && { label: `Amended (no. ${po.amendment_no})`, value: po.amended_at ? <DateTime value={po.amended_at} /> : 'yes' },
+                po.cancelled_at && { label: 'Cancelled', value: <DateTime value={po.cancelled_at} /> },
+                po.closed_at && { label: 'Short-closed', value: <DateTime value={po.closed_at} /> },
                 { label: 'Vendor invoice', value: po.vendor_invoice_number },
+                { label: 'Bill', value: poBillInfo(po).name },
                 { label: 'Terms / remarks', value: po.remarks },
               ]}
               />
@@ -295,6 +395,24 @@ export default function PurchaseOrderRecordPage() {
           <Textarea rows={4} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
         </Field>
       </Drawer>
+
+      {po && superAdmin && (
+        <LineSpecsDrawer
+          po={po}
+          lineIndex={specLine}
+          onClose={() => setSpecLine(null)}
+          onSaved={() => { setActivity(null); load(); }}
+        />
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={deleteDraft}
+        title={`Delete draft ${po?.purchase_order_number || ''}?`}
+        body="The draft is removed from the purchase order list. Use this only for a PO that should never have been raised."
+        confirmLabel="Delete draft"
+      />
     </DeskShell>
   );
 }

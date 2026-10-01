@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
   Button, Checkbox, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input,
-  KeyValue, Notice, Section, Segmented, Select, Textarea,
+  KeyValue, Notice, Section, Segmented, Select, StatusChip, Textarea,
 } from '../../../components/carret';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
@@ -14,6 +14,7 @@ import { isManagerUser } from '../../vendor-management/vendorMgmtUi';
 import PartLabelPrintDrawer from '../stock/setup/PartLabelPrintDrawer';
 import { errMsg } from './procureShared';
 import { lineConfig } from './poShared';
+import AccessNumbersDrawer from './AccessNumbersDrawer';
 
 /**
  * Procure → Vendor arrivals → receive a delivery (GRN).
@@ -28,6 +29,13 @@ import { lineConfig } from './poShared';
  * A wrong or dead laptop is rejected at the door (D6): it still gets a TTSPL
  * so it can be traced, goes back to the vendor, and is never billed.
  */
+// Same format as the backend's GRN numbers (GRN-0042).
+const grnNumberOf = (id) => `GRN-${String(id).padStart(4, '0')}`;
+const partsList = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim()) { try { const p = JSON.parse(v); return Array.isArray(p) ? p : [v]; } catch { return v.replace(/[{}"]/g, '').split(',').map((x) => x.trim()).filter(Boolean); } }
+  return [];
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const NEEDS_CHECK = new Set(['on', 'part_missing']);
 const blankUnit = (line) => ({
@@ -53,6 +61,7 @@ export default function DeliveryReceivePage() {
   const [invoice, setInvoice] = useState('');
   const [labels, setLabels] = useState([]);
   const [labelOpen, setLabelOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
 
   const load = useCallback(() => {
     api.get(`/vendor-management/deliveries/${deliveryId}`)
@@ -164,6 +173,14 @@ export default function DeliveryReceivePage() {
     setBusy('inv');
     try { await api.patch(`/vendor-management/deliveries/${deliveryId}/invoice`, { vendor_invoice_no: invoice.trim() }); toast.success('Invoice number saved'); setInvoice(''); load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(''); }
   };
+  const copyCaptureLink = () => {
+    const url = capture?.capture_url;
+    if (!url) return;
+    if (!navigator.clipboard?.writeText) { toast.error('Clipboard not available'); return; }
+    navigator.clipboard.writeText(url).then(() => toast.success('Capture link copied')).catch(() => toast.error('Clipboard not available'));
+  };
+  const openCaptureLink = () => { if (capture?.capture_url) window.open(capture.capture_url, '_blank', 'noopener,noreferrer'); };
+
   const closeDelivery = async () => {
     setBusy('close');
     try {
@@ -181,7 +198,16 @@ export default function DeliveryReceivePage() {
   const unitCols = [
     { key: 't', header: 'Asset', render: (u) => <DocNumber value={u.ttspl_id} />, sub: (u) => u.serial_number },
     { key: 'c', header: 'Laptop', render: (u) => [u.brand, u.model].filter(Boolean).join(' ') || lineConfig(lines[u.line_index] || {}) || '—', sub: (u) => [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' · ') || null },
-    { key: 'cond', header: 'Condition', render: (u) => LAPTOP_CONDITIONS.find((c) => c.value === u.received_condition)?.label || u.received_condition || '—' },
+    {
+      key: 'cond',
+      header: 'Condition',
+      render: (u) => LAPTOP_CONDITIONS.find((c) => c.value === u.received_condition)?.label || u.received_condition || '—',
+      sub: (u) => {
+        const mp = partsList(u.missing_parts);
+        return mp.length ? `Missing: ${mp.map((m) => PART_CATEGORIES.find((p) => p.value === m)?.label || m).join(', ')}` : null;
+      },
+    },
+    { key: 'st', header: 'Stage', render: (u) => (u.inventory_status ? <StatusChip status={u.inventory_status} /> : '—') },
     {
       key: 'chk',
       header: 'Check',
@@ -219,12 +245,15 @@ export default function DeliveryReceivePage() {
           actions={(
             <>
               {labels.length > 0 && <Button onClick={() => setLabelOpen(true)}>Print {labels.length} label{labels.length > 1 ? 's' : ''}</Button>}
+              <Button variant="quiet" onClick={() => setAccessOpen(true)}>Access numbers</Button>
+              {d.grn_id && <Button variant="quiet" onClick={() => navigate(`/carret/procure/purchase-orders/${d.po_id}/grns/${d.grn_id}`)}>Open GRN</Button>}
               <Button variant="quiet" onClick={() => navigate(`/carret/procure/purchase-orders/${d.po_id}`)}>Open PO</Button>
               {open && canEdit && <Button variant={full ? 'primary' : 'quiet'} onClick={() => setCloseOpen(true)}>Close delivery</Button>}
             </>
           )}
           meta={[
             { label: 'Vendor', value: d.vendor_name },
+            { label: 'GRN', value: d.grn_id ? <Link to={`/carret/procure/purchase-orders/${d.po_id}/grns/${d.grn_id}`}><DocNumber value={grnNumberOf(d.grn_id)} /></Link> : <span className="text-ink-3">not started</span> },
             { label: 'Challan', value: d.vendor_challan_no },
             { label: 'Invoice', value: d.vendor_invoice_no || <span style={{ color: 'var(--alert-warn)' }}>not given</span> },
             { label: 'Logged by', value: d.logged_by_name },
@@ -249,7 +278,7 @@ export default function DeliveryReceivePage() {
             Needed before the vendor is paid for these laptops.
           </Notice>
         )}
-        {!open && <Notice tone={d.status === 'cancelled' ? 'serious' : 'good'} title={d.status === 'cancelled' ? 'Turned away' : 'Delivery closed'}>{d.completion_note || `Closed ${d.completed_by_name ? `by ${d.completed_by_name}` : ''}.`}</Notice>}
+        {!open && <Notice tone={d.status === 'cancelled' ? 'serious' : 'good'} title={d.status === 'cancelled' ? 'Turned away' : 'Delivery closed'}>{d.completion_note ? <>{d.completion_note} · </> : null}{d.status === 'cancelled' ? 'Turned away' : 'Closed'}{d.completed_by_name ? ` by ${d.completed_by_name}` : ''}{d.completed_at ? <> <DateTime value={d.completed_at} /></> : null}.</Notice>}
 
         {open && canEdit && !full && (
           <Section title={`Receive laptop ${handled + 1} of ${d.laptop_count}`}>
@@ -295,6 +324,13 @@ export default function DeliveryReceivePage() {
                     <div style={{ margin: '8px 0' }}>
                       <p>On the laptop, open <strong>{String(capture.capture_url || '').replace(/^https?:\/\//, '').split('/')[0]}/access</strong> and enter:</p>
                       <p className="font-mono" style={{ fontSize: '2rem', letterSpacing: '0.2em', margin: '8px 0' }}>{capture.access_number || '—'}</p>
+                      {capture.capture_url && (
+                        <div className="flex flex-wrap items-center" style={{ gap: '8px', margin: '8px 0' }}>
+                          <span className="text-ink-3">Or use the link:</span>
+                          <Button onClick={copyCaptureLink}>Copy link</Button>
+                          <Button variant="quiet" onClick={openCaptureLink}>Open link</Button>
+                        </div>
+                      )}
                       <p className="text-ink-3">Waiting for the laptop… this updates by itself.</p>
                     </div>
                   )}
@@ -345,6 +381,9 @@ export default function DeliveryReceivePage() {
             { label: 'Brought by', value: d.carrier_name },
             { label: 'Vehicle', value: d.vehicle_no },
             { label: 'Gate notes', value: d.notes },
+            { label: 'Arrived', value: d.arrived_at ? <DateTime value={d.arrived_at} /> : null },
+            { label: 'Completed', value: d.completed_at ? <DateTime value={d.completed_at} /> : null },
+            { label: 'Completed by', value: d.completed_by_name },
           ]}
           />
         </Section>
@@ -366,6 +405,8 @@ export default function DeliveryReceivePage() {
           <Field label="Note" required={handled !== Number(d.laptop_count)}><Textarea rows={3} value={closeNote} onChange={(e) => setCloseNote(e.target.value)} /></Field>
         </div>
       </Drawer>
+
+      <AccessNumbersDrawer open={accessOpen} onClose={() => setAccessOpen(false)} poId={d.po_id} />
 
       <PartLabelPrintDrawer open={labelOpen} units={labels} defaultCopies={1} title="Print TTSPL labels" onClose={() => { setLabelOpen(false); setLabels([]); }} />
     </DeskShell>

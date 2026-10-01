@@ -43,6 +43,7 @@ const ToBuyPage = React.lazy(() => import('../features/carret/procure/ToBuyPage'
 const PurchaseOrdersListPage = React.lazy(() => import('../features/carret/procure/PurchaseOrdersListPage'));
 const PurchaseOrderFormPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderFormPage'));
 const PurchaseOrderRecordPage = React.lazy(() => import('../features/carret/procure/PurchaseOrderRecordPage'));
+const GrnRecordPage = React.lazy(() => import('../features/carret/procure/GrnRecordPage'));
 const SparePoRecordPage = React.lazy(() => import('../features/carret/procure/SparePoRecordPage'));
 const VendorArrivalsPage = React.lazy(() => import('../features/carret/procure/VendorArrivalsPage'));
 const DeliveryReceivePage = React.lazy(() => import('../features/carret/procure/DeliveryReceivePage'));
@@ -182,6 +183,8 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/procure/purchase-orders/new', element: guard('vendor_management', 'create', <PurchaseOrderFormPage />) },
       { path: '/carret/procure/purchase-orders/:poId', element: guard('vendor_management', 'view', <PurchaseOrderRecordPage />) },
       { path: '/carret/procure/purchase-orders/:poId/edit', element: guard('vendor_management', 'edit', <PurchaseOrderFormPage />) },
+      // One GRN on a PO — works for GRNs made before gate logging (no delivery).
+      { path: '/carret/procure/purchase-orders/:poId/grns/:grnId', element: guard('vendor_management', 'view', <GrnRecordPage />) },
       { path: '/carret/procure/to-buy', element: guard('vendor_management', 'view', <ToBuyPage />) },
       // The guard logs vendor arrivals; the warehouse receives against them (D4).
       { path: '/carret/procure/arrivals', element: guardAny(['guard_gate_checking', 'vendor_management'], 'view', <VendorArrivalsPage />) },
