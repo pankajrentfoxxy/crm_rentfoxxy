@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DateTime, DocNumber, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, Notice, Section, Select, StatusChip, Tabs, Textarea,
+  Button, DateTime, DocNumber, Drawer, EmptyState, Field, FlowSteps, FormGrid, Input, Notice, Select, StatusChip, Tabs, Textarea,
 } from '../../../components/carret';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -28,7 +28,9 @@ import {
  * (produce/work/*: numbered steps, questions that say which answer is good,
  * checked again on the server); Pending Inventory goes to the receive screen. Around it: claim, the work timer (only the assignee — PD13),
  * parts (requests only — PD7), hold / release with a reason (PD11), dismantle
- * for parts (PD14), send back to the vendor, and the history.
+ * for parts (PD14) and send back to the vendor. The ticket's history and the
+ * laptop's cost are not shown here (2 Oct 2026, user decision): the laptop's
+ * full story and money live on its Lifecycle page, linked from the header.
  */
 const WORK_STAGES = ['Diagnosis', 'Chip Level Repair', 'Body & Paint', 'Assembly & Software', 'Final Testing', 'QC1', 'QC2', 'Dispatch QC'];
 
@@ -50,8 +52,6 @@ export default function FloorTicketPage() {
   const [form, setForm] = useState({});
   const [assignOpen, setAssignOpen] = useState(false);
   const [partHits, setPartHits] = useState([]);
-  const [showAllHistory, setShowAllHistory] = useState(false);
-  const [showCost, setShowCost] = useState(false);
 
   const load = useCallback(() => {
     fetchTicket(ticketId).then(({ data: d }) => setData(d)).catch((e) => setError(errMsg(e, 'Could not load the ticket.')));
@@ -117,11 +117,8 @@ export default function FloorTicketPage() {
     </>
   );
 
-  const acts = data.activities || [];
   const cc = data.config_check?.config || {};
   const disagreements = data.config_check?.disagreements || [];
-  const cost = data.laptop_cost;
-  const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
   // The laptop, once, in the header (1 Oct 2026: the "Laptop" tab repeated the
   // header's TTSPL / serial and dumped the config, cost and grade; the full
@@ -157,7 +154,6 @@ export default function FloorTicketPage() {
     ...(t.final_grade ? [{ label: 'Grade', value: t.final_grade }] : []),
     ...(t.qc_fail_count > 0 ? [{ label: 'QC failures', value: <span style={{ color: 'var(--alert-crit)', fontWeight: 600 }}>{t.qc_fail_count}</span> }] : []),
   ];
-  const shownActs = showAllHistory ? acts : acts.slice(0, 8);
   const partsTab = stage !== 'Dispatch QC' || activePartRequests(data.part_requests).length > 0;
 
   return (
@@ -205,8 +201,7 @@ export default function FloorTicketPage() {
         )}
         {next}
 
-        <div className="c-split">
-          <div className="c-stack min-w-0">
+        <div className="c-stack min-w-0">
             <Tabs
               value={partsTab ? tab : 'work'}
               onChange={setTab}
@@ -233,74 +228,6 @@ export default function FloorTicketPage() {
             {tab === 'parts' && partsTab && (
               <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && stage !== 'Dispatch QC' && (mine || lead)} onChanged={done} />
             )}
-          </div>
-
-          <aside className="c-stack min-w-0">
-            <Section title={`History${acts.length ? ` (${acts.length})` : ''}`}>
-              {!acts.length ? <p className="text-ink-3" style={{ margin: 0 }}>Nothing yet.</p> : (
-                <ol className="list-none p-0 m-0 font-ui">
-                  {shownActs.map((a, i) => (
-                    <li key={a.activity_id || i} style={{ padding: '8px 0', borderTop: i ? '1px solid var(--rule)' : 0 }}>
-                      <div className="text-ink" style={{ fontWeight: 500, textTransform: 'capitalize' }}>{String(a.action || '').replace(/_/g, ' ')}</div>
-                      {a.notes && (
-                        <div className="text-ink-2" title={a.notes} style={{ fontSize: '13px', marginTop: '2px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>
-                          {a.notes}
-                        </div>
-                      )}
-                      <div className="text-ink-3" style={{ fontSize: '12.5px', marginTop: '2px' }}>{a.user_name || 'system'} · <DateTime value={a.created_at} /></div>
-                    </li>
-                  ))}
-                </ol>
-              )}
-              {acts.length > 8 && (
-                <Button variant="quiet" style={{ marginTop: '6px' }} onClick={() => setShowAllHistory((v) => !v)}>
-                  {showAllHistory ? 'Show the latest only' : `Show all ${acts.length}`}
-                </Button>
-              )}
-            </Section>
-            {/* PD15 cost, for floor leads only and folded away: it is not floor work. */}
-            {lead && cost && (
-              <Section
-                title="Cost so far"
-                actions={<Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setShowCost((v) => !v)}>{showCost ? 'Hide' : money(cost.total)}</Button>}
-              >
-                {!showCost ? <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>PO line plus parts fitted, less old parts collected.</p> : (
-                  <div className="c-totals">
-                    {cost.base.kind === 'monthly_rent' ? (
-                      <>
-                        <div>
-                          <span>
-                            Purchase-equivalent (rented on {cost.base.po_number || 'its PO'})
-                            {' — '}
-                            {{ asset_value: 'asset value on the PO', po_rate: 'price on the PO', same_model_purchases: `what we paid for the same model (${cost.base.purchase_equivalent?.lines || 0} purchase line(s))` }[cost.base.purchase_equivalent?.source] || 'no price on record'}
-                          </span>
-                          <span>{cost.base.purchase_equivalent?.amount != null ? money(cost.base.purchase_equivalent.amount) : '—'}</span>
-                        </div>
-                        <div className="text-ink-3"><span>Monthly rent to the vendor (not in the total)</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'not found'}</span></div>
-                        {cost.rent_paid && (
-                          <div className="text-ink-3">
-                            <span>
-                              {cost.rent_paid.start_in_future
-                                ? 'Rent paid so far — rent start date is wrong (in the future), cannot work it out'
-                                : `Rent paid so far — ${cost.rent_paid.days} day(s)${cost.rent_paid.ended ? ', rent ended' : ''} (not in the total)`}
-                            </span>
-                            <span>{cost.rent_paid.start_in_future ? '—' : money(cost.rent_paid.amount)}</span>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div><span>Bought on {cost.base.po_number || 'its PO'}</span><span>{cost.base.amount != null ? money(cost.base.amount) : 'price not found'}</span></div>
-                    )}
-                    {cost.lines.map((l, i) => (
-                      // eslint-disable-next-line react/no-array-index-key
-                      <div key={i}><span>{l.label}{l.ref ? ` · ${l.ref}` : ''}{l.no_cost ? ' (no cost recorded)' : ''}</span><span>{money(l.amount)}</span></div>
-                    ))}
-                    <div className="is-grand"><span>Total so far</span><span>{money(cost.total)}</span></div>
-                  </div>
-                )}
-              </Section>
-            )}
-          </aside>
         </div>
       </div>
 
