@@ -6,6 +6,7 @@ import {
   DataTable, DocNumber, EmptyState, Input, Money, Notice, Segmented, StatTile, StatusChip,
 } from '../../../components/carret';
 import { errMsg, fetchNotEarning } from './stockApi';
+import { laptopSub } from './laptopSub';
 
 /**
  * Stock → Not earning (claude/carret-stock.md, ST-D1; was "NPA Assets", a
@@ -37,7 +38,7 @@ export default function NotEarningPage() {
   }, [res, reason, q]);
 
   const cols = [
-    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: (r) => r.model_name },
+    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: laptopSub },
     { key: 'r', header: 'Why not earning', render: (r) => r.reason, sub: (r) => r.customer_name || r.location || null },
     { key: 's', header: 'State', render: (r) => <StatusChip status={r.inventory_status} /> },
     { key: 'd', header: 'Idle', numeric: true, render: (r) => `${r.idle_days} days` },

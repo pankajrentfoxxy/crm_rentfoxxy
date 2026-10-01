@@ -8,6 +8,7 @@ import {
 import { ASSET_STATUSES } from '../../config/statuses';
 import { usePermission } from '../../hooks/usePermission';
 import { errMsg, fetchAssetCounts, fetchAssets, TAG_OPTIONS } from './stock/stockApi';
+import { laptopSub } from './stock/laptopSub';
 
 /**
  * Stock → Assets (claude/carret-stock.md). Every laptop, by TTSPL: where it is,
@@ -64,7 +65,7 @@ export default function AssetsListPage() {
   useEffect(() => { load(); }, [load]);
 
   const cols = [
-    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: (r) => r.model_name },
+    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: laptopSub },
     { key: 'c', header: 'Configuration', render: (r) => [r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ') || '—' },
     { key: 's', header: 'State', render: (r) => <StatusChip status={r.inventory_status} />, sub: (r) => (r.inventory_status === 'in_stock' ? (r.is_ready ? 'ready' : `QC: ${r.qc_status || '—'}`) : null) },
     { key: 'w', header: 'Where', render: (r) => r.customer_name || r.location || '—', sub: (r) => (r.customer_name ? r.current_dc_number : (r.tag_label ? `for ${r.tag_label.toLowerCase()}` : null)) },
@@ -104,7 +105,7 @@ export default function AssetsListPage() {
         )}
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
           <Segmented label="View" value={view} onChange={(v) => { setView(v); setPage(1); }} options={views} />
-          <Input type="search" placeholder="TTSPL, serial, PO, customer or model" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: '20rem' }} />
+          <Input type="search" placeholder="TTSPL, serial number, PO, customer or model" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: '20rem' }} />
           <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} placeholder="Any state" options={ASSET_STATUSES.map((s) => ({ value: s.value, label: s.label }))} style={{ maxWidth: '12rem' }} />
           <Select value={tag} onChange={(e) => { setTag(e.target.value); setPage(1); }} placeholder="Any tag" options={[...TAG_OPTIONS, { value: 'none', label: 'Not tagged' }]} style={{ maxWidth: '10rem' }} />
           <span className="text-ink-3">{res ? `${res.total.toLocaleString('en-IN')} found` : ''}</span>

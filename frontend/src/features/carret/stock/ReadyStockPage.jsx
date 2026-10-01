@@ -8,6 +8,7 @@ import {
 import { usePermission } from '../../../hooks/usePermission';
 import { errMsg, fetchReadyStock, sendToQc } from './stockApi';
 import { LocationDrawer, RetagDrawer } from './StockActions';
+import { laptopSub } from './laptopSub';
 
 /**
  * Stock → Ready stock (claude/carret-stock.md, ST-D3). QC-passed laptops that
@@ -74,7 +75,7 @@ export default function ReadyStockPage() {
   const s = res?.summary || {};
   const cols = [
     ...(canWarehouse ? [{ key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} checked={Boolean(picked[r.serial_id])} onChange={() => setPicked({ ...picked, [r.serial_id]: !picked[r.serial_id] })} onClick={(e) => e.stopPropagation()} /> }] : []),
-    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id} />, sub: (r) => r.model_name },
+    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: laptopSub },
     { key: 'c', header: 'Configuration', render: (r) => [r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ') || '—' },
     { key: 'g', header: 'Use for', render: (r) => r.tag_label || <span style={{ color: 'var(--alert-warn)', fontWeight: 600 }}>Not tagged</span> },
     { key: 'l', header: 'Slot', render: (r) => r.location || <span style={{ color: 'var(--alert-warn)', fontWeight: 600 }}>No slot</span> },

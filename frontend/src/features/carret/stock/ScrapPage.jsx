@@ -10,6 +10,7 @@ import {
   PART_UNITS_VIEW_SECTIONS, cancelScrap, createScrapChallan, decideScrap, downloadScrapChallanPdf, errMsg, fetchDiscardedParts, fetchScrapChallans,
   fetchScrapRequests, fetchScrappedAwaitingChallan,
 } from './stockApi';
+import { laptopSub } from './laptopSub';
 
 /**
  * Stock → Scrap (claude/carret-stock.md, ST-D2).
@@ -148,7 +149,7 @@ export default function ScrapPage() {
   ];
   const handoverCols = [
     ...(canChallan ? [{ key: 'x', header: '', width: '2.5rem', render: (r) => <input type="checkbox" aria-label={`Pick ${r.ttspl_id}`} checked={Boolean(picked[pickKey('laptop', r)])} onChange={() => togglePick('laptop', r)} /> }] : []),
-    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: (r) => r.model_name },
+    { key: 't', header: 'Laptop', render: (r) => <DocNumber value={r.ttspl_id || r.serial_number} />, sub: laptopSub },
     { key: 'r', header: 'Why scrapped', render: (r) => r.reason || '—' },
     { key: 'd', header: 'Scrapped', render: (r) => <DateTime value={r.status_changed_at} /> },
     {
