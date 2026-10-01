@@ -10,8 +10,11 @@ import {
 } from '../../sales-pipeline/salesPipelineApi';
 import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
-import { pdfUrl } from '../sell/sellShared';
+import { parseJson, pdfUrl } from '../sell/sellShared';
 import { modeOf } from './ChallanDispatch';
+import {
+  RefusedLaptopPicker, canRefusePerLaptop, emptyRefusal, refusalFields,
+} from './fieldDeliveryShared';
 
 /**
  * The last mile, on the one delivery routine (deliveryCompletionService):
@@ -21,13 +24,31 @@ import { modeOf } from './ChallanDispatch';
  * - courier / porter: BlueDart closes it from tracking; anything else is
  *   confirmed here with a proof-of-delivery photo and a reason (admin-deliver);
  * - refused: the reason is recorded, the laptops wait at the gate, the guard
- *   scans them inward, and the warehouse signs them back into stock.
+ *   scans them inward, and the warehouse signs them back into stock;
+ * - partly refused: either delivery above can mark some laptops refused (with a
+ *   reason). The challan is delivered for the rest; the refused ones come back
+ *   through the gate and the same warehouse receipt.
  *
  * The old screen's "Mark Delivered" and "Verify & Deliver" sent no proof and
  * the server refused them; nothing here can reach that dead end.
  */
 const OUT = ['in_transit', 'shipped', 'reached'];
 const ADMIN_DELIVER_ROLES = ['admin', 'manager', 'warehouse', 'support_tech', 'dispatch', 'super_admin'];
+
+/**
+ * A delivered challan on which the customer refused some laptops. Tokens are
+ * the raw DC serial tokens (`id|serial|TTSPL`); labels the TTSPL (or serial).
+ */
+export function partialRefusalOf(head) {
+  const raw = parseJson(head?.rejected_serial_numbers);
+  const tokens = Array.isArray(raw) ? raw.filter(Boolean).map(String) : [];
+  const partial = String(head?.status || '').toLowerCase() === 'delivered' && Boolean(head?.rejected_at) && tokens.length > 0;
+  return {
+    partial,
+    tokens: partial ? tokens : [],
+    labels: partial ? tokens.map((t) => t.split('|')[2] || t.split('|')[1] || t) : [],
+  };
+}
 
 function ProofInput({ proof, setProof }) {
   return (
@@ -68,14 +89,21 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
   const [proof, setProof] = useState({ type: 'photo', file: null, esign: null });
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('');
+  const [refusal, setRefusal] = useState(emptyRefusal());
   const [busy, setBusy] = useState('');
   useEffect(() => { setShownOtp(detail?.can_view_otp ? detail?.otp_code : null); }, [detail]);
 
-  const reset = () => { setOtp(''); setProof({ type: 'photo', file: null, esign: null }); setNotes(''); setReason(''); };
+  // Laptop-wise refusal on either delivery (the customer keeps the rest).
+  const units = (detail?.lines || []).flatMap((l) => l.serials_detail || []);
+  const perLaptop = canRefusePerLaptop(head, units);
+  const refusedCount = perLaptop ? refusal.refused.length : 0;
+  const deliverLabel = (plain) => (refusedCount ? `Deliver ${units.length - refusedCount} · Refuse ${refusedCount}` : plain);
+
+  const reset = () => { setOtp(''); setProof({ type: 'photo', file: null, esign: null }); setNotes(''); setReason(''); setRefusal(emptyRefusal()); };
   const close = () => { setOpen(''); reset(); };
   const act = async (key, fn, ok) => {
     setBusy(key);
-    try { await fn(); if (ok) toast.success(ok); close(); onChanged?.(); } catch (e) { toast.error(e?.response?.data?.message || e.message || 'That did not work.'); } finally { setBusy(''); }
+    try { const r = await fn(); if (ok) toast.success(typeof ok === 'function' ? ok(r) : ok); close(); onChanged?.(); } catch (e) { toast.error(e?.response?.data?.message || e.message || 'That did not work.'); } finally { setBusy(''); }
   };
 
   const sendOtp = async () => {
@@ -92,24 +120,28 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
     if (!/^\d{4,8}$/.test(otp.trim())) throw new Error('Enter the OTP the customer received');
     if (proof.type === 'photo' && !proof.file) throw new Error('Attach a photo');
     if (proof.type === 'esign' && !proof.esign) throw new Error('Take the customer’s signature');
+    const extra = perLaptop ? refusalFields(units, refusal, head.serial_verified_no) : {};
     const fd = new FormData();
     fd.append('otp', otp.trim());
     fd.append('pod_type', proof.type);
     fd.append('notes', notes);
     if (proof.file) fd.append('pod_photo', proof.file);
     if (proof.esign) fd.append('esign_data', proof.esign);
-    await submitDeliveryWithPod(dc, fd);
-  }, 'Delivered — rent and invoicing start from here');
+    Object.entries(extra).forEach(([k, v]) => { if (v) fd.append(k, v); });
+    return submitDeliveryWithPod(dc, fd);
+  }, (r) => r?.data?.message || 'Delivered — rent and invoicing start from here');
 
   const confirmDelivery = () => act('confirm', async () => {
     if (!proof.file) throw new Error('Attach the proof-of-delivery photo');
     if (reason.trim().length < 3) throw new Error('Say how you know it was delivered');
+    const extra = perLaptop ? refusalFields(units, refusal, null) : {};
     const fd = new FormData();
     fd.append('pod_photo', proof.file);
     fd.append('reason', reason.trim());
     fd.append('notes', notes);
-    await adminDeliverOverride(dc, fd);
-  }, 'Delivery confirmed');
+    Object.entries(extra).forEach(([k, v]) => { if (v) fd.append(k, v); });
+    return adminDeliverOverride(dc, fd);
+  }, (r) => r?.data?.message || 'Delivery confirmed');
 
   const refuse = () => act('refuse', async () => {
     if (reason.trim().length < 3) throw new Error('Give the customer’s reason');
@@ -161,11 +193,12 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
           open={open === 'hand'}
           onClose={close}
           title="Deliver with OTP"
-          footer={<div className="flex justify-end" style={{ gap: '8px' }}><Button variant="quiet" onClick={close}>Cancel</Button><Button variant="primary" onClick={deliverByHand} disabled={busy === 'deliver'}>{busy === 'deliver' ? 'Saving…' : 'Mark delivered'}</Button></div>}
+          footer={<div className="flex justify-end" style={{ gap: '8px' }}><Button variant="quiet" onClick={close}>Cancel</Button><Button variant="primary" onClick={deliverByHand} disabled={busy === 'deliver'}>{busy === 'deliver' ? 'Saving…' : deliverLabel('Mark delivered')}</Button></div>}
         >
           <FormGrid cols={1}>
             <Field label="OTP from the customer" required><Input value={otp} inputMode="numeric" maxLength={8} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" /></Field>
             <ProofInput proof={proof} setProof={setProof} />
+            {perLaptop && <RefusedLaptopPicker serials={units} value={refusal} onChange={setRefusal} verifiedNo={head.serial_verified_no} />}
             <Field label="Notes"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
           </FormGrid>
         </Drawer>
@@ -174,7 +207,7 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
           open={open === 'confirm'}
           onClose={close}
           title="Confirm delivery"
-          footer={<div className="flex justify-end" style={{ gap: '8px' }}><Button variant="quiet" onClick={close}>Cancel</Button><Button variant="primary" onClick={confirmDelivery} disabled={busy === 'confirm'}>{busy === 'confirm' ? 'Saving…' : 'Confirm delivered'}</Button></div>}
+          footer={<div className="flex justify-end" style={{ gap: '8px' }}><Button variant="quiet" onClick={close}>Cancel</Button><Button variant="primary" onClick={confirmDelivery} disabled={busy === 'confirm'}>{busy === 'confirm' ? 'Saving…' : deliverLabel('Confirm delivered')}</Button></div>}
         >
           <FormGrid cols={1}>
             <Notice tone="warn">This is recorded as a manual confirmation against your name, with the photo and your reason.</Notice>
@@ -182,6 +215,7 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
               <Input type="file" accept="image/*" capture="environment" onChange={(e) => setProof({ type: 'photo', file: e.target.files?.[0] || null, esign: null })} />
             </Field>
             <Field label="How do you know it was delivered?" required hint="e.g. Porter POD received, customer confirmed on call."><Textarea value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+            {perLaptop && <RefusedLaptopPicker serials={units} value={refusal} onChange={setRefusal} />}
             <Field label="Notes"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
           </FormGrid>
         </Drawer>
@@ -191,7 +225,15 @@ export default function ChallanDelivery({ dc, head, detail, onChanged }) {
     );
   }
 
-  if (status === 'delivered') return <DeliveredView dc={dc} head={head} isAdmin={isAdmin} onChanged={onChanged} />;
+  if (status === 'delivered') {
+    const partial = partialRefusalOf(head);
+    return (
+      <>
+        <DeliveredView dc={dc} head={head} isAdmin={isAdmin} onChanged={onChanged} />
+        {partial.partial && <RefusedView dc={dc} head={head} canReceive={canReceive} onChanged={onChanged} refusedLabels={partial.labels} />}
+      </>
+    );
+  }
   if (status === 'rejected') return <RefusedView dc={dc} head={head} canReceive={canReceive} onChanged={onChanged} />;
   if (status === 'cancelled') return <Section title="Delivery"><Notice tone="serious" title="Cancelled">This challan was cancelled; its laptops went back to stock.</Notice></Section>;
   return null;
@@ -243,7 +285,9 @@ function DeliveredView({ dc, head, isAdmin, onChanged }) {
   );
 }
 
-function RefusedView({ dc, head, canReceive, onChanged }) {
+/** refusedLabels: set on a partly refused (delivered) challan — only those laptops come back. */
+function RefusedView({ dc, head, canReceive, onChanged, refusedLabels = null }) {
+  const partial = Boolean(refusedLabels);
   const [info, setInfo] = useState(null);
   const [open, setOpen] = useState('');
   const [scans, setScans] = useState({});
@@ -289,9 +333,10 @@ function RefusedView({ dc, head, canReceive, onChanged }) {
   };
 
   return (
-    <Section title="Refused by the customer">
+    <Section title={partial ? `Partly delivered — customer refused ${refusedLabels.length}` : 'Refused by the customer'}>
       <div className="c-stack">
         <KeyValue items={[
+          partial && { label: 'Refused laptops', value: refusedLabels.join(', ') },
           { label: 'Refused', value: <DateTime value={head.rejected_at} /> },
           { label: 'Reason', value: head.rejection_reason },
           head.rejection_remarks && { label: 'Remarks', value: head.rejection_remarks },
@@ -300,8 +345,20 @@ function RefusedView({ dc, head, canReceive, onChanged }) {
         ]}
         />
         {info?.error && <Notice tone="warn">{info.error}</Notice>}
-        {received && <Notice tone="good" title="Back in stock">The laptops were received and sent for a QC re-check. The sales order can now be cancelled if needed.</Notice>}
-        {!received && !info?.error && guardPending && <Notice tone="warn" title="Waiting for the guard">The guard must scan these laptops inward at the gate before the warehouse can receive them.</Notice>}
+        {received && (
+          <Notice tone="good" title="Back in stock">
+            {partial
+              ? 'The refused laptops were received and sent for a QC re-check. The delivered laptops stay with the customer.'
+              : 'The laptops were received and sent for a QC re-check. The sales order can now be cancelled if needed.'}
+          </Notice>
+        )}
+        {!received && !info?.error && guardPending && (
+          <Notice tone="warn" title="Waiting for the guard">
+            {partial
+              ? 'The guard must scan the refused laptops inward at the gate before the warehouse can receive them. The delivered laptops are not touched.'
+              : 'The guard must scan these laptops inward at the gate before the warehouse can receive them.'}
+          </Notice>
+        )}
         {!received && !info?.error && !guardPending && canReceive && (
           <div className="flex flex-wrap" style={{ gap: '8px' }}>
             <Button variant="primary" onClick={() => setOpen('recv')}>Receive back (scan + sign)</Button>

@@ -19,7 +19,7 @@ const TABS = [
   { key: 'inhouse', label: 'By hand' },
   { key: 'courier', label: 'Courier' },
   { key: 'porter', label: 'Porter' },
-  { key: 'awaiting_warehouse_return', label: 'Refused — coming back' },
+  { key: 'awaiting_warehouse_return', label: 'Refused — coming back' }, // full and partly refused
   { key: 'warehouse_received', label: 'Refused — received' },
   { key: 'delivered', label: 'Delivered' },
 ];
@@ -56,7 +56,15 @@ export default function DeliveryRegisterPage() {
       key: 'otp', header: 'OTP',
       render: (r) => (r.otp_verified_at ? <StatusChip status="approved" title="OTP verified" /> : r.otp_sent_at ? <StatusChip status="sent" title="OTP sent" /> : <span className="text-ink-3">—</span>),
     },
-    { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status} />, sub: (r) => r.refusal_stage_label || (r.delivered_at ? new Date(r.delivered_at).toLocaleString() : null) },
+    {
+      key: 's', header: 'Status',
+      // A partly refused challan is delivered; its refused laptops are received back from the challan.
+      render: (r) => (r.partially_refused ? <StatusChip status="delivered" label="Partly delivered" /> : <StatusChip status={r.status} />),
+      sub: (r) => [
+        r.partially_refused && `${r.refused_count} refused${r.warehouse_return_pending ? ' — receive back on the challan' : ''}`,
+        r.refusal_stage_label || (r.delivered_at ? new Date(r.delivered_at).toLocaleString() : null),
+      ].filter(Boolean).join(' · ') || null,
+    },
   ], []);
 
   return (

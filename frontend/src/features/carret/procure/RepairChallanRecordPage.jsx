@@ -55,6 +55,7 @@ function itemNotes(item) {
   }
   if ((item.replacement_rejections || []).length) out.push(`${item.replacement_rejections.length} replacement(s) not accepted and handed back`);
   if (item.item_status === 'vendor_kept') out.push(`Vendor kept it${item.vendor_kept_reason ? ` — ${item.vendor_kept_reason}` : ''}`);
+  if (item.gate_replacement_serial && !['received', 'replacement_received'].includes(item.item_status)) out.push(`Vendor sent replacement ${item.gate_replacement_serial} (guard)`);
   if (item.gate_outward_at) out.push('Guard scanned it out');
   if (item.gate_inward_at) out.push('Guard scanned it in');
   if (item.receive_laptop_condition) out.push(item.receive_laptop_condition === 'on' ? 'Received powering on' : 'Received not powering on');

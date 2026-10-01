@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import GateShell from '../../shells/GateShell';
-import { Button, DocNumber, EmptyState, Notice, StatusChip } from '../../components/carret';
+import {
+  Button, ConfirmDialog, DocNumber, EmptyState, Notice, StatusChip,
+} from '../../components/carret';
 import api from '../../utils/api';
 import {
-  confirmGateSession, getGateSession, resolveGateScan, scanGateUnit,
+  cancelGateSession, confirmGateSession, getGateSession, recordGateReplacement, resolveGateScan, scanGateUnit,
+  unscanGateUnit,
 } from '../guard-gate/guardGateApi';
 import { useChallans } from './useDeliveryChallans';
 
@@ -20,6 +23,12 @@ import { useChallans } from './useDeliveryChallans';
  *
  * The pre-flight is shown before the guard scans anything, and a refusal at
  * confirm lists what failed instead of "unable to confirm".
+ *
+ * Vendor repair INWARD (require_unit_scan): nothing is pre-ticked — the guard
+ * scans only the laptops that arrived and submits; the rest stay at the vendor.
+ * A laptop not on the DC can be recorded as the vendor's replacement for one
+ * still out. Before submit the guard can Remove a ticked laptop or Discard the
+ * whole open scan (both kept on the server for audit).
  *
  * The scanner holds focus. A guard with a wedge scanner has no mouse.
  */
@@ -40,7 +49,9 @@ function Flash({ flash }) {
   );
 }
 
-function LaptopCard({ l }) {
+function LaptopCard({
+  l, unitScanOnly, canRemove, busy, onRemove,
+}) {
   const checks = l.checks ? Object.entries(l.checks) : [];
   const state = l.verified ? 'good' : (checks.some(([, c]) => c && c.ok === false) ? 'crit' : 'pending');
   return (
@@ -53,9 +64,20 @@ function LaptopCard({ l }) {
         <span className="font-ui text-ink-3">{l.serial_number}</span>
         {l.awb_number && <span className="font-mono text-ink-3">AWB {l.awb_number}</span>}
         <span className="ml-auto font-ui" style={{ fontWeight: 600, color: state === 'good' ? 'var(--alert-good)' : state === 'crit' ? 'var(--alert-crit)' : 'var(--ink-3)' }}>
-          {state === 'good' ? 'ALL GREEN' : state === 'crit' ? 'FAILED' : 'SCAN IT'}
+          {state === 'good' ? 'ALL GREEN' : state === 'crit' ? 'FAILED' : unitScanOnly ? 'NOT SCANNED' : 'SCAN IT'}
         </span>
+        {canRemove && l.verified && (
+          <Button variant="quiet" disabled={busy} onClick={() => onRemove(l)}>Remove</Button>
+        )}
       </div>
+      {l.replacement_scan && (
+        <div className="font-ui" style={{ marginTop: '4px', fontWeight: 600, color: 'var(--alert-serious)' }}>
+          Replaced by vendor: <span className="font-mono">{l.replacement_scan}</span>
+        </div>
+      )}
+      {unitScanOnly && state === 'pending' && (
+        <div className="font-ui text-ink-3" style={{ marginTop: '4px', fontSize: 'var(--d-sm)' }}>Skip it if it has not arrived — it stays at the vendor.</div>
+      )}
       {l.configuration && <div className="font-ui text-ink-2" style={{ marginTop: '4px' }}>{typeof l.configuration === 'string' ? l.configuration : Object.values(l.configuration).filter(Boolean).join(' · ')}</div>}
       {checks.length > 0 && (
         <ul className="list-none p-0 m-0" style={{ marginTop: '6px', display: 'grid', gap: '2px' }}>
@@ -83,12 +105,16 @@ export default function GuardGatePage() {
   const [flash, setFlash] = useState(null);
   const [buffer, setBuffer] = useState('');
   const [busy, setBusy] = useState(false);
+  // Vendor repair INWARD: a scanned laptop not on the DC, offered as a replacement.
+  const [replacementOffer, setReplacementOffer] = useState(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const dialogOpen = useRef(false);
   const inputRef = useRef(null);
   const autoRan = useRef(false);
 
   const waiting = useChallans({ status: mode === 'outward' ? 'dispatch_ready' : 'rejected', movement: 'outbound', limit: 50, refreshKey: session?.status === 'confirmed' ? 1 : 0 });
 
-  const hold = useCallback(() => { setTimeout(() => inputRef.current?.focus(), 0); }, []);
+  const hold = useCallback(() => { setTimeout(() => { if (!dialogOpen.current) inputRef.current?.focus(); }, 0); }, []);
   useEffect(() => { hold(); }, [hold, session]);
 
   const buzz = (bad) => { if (bad && window.navigator?.vibrate) window.navigator.vibrate(250); };
@@ -107,7 +133,7 @@ export default function GuardGatePage() {
   };
 
   const resolve = useCallback(async (scan) => {
-    setBusy(true); setFlash(null);
+    setBusy(true); setFlash(null); setReplacementOffer(null);
     try {
       const { data } = await resolveGateScan({ direction: mode, scan });
       if (data?.session_id) {
@@ -134,7 +160,10 @@ export default function GuardGatePage() {
       const { data } = await scanGateUnit(session.session_id, { scan });
       const { data: fresh } = await getGateSession(data?.session_id || session.session_id);
       adopt(fresh);
-      if (data?.kind === 'verification') setFlash({ tone: 'info', title: 'Another document opened', message: data.message });
+      if (data?.kind === 'replacement_candidate') {
+        setReplacementOffer({ scan: data.scanned_code || scan, options: data.replacement_options || [] });
+        setFlash({ tone: 'info', title: 'Not on this repair challan', message: data.message });
+      } else if (data?.kind === 'verification') setFlash({ tone: 'info', title: 'Another document opened', message: data.message });
       else if (data?.valid) setFlash({ tone: 'good', title: 'Laptop verified', message: data.message || `${scan} matched.` });
       else { buzz(true); setFlash({ tone: 'crit', title: 'Blocked', message: data?.message || `${scan} did not pass.` }); }
     } catch (e) {
@@ -172,7 +201,49 @@ export default function GuardGatePage() {
     } finally { setBusy(false); hold(); }
   };
 
-  const reset = () => { setSession(null); setPre(null); setFlash(null); setParams({}); hold(); };
+  const pickReplacement = async (option) => {
+    if (!session?.session_id || !replacementOffer || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await recordGateReplacement(session.session_id, { scan: replacementOffer.scan, replaces_serial_id: option.serial_id });
+      adopt(data);
+      setReplacementOffer(null);
+      setFlash({ tone: 'good', title: 'Replacement recorded', message: data.message });
+    } catch (e) {
+      buzz(true);
+      setFlash({ tone: 'crit', title: 'Not recorded', message: e?.response?.data?.message || 'Could not record the replacement.' });
+    } finally { setBusy(false); hold(); }
+  };
+
+  // Take a laptop back out of this scan (it did not actually come through the gate).
+  const removeLaptop = async (l) => {
+    if (!session?.session_id || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await unscanGateUnit(session.session_id, { serial_id: l.serial_id || null, ttspl: l.ttspl || l.serial_number || '' });
+      if (data?.session_id) adopt(data);
+      setFlash({ tone: 'info', title: 'Removed', message: `${l.ttspl || l.serial_number} removed from this scan.` });
+    } catch (e) {
+      setFlash({ tone: 'crit', title: 'Not removed', message: e?.response?.data?.message || 'Could not remove the laptop.' });
+    } finally { setBusy(false); hold(); }
+  };
+
+  const openDiscard = (open) => { dialogOpen.current = open; setDiscardOpen(open); if (!open) hold(); };
+
+  // Throw away the whole open scan (wrong document / wrong laptops) and start again.
+  const discard = async () => {
+    if (!session?.session_id || busy) return;
+    setBusy(true);
+    try {
+      await cancelGateSession(session.session_id, { reason: 'Discarded by guard before submit' });
+      reset();
+      setFlash({ tone: 'info', title: 'Scan discarded', message: 'Scan the document again and scan only the laptops that arrived.' });
+    } catch (e) {
+      setFlash({ tone: 'crit', title: 'Not discarded', message: e?.response?.data?.message || 'Could not discard this scan.' });
+    } finally { setBusy(false); hold(); }
+  };
+
+  const reset = () => { setReplacementOffer(null); setSession(null); setPre(null); setFlash(null); setParams({}); hold(); };
 
   // Deep link from a challan: /carret/move/gate?dc=DC/26-27/0001
   useEffect(() => {
@@ -184,6 +255,8 @@ export default function GuardGatePage() {
   const laptops = session?.laptops || [];
   const verified = laptops.filter((l) => l.verified).length;
   const confirmed = session?.status === 'confirmed';
+  const open = session?.status === 'open';
+  const unitScanOnly = Boolean(session?.require_unit_scan);
 
   return (
     <GateShell mode={mode} onModeChange={(m) => { setMode(m); reset(); }} title="Guard gate">
@@ -205,7 +278,29 @@ export default function GuardGatePage() {
           />
         </form>
 
+        {replacementOffer && open && (
+          <section className="c-card" style={{ padding: 'var(--d-pad-x)', borderColor: 'var(--alert-serious)' }}>
+            <div className="font-ui text-ink" style={{ fontWeight: 600 }}>
+              Vendor replacement? <span className="font-mono">{replacementOffer.scan}</span> is not on this challan.
+            </div>
+            <div className="font-ui text-ink-2" style={{ marginTop: '4px' }}>Pick the laptop it replaces. Only do this if the vendor says it is a replacement.</div>
+            <div className="c-stack" style={{ gap: '6px', marginTop: '10px' }}>
+              {replacementOffer.options.map((o) => (
+                <Button key={o.serial_id || o.ttspl} disabled={busy} onClick={() => pickReplacement(o)} style={{ justifyContent: 'flex-start', textAlign: 'left' }}>
+                  Replacement for <span className="font-mono" style={{ fontWeight: 600 }}>{o.ttspl}</span>
+                  <span className="text-ink-3">{o.serial_number}{o.configuration ? ` · ${typeof o.configuration === 'string' ? o.configuration : Object.values(o.configuration).filter(Boolean).join(' · ')}` : ''}</span>
+                </Button>
+              ))}
+            </div>
+            <div style={{ marginTop: '8px' }}><Button variant="quiet" onClick={() => { setReplacementOffer(null); hold(); }}>Not a replacement — ignore</Button></div>
+          </section>
+        )}
+
         <Flash flash={flash} />
+
+        {session && open && unitScanOnly && (
+          <Notice tone="info">Scan only the laptops that physically arrived, then submit. Laptops you do not scan stay at the vendor.</Notice>
+        )}
 
         {session && (
           <section className="c-card" style={{ padding: 'var(--d-pad-x)' }}>
@@ -230,7 +325,9 @@ export default function GuardGatePage() {
 
         {session && laptops.length > 0 && (
           <div className="c-stack" style={{ gap: '8px' }}>
-            {laptops.map((l) => <LaptopCard key={l.serial_id || l.ttspl || l.serial_number} l={l} />)}
+            {laptops.map((l) => (
+              <LaptopCard key={l.serial_id || l.ttspl || l.serial_number} l={l} unitScanOnly={unitScanOnly} canRemove={open} busy={busy} onRemove={removeLaptop} />
+            ))}
           </div>
         )}
 
@@ -246,9 +343,18 @@ export default function GuardGatePage() {
                 ? (verified && verified < laptops.length ? `Submit ${verified} of ${laptops.length} ${mode.toUpperCase()}` : `Submit ${mode.toUpperCase()}`)
                 : (session.block_submit_reason || 'Scan the laptops to unlock')}
             </Button>
+            {open && <Button onClick={() => openDiscard(true)} disabled={busy}>Discard scan</Button>}
             <Button onClick={reset} disabled={busy}>New scan</Button>
           </div>
         )}
+        <ConfirmDialog
+          open={discardOpen}
+          onClose={() => openDiscard(false)}
+          onConfirm={discard}
+          title="Discard this scan?"
+          body="Nothing has been submitted. You can scan the document again."
+          confirmLabel="Discard"
+        />
         {confirmed && <Button variant="primary" onClick={reset} style={{ minHeight: 'calc(var(--d-tap) + 8px)' }}>Next</Button>}
 
         {!session && (

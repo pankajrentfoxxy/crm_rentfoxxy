@@ -322,14 +322,16 @@ export function ReplacementDecisionDrawer({ dcNumber, item, approve, onClose, on
 
 const blankReceive = (user, item) => {
   const cfg = parseVrdcItemConfig(item || {});
+  // The guard recorded a vendor replacement for this laptop: start on Replacement.
+  const guardReplacement = item?.gate_replacement_serial || '';
   return {
-    receive_mode: 'repaired',
+    receive_mode: guardReplacement ? 'replacement' : 'repaired',
     laptop_condition: DEFAULT_CONDITION,
     bypass_gate_flow: false,
     serials: {},
     wh_signer_name: user?.name || user?.email || '',
     wh_esign: null,
-    replacement_serial_number: '',
+    replacement_serial_number: guardReplacement,
     replacement_brand: cfg.brand,
     replacement_model: cfg.model,
     replacement_generation: cfg.generation,
@@ -338,6 +340,8 @@ const blankReceive = (user, item) => {
 
 /** One laptop's state line in the receive picker. */
 function receiveHint(dc, item) {
+  if (item.gate_replacement_serial) return `Vendor replacement at gate: ${item.gate_replacement_serial}`;
+  if (dc.gate_legacy) return item.gate_inward_at ? 'Guard inward done' : 'Not scanned in by the guard — check it has come back';
   if (!dc.gate_legacy && !item.gate_inward_at) return 'Waiting for the guard’s inward scan';
   if (!dc.gate_legacy && (!item.return_config_verified_at || !item.return_captured_serial)) return 'If it powers on: run the vendor-return script (serial + specs)';
   return 'Ready to receive';

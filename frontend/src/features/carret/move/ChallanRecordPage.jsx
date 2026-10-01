@@ -17,7 +17,7 @@ import { configText } from '../sell/LineItemsEditor';
 import { openPdf, parseJson } from '../sell/sellShared';
 import ChallanPaperwork, { paperworkState } from './ChallanPaperwork';
 import { DispatchEditDrawer, DispatchSummary, modeOf } from './ChallanDispatch';
-import ChallanDelivery from './ChallanDelivery';
+import ChallanDelivery, { partialRefusalOf } from './ChallanDelivery';
 
 /**
  * Move → Delivery challan record.
@@ -68,6 +68,9 @@ export default function ChallanRecordPage() {
   const qcTotal = Number(qc?.total_count) || 0;
   const qcPassed = qcTotal - (Number(qc?.pending_count) || 0) - (Number(qc?.failed_count) || 0);
   const out = OUT.includes(status);
+  // Delivered, but the customer refused some laptops at the door.
+  const refusal = partialRefusalOf(head);
+  const isRefusedUnit = (u) => refusal.tokens.some((t) => t.split('|').some((p) => p && [u.ttspl, u.serial_number].includes(p)));
   const isSale = Boolean(d?.is_sale);
   const cancellable = isSuper && !['delivered', 'rejected', 'cancelled'].includes(status) && head.movement_type !== 'return';
 
@@ -103,7 +106,7 @@ export default function ChallanRecordPage() {
     { key: 'dc', label: 'Challan', sub: dc, state: status === 'cancelled' ? 'blocked' : 'done' },
     { key: 'paper', label: 'Paperwork', sub: paper.none ? 'not needed' : (paper.done ? 'on file' : 'missing'), state: paper.done ? 'done' : 'blocked', onClick: () => setTab('paperwork') },
     { key: 'gate', label: 'Gate', sub: head.dispatched_at ? 'out' : (blockers.length ? `${blockers.length} to fix` : 'ready'), state: head.dispatched_at || out || ['delivered', 'rejected'].includes(status) ? 'done' : (blockers.length ? 'blocked' : 'current') },
-    { key: 'del', label: status === 'rejected' ? 'Refused' : 'Delivered', sub: status === 'delivered' ? 'done' : (status === 'rejected' ? 'refused' : '—'), state: status === 'delivered' ? 'done' : (status === 'rejected' ? 'blocked' : (out ? 'current' : 'todo')), onClick: () => setTab('delivery') },
+    { key: 'del', label: status === 'rejected' ? 'Refused' : 'Delivered', sub: status === 'delivered' ? (refusal.partial ? `${refusal.labels.length} refused` : 'done') : (status === 'rejected' ? 'refused' : '—'), state: status === 'delivered' ? 'done' : (status === 'rejected' ? 'blocked' : (out ? 'current' : 'todo')), onClick: () => setTab('delivery') },
   ];
 
   const actions = d && (
@@ -154,6 +157,14 @@ export default function ChallanRecordPage() {
           )}
           {status === 'dispatch_ready' && pre?.ok && <Notice tone="good" title="Clear to go out">Everything the gate checks is in place. The guard can scan it out.</Notice>}
           {status === 'cancelled' && <Notice tone="serious" title="Cancelled">This challan was cancelled. Its laptops went back to the order.</Notice>}
+          {refusal.partial && (
+            <Notice tone={head.return_to_warehouse_at ? 'info' : 'warn'} title={`Partly delivered — customer refused ${refusal.labels.length}: ${refusal.labels.join(', ')}`}>
+              {head.return_to_warehouse_at
+                ? 'The refused laptops are back at the warehouse. '
+                : 'The refused laptops come back through the gate; the warehouse receives them on the Delivery tab. '}
+              <Button variant="quiet" onClick={() => setTab('delivery')}>Delivery</Button>
+            </Notice>
+          )}
 
           <Tabs
             value={tab}
@@ -175,6 +186,7 @@ export default function ChallanRecordPage() {
                     rowKey={(u, i) => u.ttspl || u.serial_number || i}
                     columns={[
                       { key: 't', header: 'Laptop', render: (u) => <Link to={`/carret/stock/assets/${encodeURIComponent(u.ttspl || u.serial_number)}`}><DocNumber value={u.ttspl || u.serial_number} /></Link>, sub: (u) => u.serial_number },
+                      refusal.partial && { key: 'r', header: 'Delivery', render: (u) => (isRefusedUnit(u) ? <StatusChip status="rejected" label="Refused" /> : <StatusChip status="delivered" />) },
                       { key: 'c', header: 'Configuration', render: (u) => configText({ brand: u.brand, model_name: u.model, processor: u.processor, generation: u.generation, ram: u.ram, storage: u.storage, gpu: u.gpu, screen_size: u.screen_size }) },
                       {
                         key: 'q', header: 'Dispatch QC',
@@ -184,7 +196,7 @@ export default function ChallanRecordPage() {
                           return <StatusChip status={t.status === 'qc_passed' ? 'approved' : t.status === 'qc_failed' ? 'rejected' : 'pending'} title={t.stage_name} />;
                         },
                       },
-                    ]}
+                    ].filter(Boolean)}
                     empty={<EmptyState title="No laptops listed" />}
                   />
                 </Section>

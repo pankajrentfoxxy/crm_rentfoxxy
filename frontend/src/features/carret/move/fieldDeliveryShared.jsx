@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button, DocNumber, Notice, Segmented } from '../../../components/carret';
+import {
+  Button, DocNumber, Field, Input, Notice, Segmented, Textarea,
+} from '../../../components/carret';
 import ScanField from '../../../components/ScanField';
 import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import { formatDeliveryAddressLine, deliveryAddressPhone } from '../../sales-pipeline/salesPipelineUtils';
@@ -87,7 +89,16 @@ export function CardHead({ dc, kindLabel }) {
   );
 }
 
-export function LaptopList({ serials = [], scannedKeys = null }) {
+const DELIVERY_STATE = {
+  refused: ['Refused — bring back', 'var(--alert-crit)'],
+  delivered: ['Delivered', 'var(--alert-good)'],
+};
+
+/**
+ * showState: tag each laptop delivered / refused (a partly refused challan).
+ * A refused laptop is always tagged.
+ */
+export function LaptopList({ serials = [], scannedKeys = null, showState = false }) {
   if (!serials.length) return null;
   return (
     <ul className="list-none p-0 m-0 font-ui" style={{ marginTop: '10px', display: 'grid', gap: '6px' }}>
@@ -101,6 +112,11 @@ export function LaptopList({ serials = [], scannedKeys = null }) {
             <span className="min-w-0">
               <span className="font-mono text-ink">{s.ttspl || s.serial_number}</span>
               {s.serial_number && s.ttspl && <span className="font-mono text-ink-3"> · {s.serial_number}</span>}
+              {DELIVERY_STATE[s.delivery_state] && (showState || s.delivery_state === 'refused') && (
+                <span style={{ marginLeft: '8px', fontSize: 'var(--d-sm)', fontWeight: 700, color: DELIVERY_STATE[s.delivery_state][1] }}>
+                  {DELIVERY_STATE[s.delivery_state][0]}
+                </span>
+              )}
               <span className="block text-ink-2" style={{ fontSize: 'var(--d-sm)' }}>
                 {[s.brand, s.model, s.processor, s.generation, s.ram, s.storage].filter(Boolean).join(' · ')}
                 {s.issue_type ? ` — ${s.issue_type}` : ''}
@@ -121,6 +137,95 @@ export function laptopKeyFor(serials, code) {
   if (!c) return null;
   const i = (serials || []).findIndex((s) => norm(s.ttspl) === c || norm(s.serial_number) === c);
   return i < 0 ? null : String(i);
+}
+
+/**
+ * Laptop-wise refusal at the door (the customer keeps some laptops, refuses the
+ * rest). The server allows it on a normal outbound challan only, and only with
+ * more than one laptop (deliveryFlowController.parseRefusedUnits).
+ */
+export function canRefusePerLaptop(dc, serials) {
+  return String(dc?.movement_type || 'outbound') === 'outbound'
+    && String(dc?.dc_purpose || 'standard') === 'standard'
+    && !dc?.support_ticket_id && !dc?.support_replacement_order_id
+    && (serials || []).length > 1;
+}
+
+export const emptyRefusal = () => ({ refused: [], reason: '', remarks: '' });
+const refuseCode = (s) => s.ttspl || s.serial_number;
+
+/**
+ * The extra POST /deliver (or admin-deliver) fields for a partial refusal; {}
+ * when nothing is refused. Throws the same rules the server checks: at least
+ * one laptop kept, the scanned (verified) laptop is not a refused one, and a
+ * reason.
+ */
+export function refusalFields(serials, refusal, verifiedNo) {
+  const refused = refusal?.refused || [];
+  if (!refused.length) return {};
+  if (refused.length >= (serials || []).length) {
+    throw new Error('Every laptop is refused — use "Customer refused" instead');
+  }
+  const v = norm(verifiedNo);
+  if (v && serials.some((s) => refused.includes(refuseCode(s)) && [s.ttspl, s.serial_number].map(norm).includes(v))) {
+    throw new Error('The laptop you scanned is marked refused — scan a laptop the customer is keeping');
+  }
+  if (!String(refusal.reason || '').trim()) throw new Error('Enter why the customer refused those laptops');
+  return {
+    refused_units: JSON.stringify(refused),
+    refusal_reason: refusal.reason.trim(),
+    refusal_remarks: String(refusal.remarks || '').trim() || undefined,
+  };
+}
+
+/** One Delivering / Refused switch per laptop; a reason once any is refused. */
+export function RefusedLaptopPicker({ serials = [], value, onChange, verifiedNo }) {
+  const refused = value?.refused || [];
+  const v = norm(verifiedNo);
+  const set = (code, state) => onChange({
+    ...value,
+    refused: state === 'refused' ? [...refused.filter((c) => c !== code), code] : refused.filter((c) => c !== code),
+  });
+  return (
+    <div className="c-stack" style={{ gap: '8px' }}>
+      <strong className="font-ui">Did the customer refuse any laptop?</strong>
+      <ul className="list-none p-0 m-0 font-ui" style={{ display: 'grid', gap: '8px' }}>
+        {serials.map((s, i) => {
+          const code = refuseCode(s);
+          const scanned = v && [s.ttspl, s.serial_number].map(norm).includes(v);
+          return (
+            <li key={`${code}-${i}`} className="flex items-center flex-wrap" style={{ gap: '8px' }}>
+              <span className="min-w-0">
+                <span className="font-mono text-ink">{code}</span>
+                {scanned && <span className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}> · scanned</span>}
+                <span className="block text-ink-2" style={{ fontSize: 'var(--d-sm)' }}>{[s.brand, s.model].filter(Boolean).join(' ')}</span>
+              </span>
+              <span className="ml-auto">
+                <Segmented
+                  label={`${code}: delivering or refused`}
+                  value={refused.includes(code) ? 'refused' : 'delivering'}
+                  onChange={(state) => set(code, state)}
+                  options={[{ value: 'delivering', label: 'Delivering' }, { value: 'refused', label: 'Refused' }]}
+                />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {refused.length > 0 && refused.length >= serials.length && (
+        <Notice tone="warn">Every laptop is refused — use &quot;Customer refused&quot; instead.</Notice>
+      )}
+      {refused.length > 0 && (
+        <>
+          <Field label="Why did the customer refuse these laptops?" required>
+            <Textarea rows={2} value={value.reason || ''} onChange={(e) => onChange({ ...value, reason: e.target.value })} />
+          </Field>
+          <Field label="Remarks"><Input value={value.remarks || ''} onChange={(e) => onChange({ ...value, remarks: e.target.value })} /></Field>
+          <Notice tone="info">The refused laptops come back: the guard scans them in at the gate, then the warehouse receives them.</Notice>
+        </>
+      )}
+    </div>
+  );
 }
 
 /**

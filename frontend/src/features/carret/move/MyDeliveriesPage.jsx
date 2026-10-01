@@ -11,7 +11,8 @@ import {
   verifySerialAndGenerateOtp, verifyWarehouseReturnOtp,
 } from '../../sales-pipeline/salesPipelineApi';
 import {
-  BIG, CardHead, LaptopList, ProofCapture, emptyProof, errMsg, proofForm, useRunner, withGps,
+  BIG, CardHead, LaptopList, ProofCapture, RefusedLaptopPicker, canRefusePerLaptop, emptyProof, emptyRefusal,
+  errMsg, proofForm, refusalFields, useRunner, withGps,
 } from './fieldDeliveryShared';
 import { HandInCard, PickupCard, VendorCard } from './MyPickupCards';
 import { TECH_TABS } from '../serve/serveShared';
@@ -23,8 +24,9 @@ import { TECH_TABS } from '../serve/serveShared';
  *
  *   Delivery   on the way → reached → scan the laptop (customer gets an OTP)
  *              → OTP + photo or signature → delivered. Refused at the door is
- *              one tap away; a refused challan walks the laptops back to the
- *              warehouse with the warehouse OTP.
+ *              one tap away, or laptop by laptop at the OTP step (the rest
+ *              are delivered); refused laptops walk back to the warehouse
+ *              with the warehouse OTP.
  *   Pickup     reached → scan every laptop + the charger we sent → OTP + proof
  *              → collected → "Hand in" until the warehouse receives them.
  *   Vendor     return (VRTDC) or repair (VRDC) by hand: reached → the vendor
@@ -48,11 +50,17 @@ function DeliveryCard({ dc, onChanged }) {
   const [proof, setProof] = useState(emptyProof());
   const [notes, setNotes] = useState('');
   const [refuse, setRefuse] = useState(null);
+  // Laptop-wise refusal at the door: the customer keeps some, refuses the rest.
+  const [refusal, setRefusal] = useState(emptyRefusal());
   const [whOtp, setWhOtp] = useState('');
   const [whAsked, setWhAsked] = useState(Boolean(dc.warehouse_return_otp_sent));
   const { busy, run } = useRunner(onChanged);
 
   const status = String(dc.status || '').toLowerCase();
+  const serials = dc.serials || [];
+  const perLaptop = canRefusePerLaptop(dc, serials);
+  const refusedCount = perLaptop ? refusal.refused.length : 0;
+  const fullRefusal = status === 'rejected';
   const stage = status === 'in_transit' ? 0 : status === 'reached' ? (dc.otp_pending ? 2 : 1) : 3;
   const steps = status === 'rejected' ? null : [['Reached'], ['Scan laptop'], ['OTP + proof']].map(([label], i) => ({
     key: label, label, state: i < stage ? 'done' : i === stage ? 'current' : 'todo',
@@ -67,8 +75,9 @@ function DeliveryCard({ dc, onChanged }) {
     if (!/^\d{4,8}$/.test(otp.trim())) throw new Error('Enter the OTP from the customer');
     if (proof.type === 'photo' && !proof.file) throw new Error('Take a photo');
     if (proof.type === 'esign' && !proof.esign) throw new Error('Take the customer’s signature');
-    await submitDeliveryWithPod(dc.dc_number, proofForm(proof, { otp: otp.trim(), pod_type: proof.type, notes }));
-  }, 'Delivered ✓');
+    const extra = perLaptop ? refusalFields(serials, refusal, dc.serial_verified_no) : {};
+    return submitDeliveryWithPod(dc.dc_number, proofForm(proof, { otp: otp.trim(), pod_type: proof.type, notes, ...extra }));
+  }, (r) => r?.data?.message || 'Delivered ✓');
   const doRefuse = () => run(async () => {
     if ((refuse?.reason || '').trim().length < 3) throw new Error('Why did the customer refuse?');
     await markCustomerRejected(dc.dc_number, { rejection_reason: refuse.reason.trim(), rejection_remarks: refuse.remarks?.trim() || undefined, source: 'technician' });
@@ -81,7 +90,7 @@ function DeliveryCard({ dc, onChanged }) {
     <article className="c-card" style={{ padding: 'var(--d-pad-x)' }}>
       <CardHead dc={dc} kindLabel="Delivery" />
       {steps && <div style={{ marginTop: '12px' }}><FlowSteps steps={steps} /></div>}
-      <LaptopList serials={dc.serials || []} />
+      <LaptopList serials={serials} showState={Boolean(dc.partially_refused)} />
 
       <div className="c-stack" style={{ marginTop: '14px', gap: '10px' }}>
         {!canAct && <Notice tone="info">View only — you cannot record deliveries.</Notice>}
@@ -92,6 +101,7 @@ function DeliveryCard({ dc, onChanged }) {
 
         {canAct && status === 'reached' && !dc.otp_pending && (
           <>
+            {perLaptop && <Notice tone="info">If the customer is refusing some laptops, scan one they are keeping.</Notice>}
             <Field label="Scan the laptop you are handing over">
               <ScanField value={serial} onChange={setSerial} placeholder="TTSPL or serial" aria-label="Scan the laptop" disabled={busy} />
             </Field>
@@ -104,9 +114,12 @@ function DeliveryCard({ dc, onChanged }) {
             <Field label="OTP from the customer" required>
               <Input value={otp} inputMode="numeric" maxLength={8} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" style={{ fontSize: '24px', letterSpacing: '6px', textAlign: 'center' }} />
             </Field>
+            {perLaptop && <RefusedLaptopPicker serials={serials} value={refusal} onChange={setRefusal} verifiedNo={dc.serial_verified_no} />}
             <ProofCapture value={proof} onChange={setProof} />
             <Field label="Notes"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-            <Button variant="primary" onClick={deliver} disabled={busy} style={BIG}>{busy ? 'Saving…' : 'Confirm delivery'}</Button>
+            <Button variant="primary" onClick={deliver} disabled={busy} style={BIG}>
+              {busy ? 'Saving…' : (refusedCount ? `Deliver ${serials.length - refusedCount} · Refuse ${refusedCount}` : 'Confirm delivery')}
+            </Button>
             <Field label="Customer did not get the OTP? Scan the laptop again">
               <ScanField value={serial} onChange={setSerial} placeholder="TTSPL or serial" aria-label="Scan the laptop again" disabled={busy} />
             </Field>
@@ -127,11 +140,13 @@ function DeliveryCard({ dc, onChanged }) {
           ) : <Button variant="quiet" onClick={() => setRefuse({})}>Customer refused</Button>
         )}
 
-        {status === 'rejected' && dc.warehouse_return_pending && (
+        {(fullRefusal || dc.partially_refused) && dc.warehouse_return_pending && (
           <>
-            <Notice tone="warn" title="Refused — bring the laptops back">
+            <Notice tone="warn" title={fullRefusal ? 'Refused — bring the laptops back' : `Customer refused ${dc.refused_count || ''} laptop(s) — the rest are delivered`}>
               {dc.rejection_reason ? `Reason: ${dc.rejection_reason}. ` : ''}
-              {dc.refusal_stage_label || 'Hand them to the guard at the gate, then to the warehouse.'}
+              {fullRefusal
+                ? (dc.refusal_stage_label || 'Hand them to the guard at the gate, then to the warehouse.')
+                : 'Bring back only the laptops marked "Refused" above. The guard scans them in at the gate, then the warehouse signs the inward — or gives you the return OTP.'}
             </Notice>
             {canAct && (
               <>
