@@ -30,7 +30,7 @@ export default function StatTile({ label, value, delta, family, unit, className 
         {hasValue ? value : '—'}{hasValue && unit ? <span className="text-ink-3" style={{ fontSize: 'var(--d-base)' }}> {unit}</span> : null}
       </div>
       {delta != null && (
-        <div className="font-mono text-ink-3" style={{ fontSize: 'var(--d-sm)', marginTop: 'var(--d-gap)' }}>{delta}</div>
+        <div className="tabular-nums text-ink-3" style={{ fontSize: 'var(--d-sm)', marginTop: 'var(--d-gap)' }}>{delta}</div>
       )}
       {!hasValue && (
         <div className="text-ink-3 font-ui" style={{ fontSize: 'var(--d-sm)' }}>no data source yet</div>

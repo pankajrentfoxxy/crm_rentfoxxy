@@ -74,7 +74,7 @@ export default function DataTable({
                     key={c.key}
                     className={[
                       ci === 0 ? 'is-primary' : '',
-                      c.numeric ? 'is-num font-mono' : '',
+                      c.numeric ? 'is-num' : '',
                     ].join(' ').trim() || undefined}
                     style={c.align ? { textAlign: c.align } : undefined}
                   >

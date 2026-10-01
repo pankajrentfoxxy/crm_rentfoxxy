@@ -52,7 +52,7 @@ export default function Timeline({ events = [], className = '' }) {
                 className="flex items-baseline border-l-2 border-rule-2"
                 style={{ gap: 'var(--d-pad-x)', padding: 'var(--d-pad-y) var(--d-pad-x)' }}
               >
-                <time className="font-mono tabular-nums text-ink-3 whitespace-nowrap" style={{ fontSize: 'var(--d-sm)' }}>
+                <time className="tabular-nums text-ink-3 whitespace-nowrap" style={{ fontSize: 'var(--d-sm)' }}>
                   {formatDate(e.occurred_at, 'datetime').split(', ')[1] || '--:--'}
                 </time>
                 <div className="min-w-0 flex-1">

@@ -13,13 +13,13 @@ const FORMATTER = new Intl.NumberFormat('en-IN', {
 export default function Money({ value, currency = 'INR', className = '', showZero = true }) {
   const n = Number(value);
   if (!Number.isFinite(n) || (!showZero && n === 0)) {
-    return <span className={`font-mono text-ink-3 ${className}`}>—</span>;
+    return <span className={`text-ink-3 ${className}`}>—</span>;
   }
   const negative = n < 0;
   const symbol = currency === 'INR' ? '₹' : '';
   return (
     <span
-      className={`font-mono tabular-nums whitespace-nowrap ${className}`}
+      className={`tabular-nums whitespace-nowrap ${className}`}
       style={negative ? { color: 'var(--alert-crit)' } : undefined}
     >
       {negative ? '-' : ''}{symbol}{FORMATTER.format(Math.abs(n))}
