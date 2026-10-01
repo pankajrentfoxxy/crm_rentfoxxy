@@ -617,48 +617,50 @@ async function loadOutboundDc(db, dcNumber) {
   };
 }
 
-/** Customer refused delivery — laptop(s) return via guard INWARD on the original outbound DC. */
+/**
+ * Customer refused delivery — laptop(s) return via guard INWARD on the original
+ * outbound DC. Covers a full refusal (every line rejected) and a partial one (DC
+ * delivered, some laptops refused): the guard only expects the refused laptops.
+ */
 async function loadRefusedDeliveryReturn(db, dcNumber) {
   const base = await loadOutboundDc(db, dcNumber);
   if (!base) return null;
-  if (!base.statuses?.every((s) => s === 'rejected')) return null;
-
-  const headRes = await db.query(
-    `SELECT return_to_warehouse_at, warehouse_received_at, customer_name, sales_order_number
-       FROM delivery_challan_lines
-      WHERE dc_number = $1
-      LIMIT 1`,
-    [dcNumber]
-  );
-  const head = headRes.rows[0];
+  const deliveryRejection = require('./deliveryRejectionService');
+  const head = await deliveryRejection.getDcHead(db, dcNumber);
   if (!head) return null;
+  const fullRefusal = base.statuses?.every((s) => s === 'rejected');
+  if (!fullRefusal && !deliveryRejection.isPartialRefusal(head)) return null;
+
+  const refusedEntries = await deliveryRejection.collectRefusedDcSerials(db, dcNumber);
+  const laptops = refusedEntries.length
+    ? uniqueLaptops(await enrichLaptops(db, refusedEntries.map((e) => ({
+      serial_id: e.serialId,
+      ttspl: e.ttsplId,
+      serial_number: e.serialNumber,
+      awb_number: null,
+    }))))
+    : base.laptops;
 
   let active = true;
   let inactive_reason = null;
   if (head.return_to_warehouse_at || head.warehouse_received_at) {
     active = false;
     inactive_reason = 'This refused delivery has already been received at the warehouse.';
-  } else {
-    const deliveryRejection = require('./deliveryRejectionService');
-    const rejectedRes = await db.query(
-      'SELECT rejected_at FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1',
-      [dcNumber]
-    );
-    if (await deliveryRejection.findGuardInwardForRefusedDc(db, dcNumber, rejectedRes.rows[0]?.rejected_at)) {
-      active = false;
-      inactive_reason = 'Already scanned INWARD at the gate — waiting for the warehouse to receive it.';
-    }
+  } else if (await deliveryRejection.findGuardInwardForRefusedDc(db, dcNumber, head.rejected_at)) {
+    active = false;
+    inactive_reason = 'Already scanned INWARD at the gate — waiting for the warehouse to receive it.';
   }
 
   return {
     ...base,
     direction: 'inward',
     source_type: 'refused_delivery',
-    source_label: 'Refused Delivery',
+    source_label: fullRefusal ? 'Refused Delivery' : 'Refused Laptops (partly delivered DC)',
     reference_type: 'dc',
     reference_number: dcNumber,
     party_name: head.customer_name || base.party_name,
     so_number: head.sales_order_number || base.so_number,
+    laptops,
     active,
     inactive_reason,
     allow_partial: false,
@@ -1572,20 +1574,26 @@ async function findBySerial(db, serial, preferredDirection) {
   }
 
   const refusedParams = [serial.ttspl || '___none___', serial.serial_number || '___none___'];
+  // A fully refused DC (any of its laptops), or a partly delivered one where this
+  // laptop is among the refused — never a laptop the customer kept.
   let refusedSql = `
     SELECT dc_number FROM delivery_challan_lines
-     WHERE LOWER(status) = 'rejected'
-       AND return_to_warehouse_at IS NULL
+     WHERE return_to_warehouse_at IS NULL
        AND warehouse_received_at IS NULL
        AND (
-         serial_number::text ILIKE '%' || $1 || '%'
-         OR serial_number::text ILIKE '%' || $2 || '%'
+         (LOWER(status) = 'delivered' AND rejected_at IS NOT NULL
+          AND jsonb_typeof(rejected_serial_numbers) = 'array'
+          AND (rejected_serial_numbers::text ILIKE '%|' || $1 || '"%'
+               OR rejected_serial_numbers::text ILIKE '%|' || $2 || '|%'))
+         OR (LOWER(status) = 'rejected' AND (
+           serial_number::text ILIKE '%' || $1 || '%'
+           OR serial_number::text ILIKE '%' || $2 || '%'
   `;
   if (serial.current_dc_number) {
     refusedParams.push(serial.current_dc_number);
     refusedSql += ` OR dc_number = $3`;
   }
-  refusedSql += `) LIMIT 1`;
+  refusedSql += `))) LIMIT 1`;
   const refused = await db.query(refusedSql, refusedParams);
   if (refused.rows[0]) {
     const ctx = await loadRefusedDeliveryReturn(db, refused.rows[0].dc_number);
@@ -2074,8 +2082,9 @@ async function resolveScan({ direction, scan, user }) {
   if (
     ['dc', 'sdc'].includes(ctx.reference_type)
     && ctx.active === false
-    && ctx.statuses?.every((s) => s === 'rejected')
+    && (ctx.statuses?.every((s) => s === 'rejected') || ctx.statuses?.every((s) => s === 'delivered'))
   ) {
+    // Fully refused, or delivered with some laptops refused (returns null otherwise).
     const refused = await loadRefusedDeliveryReturn(db, ctx.reference_number);
     if (refused) ctx = refused;
   }
@@ -2529,7 +2538,9 @@ async function applyInwardRefusedDeliveryGate(client, { session, actor }) {
   const head = await deliveryRejection.getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
   if (head.return_to_warehouse_at || head.warehouse_received_at) return { already_completed: true };
-  if (head.status !== 'rejected') throw new Error('DC is not in rejected status');
+  if (head.status !== 'rejected' && !deliveryRejection.isPartialRefusal(head)) {
+    throw new Error('DC has no refused laptops to bring in');
+  }
 
   // The gate only records the laptop coming in (this confirmed session). Moving it
   // back to stock is the warehouse's e-sign receipt, which is unlocked by this scan

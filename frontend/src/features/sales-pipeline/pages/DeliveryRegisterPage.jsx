@@ -234,6 +234,18 @@ export default function DeliveryRegisterPage() {
                         <a href={uploadUrl(row.esign_url)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 inline-flex items-center gap-1"><ImageIcon className="w-3.5 h-3.5" /> E-Sign</a>
                       )}
                       {!row.pod_photo_url && !row.esign_url && <span className="text-xs text-gray-400">{row.pod_type || '—'}</span>}
+                      {row.partially_refused && row.warehouse_return_pending && (
+                        <PermissionGate section="delivery_challans" action="edit">
+                          <button
+                            type="button"
+                            onClick={() => setReceiveBackModal(row)}
+                            className="text-xs text-red-700 font-medium inline-flex items-center gap-1"
+                            title={`${row.refused_count} laptop(s) refused at delivery`}
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Receive Back ({row.refused_count} refused)
+                          </button>
+                        </PermissionGate>
+                      )}
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">

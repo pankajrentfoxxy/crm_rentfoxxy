@@ -92,6 +92,55 @@ async function collectDcSerials(dcNumber, client = pool) {
   return serials;
 }
 
+function jsonList(value) {
+  const parsed = parseJson(value, []);
+  return (Array.isArray(parsed) ? parsed : (parsed ? [parsed] : [])).filter(Boolean);
+}
+
+/**
+ * Partial refusal: the customer took some laptops on the DC and refused the rest.
+ * The DC is 'delivered' (the accepted units are with the customer and bill as
+ * normal), rejected_serial_numbers holds the refused units and rejected_at marks
+ * the refusal. The refused units go back through the same guard INWARD scan and
+ * warehouse receipt as a fully refused DC.
+ */
+function isPartialRefusal(head) {
+  return Boolean(head && head.status === 'delivered' && head.rejected_at && head.has_refused_units);
+}
+
+/** Refused units (all or some) are out and the warehouse has not received them yet. */
+function isRefusalAwaitingWarehouse(head) {
+  return Boolean(head
+    && (head.status === 'rejected' || isPartialRefusal(head))
+    && !head.return_to_warehouse_at);
+}
+
+/**
+ * The units coming back on a refusal, read on the caller's client. A fully
+ * refused line returns everything on it; a delivered line only its refused units.
+ * Never the units the customer kept.
+ */
+async function collectRefusedDcSerials(client, dcNumber) {
+  const { rows } = await client.query(
+    `SELECT id, sales_order_number, status, rejected_at, serial_number, rejected_serial_numbers
+       FROM delivery_challan_lines
+      WHERE dc_number = $1
+      ORDER BY id`,
+    [dcNumber]
+  );
+  const serials = [];
+  for (const line of rows) {
+    const refused = jsonList(line.rejected_serial_numbers);
+    let list = [];
+    if (line.status === 'rejected') list = refused.length ? refused : jsonList(line.serial_number);
+    else if (line.status === 'delivered' && line.rejected_at) list = refused;
+    for (const entry of list) {
+      serials.push({ ...parseSerialEntry(entry), line_id: line.id, sales_order_number: line.sales_order_number });
+    }
+  }
+  return serials;
+}
+
 async function resolveSerialId(client, s) {
   if (s.serialId) return s.serialId;
   const key = s.serialNumber || s.ttsplId;
@@ -150,7 +199,14 @@ async function getDcHead(client, dcNumber) {
             sales_order_number, movement_type, dc_purpose, delivery_person_id,
             rejection_reason, rejection_remarks, rejection_source, rejected_at, rejected_by,
             return_to_warehouse_at, warehouse_received_at, warehouse_received_by,
-            warehouse_receiver_name, warehouse_esign_url, warehouse_receive_remarks
+            warehouse_receiver_name, warehouse_esign_url, warehouse_receive_remarks,
+            warehouse_return_otp,
+            EXISTS (
+              SELECT 1 FROM delivery_challan_lines r
+               WHERE r.dc_number = $1
+                 AND jsonb_typeof(r.rejected_serial_numbers) = 'array'
+                 AND jsonb_array_length(r.rejected_serial_numbers) > 0
+            ) AS has_refused_units
        FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
     [dcNumber]
   );
@@ -229,22 +285,26 @@ async function resetSoSerialForReject(client, { serialId, salesOrderNumber, newQ
   );
 }
 
-/** On reject only — release the SO line from this DC without touching inventory (still in_transit). */
-async function releaseSoAllocationOnReject(client, dcNumber) {
+/**
+ * On reject only — release the SO line from this DC without touching inventory
+ * (still in_transit). With serialIds, only those units (a partial refusal).
+ */
+async function releaseSoAllocationOnReject(client, dcNumber, serialIds = null) {
   await client.query(
     `UPDATE sales_order_serials SET
         status = 'attached',
         dc_number = NULL,
         updated_at = NOW()
-      WHERE dc_number = $1 AND status = 'dispatched'`,
-    [dcNumber]
+      WHERE dc_number = $1 AND status = 'dispatched'
+        AND ($2::int[] IS NULL OR serial_id = ANY($2::int[]))`,
+    [dcNumber, serialIds && serialIds.length ? serialIds : null]
   );
 }
 
 async function processSerialsToQc(client, {
   dcNumber, actorUserId, actorName, customerLabel, reason,
 }) {
-  const serials = await collectDcSerials(dcNumber, client);
+  const serials = await collectRefusedDcSerials(client, dcNumber);
   const results = [];
 
   for (const s of serials) {
@@ -326,7 +386,7 @@ function normalizeCode(value) {
  * laptop before signing the inward.
  */
 async function listRefusedReturnUnits(client, dcNumber) {
-  const entries = await collectDcSerials(dcNumber, client);
+  const entries = await collectRefusedDcSerials(client, dcNumber);
   const units = [];
   for (const entry of entries) {
     const serialId = await resolveSerialId(client, entry);
@@ -457,6 +517,7 @@ async function markDeliveryRejectedByCustomer(client, {
         rejection_source = $3,
         rejected_at = NOW(),
         rejected_by = $4,
+        rejected_serial_numbers = serial_number,
         otp_code = NULL,
         otp_sent_at = NULL,
         otp_verified_at = NULL,
@@ -481,6 +542,61 @@ async function markDeliveryRejectedByCustomer(client, {
     units,
     warehouse_return_pending: true,
   };
+}
+
+/**
+ * Record a partial refusal inside the delivery transaction, after the DC lines
+ * were marked delivered. `refusedRaw` is the set of raw serial_number tokens the
+ * customer refused; every other token on the DC was accepted. Releases the
+ * refused units from the SO (they show as attached again, like a full refusal)
+ * and reverses whatever the gate dispatch billed for them. Inventory is not
+ * touched: the refused units stay in_transit until the warehouse receives them.
+ */
+async function applyPartialRefusal(client, {
+  dcNumber, refusedRaw, reason, remarks, source = 'technician', actorUserId,
+}) {
+  const refusedSet = new Set(refusedRaw);
+  const { rows: lines } = await client.query(
+    `SELECT id, serial_number FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id`,
+    [dcNumber]
+  );
+  const refusedEntries = [];
+  for (const line of lines) {
+    const all = jsonList(line.serial_number);
+    const refused = all.filter((t) => refusedSet.has(t));
+    const delivered = all.filter((t) => !refusedSet.has(t));
+    refusedEntries.push(...refused);
+    await client.query(
+      `UPDATE delivery_challan_lines SET
+          delivered_serial_numbers = $2::jsonb,
+          rejected_serial_numbers = $3::jsonb,
+          rejection_reason = $4,
+          rejection_remarks = $5,
+          rejection_source = $6,
+          rejected_at = NOW(),
+          rejected_by = $7,
+          updated_at = NOW()
+        WHERE id = $1`,
+      [line.id, JSON.stringify(delivered), JSON.stringify(refused), reason, remarks || null, source, actorUserId || null]
+    );
+  }
+  const refusedSerialIds = [];
+  for (const entry of refusedEntries) {
+    const id = await resolveSerialId(client, parseSerialEntry(entry));
+    if (id) refusedSerialIds.push(id);
+  }
+  await releaseSoAllocationOnReject(client, dcNumber, refusedSerialIds);
+  // Still with the technician: keep them off a new DC until the warehouse QC re-passes them.
+  if (refusedSerialIds.length) {
+    await client.query(
+      `UPDATE sales_order_serials SET qc_status = 'pending', updated_at = NOW()
+        WHERE serial_id = ANY($1::int[]) AND status = 'attached' AND dc_number IS NULL`,
+      [refusedSerialIds]
+    );
+  }
+  const { reverseBillingForRejectedDc } = require('./billingSchedulerService');
+  await reverseBillingForRejectedDc(client, { dcNumber, actorUserId, serialIds: refusedSerialIds });
+  return { refusedSerialIds, refusedEntries };
 }
 
 /**
@@ -525,7 +641,7 @@ async function completeRejectedReturnToWarehouse(client, {
 }) {
   const head = await getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
-  if (head.status !== 'rejected') throw new Error('DC is not in rejected status');
+  if (head.status !== 'rejected' && !isPartialRefusal(head)) throw new Error('DC has no refused units');
   if (head.return_to_warehouse_at) {
     return { already_completed: true, sales_order_numbers: await dcSalesOrderNumbers(client, dcNumber) };
   }
@@ -588,7 +704,7 @@ async function receiveRefusedReturnWithEsign(client, {
 }) {
   const head = await getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
-  if (head.status !== 'rejected') {
+  if (head.status !== 'rejected' && !isPartialRefusal(head)) {
     throw new Error('Only a customer-refused delivery challan can be received back');
   }
   if (head.return_to_warehouse_at) {
@@ -646,7 +762,7 @@ async function rejectCourierAndComplete(client, {
 async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
   const head = await getDcHead(pool, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
-  if (head.status !== 'rejected') throw new Error('DC must be marked rejected first');
+  if (head.status !== 'rejected' && !isPartialRefusal(head)) throw new Error('DC must be marked rejected first');
   if (head.return_to_warehouse_at) throw new Error('Return to warehouse already completed');
 
   const otp = String(Math.floor(100000 + Math.random() * 900000));
@@ -672,7 +788,7 @@ async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
         mailer: 'dispatch',
         subject: `Warehouse return OTP — ${dcNumber}`,
         text:
-          `Delivery rejected — return to warehouse confirmation\n\n`
+          `${isPartialRefusal(head) ? 'Laptops refused at delivery' : 'Delivery rejected'} — return to warehouse confirmation\n\n`
           + `DC: ${dcNumber}\n`
           + `Customer: ${head.customer_name || '—'}\n`
           + `Reason: ${head.rejection_reason || '—'}\n\n`
@@ -704,14 +820,9 @@ async function verifyWarehouseReturnOtp(client, {
   actorUserId,
   actorName,
 }) {
-  const headRes = await client.query(
-    `SELECT status, warehouse_return_otp, return_to_warehouse_at, rejection_reason
-       FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
-    [dcNumber]
-  );
-  const head = headRes.rows[0];
+  const head = await getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
-  if (head.status !== 'rejected') throw new Error('DC is not rejected');
+  if (head.status !== 'rejected' && !isPartialRefusal(head)) throw new Error('DC has no refused units');
   if (head.return_to_warehouse_at) return { already_completed: true };
   if (!head.warehouse_return_otp) throw new Error('Request warehouse return OTP first');
   if (String(otp || '').trim() !== String(head.warehouse_return_otp)) {
@@ -751,7 +862,13 @@ async function getSoCancelDcEligibility(client, soNumber) {
             COUNT(*) FILTER (
               WHERE status = 'rejected' AND return_to_warehouse_at IS NULL
                 AND warehouse_received_at IS NULL
-            )::int AS awaiting_warehouse_count
+            )::int AS awaiting_warehouse_count,
+            COUNT(*) FILTER (
+              WHERE status = 'delivered' AND rejected_at IS NOT NULL
+                AND jsonb_typeof(rejected_serial_numbers) = 'array'
+                AND jsonb_array_length(rejected_serial_numbers) > 0
+                AND return_to_warehouse_at IS NULL AND warehouse_received_at IS NULL
+            )::int AS partial_awaiting_warehouse_count
        FROM delivery_challan_lines
       WHERE sales_order_number = $1`,
     [soNumber]
@@ -768,6 +885,8 @@ async function getSoCancelDcEligibility(client, soNumber) {
     dc_line_count: lineCount,
     refused_received_count: refusedReceived,
     awaiting_warehouse_count: awaitingWarehouse,
+    // Partly delivered DCs whose refused laptops are not back yet (cancel stays locked).
+    partial_awaiting_warehouse_count: Number(row.partial_awaiting_warehouse_count || 0),
     // Every line refused + warehouse-received is the only way past the DC lock.
     all_refused_and_received: lineCount > 0 && refusedReceived === lineCount,
     can_cancel: dcCount === 0 || (lineCount > 0 && refusedReceived === lineCount),
@@ -778,6 +897,11 @@ module.exports = {
   ensureDeliveryRejectionSchema,
   getDcHead,
   collectDcSerials,
+  collectRefusedDcSerials,
+  isPartialRefusal,
+  isRefusalAwaitingWarehouse,
+  applyPartialRefusal,
+  parseSerialEntry,
   markDeliveryRejectedByCustomer,
   completeRejectedReturnToWarehouse,
   findGuardInwardForRefusedDc,

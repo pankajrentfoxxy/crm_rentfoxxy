@@ -281,7 +281,7 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
            WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
              AND o.customer_id = $1
              AND COALESCE(o.status, '') NOT IN ('cancelled', 'rejected')
-             AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+             AND ${dcDeliveredUnitsSql('o')}::text ILIKE '%' || vsn.inventory_asset_code || '%'
              AND COALESCE(o.delivered_at, o.created_at) >
                  COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
         )
@@ -313,7 +313,7 @@ async function loadCustomerOutboundDeliveryDates(client, customerId, serialIds) 
          ON COALESCE(dcl.movement_type, 'outbound') = 'outbound'
         AND dcl.customer_id = $1
         AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
-        AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+        AND ${dcDeliveredUnitsSql('dcl')}::text ILIKE '%' || vsn.inventory_asset_code || '%'
       WHERE vsn.serial_id = ANY($2::int[])
       ORDER BY vsn.serial_id, dcl.delivered_at DESC NULLS LAST, dcl.created_at DESC`,
     [customerId, ids]
@@ -404,6 +404,19 @@ function billedThrough(coverage, from) {
     day = addDays(day, 1);
   }
   return last;
+}
+
+/**
+ * The units a DC actually left with the customer. A partially refused DC
+ * (delivered, with refused units and a refusal time) lists the accepted ones in
+ * delivered_serial_numbers; every other DC uses its full serial list. Old DCs
+ * carry an empty delivered list, so that column is only trusted on the marker.
+ */
+function dcDeliveredUnitsSql(alias) {
+  return `(CASE WHEN ${alias}.status = 'delivered' AND ${alias}.rejected_at IS NOT NULL
+                 AND jsonb_typeof(${alias}.rejected_serial_numbers) = 'array'
+                 AND jsonb_array_length(${alias}.rejected_serial_numbers) > 0
+            THEN ${alias}.delivered_serial_numbers ELSE ${alias}.serial_number END)`;
 }
 
 const DC_SERIAL_ELEM_SQL = `
@@ -1168,8 +1181,8 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
         AND dcl.delivered_at IS NOT NULL
         AND (dcl.delivered_at AT TIME ZONE 'Asia/Kolkata')::date <= $2::date
         AND (
-          dcl.serial_number::text ILIKE '%|' || vsn.inventory_asset_code || '%'
-          OR dcl.serial_number::text ILIKE vsn.serial_id::text || '|%'
+          ${dcDeliveredUnitsSql('dcl')}::text ILIKE '%|' || vsn.inventory_asset_code || '%'
+          OR ${dcDeliveredUnitsSql('dcl')}::text ILIKE vsn.serial_id::text || '|%'
         )
       WHERE vsn.deleted_at IS NULL
         AND COALESCE(vsn.inventory_asset_code, '') <> ''
@@ -1881,7 +1894,7 @@ async function ensureInvoiceSecurityLines(client, {
                    WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
                      AND dcl.customer_id = $2
                      AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
-                     AND dcl.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+                     AND ${dcDeliveredUnitsSql('dcl')}::text ILIKE '%' || vsn.inventory_asset_code || '%'
                      AND dcl.delivered_at IS NOT NULL
                    ORDER BY dcl.delivered_at DESC
                    LIMIT 1
@@ -2603,7 +2616,7 @@ async function createMissingReturnCreditNotes(client, {
            WHERE COALESCE(o.movement_type, 'outbound') = 'outbound'
              AND o.customer_id = $1
              AND COALESCE(o.status, '') NOT IN ('cancelled', 'rejected')
-             AND o.serial_number::text ILIKE '%' || vsn.inventory_asset_code || '%'
+             AND ${dcDeliveredUnitsSql('o')}::text ILIKE '%' || vsn.inventory_asset_code || '%'
              AND COALESCE(o.delivered_at, o.created_at) >
                  COALESCE(rl.delivered_at, rl.created_at, sti.warehouse_received_at)
         )
@@ -3821,7 +3834,7 @@ function startBillingScheduler() {
  * note for finance. The laptop's billing anchors are cleared so its next
  * delivery starts clean.
  */
-async function reverseBillingForRejectedDc(client, { dcNumber, actorUserId = null }) {
+async function reverseBillingForRejectedDc(client, { dcNumber, actorUserId = null, serialIds: onlySerialIds = null }) {
   const head = await client.query(
     `SELECT MAX(customer_id) AS customer_id,
             (MIN(COALESCE(dispatched_at, created_at)) AT TIME ZONE 'Asia/Kolkata')::date::text AS dispatch_date
@@ -3833,15 +3846,18 @@ async function reverseBillingForRejectedDc(client, { dcNumber, actorUserId = nul
   const dispatchDate = head.rows[0]?.dispatch_date;
   if (!customerId || !dispatchDate) return { reversed: 0 };
 
-  const serialRes = await client.query(
-    `SELECT DISTINCT vsn.serial_id
-       FROM delivery_challan_lines dcl, ${DC_SERIAL_ELEM_SQL}
-       JOIN vendor_serial_numbers vsn
-         ON UPPER(vsn.inventory_asset_code) = UPPER(NULLIF(split_part(elem, '|', 3), ''))
-      WHERE dcl.dc_number = $1`,
-    [dcNumber]
-  );
-  const serialIds = serialRes.rows.map((row) => Number(row.serial_id));
+  // A partial refusal passes the refused units: the rest of the DC was delivered
+  // and keeps its billing.
+  const serialIds = Array.isArray(onlySerialIds)
+    ? onlySerialIds.map(Number).filter((n) => n > 0)
+    : (await client.query(
+      `SELECT DISTINCT vsn.serial_id
+         FROM delivery_challan_lines dcl, ${DC_SERIAL_ELEM_SQL}
+         JOIN vendor_serial_numbers vsn
+           ON UPPER(vsn.inventory_asset_code) = UPPER(NULLIF(split_part(elem, '|', 3), ''))
+        WHERE dcl.dc_number = $1`,
+      [dcNumber]
+    )).rows.map((row) => Number(row.serial_id));
   if (!serialIds.length) return { reversed: 0 };
 
   const hits = await client.query(

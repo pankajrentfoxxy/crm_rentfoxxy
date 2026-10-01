@@ -4827,6 +4827,7 @@ function refusalStatusLabel(soStatus, eligibility) {
     return eligibility.all_refused_and_received ? 'Cancelled after Customer Refusal' : null;
   }
   if (eligibility.awaiting_warehouse_count > 0) return 'Customer Refused — Waiting for Warehouse Receipt';
+  if (eligibility.partial_awaiting_warehouse_count > 0) return 'Some Laptops Refused — Waiting for Warehouse Receipt';
   if (eligibility.all_refused_and_received) return 'Customer Refused — Warehouse Received';
   return null;
 }
@@ -5706,7 +5707,10 @@ exports.updateDcDispatch = async (req, res) => {
  *   demo deliveries open a demo_agreements record (delivery + 7d decision)
  * Also marks sales_order_serials.status = 'dispatched'.
  */
-exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
+// opts.skipSerialIds: units the customer refused on a partial delivery; they stay
+// in_transit until the warehouse receives them back.
+exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}, opts = {}) => {
+  const skipSerialIds = new Set((opts.skipSerialIds || []).map(Number));
   // Return DCs (movement_type='return') re-enter the return lifecycle instead of
   // the outbound delivered flow: mark returned -> QC re-entry ticket -> credit note.
   const meta = await client.query(
@@ -5757,7 +5761,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
 
   for (const s of serials) {
     const serialId = await resolveSerialId(client, s);
-    if (!serialId) continue;
+    if (!serialId || skipSerialIds.has(Number(serialId))) continue;
     const sr = await client.query(
       `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id,
               inventory_status, current_dc_number
