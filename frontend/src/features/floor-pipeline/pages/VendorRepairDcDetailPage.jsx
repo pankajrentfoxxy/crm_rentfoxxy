@@ -1030,6 +1030,10 @@ export default function VendorRepairDcDetailPage() {
                               <p className="text-amber-700">Awaiting Guard inward</p>
                             ) : scriptPending ? (
                               <p className="text-amber-700">ON receive: run vendor-return script for serial + specs</p>
+                            ) : dc.gate_legacy && item.gate_inward_at ? (
+                              <p className="text-emerald-700">Guard inward done</p>
+                            ) : dc.gate_legacy ? (
+                              <p className="text-amber-700">Not scanned in by the guard — check it has come back</p>
                             ) : null}
                           </span>
                         </label>

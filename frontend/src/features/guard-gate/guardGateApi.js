@@ -8,3 +8,5 @@ export const resolveGateScan = (payload) => api.post('/guard-gate/resolve', payl
 export const scanGateUnit = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/scan`, payload);
 export const confirmGateSession = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/confirm`, payload);
 export const getGateSession = (sessionId) => api.get(`/guard-gate/sessions/${sessionId}`);
+export const unscanGateUnit = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/unscan`, payload);
+export const cancelGateSession = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/cancel`, payload);

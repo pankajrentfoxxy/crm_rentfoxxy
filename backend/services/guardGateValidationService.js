@@ -906,8 +906,18 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   const outwardItems = items.rows.filter((i) =>
     String(i.item_status || '').toLowerCase() === 'dispatch_ready'
   );
+  // Laptops the guard already brought in on a confirmed inward stay off the list:
+  // on a gate_legacy DC the item stays 'dispatched' after the gate, so look at
+  // the confirmed movements too. The vendor often returns a DC in parts.
+  const inwardDone = new Set((await db.query(
+    `SELECT DISTINCT serial_id FROM gate_movements
+      WHERE reference_type = 'vrdc' AND reference_number = $1 AND direction = 'inward'
+        AND validation_result = 'valid' AND confirmed_at IS NOT NULL AND serial_id IS NOT NULL`,
+    [head.dc_number]
+  )).rows.map((r) => Number(r.serial_id)));
   const inwardItems = items.rows.filter((i) =>
     String(i.item_status || '').toLowerCase() === 'dispatched'
+    && !inwardDone.has(Number(i.serial_id))
   );
 
   const pick = direction === 'inward' ? inwardItems : outwardItems;
@@ -968,6 +978,9 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     awb_number: head.awb_number || head.porter_tracking_id || null,
     movement_mode: movementModeLabel(head.ship_by, head.dispatch_mode),
     allow_partial: direction === 'inward',
+    // Inward: the DC QR does not tick every laptop. The guard scans only the
+    // laptops that physically came back; the rest stay at the vendor.
+    require_unit_scan: direction === 'inward',
     active,
     inactive_reason,
     laptops,
@@ -1610,6 +1623,8 @@ async function findBySerial(db, serial, preferredDirection) {
 
 function scopeContextToUnit(ctx, unit) {
   if (!ctx?.laptops?.length || !unit) return ctx;
+  // Partial-return documents keep every outstanding laptop listed.
+  if (ctx.require_unit_scan) return ctx;
   const matched = ctx.laptops.filter((l) => laptopMatches(l, unit));
   if (!matched.length) return ctx;
   return {
@@ -1889,6 +1904,7 @@ async function sessionView(db, session, ctx) {
     status: session.status,
     allow_partial: allowPartial,
     skip_unit_verify: skipVerify,
+    require_unit_scan: Boolean(ctx.require_unit_scan),
     expected_count: laptops.length,
     scanned_count: skipVerify ? laptops.length : verifiedCount,
     remaining_count: skipVerify ? 0 : Math.max(0, laptops.length - verifiedCount),
@@ -2150,7 +2166,7 @@ async function resolveScan({ direction, scan, user }) {
 
   const fromDocument = Boolean(resolved.ctx) && !resolved.unitScan;
   let autoVerified = 0;
-  if (fromDocument && !ctx.skip_unit_verify) {
+  if (fromDocument && !ctx.skip_unit_verify && !ctx.require_unit_scan) {
     autoVerified = await autoVerifyDocumentLaptops(db, { session, ctx, actor });
   }
   const view = await sessionView(db, session, ctx);
@@ -2160,6 +2176,9 @@ async function resolveScan({ direction, scan, user }) {
     : 'Now scan the laptop TTSPL or serial to verify, then submit.';
   if (autoSwitch && !ctx.skip_unit_verify) {
     message = `Opened as ${ctx.direction.toUpperCase()} for this document.`;
+  }
+  if (ctx.require_unit_scan) {
+    message = `${(ctx.laptops || []).length} laptop(s) still at the vendor. Scan the TTSPL or serial of each laptop that arrived, then submit. Laptops you do not scan stay at the vendor.`;
   }
   if (autoVerified > 0) {
     message = autoVerified === (ctx.laptops || []).length
@@ -2685,7 +2704,9 @@ async function confirmSession({ sessionId, remarks, user }) {
         RETURNING serial_id, ttspl, serial_number`,
       [session.session_id, remarks || null]
     );
-    if (remaining === 0) {
+    // A partial vendor return closes its session too: the laptops not scanned
+    // stay at the vendor and come in later on a fresh session.
+    if (remaining === 0 || ctx.require_unit_scan) {
       await client.query(
         `UPDATE gate_scan_sessions
             SET status = 'confirmed',
@@ -2843,7 +2864,9 @@ async function confirmSession({ sessionId, remarks, user }) {
       ok: true,
       message: remaining === 0
         ? `Gate ${session.direction} confirmed.`
-        : `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). Scan remaining units to continue.`,
+        : ctx.require_unit_scan
+          ? `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). ${remaining} laptop(s) are still at the vendor — scan them in when they come back.`
+          : `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). Scan remaining units to continue.`,
       session_id: session.session_id,
       confirmed_count: stamped.rows.length,
       remaining_count: remaining,
@@ -2865,6 +2888,76 @@ async function getSession(sessionId) {
   const ctx = await reloadContextForSession(pool, r.rows[0]);
   if (!ctx) return { session_id: sessionId, status: r.rows[0].status, laptops: [] };
   return sessionView(pool, r.rows[0], ctx);
+}
+
+/**
+ * Guard removes a laptop he scanned (or the QR ticked) before submitting — e.g.
+ * the vendor brought back fewer laptops than the DC lists. The movement is kept
+ * for the audit trail but no longer counts as valid.
+ */
+async function unscanUnit({ sessionId, serialId, code, user }) {
+  const actor = await getActor(pool, user);
+  const sess = (await pool.query(`SELECT * FROM gate_scan_sessions WHERE session_id = $1`, [sessionId])).rows[0];
+  if (!sess) return { ok: false, message: 'Scan session not found.' };
+  if (sess.status !== 'open') return { ok: false, message: 'This gate session is already submitted or discarded.' };
+  const key = String(code || '').trim().toUpperCase();
+  const r = await pool.query(
+    `UPDATE gate_movements
+        SET validation_result = 'invalid',
+            validation_message = 'Removed by guard before submit',
+            metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+              'removed', true, 'removed_at', NOW(), 'removed_by', $4::text)
+      WHERE session_id = $1 AND confirmed_at IS NULL AND validation_result = 'valid'
+        AND (($2::int IS NOT NULL AND serial_id = $2::int)
+             OR ($3::text <> '' AND (UPPER(ttspl) = $3::text OR UPPER(serial_number) = $3::text)))
+      RETURNING id`,
+    [sessionId, serialId ? Number(serialId) : null, key, actor.name || String(actor.userId || '')]
+  );
+  if (!r.rowCount) return { ok: false, message: 'That laptop is not scanned in this session.' };
+  const view = await getSession(sessionId);
+  return { ok: true, message: 'Laptop removed from this scan.', removed: r.rowCount, ...view };
+}
+
+/**
+ * Guard discards an open session (wrong document, wrong laptops ticked). Its
+ * unsubmitted scans stop counting; nothing downstream ran, since only Submit
+ * applies a movement.
+ */
+async function cancelSession({ sessionId, reason, user }) {
+  const actor = await getActor(pool, user);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sess = (await client.query(
+      `SELECT * FROM gate_scan_sessions WHERE session_id = $1 FOR UPDATE`, [sessionId]
+    )).rows[0];
+    if (!sess) { await client.query('ROLLBACK'); return { ok: false, message: 'Scan session not found.' }; }
+    if (sess.status !== 'open') {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'Only an open (not submitted) scan can be discarded.' };
+    }
+    const note = String(reason || '').trim() || 'Discarded by guard';
+    await client.query(
+      `UPDATE gate_movements
+          SET validation_result = 'invalid',
+              validation_message = $2,
+              metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                'discarded', true, 'discarded_at', NOW(), 'discarded_by', $3::text)
+        WHERE session_id = $1 AND confirmed_at IS NULL AND validation_result = 'valid'`,
+      [sessionId, `Discarded: ${note}`, actor.name || String(actor.userId || '')]
+    );
+    await client.query(
+      `UPDATE gate_scan_sessions SET status = 'cancelled', remarks = $2 WHERE session_id = $1`,
+      [sessionId, note]
+    );
+    await client.query('COMMIT');
+    return { ok: true, message: 'Scan discarded. Scan the document again to start fresh.', session_id: sessionId };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function getDashboard({ userId, role, search, direction } = {}) {
@@ -2973,6 +3066,8 @@ async function getHistory({ userId, role, limit = 50, search } = {}) {
 }
 
 module.exports = {
+  unscanUnit,
+  cancelSession,
   resolveScan,
   scanUnit,
   confirmSession,

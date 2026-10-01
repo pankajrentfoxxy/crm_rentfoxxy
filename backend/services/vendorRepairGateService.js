@@ -156,7 +156,22 @@ async function applyInwardGateVrdc(client, {
   const head = headRes.rows[0];
   if (!head) return null;
   if (String(head.item_domain || 'laptop') !== 'laptop') return null;
-  if (head.gate_legacy) return null;
+  // Only the laptops the guard actually scanned — never "all" by default.
+  if (!ids.length) return { dc_number: dcNumber, items: 0 };
+  if (head.gate_legacy) {
+    // Legacy DCs keep the old warehouse receive (no capture script), but record
+    // which laptops came through the gate so the receive screen can show it.
+    const stampedLegacy = await client.query(
+      `UPDATE vendor_repair_dc_items SET
+          gate_inward_session_id = COALESCE($3::uuid, gate_inward_session_id),
+          gate_inward_at = COALESCE(gate_inward_at, NOW())
+        WHERE dc_number = $1 AND serial_id = ANY($2::int[])
+          AND COALESCE(item_status, '') = 'dispatched'
+        RETURNING id`,
+      [dcNumber, ids, sessionId || null]
+    );
+    return { dc_number: dcNumber, legacy: true, items: stampedLegacy.rowCount };
+  }
 
   const itemsRes = await client.query(
     `SELECT i.id, i.ticket_id, i.serial_id, i.ttspl_id, i.serial_number,
@@ -164,8 +179,8 @@ async function applyInwardGateVrdc(client, {
        FROM vendor_repair_dc_items i
       WHERE i.dc_number = $1
         AND COALESCE(i.item_status, '') = 'dispatched'
-        AND ($2::int[] IS NULL OR cardinality($2::int[]) = 0 OR i.serial_id = ANY($2::int[]))`,
-    [dcNumber, ids.length ? ids : null]
+        AND i.serial_id = ANY($2::int[])`,
+    [dcNumber, ids]
   );
   if (!itemsRes.rows.length) return { dc_number: dcNumber, items: 0 };
 

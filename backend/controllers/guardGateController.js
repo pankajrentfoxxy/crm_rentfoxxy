@@ -76,6 +76,35 @@ exports.confirm = async (req, res) => {
   }
 };
 
+exports.unscanUnit = async (req, res) => {
+  try {
+    const result = await gate.unscanUnit({
+      sessionId: req.params.sessionId,
+      serialId: req.body?.serial_id || null,
+      code: req.body?.ttspl || req.body?.serial_number || req.body?.code || '',
+      user: actorFromReq(req),
+    });
+    return res.status(result.ok ? 200 : 400).json({ success: Boolean(result.ok), ...result });
+  } catch (err) {
+    console.error('guardGate.unscanUnit', err);
+    return res.status(500).json({ success: false, message: 'Unable to remove the laptop from this scan.' });
+  }
+};
+
+exports.cancelSession = async (req, res) => {
+  try {
+    const result = await gate.cancelSession({
+      sessionId: req.params.sessionId,
+      reason: req.body?.reason || null,
+      user: actorFromReq(req),
+    });
+    return res.status(result.ok ? 200 : 400).json({ success: Boolean(result.ok), ...result });
+  } catch (err) {
+    console.error('guardGate.cancelSession', err);
+    return res.status(500).json({ success: false, message: 'Unable to discard this scan.' });
+  }
+};
+
 exports.getSession = async (req, res) => {
   try {
     const view = await gate.getSession(req.params.sessionId);
