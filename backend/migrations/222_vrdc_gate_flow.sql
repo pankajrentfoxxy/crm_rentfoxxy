@@ -6,10 +6,18 @@ ALTER TABLE vendor_repair_delivery_challans
   ADD COLUMN IF NOT EXISTS gate_legacy BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Everything already dispatched pre-dates the gate. Exempt it forever.
-UPDATE vendor_repair_delivery_challans
+-- This file is replayed on every boot (ensureVendorRepairSchema), so a DC that
+-- went out through the gate must not be swept in: without this NOT EXISTS every
+-- gated DC turned legacy after the next restart and skipped the inward flow.
+UPDATE vendor_repair_delivery_challans d
    SET gate_legacy = TRUE
- WHERE status IN ('dispatched','partially_returned','returned')
-   AND gate_legacy = FALSE;
+ WHERE d.status IN ('dispatched','partially_returned','returned')
+   AND d.gate_legacy = FALSE
+   AND NOT EXISTS (
+         SELECT 1 FROM vendor_repair_dc_items i
+          WHERE i.dc_number = d.dc_number
+            AND i.gate_outward_session_id IS NOT NULL
+       );
 
 -- ---------------------------------------------------------------- items
 ALTER TABLE vendor_repair_dc_items

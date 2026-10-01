@@ -132,16 +132,39 @@ async function resolveSpecs(entries) {
  * Derived from the existing delivery status + warehouse-receipt timestamps rather than
  * a new status column, so the happy path is untouched.
  */
+/** A delivered DC on which the customer refused some laptops (see deliveryRejectionService). */
+const PARTIAL_REFUSAL_SQL = `(d.status = 'delivered' AND d.rejected_at IS NOT NULL
+  AND jsonb_typeof(d.rejected_serial_numbers) = 'array'
+  AND jsonb_array_length(d.rejected_serial_numbers) > 0)`;
+
 const REFUSAL_STAGE_LABELS = {
   awaiting_warehouse_receipt: 'Customer Refused — Waiting for Warehouse Receipt',
+  partial_awaiting_warehouse_receipt: 'Some Laptops Refused — Waiting for Warehouse Receipt',
+  partial_warehouse_received: 'Some Laptops Refused — Warehouse Received',
   warehouse_received: 'Customer Refused — Warehouse Received',
 };
 
+/** Laptops refused on this DC (all of them on a full refusal), as raw tokens. */
+function refusedTokensForLine(line) {
+  const refused = parseJson(line.rejected_serial_numbers, []);
+  const list = Array.isArray(refused) ? refused.filter(Boolean) : [];
+  if (line.status === 'rejected') {
+    return list.length ? list : serialEntriesForLine(line).map((e) => e.raw);
+  }
+  return line.status === 'delivered' && line.rejected_at ? list : [];
+}
+
+function hasRefusal(line) {
+  return Boolean(line && (line.status === 'rejected'
+    || (line.status === 'delivered' && line.rejected_at && refusedTokensForLine(line).length)));
+}
+
 function refusalStage(line) {
-  if (!line || line.status !== 'rejected') return null;
-  return (line.return_to_warehouse_at || line.warehouse_received_at)
+  if (!hasRefusal(line)) return null;
+  const prefix = line.status === 'delivered' ? 'partial_' : '';
+  return prefix + ((line.return_to_warehouse_at || line.warehouse_received_at)
     ? 'warehouse_received'
-    : 'awaiting_warehouse_receipt';
+    : 'awaiting_warehouse_receipt');
 }
 
 /**
@@ -197,6 +220,8 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
     const first = lines[0];
     const entries = lines.flatMap(serialEntriesForLine);
     const specs = await resolveSpecs(entries);
+    const refusedTokens = new Set(lines.flatMap(refusedTokensForLine));
+    const refusalOpen = hasRefusal(first) && !first.return_to_warehouse_at;
     const serials = entries.map((e) => {
       const d = specs.find((x) =>
         (e.serialId && x.serial_id === e.serialId)
@@ -213,6 +238,10 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
         storage: d.storage || '',
         gpu: d.gpu || '',
         screen_size: d.screen_size || '',
+        // delivered | refused | pending — per laptop, for multi-laptop DCs.
+        delivery_state: refusedTokens.has(e.raw)
+          ? 'refused'
+          : (first.status === 'delivered' ? 'delivered' : 'pending'),
       };
     });
 
@@ -270,7 +299,9 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       rejection_remarks: first.rejection_remarks,
       rejection_source: first.rejection_source,
       return_to_warehouse_at: first.return_to_warehouse_at,
-      warehouse_return_pending: first.status === 'rejected' && !first.return_to_warehouse_at,
+      warehouse_return_pending: refusalOpen,
+      partially_refused: first.status === 'delivered' && refusedTokens.size > 0,
+      refused_count: refusedTokens.size,
       warehouse_return_otp_sent: Boolean(first.warehouse_return_otp_sent_at),
       warehouse_received_at: first.warehouse_received_at,
       warehouse_received_by: first.warehouse_received_by,
@@ -310,15 +341,16 @@ exports.listDeliveryFlow = async (req, res) => {
       conditions.push(`d.dispatch_mode = 'courier'`);
       conditions.push(`d.status IN ('shipped','in_transit','reached')`);
     } else if (status === 'rejected') {
-      conditions.push(`d.status = 'rejected'`);
+      conditions.push(`(d.status = 'rejected' OR ${PARTIAL_REFUSAL_SQL})`);
     } else if (status === 'awaiting_warehouse_return') {
       // "Refused — awaiting warehouse receipt": refused by the customer, still not
-      // physically back on the shelf, so the SO cannot be cancelled yet.
-      conditions.push(`d.status = 'rejected'`);
+      // physically back on the shelf, so the SO cannot be cancelled yet. Includes
+      // the refused laptops of a partly delivered DC.
+      conditions.push(`(d.status = 'rejected' OR ${PARTIAL_REFUSAL_SQL})`);
       conditions.push(`d.return_to_warehouse_at IS NULL`);
       conditions.push(`d.warehouse_received_at IS NULL`);
     } else if (status === 'warehouse_received') {
-      conditions.push(`d.status = 'rejected'`);
+      conditions.push(`(d.status = 'rejected' OR ${PARTIAL_REFUSAL_SQL})`);
       conditions.push(`COALESCE(d.return_to_warehouse_at, d.warehouse_received_at) IS NOT NULL`);
     } else {
       params.push(status);
@@ -568,6 +600,8 @@ exports.getMyDeliveries = async (req, res) => {
                         AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
                        OR (d.status = 'rejected' AND d.return_to_warehouse_at IS NULL
                            AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                       OR (${PARTIAL_REFUSAL_SQL} AND d.return_to_warehouse_at IS NULL
+                           AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
                      )
                      -- Support pickups are worked per laptop in Support → My work.
                      AND NOT (d.movement_type = 'return' AND ${SUPPORT_RDC_EXISTS})`;
@@ -781,6 +815,79 @@ function saveEsign(dcNumber, dataUrl) {
   return `pod/${filename}`;
 }
 
+/**
+ * Partial refusal on delivery: `refused_units` (JSON array of TTSPL IDs, serial
+ * numbers or raw DC tokens) lists the laptops the customer refused; the rest are
+ * delivered. Returns null when nothing was refused. Validates against the locked
+ * DC lines: standard outbound DCs only, at least one laptop must be kept, and a
+ * reason is required. Refusing everything is the Customer Rejected action.
+ */
+async function parseRefusedUnits(client, dcNumber, body = {}) {
+  let list = body.refused_units;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch { list = list.split(','); }
+  }
+  list = (Array.isArray(list) ? list : []).map((v) => String(v || '').trim()).filter(Boolean);
+  if (!list.length) return null;
+
+  const { rows: lines } = await client.query(
+    `SELECT id, serial_number, movement_type, dc_purpose, support_replacement_order_id, support_ticket_id
+       FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id FOR UPDATE`,
+    [dcNumber]
+  );
+  const bad = (message) => Object.assign(new Error(message), { status: 400 });
+  const head = lines[0] || {};
+  if (String(head.movement_type || 'outbound') !== 'outbound'
+    || String(head.dc_purpose || 'standard') !== 'standard'
+    || head.support_replacement_order_id || head.support_ticket_id) {
+    throw bad('Laptop-wise refusal is only available on a normal delivery challan');
+  }
+  const entries = lines.flatMap(serialEntriesForLine);
+  const specs = await resolveSpecs(entries);
+  const norm = (v) => String(v || '').trim().toUpperCase();
+  const codesFor = (e) => {
+    const spec = specs.find((x) => (e.serialId && x.serial_id === e.serialId)) || {};
+    return [e.raw, e.serialNumber, e.ttsplId, spec.serial_number, spec.inventory_asset_code].filter(Boolean).map(norm);
+  };
+  const refusedRaw = [];
+  for (const code of list) {
+    const hit = entries.find((e) => codesFor(e).includes(norm(code)));
+    if (!hit) throw bad(`${code} is not a laptop on this delivery challan`);
+    if (!refusedRaw.includes(hit.raw)) refusedRaw.push(hit.raw);
+  }
+  if (refusedRaw.length >= entries.length) {
+    throw bad('The customer refused every laptop. Use Customer Rejected instead of Deliver.');
+  }
+  const verified = norm(body.serial_verified_no);
+  if (verified && entries.some((e) => refusedRaw.includes(e.raw) && codesFor(e).includes(verified))) {
+    throw bad('The verified laptop is marked refused. Verify a laptop the customer is keeping.');
+  }
+  const reason = String(body.refusal_reason || '').trim();
+  if (!reason) throw bad('Enter the reason the customer refused the laptops');
+  const labels = entries.filter((e) => refusedRaw.includes(e.raw))
+    .map((e) => (specs.find((x) => e.serialId && x.serial_id === e.serialId) || {}).inventory_asset_code || e.ttsplId || e.serialNumber);
+  return {
+    refusedRaw,
+    labels,
+    keptCount: entries.length - refusedRaw.length,
+    reason,
+    remarks: String(body.refusal_remarks || '').trim() || null,
+  };
+}
+
+/** Log a partial refusal on the sales order(s) after commit. Never throws. */
+function logPartialRefusal(dcNumber, refusal, user) {
+  rejectionSvc.dcSalesOrderNumbers(pool, dcNumber)
+    .then((soNumbers) => rejectionSvc.logRefusalActivity(soNumbers, {
+      action: 'customer_refused_partial',
+      description: `${dcNumber}: customer kept ${refusal.keptCount}, refused ${refusal.labels.join(', ')} (${refusal.reason}). Refused laptops come back to the warehouse.`,
+      remarks: refusal.remarks,
+      metadata: { dc_number: dcNumber, refused: refusal.labels, reason: refusal.reason },
+      user,
+    }))
+    .catch(() => {});
+}
+
 // POST /delivery-challans/:dcNumber/deliver  (multipart: otp, pod_type, pod_photo|esign_data, notes)
 exports.submitDeliveryWithPod = async (req, res) => {
   const dcNumber = req.params.dcNumber;
@@ -899,6 +1006,12 @@ exports.submitDeliveryWithPod = async (req, res) => {
     // back to 'none' here and the delivery completed anyway — the admin path
     // enforced the photo while the primary path did not. The service now
     // refuses rather than accepting 'none'.
+    const refusal = await parseRefusedUnits(client, dcNumber, {
+      ...body,
+      serial_verified_no: (await client.query(
+        'SELECT serial_verified_no FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1', [dcNumber]
+      )).rows[0]?.serial_verified_no,
+    });
     const dcResult = await completeDelivery(client, {
       dcNumber,
       mode: DELIVERY_MODE.BY_HAND,
@@ -911,6 +1024,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
       },
       actor: req.user,
       correlationId: req.correlationId,
+      partialRefusal: refusal ? { ...refusal, source: 'technician' } : null,
       source: 'deliveryFlowController.technicianDeliver',
     });
     if (!dcResult.ok) {
@@ -919,6 +1033,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
     }
 
     await client.query('COMMIT');
+    if (refusal) logPartialRefusal(dcNumber, refusal, req.user);
 
     try {
       const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
@@ -951,11 +1066,17 @@ exports.submitDeliveryWithPod = async (req, res) => {
       }).catch((e) => console.error('Delivery confirm email failed:', e.message));
     }
 
-    res.json({ success: true, message: 'Delivery confirmed' });
+    res.json({
+      success: true,
+      message: refusal
+        ? `Delivered ${refusal.keptCount} laptop(s). Refused: ${refusal.labels.join(', ')} — bring them back to the warehouse.`
+        : 'Delivery confirmed',
+      refused_units: refusal ? refusal.labels : [],
+    });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('submitDeliveryWithPod:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   } finally {
     client.release();
   }
@@ -1018,6 +1139,7 @@ exports.adminDeliverOverride = async (req, res) => {
     // Part 3.3 — the same routine, in override mode. The proof rules require a
     // POD photo AND a reason, and both are recorded as an event: "always
     // logged" is the point of an override.
+    const refusal = await parseRefusedUnits(client, dcNumber, body);
     const overrideResult = await completeDelivery(client, {
       dcNumber,
       mode: DELIVERY_MODE.ADMIN_OVERRIDE,
@@ -1029,6 +1151,7 @@ exports.adminDeliverOverride = async (req, res) => {
       },
       actor: req.user,
       correlationId: req.correlationId,
+      partialRefusal: refusal ? { ...refusal, source: 'admin' } : null,
       source: 'deliveryFlowController.adminDeliverOverride',
     });
     if (!overrideResult.ok) {
@@ -1037,6 +1160,7 @@ exports.adminDeliverOverride = async (req, res) => {
     }
 
     await client.query('COMMIT');
+    if (refusal) logPartialRefusal(dcNumber, refusal, req.user);
 
     try {
       const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');
@@ -1049,11 +1173,17 @@ exports.adminDeliverOverride = async (req, res) => {
 
     await fireOnDeliveryRentalInvoice(dcNumber, 'adminDeliverOverride');
 
-    res.json({ success: true, message: 'Delivery confirmed (admin override)' });
+    res.json({
+      success: true,
+      message: refusal
+        ? `Delivered ${refusal.keptCount} laptop(s) (admin override). Refused: ${refusal.labels.join(', ')}.`
+        : 'Delivery confirmed (admin override)',
+      refused_units: refusal ? refusal.labels : [],
+    });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('adminDeliverOverride:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   } finally {
     client.release();
   }
@@ -1189,24 +1319,30 @@ exports.getRefusedReturnUnits = async (req, res) => {
       `SELECT dc_number, sales_order_number, customer_id, customer_name, status,
               rejection_reason, rejection_remarks, rejection_source, rejected_at,
               return_to_warehouse_at, warehouse_received_at, warehouse_receiver_name,
-              warehouse_esign_url, warehouse_receive_remarks
+              warehouse_esign_url, warehouse_receive_remarks, rejected_serial_numbers, serial_number
          FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]
     );
     const head = headRes.rows[0];
     if (!head) return res.status(404).json({ success: false, message: 'Delivery challan not found' });
 
+    // Only the refused laptops — on a partly delivered DC the rest stay with the customer.
     const units = await rejectionSvc.listRefusedReturnUnits(pool, dcNumber);
-    const guardInward = head.status === 'rejected'
+    const refused = hasRefusal(head);
+    const guardInward = refused
       ? await rejectionSvc.findGuardInwardForRefusedDc(pool, dcNumber, head.rejected_at)
       : null;
+    const pending = refused && !head.return_to_warehouse_at;
+    const { rejected_serial_numbers: _r, serial_number: _s, ...dc } = head;
     res.json({
       success: true,
-      dc: head,
+      dc,
       refusal_stage: refusalStage(head),
-      warehouse_return_pending: head.status === 'rejected' && !head.return_to_warehouse_at,
+      partially_refused: head.status === 'delivered' && refused,
+      total_units: serialEntriesForLine(head).length,
+      warehouse_return_pending: pending,
       guard_inward_at: guardInward?.confirmed_at || null,
-      guard_inward_pending: head.status === 'rejected' && !head.return_to_warehouse_at && !guardInward,
+      guard_inward_pending: pending && !guardInward,
       units,
     });
   } catch (error) {
@@ -1240,7 +1376,7 @@ exports.receiveRefusedReturn = async (req, res) => {
       success: true,
       message: result.already_completed
         ? 'Warehouse return was already confirmed for this challan'
-        : 'Units received back at the warehouse and sent to QC — the sales order can now be cancelled',
+        : 'Refused units received back at the warehouse and sent to QC',
       refusal_stage: 'warehouse_received',
       ...result,
     });

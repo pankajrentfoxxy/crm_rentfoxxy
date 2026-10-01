@@ -256,6 +256,9 @@ describe('vendorRepairGate', { concurrency: 1 }, () => {
     await confirmOutward(dcNumber);
     const opened = await gate.resolveScan({ direction: 'inward', scan: dcNumber, user: ACTOR });
     assert.equal(opened.ok, true, opened.message);
+    // Inward VRDC: the QR does not tick laptops; the guard scans each one that arrived.
+    assert.equal(opened.scanned_count, 0);
+    await gate.scanUnit({ sessionId: opened.session_id, scan: laptop.ttspl, user: ACTOR });
     const confirmed = await gate.confirmSession({
       sessionId: opened.session_id,
       remarks: 'test inward',
@@ -362,6 +365,7 @@ describe('vendorRepairGate', { concurrency: 1 }, () => {
     const { dcNumber } = await createSignedDc(laptop);
     await confirmOutward(dcNumber);
     const opened = await gate.resolveScan({ direction: 'inward', scan: dcNumber, user: ACTOR });
+    await gate.scanUnit({ sessionId: opened.session_id, scan: laptop.ttspl, user: ACTOR });
     await gate.confirmSession({ sessionId: opened.session_id, remarks: 'in', user: ACTOR });
     const tok = await pool.query(
       `SELECT token_id, receive_dc_number FROM vendor_return_capture_tokens

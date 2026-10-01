@@ -98,7 +98,11 @@ async function loadDcContext(dcNumber) {
             MAX(dcl.movement_type) AS movement_type,
             MAX(dcl.dc_purpose) AS dc_purpose,
             MAX(dcl.customer_shipping_address::text) AS shipping,
-            SUM(COALESCE(dcl.quantity, 0))::numeric AS quantity
+            -- Laptops refused at the door (partial refusal) are not delivered.
+            SUM(GREATEST(0, COALESCE(dcl.quantity, 0) - CASE
+                  WHEN dcl.status = 'delivered' AND dcl.rejected_at IS NOT NULL
+                   AND jsonb_typeof(dcl.rejected_serial_numbers) = 'array'
+                  THEN jsonb_array_length(dcl.rejected_serial_numbers) ELSE 0 END))::numeric AS quantity
           FROM delivery_challan_lines dcl
          WHERE dcl.dc_number = $1
          GROUP BY dcl.dc_number

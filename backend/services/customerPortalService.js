@@ -21,6 +21,15 @@ const {
   applyDeliveryTimeline,
 } = require('../utils/deliveryTimeline');
 
+/**
+ * Laptops a DC left with the customer: on a partly refused DC (delivered, some
+ * laptops refused) only the kept ones, otherwise the DC's full list.
+ */
+const DC_KEPT_UNITS_SQL = `(CASE WHEN dcl.status = 'delivered' AND dcl.rejected_at IS NOT NULL
+    AND jsonb_typeof(dcl.rejected_serial_numbers) = 'array'
+    AND jsonb_array_length(dcl.rejected_serial_numbers) > 0
+  THEN dcl.delivered_serial_numbers ELSE dcl.serial_number END)`;
+
 const TERMINAL_ITEM_STATUSES = new Set(['resolved', 'closed', 'inventory_updated', 'cancelled']);
 const PENDING_ITEM_STATUS_SQL = `LOWER(COALESCE(sti.status, '')) NOT IN ('resolved','closed','inventory_updated','cancelled')`;
 
@@ -987,7 +996,7 @@ async function getCustomerDelivery(customerId, dcNumber) {
             vsn.extra->>'screen_size' AS screen_size,
             vsn.inventory_status
        FROM delivery_challan_lines dcl
-       CROSS JOIN LATERAL jsonb_array_elements_text(dcl.serial_number) AS elem
+       CROSS JOIN LATERAL jsonb_array_elements_text(${DC_KEPT_UNITS_SQL}) AS elem
        LEFT JOIN LATERAL (
          SELECT v.inventory_asset_code, v.serial_number, v.extra, v.inventory_status
            FROM vendor_serial_numbers v
@@ -1003,7 +1012,7 @@ async function getCustomerDelivery(customerId, dcNumber) {
        ) vsn ON TRUE
       WHERE dcl.dc_number = $1 AND dcl.customer_id = $2
         AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
-        AND jsonb_typeof(dcl.serial_number) = 'array'
+        AND jsonb_typeof(${DC_KEPT_UNITS_SQL}) = 'array'
       ORDER BY ttspl_id NULLS LAST, serial_number`,
     [dcNumber, customerId]
   );
@@ -1220,7 +1229,7 @@ async function queryDeliveredLaptopsFromDcs(customerId, { search = '', from = ''
     WHERE dcl.customer_id = $1
       AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
       AND dcl.status = 'delivered'
-      AND jsonb_typeof(dcl.serial_number) = 'array'`;
+      AND jsonb_typeof(${DC_KEPT_UNITS_SQL}) = 'array'`;
   if (from) {
     params.push(from);
     where += ` AND dcl.delivered_at >= $${params.length}::date`;
@@ -1245,7 +1254,7 @@ async function queryDeliveredLaptopsFromDcs(customerId, { search = '', from = ''
 
   const fromSql = `
     FROM delivery_challan_lines dcl
-    CROSS JOIN LATERAL jsonb_array_elements_text(dcl.serial_number) AS elem
+    CROSS JOIN LATERAL jsonb_array_elements_text(${DC_KEPT_UNITS_SQL}) AS elem
     LEFT JOIN LATERAL (
       SELECT v.serial_id, v.inventory_asset_code, v.serial_number, v.extra,
              v.inventory_status, v.rent_monthly_rate, v.delivered_at AS vsn_delivered_at

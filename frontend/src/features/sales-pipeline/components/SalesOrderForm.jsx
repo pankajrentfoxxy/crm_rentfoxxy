@@ -307,10 +307,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
 
   const totalValue = useMemo(() => sumLines(lines), [lines]);
   const shippingCharges = Number(form.shiping_charges) || 0;
-  // '1 month rental' security = sum of each line's monthly rate x qty.
-  const security = form.security_type === 'one_month_rental'
-    ? totalValue
-    : (Number(form.security_amount) || 0);
+  // '1 month rental' security = sum of each line's monthly rate x qty. A sale takes none.
+  const security = (form.quotation_type === 'sale' || form.quotation_type === 'sales') ? 0
+    : form.security_type === 'one_month_rental'
+      ? totalValue
+      : (Number(form.security_amount) || 0);
   const supplyState = useMemo(
     () => resolveSupplyStateFromShipping(
       selectedShippingAddress, '',

@@ -248,8 +248,10 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   );
 
   const totalValue = sumLines(lines);
-  const security = form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
+  // A sale takes no deposit; ignore a choice made before switching to Sale.
+  const security = isSaleType ? 0
+    : form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
 
   const submit = async (andSend) => {
     const contactName = (form.contact_name || form.customer_name || '').trim();
@@ -287,6 +289,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
         customer_mobile: phone,
         email: sendEmail || form.email,
         GST_number: form.GST_number || null,
+        security_type: isSaleType ? 'none' : form.security_type,
         security_amount: security,
         source_lead_id: form.source_lead_id || prefill.lead_id || null,
         quotation_remarks: form.remarks || null,

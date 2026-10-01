@@ -479,11 +479,15 @@ export default function DeliveryChallanDetailPage() {
   };
 
   const isRejected = head.status === 'rejected';
+  // Delivered, but the customer refused some laptops at the door.
+  const refusedTokens = Array.isArray(head.rejected_serial_numbers) ? head.rejected_serial_numbers.filter(Boolean) : [];
+  const isPartiallyRefused = head.status === 'delivered' && Boolean(head.rejected_at) && refusedTokens.length > 0;
+  const refusedLabels = refusedTokens.map((t) => String(t).split('|')[2] || String(t).split('|')[1] || t);
   const isCancelled = head.status === 'cancelled';
   const accountsMailBlocked = isAccountsMailBlocked(head.status);
   const canCancelDc = isSuperAdmin && isDcCancellable(head);
   const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
-  const pendingWarehouseReturn = isRejected && !head.return_to_warehouse_at;
+  const pendingWarehouseReturn = (isRejected || isPartiallyRefused) && !head.return_to_warehouse_at;
 
   const specStr = (d) => [d.processor, d.generation, d.ram, d.storage, d.gpu, d.screen_size]
     .filter(Boolean).join(' · ');
@@ -1236,9 +1240,15 @@ export default function DeliveryChallanDetailPage() {
                   )}
                 </div>
               )}
-              {isRejected && (
+              {(isRejected || isPartiallyRefused) && (
                 <div className="text-sm space-y-3 border border-red-200 bg-red-50 rounded-lg p-4">
-                  <p className="text-red-800 font-semibold line-through decoration-red-400">Delivery Rejected</p>
+                  {isRejected ? (
+                    <p className="text-red-800 font-semibold line-through decoration-red-400">Delivery Rejected</p>
+                  ) : (
+                    <p className="text-red-800 font-semibold">
+                      Partly delivered — customer refused {refusedLabels.length}: {refusedLabels.join(', ')}
+                    </p>
+                  )}
                   <p className="text-red-700">Reason: {head.rejection_reason || '—'}</p>
                   {head.rejection_remarks && <p className="text-gray-700">Remarks: {head.rejection_remarks}</p>}
                   {head.rejected_at && <p className="text-gray-600">Rejected at: {formatDateTime(head.rejected_at)}</p>}
@@ -1259,15 +1269,15 @@ export default function DeliveryChallanDetailPage() {
                           </a>
                         </div>
                       )}
-                      <p className="text-xs text-gray-500">The sales order can now be cancelled.</p>
+                      {isRejected && <p className="text-xs text-gray-500">The sales order can now be cancelled.</p>}
                     </div>
                   ) : pendingWarehouseReturn ? (
                     <div className="space-y-2 pt-2 border-t border-red-200">
                       <p className="text-xs font-medium text-amber-800">Waiting for warehouse receipt</p>
                       <p className="text-xs text-gray-600">
-                        Laptops stay in transit and no customer asset is created. Receive them back with the
-                        warehouse e-sign inward (or the return OTP) to move them to stock and QC — only then can
-                        the sales order be cancelled.
+                        {isRejected
+                          ? 'Laptops stay in transit and no customer asset is created. Receive them back with the warehouse e-sign inward (or the return OTP) to move them to stock and QC — only then can the sales order be cancelled.'
+                          : 'The refused laptops stay in transit until the guard scans them in at the gate and the warehouse receives them back (e-sign inward or return OTP). The delivered laptops are not touched.'}
                       </p>
                       <button
                         type="button"

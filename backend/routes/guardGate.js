@@ -57,5 +57,8 @@ router.post('/resolve', create, ctrl.resolve);
 router.get('/sessions/:sessionId', view, ctrl.getSession);
 router.post('/sessions/:sessionId/scan', create, ctrl.scanUnit);
 router.post('/sessions/:sessionId/confirm', create, ctrl.confirm);
+router.post('/sessions/:sessionId/unscan', create, ctrl.unscanUnit);
+router.post('/sessions/:sessionId/cancel', create, ctrl.cancelSession);
+router.post('/sessions/:sessionId/replacement', create, ctrl.recordReplacement);
 
 module.exports = router;

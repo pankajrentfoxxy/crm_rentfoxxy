@@ -54,6 +54,7 @@ const {
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const {
+  isSaleQuotation,
   sendSalesQuotationEmail,
   assertQuotationSendFields,
   assertLeadAllowsQuotationSend,
@@ -677,9 +678,18 @@ exports.storeQuotation = async (req, res) => {
     );
 
     // Security: 1 / 2 / 3 months = sum(rate x qty) of all lines x months; 'none' = 0.
-    const qSecurityType = String(body.security_type || 'none').toLowerCase();
+    // A sale takes no deposit. The form hides the choice for a sale but kept a
+    // value picked before the type was switched (GEST-000004 went out with
+    // Rs 80,000 security), so the server decides.
+    const isSaleQuote = isSaleQuotation(quotationType);
+    const qSecurityType = isSaleQuote ? 'none' : String(body.security_type || 'none').toLowerCase();
     const qMonths = securityMonths(qSecurityType);
-    if (qMonths > 0) {
+    if (isSaleQuote) {
+      await client.query(
+        `UPDATE sales_quotations SET security_amount = 0, security_type = 'none' WHERE quotation_number = $1`,
+        [quotationNumber]
+      );
+    } else if (qMonths > 0) {
       const oneMonth = lineItems.reduce((s, it) => s + (Number(it.rate || 0) * Number(it.quantity || 1)), 0);
       await client.query(
         `UPDATE sales_quotations SET security_amount = $1, security_type = $3 WHERE quotation_number = $2`,
@@ -1369,10 +1379,16 @@ exports.storeSalesOrder = async (req, res) => {
 
     // Security: 1 / 2 / 3 months of rent auto-computes from each line's
     // monthly rate x qty x months (server-authoritative). 'none' = 0.
-    // No deposit on a sale in place — the unit is being bought, not rented.
-    const securityType = isInPlace ? 'none' : String(body.security_type || 'none').toLowerCase();
+    // No deposit on any sale (in place or dispatched) — the unit is being bought, not rented.
+    const isSaleSo = isSaleQuotation(body.quotation_type);
+    const securityType = (isInPlace || isSaleSo) ? 'none' : String(body.security_type || 'none').toLowerCase();
     const secMonths = securityMonths(securityType);
-    if (secMonths > 0) {
+    if (isSaleSo) {
+      await client.query(
+        `UPDATE sales_order_lines SET security_amount = 0, security_type = 'none' WHERE sales_order_number = $1`,
+        [salesOrderNumber]
+      );
+    } else if (secMonths > 0) {
       await client.query(
         `UPDATE sales_order_lines
             SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1) * $2)::numeric, 2),
@@ -1725,7 +1741,13 @@ exports.updateSalesOrder = async (req, res) => {
 
     const securityType = String(body.security_type || 'none').toLowerCase();
     const secMonths = securityMonths(securityType);
-    if (secMonths > 0) {
+    if (isSaleQuotation(body.quotation_type || head.quotation_type)) {
+      // A sale takes no deposit, whatever the form sent.
+      await client.query(
+        `UPDATE sales_order_lines SET security_amount = 0, security_type = 'none' WHERE sales_order_number = $1`,
+        [soNumber]
+      );
+    } else if (secMonths > 0) {
       await client.query(
         `UPDATE sales_order_lines
             SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1) * $2)::numeric, 2),
@@ -5242,6 +5264,7 @@ function refusalStatusLabel(soStatus, eligibility) {
     return eligibility.all_refused_and_received ? 'Cancelled after Customer Refusal' : null;
   }
   if (eligibility.awaiting_warehouse_count > 0) return 'Customer Refused — Waiting for Warehouse Receipt';
+  if (eligibility.partial_awaiting_warehouse_count > 0) return 'Some Laptops Refused — Waiting for Warehouse Receipt';
   if (eligibility.all_refused_and_received) return 'Customer Refused — Warehouse Received';
   return null;
 }
@@ -6121,7 +6144,10 @@ exports.updateDcDispatch = async (req, res) => {
  *   demo deliveries open a demo_agreements record (delivery + 7d decision)
  * Also marks sales_order_serials.status = 'dispatched'.
  */
-exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
+// opts.skipSerialIds: units the customer refused on a partial delivery; they stay
+// in_transit until the warehouse receives them back.
+exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}, opts = {}) => {
+  const skipSerialIds = new Set((opts.skipSerialIds || []).map(Number));
   // Return DCs (movement_type='return') re-enter the return lifecycle instead of
   // the outbound delivered flow: mark returned -> QC re-entry ticket -> credit note.
   const meta = await client.query(
@@ -6172,7 +6198,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
 
   for (const s of serials) {
     const serialId = await resolveSerialId(client, s);
-    if (!serialId) continue;
+    if (!serialId || skipSerialIds.has(Number(serialId))) continue;
     const sr = await client.query(
       `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id,
               inventory_status, current_dc_number

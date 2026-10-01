@@ -16,15 +16,23 @@ function StatusBadge({ status }) {
     in_transit: 'bg-blue-100 text-blue-700',
     reached: 'bg-amber-100 text-amber-700',
     rejected: 'bg-red-100 text-red-800 line-through decoration-red-500',
+    delivered: 'bg-emerald-100 text-emerald-800',
   };
-  const label = { in_transit: 'In Transit', reached: 'Reached', rejected: 'Rejected' }[status] || status;
+  const label = { in_transit: 'In Transit', reached: 'Reached', rejected: 'Rejected', delivered: 'Delivered' }[status] || status;
   return <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${map[status] || 'bg-gray-100 text-gray-700'}`}>{label}</span>;
 }
 
 function LaptopLine({ s }) {
+  const stateBadge = {
+    delivered: ['Delivered', 'bg-emerald-100 text-emerald-800'],
+    refused: ['Refused — bring back', 'bg-red-100 text-red-800'],
+  }[s.delivery_state];
   return (
     <div className="text-sm text-gray-700">
-      <p className="font-medium flex items-center gap-1.5"><Laptop className="w-4 h-4 text-gray-400" /> {[s.brand, s.model].filter(Boolean).join(' ') || s.ttspl}</p>
+      <p className="font-medium flex items-center gap-1.5">
+        <Laptop className="w-4 h-4 text-gray-400" /> {[s.brand, s.model].filter(Boolean).join(' ') || s.ttspl}
+        {stateBadge && <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold ${stateBadge[1]}`}>{stateBadge[0]}</span>}
+      </p>
       <p className="text-xs text-gray-500 ml-5">
         {[s.ttspl, s.processor, s.generation, s.ram, s.storage].filter(Boolean).join(' | ')}
       </p>
@@ -48,6 +56,13 @@ function DeliveryCard({ dc, onChanged }) {
   const [rejectRemarks, setRejectRemarks] = useState('');
   const [warehouseOtp, setWarehouseOtp] = useState('');
   const [otpRequested, setOtpRequested] = useState(Boolean(dc.warehouse_return_otp_sent));
+  // Laptop-wise refusal at the door: TTSPLs the customer refused (the rest are delivered).
+  const [refused, setRefused] = useState([]);
+  const [refusalReason, setRefusalReason] = useState('');
+  const canRefusePerLaptop = !isVendorReturn && (dc.movement_type || 'outbound') === 'outbound'
+    && (dc.dc_purpose || 'standard') === 'standard' && (dc.serials || []).length > 1;
+  const toggleRefused = (ttspl) => setRefused((list) => (
+    list.includes(ttspl) ? list.filter((t) => t !== ttspl) : [...list, ttspl]));
 
   const addr = parseDeliveryAddress(dc.delivery_address) || {};
   const addrText = formatDeliveryAddressLine(dc.delivery_address);
@@ -111,6 +126,11 @@ function DeliveryCard({ dc, onChanged }) {
     }
     if (!isVendorReturn && podType === 'photo' && !photoFile) { toast.error('Capture a POD photo or choose another POD option'); return; }
     if (!isVendorReturn && podType === 'esign' && !esignData) { toast.error('Capture the customer signature'); return; }
+    if (refused.length && refused.length >= (dc.serials || []).length) {
+      toast.error('Every laptop is refused — use "Customer Rejected Delivery" instead');
+      return;
+    }
+    if (refused.length && !refusalReason.trim()) { toast.error('Enter why the customer refused the laptops'); return; }
     setBusy(true);
     try {
       const fd = new FormData();
@@ -119,8 +139,12 @@ function DeliveryCard({ dc, onChanged }) {
       fd.append('notes', notes);
       if (photoFile) fd.append('pod_photo', photoFile);
       if (esignData) fd.append('esign_data', esignData);
-      await submitDeliveryWithPod(dc.dc_number, fd);
-      toast.success('Delivery confirmed ✓');
+      if (refused.length) {
+        fd.append('refused_units', JSON.stringify(refused));
+        fd.append('refusal_reason', refusalReason.trim());
+      }
+      const r = await submitDeliveryWithPod(dc.dc_number, fd);
+      toast.success(r?.data?.message || 'Delivery confirmed ✓', { duration: refused.length ? 8000 : 4000 });
       onChanged();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Could not confirm delivery');
@@ -176,12 +200,14 @@ function DeliveryCard({ dc, onChanged }) {
     }
   };
 
-  const isRejectedPendingReturn = dc.status === 'rejected' && dc.warehouse_return_pending;
+  // Fully refused, or delivered with some laptops refused: refused ones still to hand back.
+  const isRejectedPendingReturn = Boolean(dc.warehouse_return_pending);
+  const isFullRejection = dc.status === 'rejected';
 
   return (
     <div className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${isRejectedPendingReturn ? 'border-red-300 ring-1 ring-red-100' : ''}`}>
       <div className={`flex items-center justify-between px-4 py-3 border-b ${isRejectedPendingReturn ? 'bg-red-50' : ''}`}>
-        <span className={`font-mono font-semibold flex items-center gap-2 ${isRejectedPendingReturn ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}>
+        <span className={`font-mono font-semibold flex items-center gap-2 ${isRejectedPendingReturn && isFullRejection ? 'text-red-700 line-through decoration-red-400' : (isRejectedPendingReturn ? 'text-red-700' : 'text-blue-700')}`}>
           {dc.dc_number}
           {dc.dc_purpose === 'replacement' && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-pink-100 text-pink-800">REPLACEMENT</span>
@@ -232,6 +258,9 @@ function DeliveryCard({ dc, onChanged }) {
         {!isVendorReturn && dc.status === 'reached' && !dc.otp_pending && (
           <div className="border-t pt-3 space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase">Step 1 · Verify Laptop Serial</p>
+            {canRefusePerLaptop && (
+              <p className="text-xs text-gray-500">If the customer is refusing some laptops, scan one they are keeping.</p>
+            )}
             <div className="flex gap-2">
               <input value={serial} onChange={(e) => setSerial(e.target.value)}
                 placeholder="Serial number / TTSPL ID"
@@ -262,6 +291,30 @@ function DeliveryCard({ dc, onChanged }) {
               <p className="text-xs text-slate-600">
                 All laptops on this return are listed above. Capture the vendor / receiver e-signature (required). No per-laptop TTSPL scan and no customer OTP.
               </p>
+            )}
+
+            {canRefusePerLaptop && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase">Laptops — tap any the customer refused</p>
+                {dc.serials.map((s) => {
+                  const isRefused = refused.includes(s.ttspl);
+                  return (
+                    <button key={s.ttspl} type="button" onClick={() => toggleRefused(s.ttspl)}
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-left text-sm ${isRefused ? 'border-red-300 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+                      <span>
+                        <span className="font-mono font-semibold">{s.ttspl}</span>
+                        <span className="text-xs ml-2 opacity-75">{[s.brand, s.model].filter(Boolean).join(' ')}</span>
+                      </span>
+                      <span className="text-xs font-semibold">{isRefused ? '✕ Refused' : '✓ Delivering'}</span>
+                    </button>
+                  );
+                })}
+                {refused.length > 0 && (
+                  <textarea className="w-full border border-red-200 rounded-xl px-3 py-2 text-sm" rows={2}
+                    placeholder="Why did the customer refuse these laptops? (required)"
+                    value={refusalReason} onChange={(e) => setRefusalReason(e.target.value)} />
+                )}
+              </div>
             )}
 
             <div>
@@ -336,7 +389,10 @@ function DeliveryCard({ dc, onChanged }) {
 
             <button type="button" disabled={busy || (isVendorReturn && !esignData)} onClick={handleConfirm}
               className="w-full flex items-center justify-center gap-2 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Confirm Delivery
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              {refused.length
+                ? ` Deliver ${dc.serials.length - refused.length} · Refuse ${refused.length}`
+                : ' Confirm Delivery'}
             </button>
           </div>
         )}
@@ -345,7 +401,12 @@ function DeliveryCard({ dc, onChanged }) {
         {isRejectedPendingReturn && (
           <div className="border-t pt-3 space-y-3 bg-red-50/50 -mx-4 px-4 pb-1">
             <div className="text-sm text-red-800">
-              <p className="font-semibold flex items-center gap-1.5"><XCircle className="w-4 h-4" /> Customer refused delivery</p>
+              <p className="font-semibold flex items-center gap-1.5">
+                <XCircle className="w-4 h-4" />
+                {isFullRejection
+                  ? 'Customer refused delivery'
+                  : `Customer refused ${dc.refused_count || ''} laptop(s) — the rest are delivered`}
+              </p>
               {dc.rejection_reason && <p className="text-xs mt-1">Reason: {dc.rejection_reason}</p>}
               {dc.rejected_at && <p className="text-xs text-red-600">Refused: {formatDateTime(dc.rejected_at)}</p>}
               <p className="text-xs font-medium text-amber-800 mt-1">
@@ -353,7 +414,9 @@ function DeliveryCard({ dc, onChanged }) {
               </p>
             </div>
             <p className="text-xs text-gray-600">
-              Hand the laptops back at the warehouse. They sign the inward — or give you the return OTP to enter below.
+              {isFullRejection
+                ? 'Hand the laptops back at the warehouse. They sign the inward — or give you the return OTP to enter below.'
+                : 'Bring back only the laptops marked "Refused" above. The guard scans them in at the gate, then the warehouse signs the inward — or gives you the return OTP.'}
             </p>
             {!otpRequested && (
               <button type="button" disabled={busy} onClick={handleRequestWarehouseOtp}

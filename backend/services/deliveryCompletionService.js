@@ -110,6 +110,10 @@ async function completeDelivery(client, {
   // the time the sweep happened to run. Defaults to now for the paths where
   // the two are the same moment.
   deliveredAt = null,
+  // The customer kept some laptops and refused the rest: { refusedRaw, reason,
+  // remarks, source }. The DC is still delivered; the refused units go back
+  // through the refusal flow (deliveryRejectionService.applyPartialRefusal).
+  partialRefusal = null,
   source = 'deliveryCompletionService',
 }) {
   const missing = checkProof(mode, proof, actor);
@@ -221,8 +225,22 @@ async function completeDelivery(client, {
 
   // The step three of the five paths skipped: move the serials out of
   // in_transit and set rent_start_date.
+  let refusedSerialIds = [];
+  if (partialRefusal) {
+    const rejectionSvc = require('./deliveryRejectionService');
+    const refused = await rejectionSvc.applyPartialRefusal(client, {
+      dcNumber,
+      refusedRaw: partialRefusal.refusedRaw,
+      reason: partialRefusal.reason,
+      remarks: partialRefusal.remarks,
+      source: partialRefusal.source || 'technician',
+      actorUserId: actor?.user_id || null,
+    });
+    refusedSerialIds = refused.refusedSerialIds;
+  }
+
   const sm = require('../controllers/salesManagementController');
-  await sm.finalizeDeliveryInventory(client, dcNumber, actor);
+  await sm.finalizeDeliveryInventory(client, dcNumber, actor, { skipSerialIds: refusedSerialIds });
 
   await recordEvent(client, {
     entityType: ENTITY.DC,
@@ -238,6 +256,7 @@ async function completeDelivery(client, {
         courier_scan: Boolean(proof.courierScan),
         reason: proof.reason || null,
       },
+      refused_serial_ids: refusedSerialIds.length ? refusedSerialIds : undefined,
       source,
     },
     correlationId,
@@ -245,7 +264,7 @@ async function completeDelivery(client, {
     actor,
   });
 
-  return { ok: true, mode };
+  return { ok: true, mode, refusedSerialIds };
 }
 
 module.exports = {

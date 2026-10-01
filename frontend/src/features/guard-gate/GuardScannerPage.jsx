@@ -10,7 +10,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import ScanField from '../../components/ScanField';
-import { confirmGateSession, getGateSession, resolveGateScan, scanGateUnit } from './guardGateApi';
+import {
+  cancelGateSession, confirmGateSession, getGateSession, recordGateReplacement, resolveGateScan, scanGateUnit,
+  unscanGateUnit,
+} from './guardGateApi';
 
 const SOURCE_LABELS = {
   vendor: 'Vendor',
@@ -99,6 +102,8 @@ export default function GuardScannerPage() {
   const [flash, setFlash] = useState(null);
   const [session, setSession] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  // Vendor repair INWARD: a scanned laptop not on the DC, offered as a replacement.
+  const [replacementOffer, setReplacementOffer] = useState(null);
 
   const applySession = (data) => {
     const nextDir = sessionDirection(data);
@@ -188,6 +193,12 @@ export default function GuardScannerPage() {
     setFlash(null);
     try {
       const { data } = await scanGateUnit(session.session_id, { scan });
+      if (data?.kind === 'replacement_candidate') {
+        applySession(data);
+        setReplacementOffer({ scan: data.scanned_code || scan, options: data.replacement_options || [] });
+        setFlash({ tone: 'info', title: 'Not on this DC', message: data.message });
+        return;
+      }
       if (data?.kind === 'verification' && data?.session_id) {
         applySession(data);
         setFlash({
@@ -309,10 +320,64 @@ export default function GuardScannerPage() {
   };
 
   const reset = () => {
+    setReplacementOffer(null);
     setSession(null);
     setFlash(null);
     setCode('');
     setSearchParams({}, { replace: true });
+  };
+
+  const handlePickReplacement = async (option) => {
+    if (!session?.session_id || !replacementOffer || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await recordGateReplacement(session.session_id, {
+        scan: replacementOffer.scan,
+        replaces_serial_id: option.serial_id,
+      });
+      applySession(data);
+      setReplacementOffer(null);
+      setFlash({ tone: 'success', title: 'Replacement recorded', message: data.message });
+    } catch (err) {
+      setFlash({ tone: 'error', title: 'Not recorded', message: err.response?.data?.message || 'Could not record the replacement.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Take a laptop back out of this scan (it did not actually come through the gate).
+  const handleUnscan = async (laptop) => {
+    if (!session?.session_id || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await unscanGateUnit(session.session_id, {
+        serial_id: laptop.serial_id || null,
+        ttspl: laptop.ttspl || laptop.serial_number || '',
+      });
+      if (data?.session_id) applySession(data);
+      setFlash({ tone: 'info', title: 'Removed', message: `${laptop.ttspl || laptop.serial_number} removed from this scan.` });
+    } catch (err) {
+      setFlash({ tone: 'error', title: 'Not removed', message: err.response?.data?.message || 'Could not remove the laptop.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Throw away the whole open scan (wrong document / wrong laptops) and start again.
+  const handleDiscard = async () => {
+    if (!session?.session_id || busy) return;
+    // eslint-disable-next-line no-alert
+    if (!window.confirm('Discard this scan? Nothing has been submitted; you can scan the document again.')) return;
+    setBusy(true);
+    try {
+      await cancelGateSession(session.session_id, { reason: 'Discarded by guard before submit' });
+      reset();
+      setFlash({ tone: 'info', title: 'Scan discarded', message: 'Scan the document again and scan only the laptops that arrived.' });
+    } catch (err) {
+      setFlash({ tone: 'error', title: 'Not discarded', message: err.response?.data?.message || 'Could not discard this scan.' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const movement = session?.movement;
@@ -323,6 +388,8 @@ export default function GuardScannerPage() {
     || Boolean(session?.all_checks_passed)
     || (laptops.length > 0 && laptops.every(laptopAllGreen));
   const submitEnabled = Boolean(session?.can_confirm && session.status === 'open');
+  // Vendor repair return: only the laptops that arrived are scanned; the rest stay at the vendor.
+  const unitScanOnly = Boolean(session?.require_unit_scan);
 
   const flashClass = {
     success: 'bg-emerald-50 text-emerald-800',
@@ -341,6 +408,8 @@ export default function GuardScannerPage() {
             {verifying
               ? (skipUnitVerify
                 ? 'Part DC loaded. Verify the details below, then submit OUTWARD. Do not pick parts yourself.'
+                : unitScanOnly
+                  ? 'Scan only the laptops that physically arrived, then submit. Laptops you do not scan stay at the vendor.'
                 : submitEnabled
                   ? 'Document units matched. Submit to process this movement.'
                   : 'Confirm laptop details. Submit stays locked until every check is green.')
@@ -348,9 +417,16 @@ export default function GuardScannerPage() {
           </p>
         </div>
         {session ? (
-          <button type="button" onClick={reset} className="text-xs font-medium text-slate-600 inline-flex items-center gap-1">
-            <RotateCcw className="w-3.5 h-3.5" /> New
-          </button>
+          <div className="flex items-center gap-3">
+            {session.status === 'open' ? (
+              <button type="button" disabled={busy} onClick={handleDiscard} className="text-xs font-medium text-red-600 inline-flex items-center gap-1 disabled:opacity-50">
+                <XCircle className="w-3.5 h-3.5" /> Discard
+              </button>
+            ) : null}
+            <button type="button" onClick={reset} className="text-xs font-medium text-slate-600 inline-flex items-center gap-1">
+              <RotateCcw className="w-3.5 h-3.5" /> New
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -399,6 +475,30 @@ export default function GuardScannerPage() {
         disabled={busy || session?.status === 'confirmed'}
         aria-label="Gate scanner"
       />
+
+      {replacementOffer && session?.status === 'open' ? (
+        <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 space-y-2">
+          <p className="text-sm font-bold text-violet-900">
+            Vendor replacement? <span className="font-mono">{replacementOffer.scan}</span> is not on this DC.
+          </p>
+          <p className="text-xs text-violet-800">Tap the laptop it replaces. Only do this if the vendor says it is a replacement.</p>
+          {replacementOffer.options.map((o) => (
+            <button
+              key={o.serial_id || o.ttspl}
+              type="button"
+              disabled={busy}
+              onClick={() => handlePickReplacement(o)}
+              className="w-full text-left bg-white border border-violet-200 rounded-xl px-3 py-2 text-sm disabled:opacity-50"
+            >
+              <span className="font-mono font-semibold">{o.ttspl}</span>
+              <span className="text-xs text-slate-500 ml-2">{o.serial_number}{o.configuration ? ` · ${o.configuration}` : ''}</span>
+            </button>
+          ))}
+          <button type="button" onClick={() => setReplacementOffer(null)} className="text-xs text-slate-600 underline">
+            Not a replacement — ignore
+          </button>
+        </div>
+      ) : null}
 
       {flash ? (
         <div className={`rounded-2xl px-4 py-3 flex items-start gap-3 ${flashClass}`}>
@@ -506,6 +606,9 @@ export default function GuardScannerPage() {
                       {laptop.ttspl || '—'}
                     </p>
                     <p className="text-xs text-slate-500 truncate">{laptop.serial_number || '—'}</p>
+                    {laptop.replacement_scan ? (
+                      <p className="text-[11px] font-semibold text-violet-700 truncate">Replaced by vendor: {laptop.replacement_scan}</p>
+                    ) : null}
                     {laptop.awb_number ? (
                       <p className="text-[11px] font-medium text-slate-500 truncate">AWB {laptop.awb_number}</p>
                     ) : null}
@@ -520,11 +623,26 @@ export default function GuardScannerPage() {
                       </p>
                     ) : null}
                   </div>
-                  <span className={`text-xs font-bold shrink-0 ${
-                    green ? 'text-emerald-600' : failed ? 'text-red-600' : 'text-slate-400'
-                  }`}>
-                    {green ? 'ALL GREEN' : failed ? 'FAILED' : 'PENDING'}
-                  </span>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-xs font-bold ${
+                      green ? 'text-emerald-600' : failed ? 'text-red-600' : 'text-slate-400'
+                    }`}>
+                      {green ? 'ALL GREEN' : failed ? 'FAILED' : unitScanOnly ? 'NOT SCANNED' : 'PENDING'}
+                    </span>
+                    {unitScanOnly && !green && !failed ? (
+                      <span className="text-[10px] text-slate-400">Skip if not arrived</span>
+                    ) : null}
+                    {session?.status === 'open' && (laptop.verified || green) ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleUnscan(laptop)}
+                        className="text-[11px] font-medium text-red-600 underline disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
                 <ul className="space-y-1.5">
                   {CHECKS.map(({ key, label }) => {

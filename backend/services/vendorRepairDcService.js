@@ -1178,10 +1178,22 @@ async function getVendorRepairDc(dcNumber) {
     `SELECT i.*, t.status AS ticket_status, t.diagnosis_failed_reason,
             t.brand AS ticket_brand, t.model AS ticket_model, t.processor AS ticket_processor,
             t.ram AS ticket_ram, t.storage AS ticket_storage,
-            vsn.extra AS serial_extra
+            vsn.extra AS serial_extra,
+            gr.replacement_scan AS gate_replacement_serial
        FROM vendor_repair_dc_items i
        JOIN tickets t ON t.ticket_id = i.ticket_id
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = i.serial_id
+       -- The guard recorded the vendor's replacement laptop against this item.
+       LEFT JOIN LATERAL (
+         SELECT m.metadata->>'replacement_scan' AS replacement_scan
+           FROM gate_movements m
+          WHERE m.reference_type = 'vrdc' AND m.reference_number = i.dc_number
+            AND m.direction = 'inward' AND m.serial_id = i.serial_id
+            AND m.validation_result = 'valid' AND m.confirmed_at IS NOT NULL
+            AND m.metadata->>'replacement' = 'true'
+          ORDER BY m.confirmed_at DESC
+          LIMIT 1
+       ) gr ON TRUE
       WHERE i.dc_number = $1
       ORDER BY i.id ASC`,
     [dcNumber]

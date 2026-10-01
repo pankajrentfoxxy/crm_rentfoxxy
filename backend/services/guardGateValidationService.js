@@ -617,48 +617,50 @@ async function loadOutboundDc(db, dcNumber) {
   };
 }
 
-/** Customer refused delivery — laptop(s) return via guard INWARD on the original outbound DC. */
+/**
+ * Customer refused delivery — laptop(s) return via guard INWARD on the original
+ * outbound DC. Covers a full refusal (every line rejected) and a partial one (DC
+ * delivered, some laptops refused): the guard only expects the refused laptops.
+ */
 async function loadRefusedDeliveryReturn(db, dcNumber) {
   const base = await loadOutboundDc(db, dcNumber);
   if (!base) return null;
-  if (!base.statuses?.every((s) => s === 'rejected')) return null;
-
-  const headRes = await db.query(
-    `SELECT return_to_warehouse_at, warehouse_received_at, customer_name, sales_order_number
-       FROM delivery_challan_lines
-      WHERE dc_number = $1
-      LIMIT 1`,
-    [dcNumber]
-  );
-  const head = headRes.rows[0];
+  const deliveryRejection = require('./deliveryRejectionService');
+  const head = await deliveryRejection.getDcHead(db, dcNumber);
   if (!head) return null;
+  const fullRefusal = base.statuses?.every((s) => s === 'rejected');
+  if (!fullRefusal && !deliveryRejection.isPartialRefusal(head)) return null;
+
+  const refusedEntries = await deliveryRejection.collectRefusedDcSerials(db, dcNumber);
+  const laptops = refusedEntries.length
+    ? uniqueLaptops(await enrichLaptops(db, refusedEntries.map((e) => ({
+      serial_id: e.serialId,
+      ttspl: e.ttsplId,
+      serial_number: e.serialNumber,
+      awb_number: null,
+    }))))
+    : base.laptops;
 
   let active = true;
   let inactive_reason = null;
   if (head.return_to_warehouse_at || head.warehouse_received_at) {
     active = false;
     inactive_reason = 'This refused delivery has already been received at the warehouse.';
-  } else {
-    const deliveryRejection = require('./deliveryRejectionService');
-    const rejectedRes = await db.query(
-      'SELECT rejected_at FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1',
-      [dcNumber]
-    );
-    if (await deliveryRejection.findGuardInwardForRefusedDc(db, dcNumber, rejectedRes.rows[0]?.rejected_at)) {
-      active = false;
-      inactive_reason = 'Already scanned INWARD at the gate — waiting for the warehouse to receive it.';
-    }
+  } else if (await deliveryRejection.findGuardInwardForRefusedDc(db, dcNumber, head.rejected_at)) {
+    active = false;
+    inactive_reason = 'Already scanned INWARD at the gate — waiting for the warehouse to receive it.';
   }
 
   return {
     ...base,
     direction: 'inward',
     source_type: 'refused_delivery',
-    source_label: 'Refused Delivery',
+    source_label: fullRefusal ? 'Refused Delivery' : 'Refused Laptops (partly delivered DC)',
     reference_type: 'dc',
     reference_number: dcNumber,
     party_name: head.customer_name || base.party_name,
     so_number: head.sales_order_number || base.so_number,
+    laptops,
     active,
     inactive_reason,
     allow_partial: false,
@@ -912,8 +914,18 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
   const outwardItems = items.rows.filter((i) =>
     String(i.item_status || '').toLowerCase() === 'dispatch_ready'
   );
+  // Laptops the guard already brought in on a confirmed inward stay off the list:
+  // on a gate_legacy DC the item stays 'dispatched' after the gate, so look at
+  // the confirmed movements too. The vendor often returns a DC in parts.
+  const inwardDone = new Set((await db.query(
+    `SELECT DISTINCT serial_id FROM gate_movements
+      WHERE reference_type = 'vrdc' AND reference_number = $1 AND direction = 'inward'
+        AND validation_result = 'valid' AND confirmed_at IS NOT NULL AND serial_id IS NOT NULL`,
+    [head.dc_number]
+  )).rows.map((r) => Number(r.serial_id)));
   const inwardItems = items.rows.filter((i) =>
     String(i.item_status || '').toLowerCase() === 'dispatched'
+    && !inwardDone.has(Number(i.serial_id))
   );
 
   const pick = direction === 'inward' ? inwardItems : outwardItems;
@@ -974,6 +986,9 @@ async function loadVendorRepairDc(db, dcNumber, preferredDirection) {
     awb_number: head.awb_number || head.porter_tracking_id || null,
     movement_mode: movementModeLabel(head.ship_by, head.dispatch_mode),
     allow_partial: direction === 'inward',
+    // Inward: the DC QR does not tick every laptop. The guard scans only the
+    // laptops that physically came back; the rest stay at the vendor.
+    require_unit_scan: direction === 'inward',
     active,
     inactive_reason,
     laptops,
@@ -1580,20 +1595,26 @@ async function findBySerial(db, serial, preferredDirection) {
   }
 
   const refusedParams = [serial.ttspl || '___none___', serial.serial_number || '___none___'];
+  // A fully refused DC (any of its laptops), or a partly delivered one where this
+  // laptop is among the refused — never a laptop the customer kept.
   let refusedSql = `
     SELECT dc_number FROM delivery_challan_lines
-     WHERE LOWER(status) = 'rejected'
-       AND return_to_warehouse_at IS NULL
+     WHERE return_to_warehouse_at IS NULL
        AND warehouse_received_at IS NULL
        AND (
-         serial_number::text ILIKE '%' || $1 || '%'
-         OR serial_number::text ILIKE '%' || $2 || '%'
+         (LOWER(status) = 'delivered' AND rejected_at IS NOT NULL
+          AND jsonb_typeof(rejected_serial_numbers) = 'array'
+          AND (rejected_serial_numbers::text ILIKE '%|' || $1 || '"%'
+               OR rejected_serial_numbers::text ILIKE '%|' || $2 || '|%'))
+         OR (LOWER(status) = 'rejected' AND (
+           serial_number::text ILIKE '%' || $1 || '%'
+           OR serial_number::text ILIKE '%' || $2 || '%'
   `;
   if (serial.current_dc_number) {
     refusedParams.push(serial.current_dc_number);
     refusedSql += ` OR dc_number = $3`;
   }
-  refusedSql += `) LIMIT 1`;
+  refusedSql += `))) LIMIT 1`;
   const refused = await db.query(refusedSql, refusedParams);
   if (refused.rows[0]) {
     const ctx = await loadRefusedDeliveryReturn(db, refused.rows[0].dc_number);
@@ -1610,6 +1631,8 @@ async function findBySerial(db, serial, preferredDirection) {
 
 function scopeContextToUnit(ctx, unit) {
   if (!ctx?.laptops?.length || !unit) return ctx;
+  // Partial-return documents keep every outstanding laptop listed.
+  if (ctx.require_unit_scan) return ctx;
   const matched = ctx.laptops.filter((l) => laptopMatches(l, unit));
   if (!matched.length) return ctx;
   return {
@@ -1800,8 +1823,85 @@ async function attachScanState(db, session, laptops, ctx) {
       }),
       scanned_at: hit?.scan_time || null,
       already_confirmed: Boolean(hit?.confirmed_at),
+      replacement_scan: hit?.validation_result === 'valid' ? (parseJson(hit?.metadata, {})?.replacement_scan || null) : null,
     };
   });
+}
+
+/**
+ * Vendor repair INWARD: a laptop that is not on the DC may be the vendor's
+ * replacement for one we sent. Offer the guard the laptops still at the vendor
+ * to pick from instead of rejecting it outright.
+ */
+async function vrdcReplacementCandidate(db, { session, ctx, raw, serial }) {
+  if (!ctx?.require_unit_scan || ctx.reference_type !== 'vrdc') return null;
+  if (serial && (ctx.laptops || []).some((l) => laptopMatches(l, serial))) return null;
+  if (serial?.serial_id) {
+    // A laptop that was on this DC (e.g. already brought in) is not a replacement.
+    const own = await db.query(
+      `SELECT 1 FROM vendor_repair_dc_items WHERE dc_number = $1 AND serial_id = $2 LIMIT 1`,
+      [ctx.reference_number, serial.serial_id]
+    );
+    if (own.rows.length) return null;
+  }
+  const view = await sessionView(db, session, ctx);
+  const options = (view.laptops || []).filter((l) => !l.verified).map((l) => ({
+    serial_id: l.serial_id, ttspl: l.ttspl, serial_number: l.serial_number, configuration: l.configuration,
+  }));
+  if (!options.length) return null;
+  return {
+    ok: true,
+    valid: false,
+    kind: 'replacement_candidate',
+    scanned_code: raw,
+    replacement_options: options,
+    message: `${raw} is not on this repair DC. If the vendor sent it as a replacement, choose which laptop it replaces.`,
+    ...view,
+  };
+}
+
+/** Guard records the vendor's replacement laptop against the original it stands in for. */
+async function recordVrdcReplacement({ sessionId, scan, replacesSerialId, user }) {
+  const raw = normalizeScan(scan);
+  if (!raw) return { ok: false, message: 'Scan the replacement laptop serial.' };
+  const db = pool;
+  const actor = await getActor(db, user);
+  const session = (await db.query(`SELECT * FROM gate_scan_sessions WHERE session_id = $1`, [sessionId])).rows[0];
+  if (!session) return { ok: false, message: 'Scan session not found.' };
+  if (session.status !== 'open') return { ok: false, message: 'This gate session is no longer open.' };
+  const ctx = await reloadContextForSession(db, session);
+  if (!ctx?.require_unit_scan || ctx.reference_type !== 'vrdc' || ctx.direction !== 'inward') {
+    return { ok: false, message: 'Replacements can only be recorded on a vendor repair INWARD scan.' };
+  }
+  if (ctx.active === false) return { ok: false, message: ctx.inactive_reason || 'This movement is no longer active.' };
+  const target = (ctx.laptops || []).find((l) => Number(l.serial_id) === Number(replacesSerialId));
+  if (!target) return { ok: false, message: 'Pick a laptop that is still at the vendor.' };
+  if (await scannedInSession(db, session.session_id, target.serial_id)) {
+    return { ok: false, message: `${target.ttspl} is already scanned in this session. Remove it first.` };
+  }
+  await recordMovement(db, {
+    session,
+    ctx,
+    serial: {
+      serial_id: target.serial_id,
+      ttspl: target.ttspl,
+      serial_number: target.serial_number,
+      configuration: target.configuration,
+    },
+    actor,
+    awb: session.awb_number,
+    result: 'valid',
+    message: `Vendor replacement ${raw} received in place of ${target.ttspl}`,
+    extraMeta: { replacement: true, replacement_scan: raw, replaces_ttspl: target.ttspl },
+  });
+  const view = await sessionView(db, session, ctx);
+  return {
+    ok: true,
+    valid: true,
+    kind: 'unit',
+    message: `${raw} recorded as the vendor's replacement for ${target.ttspl}. The warehouse completes it as a replacement.`,
+    ...view,
+  };
 }
 
 async function openOrReuseSession(db, ctx, actor) {
@@ -1889,6 +1989,7 @@ async function sessionView(db, session, ctx) {
     status: session.status,
     allow_partial: allowPartial,
     skip_unit_verify: skipVerify,
+    require_unit_scan: Boolean(ctx.require_unit_scan),
     expected_count: laptops.length,
     scanned_count: skipVerify ? laptops.length : verifiedCount,
     remaining_count: skipVerify ? 0 : Math.max(0, laptops.length - verifiedCount),
@@ -2082,8 +2183,9 @@ async function resolveScan({ direction, scan, user }) {
   if (
     ['dc', 'sdc'].includes(ctx.reference_type)
     && ctx.active === false
-    && ctx.statuses?.every((s) => s === 'rejected')
+    && (ctx.statuses?.every((s) => s === 'rejected') || ctx.statuses?.every((s) => s === 'delivered'))
   ) {
+    // Fully refused, or delivered with some laptops refused (returns null otherwise).
     const refused = await loadRefusedDeliveryReturn(db, ctx.reference_number);
     if (refused) ctx = refused;
   }
@@ -2149,7 +2251,7 @@ async function resolveScan({ direction, scan, user }) {
 
   const fromDocument = Boolean(resolved.ctx) && !resolved.unitScan;
   let autoVerified = 0;
-  if (fromDocument && !ctx.skip_unit_verify) {
+  if (fromDocument && !ctx.skip_unit_verify && !ctx.require_unit_scan) {
     autoVerified = await autoVerifyDocumentLaptops(db, { session, ctx, actor });
   }
   const view = await sessionView(db, session, ctx);
@@ -2159,6 +2261,9 @@ async function resolveScan({ direction, scan, user }) {
     : 'Now scan the laptop TTSPL or serial to verify, then submit.';
   if (autoSwitch && !ctx.skip_unit_verify) {
     message = `Opened as ${ctx.direction.toUpperCase()} for this document.`;
+  }
+  if (ctx.require_unit_scan) {
+    message = `${(ctx.laptops || []).length} laptop(s) still at the vendor. Scan the TTSPL or serial of each laptop that arrived, then submit. Laptops you do not scan stay at the vendor.`;
   }
   if (autoVerified > 0) {
     message = autoVerified === (ctx.laptops || []).length
@@ -2399,6 +2504,9 @@ async function scanUnit({ sessionId, scan, user }) {
       serial = await findSerial(db, byAwb.ttspl || byAwb.serial_number);
     }
   }
+  const replacementOffer = await vrdcReplacementCandidate(db, { session, ctx, raw, serial });
+  if (replacementOffer) return replacementOffer;
+
   if (!serial) {
     await recordMovement(db, {
       session, ctx, serial: { ttspl: normalizeTtspl(raw), serial_number: raw }, actor,
@@ -2565,7 +2673,9 @@ async function applyInwardRefusedDeliveryGate(client, { session, actor }) {
   const head = await deliveryRejection.getDcHead(client, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
   if (head.return_to_warehouse_at || head.warehouse_received_at) return { already_completed: true };
-  if (head.status !== 'rejected') throw new Error('DC is not in rejected status');
+  if (head.status !== 'rejected' && !deliveryRejection.isPartialRefusal(head)) {
+    throw new Error('DC has no refused laptops to bring in');
+  }
 
   // The gate only records the laptop coming in (this confirmed session). Moving it
   // back to stock is the warehouse's e-sign receipt, which is unlocked by this scan
@@ -2710,7 +2820,9 @@ async function confirmSession({ sessionId, remarks, user }) {
         RETURNING serial_id, ttspl, serial_number`,
       [session.session_id, remarks || null]
     );
-    if (remaining === 0) {
+    // A partial vendor return closes its session too: the laptops not scanned
+    // stay at the vendor and come in later on a fresh session.
+    if (remaining === 0 || ctx.require_unit_scan) {
       await client.query(
         `UPDATE gate_scan_sessions
             SET status = 'confirmed',
@@ -2868,7 +2980,9 @@ async function confirmSession({ sessionId, remarks, user }) {
       ok: true,
       message: remaining === 0
         ? `Gate ${session.direction} confirmed.`
-        : `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). Scan remaining units to continue.`,
+        : ctx.require_unit_scan
+          ? `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). ${remaining} laptop(s) are still at the vendor — scan them in when they come back.`
+          : `Gate ${session.direction} recorded for ${stamped.rows.length} laptop(s). Scan remaining units to continue.`,
       session_id: session.session_id,
       confirmed_count: stamped.rows.length,
       remaining_count: remaining,
@@ -2922,6 +3036,76 @@ async function getSession(sessionId) {
   const ctx = await reloadContextForSession(pool, r.rows[0]);
   if (!ctx) return { session_id: sessionId, status: r.rows[0].status, laptops: [] };
   return sessionView(pool, r.rows[0], ctx);
+}
+
+/**
+ * Guard removes a laptop he scanned (or the QR ticked) before submitting — e.g.
+ * the vendor brought back fewer laptops than the DC lists. The movement is kept
+ * for the audit trail but no longer counts as valid.
+ */
+async function unscanUnit({ sessionId, serialId, code, user }) {
+  const actor = await getActor(pool, user);
+  const sess = (await pool.query(`SELECT * FROM gate_scan_sessions WHERE session_id = $1`, [sessionId])).rows[0];
+  if (!sess) return { ok: false, message: 'Scan session not found.' };
+  if (sess.status !== 'open') return { ok: false, message: 'This gate session is already submitted or discarded.' };
+  const key = String(code || '').trim().toUpperCase();
+  const r = await pool.query(
+    `UPDATE gate_movements
+        SET validation_result = 'invalid',
+            validation_message = 'Removed by guard before submit',
+            metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+              'removed', true, 'removed_at', NOW(), 'removed_by', $4::text)
+      WHERE session_id = $1 AND confirmed_at IS NULL AND validation_result = 'valid'
+        AND (($2::int IS NOT NULL AND serial_id = $2::int)
+             OR ($3::text <> '' AND (UPPER(ttspl) = $3::text OR UPPER(serial_number) = $3::text)))
+      RETURNING id`,
+    [sessionId, serialId ? Number(serialId) : null, key, actor.name || String(actor.userId || '')]
+  );
+  if (!r.rowCount) return { ok: false, message: 'That laptop is not scanned in this session.' };
+  const view = await getSession(sessionId);
+  return { ok: true, message: 'Laptop removed from this scan.', removed: r.rowCount, ...view };
+}
+
+/**
+ * Guard discards an open session (wrong document, wrong laptops ticked). Its
+ * unsubmitted scans stop counting; nothing downstream ran, since only Submit
+ * applies a movement.
+ */
+async function cancelSession({ sessionId, reason, user }) {
+  const actor = await getActor(pool, user);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sess = (await client.query(
+      `SELECT * FROM gate_scan_sessions WHERE session_id = $1 FOR UPDATE`, [sessionId]
+    )).rows[0];
+    if (!sess) { await client.query('ROLLBACK'); return { ok: false, message: 'Scan session not found.' }; }
+    if (sess.status !== 'open') {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'Only an open (not submitted) scan can be discarded.' };
+    }
+    const note = String(reason || '').trim() || 'Discarded by guard';
+    await client.query(
+      `UPDATE gate_movements
+          SET validation_result = 'invalid',
+              validation_message = $2,
+              metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                'discarded', true, 'discarded_at', NOW(), 'discarded_by', $3::text)
+        WHERE session_id = $1 AND confirmed_at IS NULL AND validation_result = 'valid'`,
+      [sessionId, `Discarded: ${note}`, actor.name || String(actor.userId || '')]
+    );
+    await client.query(
+      `UPDATE gate_scan_sessions SET status = 'cancelled', remarks = $2 WHERE session_id = $1`,
+      [sessionId, note]
+    );
+    await client.query('COMMIT');
+    return { ok: true, message: 'Scan discarded. Scan the document again to start fresh.', session_id: sessionId };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function getDashboard({ userId, role, search, direction } = {}) {
@@ -3030,6 +3214,9 @@ async function getHistory({ userId, role, limit = 50, search } = {}) {
 }
 
 module.exports = {
+  recordVrdcReplacement,
+  unscanUnit,
+  cancelSession,
   resolveScan,
   scanUnit,
   confirmSession,
