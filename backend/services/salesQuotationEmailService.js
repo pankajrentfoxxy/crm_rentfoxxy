@@ -325,6 +325,7 @@ async function acceptSalesQuotationByToken(token) {
 
 module.exports = {
   QUOTE_SEND_LEAD_STATUSES,
+  isSaleQuotation,
   isConfigTwoActive,
   configsFromQuotationLines,
   quotationContactFields,
