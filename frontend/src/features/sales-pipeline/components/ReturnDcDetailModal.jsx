@@ -121,10 +121,10 @@ const EDIT_CONFIG_FIELDS = [
   ['gpu', 'GPU'],
 ];
 
-/** Starting values: the asset's expected config, with RAM/SSD taken from what the laptop reported. */
+/** Starting values: the expected config the unit is checked against. */
 function initialEditConfig(item) {
   const e = item?.return_capture?.expected_config || {};
-  const out = {
+  return {
     brand: e.brand || item?.brand || '',
     model: e.model || item?.model || '',
     processor: e.processor || item?.processor || '',
@@ -133,18 +133,28 @@ function initialEditConfig(item) {
     ssd: e.ssd || e.storage || item?.storage || '',
     gpu: e.gpu || '',
   };
+}
+
+/** What the laptop reported on its last script run, keyed by field. */
+function laptopReadings(item) {
+  const out = {};
   for (const c of item?.return_config_result?.checks || []) {
-    if (c.matched || c.actual == null || c.actual === '') continue;
-    if (c.field === 'ram') out.ram = String(c.actual);
-    if (c.field === 'ssd') out.ssd = String(c.actual);
-    if (c.field === 'gpu') out.gpu = String(c.actual);
+    if (c.actual != null && c.actual !== '') out[c.field] = { value: String(c.actual), matched: c.matched };
   }
   return out;
 }
 
-function EditUnitConfigPanel({ rdcNumber, item, onCancel, onSaved }) {
+const EDIT_RESULT_MESSAGES = {
+  matched: 'Expected config updated — laptop now matches, unit cleared for inward',
+  still_mismatch: 'Expected config updated — laptop still does not match',
+  awaiting_script: 'Expected config updated — run the script on the laptop',
+  already_verified: 'Expected config updated',
+};
+
+function EditUnitConfigModal({ rdcNumber, item, onClose, onSaved }) {
   const [form, setForm] = useState(() => initialEditConfig(item));
   const [saving, setSaving] = useState(false);
+  const readings = laptopReadings(item);
 
   const save = async () => {
     if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) {
@@ -153,8 +163,10 @@ function EditUnitConfigPanel({ rdcNumber, item, onCancel, onSaved }) {
     }
     setSaving(true);
     try {
-      await editReturnDcItemConfig(rdcNumber, item.id, form);
-      toast.success('Configuration updated — unit cleared for inward');
+      const r = await editReturnDcItemConfig(rdcNumber, item.id, form);
+      const status = r.data?.status;
+      if (status === 'still_mismatch') toast.error(EDIT_RESULT_MESSAGES[status]);
+      else toast.success(EDIT_RESULT_MESSAGES[status] || 'Expected config updated');
       onSaved();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to update configuration');
@@ -164,29 +176,55 @@ function EditUnitConfigPanel({ rdcNumber, item, onCancel, onSaved }) {
   };
 
   return (
-    <div className="mt-2 border border-amber-200 bg-amber-50/60 rounded-lg p-3">
-      <p className="text-xs font-semibold text-gray-900 mb-1">Edit configuration (Super Admin)</p>
-      <p className="text-[11px] text-gray-600 mb-2">
-        Saves this config on the asset and accepts the unit for warehouse inward.
-      </p>
-      <div className="grid grid-cols-2 gap-2">
-        {EDIT_CONFIG_FIELDS.map(([key, label]) => (
-          <label key={key} className="text-[11px] text-gray-600">
-            {label}
-            <input
-              type="text"
-              value={form[key]}
-              onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-              className="mt-0.5 w-full border border-gray-200 rounded px-2 py-1 text-xs text-gray-900 bg-white"
-            />
-          </label>
-        ))}
-      </div>
-      <div className="flex gap-2 mt-2">
-        <button type="button" onClick={onCancel} disabled={saving} className="flex-1 py-1.5 border rounded text-xs bg-white">Cancel</button>
-        <button type="button" onClick={save} disabled={saving} className="flex-[2] py-1.5 bg-amber-600 text-white rounded text-xs font-semibold disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save config & accept unit'}
-        </button>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
+      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div className="border-b px-5 py-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold">Edit expected configuration</h3>
+            <p className="text-xs text-gray-500 font-mono">{item.ttspl_id || '—'} · SN {item.serial_number || '—'}</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          {EDIT_CONFIG_FIELDS.map(([key, label]) => {
+            const reading = readings[key];
+            return (
+              <label key={key} className="block text-xs text-gray-600">
+                {label}
+                <input
+                  type="text"
+                  value={form[key]}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                  className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900"
+                />
+                {reading ? (
+                  <span className={`block mt-0.5 text-[11px] ${reading.matched ? 'text-gray-400' : 'text-red-700'}`}>
+                    Laptop reported: {reading.value}
+                    {!reading.matched ? (
+                      <button
+                        type="button"
+                        onClick={() => setForm((f) => ({ ...f, [key]: reading.value }))}
+                        className="ml-2 font-semibold text-violet-800"
+                      >
+                        Use this
+                      </button>
+                    ) : null}
+                  </span>
+                ) : null}
+              </label>
+            );
+          })}
+          <p className="text-[11px] text-gray-500">
+            Saves on the asset. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse inward.
+          </p>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} disabled={saving} className="flex-1 py-2 border rounded-lg text-sm">Cancel</button>
+            <button type="button" onClick={save} disabled={saving} className="flex-[2] py-2 bg-violet-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -257,6 +295,9 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   };
 
   const pdfLink = assetUrl(detail?.pdf_path);
+  const editingItem = editingItemId
+    ? (detail?.pickup_items || []).find((p) => p.id === editingItemId)
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -369,7 +410,18 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     const config = unitConfig({ ...u, ...(item || {}) });
                     return (
                       <div key={u.ttspl || i} className="px-4 py-3 text-sm">
-                        <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                          {isSuperAdmin && !isCancelled && item && !item.warehouse_received_at ? (
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemId(item.id)}
+                              className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-violet-800"
+                            >
+                              <Pencil className="w-3 h-3" /> Edit
+                            </button>
+                          ) : null}
+                        </div>
                         {config ? <p className="text-xs text-gray-700 mt-0.5">{config}</p> : null}
                         <p className="text-xs text-gray-500 font-mono mt-0.5">
                           {u.ttspl || '—'} · SN {u.serial || '—'}
@@ -459,42 +511,17 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                           ) : null}
                           {item.return_config_result?.edited_by_super_admin ? (
                             <p className="text-xs text-amber-700 mt-0.5">
-                              Config edited by Super Admin{item.return_config_result.edited_by_name ? ` (${item.return_config_result.edited_by_name})` : ''}
+                              Expected config edited by Super Admin{item.return_config_result.edited_by_name ? ` (${item.return_config_result.edited_by_name})` : ''}
                             </p>
                           ) : null}
-                          {!matched && (canWarehouseSign || (isSuperAdmin && !isCancelled)) ? (
-                            <div className="mt-1 flex flex-wrap items-center gap-4">
-                              {canWarehouseSign ? (
-                                <button
-                                  type="button"
-                                  onClick={() => remintItem(item.id)}
-                                  className="inline-flex items-center gap-1 text-xs text-violet-800 font-semibold"
-                                >
-                                  <RefreshCw className="w-3 h-3" /> New access number
-                                </button>
-                              ) : null}
-                              {isSuperAdmin && !isCancelled && editingItemId !== item.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingItemId(item.id)}
-                                  className="inline-flex items-center gap-1 text-xs text-amber-700 font-semibold"
-                                >
-                                  <Pencil className="w-3 h-3" /> Edit config &amp; accept
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {!matched && isSuperAdmin && !isCancelled && editingItemId === item.id ? (
-                            <EditUnitConfigPanel
-                              rdcNumber={rdcNumber}
-                              item={item}
-                              onCancel={() => setEditingItemId(null)}
-                              onSaved={() => {
-                                setEditingItemId(null);
-                                load({ silent: true, refresh: true });
-                                onUpdated?.();
-                              }}
-                            />
+                          {!matched && canWarehouseSign ? (
+                            <button
+                              type="button"
+                              onClick={() => remintItem(item.id)}
+                              className="mt-1 inline-flex items-center gap-1 text-xs text-violet-800 font-semibold"
+                            >
+                              <RefreshCw className="w-3 h-3" /> New access number
+                            </button>
                           ) : null}
                         </div>
                       );
@@ -577,6 +604,18 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
           )}
         </div>
       </div>
+      {editingItem ? (
+        <EditUnitConfigModal
+          rdcNumber={rdcNumber}
+          item={editingItem}
+          onClose={() => setEditingItemId(null)}
+          onSaved={() => {
+            setEditingItemId(null);
+            load({ silent: true, refresh: true });
+            onUpdated?.();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
