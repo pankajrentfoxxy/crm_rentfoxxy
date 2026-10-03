@@ -494,7 +494,117 @@ async function submitRdcSerial(tokenId, serialNumber) {
   return { ok: true, serial_number: serial };
 }
 
+const EDITABLE_CONFIG_FIELDS = ['brand', 'model', 'processor', 'generation', 'ram', 'ssd', 'gpu'];
+
+/**
+ * Super Admin: correct a Return DC unit's configuration when the script reports a
+ * mismatch, and accept the unit for warehouse inward. The corrected config is saved to
+ * the asset (production asset → vendor_serial_numbers.extra) and the pickup row.
+ */
+async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
+  const items = await loadPickupItemsForRdc(client, rdcNumber);
+  const item = items.find((i) => Number(i.id) === Number(itemId));
+  if (!item) return { ok: false, code: 404, message: 'Unit not found on this Return DC' };
+  if (!item.gate_inward_at) return { ok: false, code: 400, message: 'Guard inward is not done for this unit yet' };
+  if (item.warehouse_received_at) return { ok: false, code: 409, message: 'This unit is already received at the warehouse' };
+
+  const current = await expectedConfigForPickupItem(client, item);
+  const next = { ...current };
+  for (const f of EDITABLE_CONFIG_FIELDS) {
+    if (config?.[f] === undefined) continue;
+    const v = String(config[f] ?? '').trim().slice(0, 200);
+    next[f] = v || null;
+  }
+  if (!next.ram || !next.ssd || !next.processor) {
+    return { ok: false, code: 400, message: 'Processor, RAM and SSD are required' };
+  }
+  const userId = user?.user_id || user?.id || null;
+
+  const productionAssetService = require('./productionAssetService');
+  await productionAssetService.syncWorkingConfigFromInventory(client, {
+    serial_number: item.serial_number,
+    machine_number: item.ttspl_id || item.unique_serial_number,
+    brand: next.brand,
+    model: next.model,
+    processor: next.processor,
+    generation: next.generation,
+    ram: next.ram,
+    storage: next.ssd,
+    gpu: next.gpu,
+  }, userId);
+  if (item.serial_id) {
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+              updated_at = NOW()
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [item.serial_id, JSON.stringify({
+        brand: next.brand || undefined,
+        model: next.model || undefined,
+        model_name: next.model || undefined,
+        processor: next.processor || undefined,
+        generation: next.generation || undefined,
+        ram: next.ram || undefined,
+        storage: next.ssd || undefined,
+        ssd: next.ssd || undefined,
+        gpu: next.gpu || undefined,
+      })]
+    );
+  }
+
+  const prev = item.return_config_result || {};
+  const actual = (await latestTokenForItem(client, item.id))?.actual_config || null;
+  const recheck = actual ? verifyConfigurationAgainst(expectedShape(next), actual) : null;
+  const matchPayload = {
+    configurationMatched: true,
+    laptop_condition: prev.laptop_condition || 'on',
+    edited_by_super_admin: true,
+    edited_by: userId,
+    edited_by_name: user?.name || user?.email || null,
+    edited_at: new Date().toISOString(),
+    previous_expected: current,
+    checks: recheck?.checks || prev.checks || [],
+    errors: recheck?.errors || [],
+    verified_at: new Date().toISOString(),
+  };
+
+  await client.query(
+    `UPDATE rdc_capture_tokens SET status = 'expired'
+      WHERE item_id = $1 AND status = 'pending'`,
+    [item.id]
+  );
+  await client.query(
+    `UPDATE support_ticket_items
+        SET brand = COALESCE($2, brand),
+            model = COALESCE($3, model),
+            processor = $4,
+            generation = $5,
+            ram = $6,
+            storage = $7,
+            return_config_verified_at = NOW(),
+            return_config_result = $8::jsonb,
+            return_captured_serial = COALESCE(return_captured_serial, $9),
+            return_laptop_condition = COALESCE(return_laptop_condition, $10),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [
+      item.id,
+      next.brand,
+      next.model,
+      next.processor,
+      next.generation,
+      next.ram,
+      next.ssd,
+      JSON.stringify(matchPayload),
+      String(item.serial_number || '').trim().toUpperCase() || null,
+      matchPayload.laptop_condition,
+    ]
+  );
+  return { ok: true, config: next };
+}
+
 module.exports = {
+  editRdcItemConfig,
   expectedConfigForPickupItem,
   mintTokensForItems,
   mintTokensForRdc,

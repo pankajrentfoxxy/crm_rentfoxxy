@@ -123,6 +123,10 @@ export const confirmReturnDcWarehouse = (rdcNumber, data) =>
 export const remintReturnDcConfigTokens = (rdcNumber, data) =>
   api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/config-tokens`, data || {});
 
+/** Super Admin: correct a unit's config after a script mismatch and accept it for inward. */
+export const editReturnDcItemConfig = (rdcNumber, itemId, config) =>
+  api.patch(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/items/${itemId}/config`, { config });
+
 export const getDeliveryCounts = () => api.get('/delivery-register-management/counts');
 export const listByStatus = (status, p) => api.get(`/delivery-register-management/${status}`, { params: p });
 export const sendDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${encDc(dcNumber)}/send-otp`, d || {});

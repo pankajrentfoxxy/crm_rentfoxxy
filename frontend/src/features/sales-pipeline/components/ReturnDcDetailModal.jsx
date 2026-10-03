@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
+import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2, ExternalLink, RefreshCw, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
-import { confirmReturnDcWarehouse, getReturnDcDetail, remintReturnDcConfigTokens } from '../salesPipelineApi';
+import {
+  confirmReturnDcWarehouse, editReturnDcItemConfig, getReturnDcDetail, remintReturnDcConfigTokens,
+} from '../salesPipelineApi';
 import { formatDate, formatDateTime } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 
@@ -109,6 +111,87 @@ function WarehouseSignPanel({ rdcNumber, onSigned }) {
   );
 }
 
+const EDIT_CONFIG_FIELDS = [
+  ['brand', 'Brand'],
+  ['model', 'Model'],
+  ['processor', 'Processor'],
+  ['generation', 'Generation'],
+  ['ram', 'RAM'],
+  ['ssd', 'SSD'],
+  ['gpu', 'GPU'],
+];
+
+/** Starting values: the asset's expected config, with RAM/SSD taken from what the laptop reported. */
+function initialEditConfig(item) {
+  const e = item?.return_capture?.expected_config || {};
+  const out = {
+    brand: e.brand || item?.brand || '',
+    model: e.model || item?.model || '',
+    processor: e.processor || item?.processor || '',
+    generation: e.generation || item?.generation || '',
+    ram: e.ram || item?.ram || '',
+    ssd: e.ssd || e.storage || item?.storage || '',
+    gpu: e.gpu || '',
+  };
+  for (const c of item?.return_config_result?.checks || []) {
+    if (c.matched || c.actual == null || c.actual === '') continue;
+    if (c.field === 'ram') out.ram = String(c.actual);
+    if (c.field === 'ssd') out.ssd = String(c.actual);
+    if (c.field === 'gpu') out.gpu = String(c.actual);
+  }
+  return out;
+}
+
+function EditUnitConfigPanel({ rdcNumber, item, onCancel, onSaved }) {
+  const [form, setForm] = useState(() => initialEditConfig(item));
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) {
+      toast.error('Processor, RAM and SSD are required');
+      return;
+    }
+    setSaving(true);
+    try {
+      await editReturnDcItemConfig(rdcNumber, item.id, form);
+      toast.success('Configuration updated — unit cleared for inward');
+      onSaved();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to update configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 border border-amber-200 bg-amber-50/60 rounded-lg p-3">
+      <p className="text-xs font-semibold text-gray-900 mb-1">Edit configuration (Super Admin)</p>
+      <p className="text-[11px] text-gray-600 mb-2">
+        Saves this config on the asset and accepts the unit for warehouse inward.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {EDIT_CONFIG_FIELDS.map(([key, label]) => (
+          <label key={key} className="text-[11px] text-gray-600">
+            {label}
+            <input
+              type="text"
+              value={form[key]}
+              onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+              className="mt-0.5 w-full border border-gray-200 rounded px-2 py-1 text-xs text-gray-900 bg-white"
+            />
+          </label>
+        ))}
+      </div>
+      <div className="flex gap-2 mt-2">
+        <button type="button" onClick={onCancel} disabled={saving} className="flex-1 py-1.5 border rounded text-xs bg-white">Cancel</button>
+        <button type="button" onClick={save} disabled={saving} className="flex-[2] py-1.5 bg-amber-600 text-white rounded text-xs font-semibold disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save config & accept unit'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const { user } = useAuth();
   const { canView } = usePermission();
@@ -117,6 +200,8 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const [detail, setDetail] = useState(null);
   const isCancelled = String(detail?.status || '').toLowerCase() === 'cancelled';
   const canWarehouseSign = roleCanWarehouseSign && !isCancelled;
+  const isSuperAdmin = String(user?.role || '').toLowerCase() === 'super_admin';
+  const [editingItemId, setEditingItemId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
@@ -372,14 +457,44 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                               </tbody>
                             </table>
                           ) : null}
-                          {!matched && canWarehouseSign ? (
-                            <button
-                              type="button"
-                              onClick={() => remintItem(item.id)}
-                              className="mt-1 inline-flex items-center gap-1 text-xs text-violet-800 font-semibold"
-                            >
-                              <RefreshCw className="w-3 h-3" /> New access number
-                            </button>
+                          {item.return_config_result?.edited_by_super_admin ? (
+                            <p className="text-xs text-amber-700 mt-0.5">
+                              Config edited by Super Admin{item.return_config_result.edited_by_name ? ` (${item.return_config_result.edited_by_name})` : ''}
+                            </p>
+                          ) : null}
+                          {!matched && (canWarehouseSign || (isSuperAdmin && !isCancelled)) ? (
+                            <div className="mt-1 flex flex-wrap items-center gap-4">
+                              {canWarehouseSign ? (
+                                <button
+                                  type="button"
+                                  onClick={() => remintItem(item.id)}
+                                  className="inline-flex items-center gap-1 text-xs text-violet-800 font-semibold"
+                                >
+                                  <RefreshCw className="w-3 h-3" /> New access number
+                                </button>
+                              ) : null}
+                              {isSuperAdmin && !isCancelled && editingItemId !== item.id ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingItemId(item.id)}
+                                  className="inline-flex items-center gap-1 text-xs text-amber-700 font-semibold"
+                                >
+                                  <Pencil className="w-3 h-3" /> Edit config &amp; accept
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {!matched && isSuperAdmin && !isCancelled && editingItemId === item.id ? (
+                            <EditUnitConfigPanel
+                              rdcNumber={rdcNumber}
+                              item={item}
+                              onCancel={() => setEditingItemId(null)}
+                              onSaved={() => {
+                                setEditingItemId(null);
+                                load({ silent: true, refresh: true });
+                                onUpdated?.();
+                              }}
+                            />
                           ) : null}
                         </div>
                       );

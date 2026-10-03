@@ -285,6 +285,8 @@ router.get('/return-dc/:rdcNumber/download-pdf', rdcView, ctrl.downloadReturnDcP
 router.post('/return-dc/:rdcNumber/pdf', rdcView, ctrl.regenerateReturnDcPdf);
 router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
 router.post('/return-dc/:rdcNumber/config-tokens', rdcEdit, rejectCancelledReturnDc, ctrl.remintReturnDcConfigTokens);
+// Super Admin: correct a unit's config after a script mismatch and accept it for inward.
+router.patch('/return-dc/:rdcNumber/items/:itemId/config', checkRole('super_admin'), rejectCancelledReturnDc, ctrl.editReturnDcItemConfig);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);
 router.post('/return-dc/tickets/:ticketId/generate', rdcEdit, ctrl.generateReturnDc);
 

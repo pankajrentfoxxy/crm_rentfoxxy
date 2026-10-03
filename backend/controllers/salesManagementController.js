@@ -4300,6 +4300,38 @@ exports.remintReturnDcConfigTokens = async (req, res) => {
   }
 };
 
+exports.editReturnDcItemConfig = async (req, res) => {
+  const pool = require('../config/db');
+  const client = await pool.connect();
+  try {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    const itemId = Number(req.params.itemId || 0);
+    if (!itemId) return res.status(400).json({ success: false, message: 'Invalid unit' });
+    await client.query('BEGIN');
+    const result = await require('../services/rdcCaptureService').editRdcItemConfig(client, {
+      rdcNumber,
+      itemId,
+      config: req.body?.config || req.body || {},
+      user: req.user,
+    });
+    if (!result.ok) {
+      await client.query('ROLLBACK');
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    await client.query('COMMIT');
+    try {
+      require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
+    } catch { /* ignore */ }
+    res.json({ success: true, config: result.config });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    console.error('editReturnDcItemConfig:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to update configuration' });
+  } finally {
+    client.release();
+  }
+};
+
 exports.getReturnDcDetail = async (req, res) => {
   try {
     const rdcNumber = String(req.params.rdcNumber || '').trim();
