@@ -24,6 +24,16 @@ function securityLinesSubtotal(lines = []) {
   );
 }
 
+// A re-rented laptop keeps its previous rental's delivered_at until this
+// delivery is marked, so at DC create a stale date (TTSPL6324: 29 May on a
+// 28 Sep dispatch) pushed it out of the window and the first invoice went out
+// with no security. A delivery from before this dispatch is not this rental's.
+const DELIVERY_DATE_SQL = `COALESCE(
+              CASE WHEN vsn.dispatched_at IS NULL
+                     OR vsn.delivered_at::date >= vsn.dispatched_at::date - 7
+                   THEN vsn.delivered_at::date END,
+              vsn.rent_start_date, vsn.dispatched_at::date)`;
+
 function securityAssetKey(line) {
   if (line?.serial_id != null && line.serial_id !== '') return `id:${line.serial_id}`;
   if (line?.ttspl_id) return `t:${String(line.ttspl_id).trim()}`;
@@ -94,7 +104,7 @@ async function collectUnbilledSecurityLines(client, {
             vsn.serial_id,
             COALESCE(vsn.inventory_asset_code, sos.ttspl_id) AS ttspl_id,
             COALESCE(vsn.serial_number, sos.serial_number) AS serial_number,
-            COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) AS delivery_date,
+            ${DELIVERY_DATE_SQL} AS delivery_date,
             COALESCE(vsn.current_dc_number, sos.dc_number) AS dc_number,
             sos.sales_order_number,
             sol.security_type,
@@ -121,9 +131,9 @@ async function collectUnbilledSecurityLines(client, {
           LOWER(COALESCE(sol.security_type, '')) = 'one_month_rental'
           OR COALESCE(sol.security_amount, 0) > 0
         )
-        AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) IS NOT NULL
-        AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) >= $2::date
-        AND COALESCE(vsn.delivered_at::date, vsn.rent_start_date, vsn.dispatched_at::date) <= $3::date
+        AND ${DELIVERY_DATE_SQL} IS NOT NULL
+        AND ${DELIVERY_DATE_SQL} >= $2::date
+        AND ${DELIVERY_DATE_SQL} <= $3::date
         AND ($4::int[] IS NULL OR vsn.serial_id = ANY($4::int[]))
         AND NOT EXISTS (
           SELECT 1 FROM customer_security_deposits sd
