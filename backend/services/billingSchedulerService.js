@@ -1083,7 +1083,9 @@ async function buildCustomerInvoiceLines(client, {
       const dailyRate = monthlyRate / seg.daysInMonth;
       const amount = parseFloat((dailyRate * days).toFixed(2));
       subtotal += amount;
-      const isCatchup = seg.year !== year || seg.month !== month;
+      // Catch-up means a month before the invoice month. A quarterly period's
+      // later months (Nov and Dec on an October invoice) are billed in advance.
+      const isCatchup = seg.year * 12 + seg.month < year * 12 + month;
       lineItems.push({
         serial_id: row.serial_id,
         ttspl_id: row.ttspl_id || null,

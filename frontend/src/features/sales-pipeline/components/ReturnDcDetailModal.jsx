@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
+import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2, ExternalLink, RefreshCw, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
-import { confirmReturnDcWarehouse, getReturnDcDetail, remintReturnDcConfigTokens } from '../salesPipelineApi';
+import {
+  confirmReturnDcWarehouse, editReturnDcItemConfig, getReturnDcDetail, remintReturnDcConfigTokens,
+} from '../salesPipelineApi';
 import { formatDate, formatDateTime } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 
@@ -109,6 +111,125 @@ function WarehouseSignPanel({ rdcNumber, onSigned }) {
   );
 }
 
+const EDIT_CONFIG_FIELDS = [
+  ['brand', 'Brand'],
+  ['model', 'Model'],
+  ['processor', 'Processor'],
+  ['generation', 'Generation'],
+  ['ram', 'RAM'],
+  ['ssd', 'SSD'],
+  ['gpu', 'GPU'],
+];
+
+/** Starting values: the expected config the unit is checked against. */
+function initialEditConfig(item) {
+  const e = item?.return_capture?.expected_config || {};
+  return {
+    brand: e.brand || item?.brand || '',
+    model: e.model || item?.model || '',
+    processor: e.processor || item?.processor || '',
+    generation: e.generation || item?.generation || '',
+    ram: e.ram || item?.ram || '',
+    ssd: e.ssd || e.storage || item?.storage || '',
+    gpu: e.gpu || '',
+  };
+}
+
+/** What the laptop reported on its last script run, keyed by field. */
+function laptopReadings(item) {
+  const out = {};
+  for (const c of item?.return_config_result?.checks || []) {
+    if (c.actual != null && c.actual !== '') out[c.field] = { value: String(c.actual), matched: c.matched };
+  }
+  return out;
+}
+
+const EDIT_RESULT_MESSAGES = {
+  matched: 'Expected config updated — laptop now matches, unit cleared for inward',
+  still_mismatch: 'Expected config updated — laptop still does not match',
+  awaiting_script: 'Expected config updated — run the script on the laptop',
+  already_verified: 'Expected config updated',
+};
+
+function EditUnitConfigModal({ rdcNumber, item, onClose, onSaved }) {
+  const [form, setForm] = useState(() => initialEditConfig(item));
+  const [saving, setSaving] = useState(false);
+  const readings = laptopReadings(item);
+
+  const save = async () => {
+    if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) {
+      toast.error('Processor, RAM and SSD are required');
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await editReturnDcItemConfig(rdcNumber, item.id, form);
+      const status = r.data?.status;
+      if (status === 'still_mismatch') toast.error(EDIT_RESULT_MESSAGES[status]);
+      else toast.success(EDIT_RESULT_MESSAGES[status] || 'Expected config updated');
+      onSaved();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to update configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
+      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div className="border-b px-5 py-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold">Edit expected configuration</h3>
+            <p className="text-xs text-gray-500 font-mono">{item.ttspl_id || '—'} · SN {item.serial_number || '—'}</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          {EDIT_CONFIG_FIELDS.map(([key, label]) => {
+            const reading = readings[key];
+            return (
+              <label key={key} className="block text-xs text-gray-600">
+                {label}
+                <input
+                  type="text"
+                  value={form[key]}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                  className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900"
+                />
+                {reading ? (
+                  <span className={`block mt-0.5 text-[11px] ${reading.matched ? 'text-gray-400' : 'text-red-700'}`}>
+                    Laptop reported: {reading.value}
+                    {!reading.matched ? (
+                      <button
+                        type="button"
+                        onClick={() => setForm((f) => ({ ...f, [key]: reading.value }))}
+                        className="ml-2 font-semibold text-violet-800"
+                      >
+                        Use this
+                      </button>
+                    ) : null}
+                  </span>
+                ) : null}
+              </label>
+            );
+          })}
+          <p className="text-[11px] text-gray-500">
+            Saves on the asset. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse inward.
+          </p>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} disabled={saving} className="flex-1 py-2 border rounded-lg text-sm">Cancel</button>
+            <button type="button" onClick={save} disabled={saving} className="flex-[2] py-2 bg-violet-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const { user } = useAuth();
   const { canView } = usePermission();
@@ -117,6 +238,8 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const [detail, setDetail] = useState(null);
   const isCancelled = String(detail?.status || '').toLowerCase() === 'cancelled';
   const canWarehouseSign = roleCanWarehouseSign && !isCancelled;
+  const isSuperAdmin = String(user?.role || '').toLowerCase() === 'super_admin';
+  const [editingItemId, setEditingItemId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
@@ -172,6 +295,9 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   };
 
   const pdfLink = assetUrl(detail?.pdf_path);
+  const editingItem = editingItemId
+    ? (detail?.pickup_items || []).find((p) => p.id === editingItemId)
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -284,7 +410,18 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     const config = unitConfig({ ...u, ...(item || {}) });
                     return (
                       <div key={u.ttspl || i} className="px-4 py-3 text-sm">
-                        <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-medium">{[u.brand, u.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                          {isSuperAdmin && !isCancelled && item && !item.warehouse_received_at ? (
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemId(item.id)}
+                              className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-violet-800"
+                            >
+                              <Pencil className="w-3 h-3" /> Edit
+                            </button>
+                          ) : null}
+                        </div>
                         {config ? <p className="text-xs text-gray-700 mt-0.5">{config}</p> : null}
                         <p className="text-xs text-gray-500 font-mono mt-0.5">
                           {u.ttspl || '—'} · SN {u.serial || '—'}
@@ -371,6 +508,11 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                                 ))}
                               </tbody>
                             </table>
+                          ) : null}
+                          {item.return_config_result?.edited_by_super_admin ? (
+                            <p className="text-xs text-amber-700 mt-0.5">
+                              Expected config edited by Super Admin{item.return_config_result.edited_by_name ? ` (${item.return_config_result.edited_by_name})` : ''}
+                            </p>
                           ) : null}
                           {!matched && canWarehouseSign ? (
                             <button
@@ -462,6 +604,18 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
           )}
         </div>
       </div>
+      {editingItem ? (
+        <EditUnitConfigModal
+          rdcNumber={rdcNumber}
+          item={editingItem}
+          onClose={() => setEditingItemId(null)}
+          onSaved={() => {
+            setEditingItemId(null);
+            load({ silent: true, refresh: true });
+            onUpdated?.();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

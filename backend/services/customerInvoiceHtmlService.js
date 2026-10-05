@@ -14,6 +14,8 @@ const {
   parseItemDisplay,
   formatSpecLine,
   groupLineItems,
+  mergeLaptopPeriodLines,
+  linesSpanLabel,
   countUniqueLaptops,
   fmtMoneyPlain,
   fmtMoneyInr,
@@ -150,20 +152,27 @@ function monthYearLabel(ym) {
 }
 
 function groupTitleCatchup(lines, { compact = false } = {}) {
-  const first = lines[0];
-  const label = monthYearLabel(first?.period)
-    || fmtPeriod(first?.rent_start, first?.rent_end).replace(/\s\d{4}$/, '');
+  const label = linesSpanLabel(lines);
   const base = `Catch-up charges${label ? ` for ${label}` : ''}`;
   if (compact) return base;
-  return `${base} <small>— devices delivered mid-month, billed pro-rata</small>`;
+  const partial = lines.some((l) => Number(l.month_days) > 0 && Number(l.days_in_month || 0) < Number(l.month_days));
+  return `${base} <small>— ${partial ? 'devices delivered mid-month, billed pro-rata' : 'earlier months not billed before'}</small>`;
 }
 
-function groupTitleFull(invoice, { compact = false } = {}) {
-  const from = fmtInvoiceDate(invoice.from_date);
-  const to = fmtInvoiceDate(invoice.to_date);
-  const label = monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`);
+function groupTitleFull(invoice, { compact = false } = {}, lines = []) {
+  const label = linesSpanLabel(lines)
+    || monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`);
   const base = `Rental for ${label || 'billing period'}`;
   if (compact) return base;
+  // A quarterly invoice's period runs past the month; its catch-up runs before it.
+  const multiMonth = label.includes(' – ');
+  if (multiMonth) {
+    const starts = lines.map((l) => String(l.rent_start || '').slice(0, 10)).filter(Boolean).sort();
+    const ends = lines.map((l) => String(l.rent_end || '').slice(0, 10)).filter(Boolean).sort();
+    return `${base} <small>— ${fmtInvoiceDate(starts[0])} – ${fmtInvoiceDate(ends[ends.length - 1])}, billed in advance</small>`;
+  }
+  const from = fmtInvoiceDate(invoice.from_date);
+  const to = fmtInvoiceDate(invoice.to_date);
   return `${base} <small>— ${from} – ${to}, full month</small>`;
 }
 
@@ -172,7 +181,10 @@ function renderLineRow(line, idx, alt) {
   const spec = formatSpecLine(line);
   const serial = line.serial_number ? `SN ${escapeHtml(line.serial_number)}` : '';
   const security = isSecurityLine(line);
-  const proRataTag = isProRataLine(line) ? '<span class="tag">pro-rata</span>' : '';
+  // Catch-up for whole months (a quarter's back rent) is not pro-rata.
+  const partDays = Number(line.month_days) > 0 && Number(line.days_in_month || 0) < Number(line.month_days);
+  const proRataTag = isProRataLine(line) && (partDays || !Number(line.month_days))
+    ? '<span class="tag">pro-rata</span>' : '';
   const securityTag = security ? '<span class="tag">security</span>' : '';
   const rate = line.monthly_rate != null ? line.monthly_rate : (
     Number(line.month_days) > 0
@@ -281,7 +293,10 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
     };
   }
 
-  const { catchup, full, security } = groupLineItems(lines);
+  const grouped = groupLineItems(lines);
+  const catchup = mergeLaptopPeriodLines(grouped.catchup);
+  const full = mergeLaptopPeriodLines(grouped.full);
+  const { security } = grouped;
   let bodyRows = '';
   let rowNum = 1;
   let altToggle = false;
@@ -289,10 +304,11 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
   let fullSubtotal = 0;
   let securitySubtotal = 0;
   let catchupMonthLabel = '';
+  let fullPeriodLabel = '';
   const titleOpts = { compact: compactSectionTitles };
 
   if (catchup.length) {
-    catchupMonthLabel = monthYearLabel(catchup[0]?.period) || 'prior period';
+    catchupMonthLabel = linesSpanLabel(catchup) || 'prior period';
     const g = renderGroup(groupTitleCatchup(catchup, titleOpts), catchup, rowNum, altToggle, `Catch-up subtotal (${catchupMonthLabel})`);
     bodyRows += g.html;
     catchupSubtotal = g.subtotal || 0;
@@ -300,8 +316,10 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
     altToggle = (catchup.length % 2) === 1;
   }
   if (full.length) {
-    const monthLabel = monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`) || 'period';
-    const g = renderGroup(groupTitleFull(invoice, titleOpts), full, rowNum, altToggle, `${monthLabel} subtotal`);
+    const monthLabel = linesSpanLabel(full)
+      || monthYearLabel(`${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`) || 'period';
+    fullPeriodLabel = monthLabel;
+    const g = renderGroup(groupTitleFull(invoice, titleOpts, full), full, rowNum, altToggle, `${monthLabel} subtotal`);
     bodyRows += g.html;
     fullSubtotal = g.subtotal || 0;
     rowNum = g.nextIdx;
@@ -313,7 +331,7 @@ function buildItemsTableBody(invoice, lines, { compactSectionTitles = false } = 
     securitySubtotal = g.subtotal || 0;
   }
 
-  const billingMonthLabel = monthYearLabel(
+  const billingMonthLabel = fullPeriodLabel || monthYearLabel(
     `${invoice.invoice_year}-${String(invoice.invoice_month).padStart(2, '0')}`,
   );
 

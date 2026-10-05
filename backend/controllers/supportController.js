@@ -1559,6 +1559,12 @@ exports.getNavBadges = async (req, res) => {
     }
 };
 
+/** Name of the person who raised the ticket (not the company). */
+function cleanContactName(value) {
+    const name = String(value ?? '').trim().replace(/\s+/g, ' ');
+    return name ? name.slice(0, 150) : null;
+}
+
 exports.createTicket = async (req, res) => {
     if (!isSupportLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can create tickets' });
@@ -1579,7 +1585,8 @@ exports.createTicket = async (req, res) => {
         dc_number,
         sales_order_number,
         customer_portal_ticket,
-        portal_customer_id
+        portal_customer_id,
+        ticket_contact_name
     } = req.body;
     if (!customer_id || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, message: 'customer_id and items are required' });
@@ -1629,8 +1636,9 @@ exports.createTicket = async (req, res) => {
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
                 priority, top_level_remarks, ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
-                ticket_category, ttspl_id, dc_number, sales_order_number, customer_portal_ticket, portal_customer_id
-            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+                ticket_category, ttspl_id, dc_number, sales_order_number, customer_portal_ticket, portal_customer_id,
+                ticket_contact_name
+            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
             [
                 customer_id,
                 customer_name || null,
@@ -1648,7 +1656,8 @@ exports.createTicket = async (req, res) => {
                 dc_number || null,
                 sales_order_number || null,
                 customer_portal_ticket === true,
-                portal_customer_id || (customer_portal_ticket === true ? customer_id : null)
+                portal_customer_id || (customer_portal_ticket === true ? customer_id : null),
+                cleanContactName(ticket_contact_name)
             ]
         );
         const ticket = ticketRes.rows[0];
@@ -2780,6 +2789,7 @@ exports.updateTicket = async (req, res) => {
         ticket_alt_phone,
         ticket_email,
         ticket_address,
+        ticket_contact_name,
         priority,
         top_level_remarks,
         items,
@@ -2805,6 +2815,7 @@ exports.updateTicket = async (req, res) => {
                 ticket_address = COALESCE($5, ticket_address),
                 priority = COALESCE($6, priority),
                 top_level_remarks = COALESCE($7, top_level_remarks),
+                ticket_contact_name = COALESCE($8, ticket_contact_name),
                 updated_at = CURRENT_TIMESTAMP,
                 last_activity_at = CURRENT_TIMESTAMP
              WHERE id = $1`,
@@ -2815,7 +2826,8 @@ exports.updateTicket = async (req, res) => {
                 ticket_email ?? null,
                 ticket_address ?? null,
                 priority ?? null,
-                top_level_remarks ?? null
+                top_level_remarks ?? null,
+                cleanContactName(ticket_contact_name)
             ]
         );
         if (Array.isArray(items)) {
@@ -3416,7 +3428,7 @@ exports.createPickupTicket = async (req, res) => {
     const {
         customer_id, customer_name, customer_phone,
         priority, top_level_remarks,
-        ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
+        ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address, ticket_contact_name,
         machine = {},
         machines: machinesRaw,
         pickup_type, pickup_address, dispatch_mode,
@@ -3459,9 +3471,9 @@ exports.createPickupTicket = async (req, res) => {
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
                 priority, top_level_remarks, ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
-                ticket_category, ttspl_id, serial_number, complaint_type
+                ticket_category, ttspl_id, serial_number, complaint_type, ticket_contact_name
             ) VALUES ($1,$2,$3,'in_progress',$4,CURRENT_TIMESTAMP,$5,$6,$7,$8,$9,$10,
-                      'pickup',$11,$12,'pickup')
+                      'pickup',$11,$12,'pickup',$13)
             RETURNING *`,
             [
                 customer_id, customer_name || null, customer_phone || null,
@@ -3474,6 +3486,7 @@ exports.createPickupTicket = async (req, res) => {
                 ticket_address || null,
                 ttspl,
                 firstMachine.serial_number || null,
+                cleanContactName(ticket_contact_name),
             ]
         );
         const ticket = ticketRes.rows[0];

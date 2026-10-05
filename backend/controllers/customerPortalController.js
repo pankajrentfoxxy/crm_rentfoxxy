@@ -620,8 +620,8 @@ exports.raiseTicket = async (req, res) => {
       `INSERT INTO support_tickets (
          customer_id, customer_name, customer_phone, status, last_activity_at,
          priority, top_level_remarks, ticket_email, ticket_category,
-         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id, pickup_address
-       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9,$10::jsonb)
+         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id, pickup_address, ticket_contact_name
+       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9,$10::jsonb,$11)
        RETURNING id`,
       [
         customerId,
@@ -634,6 +634,7 @@ exports.raiseTicket = async (req, res) => {
         dcNumber,
         customerId,
         pickup_address ? JSON.stringify(pickup_address) : null,
+        String(pickup_address?.name || '').trim().slice(0, 150) || null,
       ]
     );
     const ticketId = ticketRes.rows[0].id;

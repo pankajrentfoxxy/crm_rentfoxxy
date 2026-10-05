@@ -252,9 +252,22 @@ function isMachineTypeCode(s) {
   return /^[0-9]{2}[a-z0-9]{6,}$/i.test(String(s || '').replace(/\s+/g, ''));
 }
 
+/**
+ * Friendly model name to show as "Laptop" in the check. Skips identifiers that
+ * are not a model name: Lenovo machine-type codes (Win32_ComputerSystem.Model
+ * "20TAS0E800"), HP's BIOS version code (Win32_ComputerSystemProduct.Version
+ * "SBKPFV3" on nearly every HP) and HP's "103C_5336AN HP ProBook" family string.
+ */
+function isFriendlyModelName(s) {
+  const t = String(s || '').trim();
+  if (!t || isMachineTypeCode(t)) return false;
+  if (/^103C_/i.test(t)) return false;
+  return /\s/.test(t);
+}
+
 function preferredActualModel(actual = {}) {
   const candidates = [actual.model_version, actual.system_family, actual.model];
-  return candidates.find((s) => s && !isMachineTypeCode(s)) || actual.model || '';
+  return candidates.find(isFriendlyModelName) || String(actual.model || '').trim();
 }
 
 /**

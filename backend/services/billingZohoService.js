@@ -12,7 +12,9 @@ async function loadZohoBillingAcks(client, customerId, serialIds) {
   const bySerial = new Map();
   if (!customerId || !ids.length) return bySerial;
   const { rows } = await client.query(
-    `SELECT serial_id, rent_billed_through, security_billed, security_amount,
+    // ::text keeps it 'YYYY-MM-DD'. pg returns a DATE as a JS Date, and
+    // String(date).slice(0, 10) gives 'Mon Aug 31', which parses as 2001.
+    `SELECT serial_id, rent_billed_through::text AS rent_billed_through, security_billed, security_amount,
             invoice_id, external_invoice_ref, source
        FROM customer_serial_billing_ack
       WHERE customer_id = $1

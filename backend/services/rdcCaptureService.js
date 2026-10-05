@@ -494,7 +494,166 @@ async function submitRdcSerial(tokenId, serialNumber) {
   return { ok: true, serial_number: serial };
 }
 
+const EDITABLE_CONFIG_FIELDS = ['brand', 'model', 'processor', 'generation', 'ram', 'ssd', 'gpu'];
+
+/**
+ * Super Admin: change a Return DC unit's expected configuration. It is saved to the asset
+ * (production asset → vendor_serial_numbers.extra), the pickup row and any open access
+ * number. If the laptop's last script reading now matches, the unit is accepted for
+ * warehouse inward; otherwise the script is re-run against the new expected config.
+ */
+async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
+  const items = await loadPickupItemsForRdc(client, rdcNumber);
+  const item = items.find((i) => Number(i.id) === Number(itemId));
+  if (!item) return { ok: false, code: 404, message: 'Unit not found on this Return DC' };
+  if (item.warehouse_received_at) return { ok: false, code: 409, message: 'This unit is already received at the warehouse' };
+
+  const current = await expectedConfigForPickupItem(client, item);
+  const next = { ...current };
+  for (const f of EDITABLE_CONFIG_FIELDS) {
+    if (config?.[f] === undefined) continue;
+    const v = String(config[f] ?? '').trim().slice(0, 200);
+    next[f] = v || null;
+  }
+  if (!next.ram || !next.ssd || !next.processor) {
+    return { ok: false, code: 400, message: 'Processor, RAM and SSD are required' };
+  }
+  const userId = user?.user_id || user?.id || null;
+
+  const productionAssetService = require('./productionAssetService');
+  await productionAssetService.syncWorkingConfigFromInventory(client, {
+    serial_number: item.serial_number,
+    machine_number: item.ttspl_id || item.unique_serial_number,
+    brand: next.brand,
+    model: next.model,
+    processor: next.processor,
+    generation: next.generation,
+    ram: next.ram,
+    storage: next.ssd,
+    gpu: next.gpu,
+  }, userId);
+  if (item.serial_id) {
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+              updated_at = NOW()
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [item.serial_id, JSON.stringify({
+        brand: next.brand || undefined,
+        model: next.model || undefined,
+        model_name: next.model || undefined,
+        processor: next.processor || undefined,
+        generation: next.generation || undefined,
+        ram: next.ram || undefined,
+        storage: next.ssd || undefined,
+        ssd: next.ssd || undefined,
+        gpu: next.gpu || undefined,
+      })]
+    );
+  }
+
+  const expected = expectedShape(next);
+  await client.query(
+    `UPDATE support_ticket_items
+        SET brand = COALESCE($2, brand),
+            model = COALESCE($3, model),
+            processor = $4,
+            generation = $5,
+            ram = $6,
+            storage = $7,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [item.id, next.brand, next.model, next.processor, next.generation, next.ram, next.ssd]
+  );
+  // Open access numbers keep working, now checked against the new expected config.
+  await client.query(
+    `UPDATE rdc_capture_tokens SET expected_config = $2::jsonb
+      WHERE item_id = $1 AND status = 'pending'`,
+    [item.id, JSON.stringify(expected)]
+  );
+
+  const editMeta = {
+    edited_by_super_admin: true,
+    edited_by: userId,
+    edited_by_name: user?.name || user?.email || null,
+    edited_at: new Date().toISOString(),
+    previous_expected: current,
+  };
+
+  if (item.return_config_verified_at) {
+    await client.query(
+      `UPDATE support_ticket_items
+          SET return_config_result = COALESCE(return_config_result, '{}'::jsonb) || $2::jsonb
+        WHERE id = $1`,
+      [item.id, JSON.stringify(editMeta)]
+    );
+    return { ok: true, config: next, status: 'already_verified' };
+  }
+
+  const readRes = await client.query(
+    `SELECT * FROM rdc_capture_tokens
+      WHERE item_id = $1 AND actual_config IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [item.id]
+  );
+  const lastRead = readRes.rows[0] || null;
+  if (!lastRead) {
+    if (item.gate_inward_at) {
+      await mintTokensForRdc(client, { rdcNumber, createdBy: userId, itemIds: [item.id] });
+    }
+    return { ok: true, config: next, status: 'awaiting_script' };
+  }
+
+  const configResult = verifyConfigurationAgainst(expected, lastRead.actual_config);
+  const matchPayload = {
+    configurationMatched: configResult.configurationMatched,
+    laptop_condition: 'on',
+    checks: configResult.checks || [],
+    errors: configResult.errors || [],
+    verified_at: new Date().toISOString(),
+    ...editMeta,
+  };
+
+  if (!configResult.configurationMatched) {
+    await client.query(
+      `UPDATE support_ticket_items SET return_config_result = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+      [item.id, JSON.stringify(matchPayload)]
+    );
+    return { ok: true, config: next, status: 'still_mismatch', errors: matchPayload.errors };
+  }
+
+  await client.query(
+    `UPDATE rdc_capture_tokens SET status = 'expired'
+      WHERE item_id = $1 AND status = 'pending'`,
+    [item.id]
+  );
+  await client.query(
+    `UPDATE rdc_capture_tokens
+        SET status = 'matched', expected_config = $2::jsonb, match_result = $3::jsonb, matched_at = NOW()
+      WHERE token_id = $1`,
+    [lastRead.token_id, JSON.stringify(expected), JSON.stringify(matchPayload)]
+  );
+  await client.query(
+    `UPDATE support_ticket_items
+        SET return_config_verified_at = NOW(),
+            return_config_result = $2::jsonb,
+            return_config_token_id = $3,
+            return_captured_serial = COALESCE(return_captured_serial, $4),
+            return_laptop_condition = 'on',
+            updated_at = NOW()
+      WHERE id = $1`,
+    [
+      item.id,
+      JSON.stringify(matchPayload),
+      lastRead.token_id,
+      String(lastRead.serial_number || item.serial_number || '').trim().toUpperCase() || null,
+    ]
+  );
+  return { ok: true, config: next, status: 'matched' };
+}
+
 module.exports = {
+  editRdcItemConfig,
   expectedConfigForPickupItem,
   mintTokensForItems,
   mintTokensForRdc,

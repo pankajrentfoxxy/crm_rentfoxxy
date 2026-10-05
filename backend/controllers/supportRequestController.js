@@ -839,6 +839,17 @@ exports.updateRequestStatus = async (req, res) => {
  * a request can sit in the queue for days, during which a laptop may have been
  * returned, reassigned to another customer, or pulled into another ticket.
  */
+/** The person who raised the request. QR requests hold them in customer_name;
+ *  portal requests hold the company there, so use the address contact. */
+function requestContactName(row) {
+  const extra = row?.extra && typeof row.extra === 'object' ? row.extra : {};
+  const addrName = String(extra.pickup_address?.name || extra.service_address?.name || '').trim();
+  const name = row?.source === 'portal'
+    ? addrName
+    : (String(row?.customer_name || '').trim() || addrName);
+  return name ? name.slice(0, 150) : null;
+}
+
 async function convertPickupRequest(client, req, row, priority, assignedTo = null) {
   const extra = row.extra && typeof row.extra === 'object' ? row.extra : {};
   const codes = (Array.isArray(extra.devices) && extra.devices.length
@@ -896,9 +907,9 @@ async function convertPickupRequest(client, req, row, priority, assignedTo = nul
     `INSERT INTO support_tickets (
         customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
         priority, top_level_remarks, ticket_phone_override, ticket_address,
-        ticket_category, ttspl_id, serial_number, complaint_type
+        ticket_category, ttspl_id, serial_number, complaint_type, ticket_contact_name
      ) VALUES ($1,$2,$3,'in_progress',$4,CURRENT_TIMESTAMP,$5,$6,$7,$8,
-               'pickup',$9,$10,'pickup')
+               'pickup',$9,$10,'pickup',$11)
      RETURNING *`,
     [
       customerId,
@@ -911,6 +922,7 @@ async function convertPickupRequest(client, req, row, priority, assignedTo = nul
       formatTicketAddress(pickupAddress),
       resolved[0].ttspl_id,
       resolved[0].serial_number || null,
+      requestContactName(row),
     ]
   );
   const ticket = ticketRes.rows[0];
@@ -1145,8 +1157,8 @@ exports.convertToTicket = async (req, res) => {
       `INSERT INTO support_tickets (
          customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
          priority, top_level_remarks, ticket_phone_override, ticket_email, ticket_address,
-         ticket_category, ttspl_id, customer_portal_ticket
-       ) VALUES ($1,$2,$3,'open',$4,NOW(),$5,$6,$7,$8,$9,$10,$11,FALSE)
+         ticket_category, ttspl_id, customer_portal_ticket, ticket_contact_name
+       ) VALUES ($1,$2,$3,'open',$4,NOW(),$5,$6,$7,$8,$9,$10,$11,FALSE,$12)
        RETURNING id`,
       [
         customerId,
@@ -1160,6 +1172,7 @@ exports.convertToTicket = async (req, res) => {
         ticketAddress,
         category,
         ttspl,
+        requestContactName(row),
       ]
     );
     const ticketId = ticketRes.rows[0].id;
