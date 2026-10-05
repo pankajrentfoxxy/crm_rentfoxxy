@@ -155,7 +155,8 @@ function groupTitleCatchup(lines, { compact = false } = {}) {
   const label = linesSpanLabel(lines);
   const base = `Catch-up charges${label ? ` for ${label}` : ''}`;
   if (compact) return base;
-  return `${base} <small>— devices delivered mid-month, billed pro-rata</small>`;
+  const partial = lines.some((l) => Number(l.month_days) > 0 && Number(l.days_in_month || 0) < Number(l.month_days));
+  return `${base} <small>— ${partial ? 'devices delivered mid-month, billed pro-rata' : 'earlier months not billed before'}</small>`;
 }
 
 function groupTitleFull(invoice, { compact = false } = {}, lines = []) {
@@ -180,7 +181,10 @@ function renderLineRow(line, idx, alt) {
   const spec = formatSpecLine(line);
   const serial = line.serial_number ? `SN ${escapeHtml(line.serial_number)}` : '';
   const security = isSecurityLine(line);
-  const proRataTag = isProRataLine(line) ? '<span class="tag">pro-rata</span>' : '';
+  // Catch-up for whole months (a quarter's back rent) is not pro-rata.
+  const partDays = Number(line.month_days) > 0 && Number(line.days_in_month || 0) < Number(line.month_days);
+  const proRataTag = isProRataLine(line) && (partDays || !Number(line.month_days))
+    ? '<span class="tag">pro-rata</span>' : '';
   const securityTag = security ? '<span class="tag">security</span>' : '';
   const rate = line.monthly_rate != null ? line.monthly_rate : (
     Number(line.month_days) > 0
