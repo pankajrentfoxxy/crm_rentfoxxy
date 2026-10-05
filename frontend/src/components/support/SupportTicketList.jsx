@@ -557,6 +557,7 @@ export default function SupportTicketList() {
                   <div className="min-w-0">
                     <p className="font-mono text-xs text-slate-400">{formatTicketId(ticket.id)}</p>
                     <p className="font-semibold text-slate-900 truncate">{ticket.customer_name || '—'}</p>
+                    {ticket.ticket_contact_name && <p className="text-xs text-slate-500 truncate">Raised by {ticket.ticket_contact_name}</p>}
                   </div>
                   <span className={`support-status-badge shrink-0 ${st.className}`}>{st.label}</span>
                 </div>
@@ -632,7 +633,10 @@ export default function SupportTicketList() {
                       </td>
                     )}
                     <td className="p-3 font-mono text-xs">{formatTicketId(ticket.id)}</td>
-                    <td className="p-3 font-medium">{ticket.customer_name || '—'}</td>
+                    <td className="p-3 font-medium">
+                      {ticket.customer_name || '—'}
+                      {ticket.ticket_contact_name && <div className="text-xs font-normal text-slate-500">Raised by {ticket.ticket_contact_name}</div>}
+                    </td>
                     <td className="p-3">
                       <TypeBadges ticket={ticket} />
                     </td>

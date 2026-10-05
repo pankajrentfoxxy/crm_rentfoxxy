@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera, Laptop } from 'lucide-react';
+import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera, Laptop, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
@@ -1347,6 +1347,11 @@ export default function SupportTicketDetail() {
               </button>
             )}
             <div className="flex flex-wrap gap-3 text-sm mt-2 items-center">
+              {ticket.ticket_contact_name && (
+                <span className="inline-flex items-center gap-1 font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                  <User className="w-4 h-4 shrink-0" /> Raised by {ticket.ticket_contact_name}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1" style={{ color: 'var(--color-text-secondary)' }}>
                 <Phone className="w-4 h-4 shrink-0" /> {ticket.display_phone || ticket.customer_phone}
               </span>

@@ -22,6 +22,7 @@ const emptyRow = () => ({
 
 export default function TicketEditPanel({ ticket, items, customerAddresses, technicians, categories, onSave, onCancel }) {
   const [form, setForm] = useState({
+    ticket_contact_name: ticket.ticket_contact_name || '',
     ticket_phone_override: ticket.ticket_phone_override || ticket.customer_phone || '',
     ticket_alt_phone: ticket.ticket_alt_phone || '',
     ticket_email: ticket.ticket_email || '',
@@ -140,6 +141,9 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
+        <label className="block text-sm">Raised by (person)
+          <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={form.ticket_contact_name} onChange={(e) => setForm((f) => ({ ...f, ticket_contact_name: e.target.value }))} maxLength={150} placeholder="Name of the person who raised it" />
+        </label>
         <label className="block text-sm">Phone
           <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={form.ticket_phone_override} onChange={(e) => setForm((f) => ({ ...f, ticket_phone_override: formatIndianMobileInput(e.target.value) }))} maxLength={10} inputMode="numeric" />
         </label>

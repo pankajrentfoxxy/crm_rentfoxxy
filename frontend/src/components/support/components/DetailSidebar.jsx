@@ -56,6 +56,9 @@ export default function DetailSidebar({
           <h3 className="support-v3-section-label"><Building2 className="w-3.5 h-3.5 inline mr-1" /> Customer</h3>
         </div>
         <p className="font-medium" style={{ color: 'var(--color-text-primary, #0f172a)' }}>{ticket.customer_name}</p>
+        <p style={{ color: 'var(--color-text-secondary, #475569)' }}>
+          Raised by: <span className="font-medium">{ticket.ticket_contact_name || '—'}</span>
+        </p>
         <p style={{ color: 'var(--color-text-secondary, #475569)' }}>{ticket.display_phone || ticket.customer_phone}</p>
         <p style={{ color: 'var(--color-text-tertiary, #64748b)' }}>{ticket.ticket_alt_phone || '—'}</p>
         <p style={{ color: 'var(--color-text-tertiary, #64748b)' }}>{ticket.ticket_email || '—'}</p>

@@ -43,6 +43,8 @@ function CategoryChips({ ticketCategory, setTicketCategory }) {
 function CustomerCard({
     customer,
     onClear,
+    contactName,
+    setContactName,
     ticketPhone,
     setTicketPhone,
     ticketAltPhone,
@@ -66,6 +68,10 @@ function CustomerCard({
                 <button type="button" className="text-sm support-link shrink-0" onClick={onClear}>Change</button>
             </div>
             <div className="grid gap-2 mt-2 sm:grid-cols-2">
+                <label className="support-label-compact sm:col-span-2">
+                    <span className="support-label-text">Raised by (person) *</span>
+                    <input className="support-field support-field-compact" value={contactName} onChange={(e) => setContactName(e.target.value)} maxLength={150} placeholder="Name of the person who raised the complaint / request" />
+                </label>
                 <label className="support-label-compact">
                     <span className="support-label-text">Phone</span>
                     <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(formatIndianMobileInput(e.target.value))} maxLength={10} inputMode="numeric" />
@@ -163,6 +169,7 @@ export default function SupportTicketCreate() {
     const [searching, setSearching] = useState(false);
     const [priority, setPriority] = useState('normal');
     const [ticketPhone, setTicketPhone] = useState('');
+    const [contactName, setContactName] = useState('');
     const [ticketAltPhone, setTicketAltPhone] = useState('');
     const [ticketEmail, setTicketEmail] = useState('');
     const [ticketAddress, setTicketAddress] = useState('');
@@ -193,6 +200,7 @@ export default function SupportTicketCreate() {
 
     const pickCustomer = async (c) => {
         setCustomer(c);
+        setContactName('');
         setCustomerQuery(c.customer_name || '');
         setCustomers([]);
         setSelected({});
@@ -295,6 +303,7 @@ export default function SupportTicketCreate() {
     }, [customer, ticketPhone]);
 
     const validateSupportPhones = () => {
+        if (!contactName.trim()) return 'Enter the name of the person who raised this ticket';
         const phoneErr = indianMobileError(ticketPhone, { label: 'Phone' });
         if (phoneErr) return phoneErr;
         const altErr = indianMobileError(ticketAltPhone, { label: 'Alternate phone' });
@@ -336,6 +345,7 @@ export default function SupportTicketCreate() {
                 ticket_alt_phone: normalizedAltPhone() || null,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
+                ticket_contact_name: contactName.trim(),
                 machines,
                 ...pickupPayload,
             });
@@ -396,6 +406,7 @@ export default function SupportTicketCreate() {
                 ticket_alt_phone: normalizedAltPhone() || null,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
+                ticket_contact_name: contactName.trim(),
                 items: buildItems()
             });
             navigate(`/support/tickets/${data.ticket.id}`);
@@ -436,6 +447,8 @@ export default function SupportTicketCreate() {
             {customer && (
                 <CustomerCard
                     customer={customer}
+                    contactName={contactName}
+                    setContactName={setContactName}
                     ticketPhone={ticketPhone}
                     setTicketPhone={setTicketPhone}
                     ticketAltPhone={ticketAltPhone}
