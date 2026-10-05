@@ -127,6 +127,8 @@ async function loadSerial(db, serialId) {
   const r = await db.query(
     `SELECT serial_id, serial_number, inventory_status, current_dc_number,
             current_customer_id, delivered_at, dispatched_at, rent_start_date AS cur_rent_start,
+            -- markDelivered keeps the billed rent anchor when both are set.
+            rent_start_date, rent_billed_until,
             COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id
        FROM vendor_serial_numbers
       WHERE serial_id = $1 AND deleted_at IS NULL`,
