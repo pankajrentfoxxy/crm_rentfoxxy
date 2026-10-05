@@ -27,7 +27,7 @@ export default function NewTicketPage() {
   const [wfhCharge, setWfhCharge] = useState(799);
   const catalog = useIssueCatalog();
   const [picked, setPicked] = useState({}); // id -> { issue: {type_id, subtype_id, issue_id}, remarks }
-  const [f, setF] = useState({ priority: 'normal', visit: '', phone: '', alt: '', email: '', address: '', note: '' });
+  const [f, setF] = useState({ priority: 'normal', visit: '', contact: '', phone: '', alt: '', email: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export default function NewTicketPage() {
     fetchCustomerLaptops(customer.customer_id)
       .then(({ data }) => { setLaptops(data.assets || []); if (data.wfh_charge) setWfhCharge(data.wfh_charge); })
       .catch((e) => { setLaptops([]); toast.error(errMsg(e, 'Could not load the laptops')); });
-    setF((x) => ({ ...x, phone: customer.customer_number || customer.contact_person_number || '' }));
+    setF((x) => ({ ...x, contact: '', phone: customer.customer_number || customer.contact_person_number || '' }));
   }, [customer]);
 
   const toggle = (a) => setPicked((p) => {
@@ -62,12 +62,14 @@ export default function NewTicketPage() {
       if (!issueComplete(picked[a.id].issue)) { toast.error(`Choose type, subtype and issue for ${a.unique_serial_number || a.serial_number}`); return; }
       if (picked[a.id].remarks.trim().length < 3) { toast.error(`Describe the problem on ${a.unique_serial_number || a.serial_number}`); return; }
     }
+    if (!f.contact.trim()) { toast.error('Enter the name of the person who raised this ticket'); return; }
     setBusy(true);
     try {
       const { data } = await createTicket({
         customer_id: customer.customer_id,
         customer_phone: f.phone || undefined,
         ticket_phone_override: f.phone || undefined,
+        ticket_contact_name: f.contact.trim(),
         ticket_alt_phone: f.alt || undefined,
         ticket_email: f.email || undefined,
         ticket_address: f.address || undefined,
@@ -185,6 +187,7 @@ export default function NewTicketPage() {
                 <Select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} options={[{ value: 'normal', label: 'Normal' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} />
               </Field>
               <Field label="Visit slot agreed (optional)"><Input type="datetime-local" value={f.visit} onChange={(e) => setF({ ...f, visit: e.target.value })} /></Field>
+              <Field label="Raised by (person)" required span={3}><Input value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} maxLength={150} placeholder="Name of the person who raised the complaint" /></Field>
               <Field label="Phone for the technician"><Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })} inputMode="numeric" /></Field>
               <Field label="Alternate phone"><Input value={f.alt} onChange={(e) => setF({ ...f, alt: e.target.value.replace(/\D/g, '').slice(0, 10) })} inputMode="numeric" /></Field>
               <Field label="Email (feedback link goes here)"><Input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>

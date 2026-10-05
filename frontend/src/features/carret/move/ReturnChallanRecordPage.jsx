@@ -20,10 +20,54 @@ import { fetchDamageCases } from '../serve/serveApi';
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'That did not work.';
 const tick = (v, label) => (v ? <span style={{ color: 'var(--ok, #15803d)' }}>✓ {label}</span> : <span className="text-ink-3">— {label}</span>);
 
+/** Config check cell: matched, mismatched (what differed), or waiting on the script. */
+function configCheck(i) {
+  const r = i.return_config_result && typeof i.return_config_result === 'object' ? i.return_config_result : null;
+  if (i.return_config_verified_at) return tick(true, 'matched');
+  if (r && r.configurationMatched === false) return <span style={{ color: 'var(--alert-crit, #b91c1c)', fontWeight: 600 }}>✗ mismatch</span>;
+  return tick(false, 'script');
+}
+function configCheckNote(i) {
+  const r = i.return_config_result && typeof i.return_config_result === 'object' ? i.return_config_result : null;
+  const parts = [];
+  if (!i.return_config_verified_at && r?.configurationMatched === false) {
+    const off = (r.checks || []).filter((c) => c.matched === false).map((c) => `${c.field}: ${c.actual || '—'}`);
+    parts.push(off.length ? `laptop has ${off.join(', ')}` : (r.errors || []).join('; '));
+  }
+  if (r?.edited_by_super_admin) parts.push(`expected config edited by Super Admin${r.edited_by_name ? ` (${r.edited_by_name})` : ''}`);
+  if (i.return_laptop_condition) parts.push(i.return_laptop_condition);
+  return parts.filter(Boolean).join(' · ') || null;
+}
+
+const EDIT_CONFIG_FIELDS = [['brand', 'Brand'], ['model', 'Model'], ['processor', 'Processor'], ['generation', 'Generation'], ['ram', 'RAM'], ['ssd', 'SSD'], ['gpu', 'GPU']];
+const EDIT_RESULT = {
+  matched: ['good', 'Expected config updated — the laptop now matches and is cleared for warehouse receive'],
+  still_mismatch: ['crit', 'Expected config updated — the laptop still does not match'],
+  awaiting_script: ['good', 'Expected config updated — run the script on the laptop'],
+  already_verified: ['good', 'Expected config updated'],
+};
+/** The expected config the unit is checked against. */
+function initialEditConfig(i) {
+  const e = i?.return_capture?.expected_config || {};
+  return {
+    brand: e.brand || i?.brand || '', model: e.model || i?.model || '', processor: e.processor || i?.processor || '',
+    generation: e.generation || i?.generation || '', ram: e.ram || i?.ram || '', ssd: e.ssd || e.storage || i?.storage || '', gpu: e.gpu || '',
+  };
+}
+/** What the laptop reported on its last script run, by field. */
+function laptopReadings(i) {
+  const out = {};
+  for (const c of i?.return_config_result?.checks || []) {
+    if (c.actual != null && c.actual !== '') out[c.field] = { value: String(c.actual), matched: c.matched };
+  }
+  return out;
+}
+
 export default function ReturnChallanRecordPage() {
   const { rdcNumber } = useParams();
   const rdc = decodeURIComponent(rdcNumber);
-  const { hasPermission } = usePermission();
+  const { hasPermission, user } = usePermission();
+  const isSuper = user?.role === 'super_admin';
   const canReceive = hasPermission('return_dc', 'edit');
   const canDamage = ['damage_charges', 'support_tickets', 'return_dc'].some((s) => hasPermission(s, 'create'));
   const [d, setD] = useState(null);
@@ -31,6 +75,7 @@ export default function ReturnChallanRecordPage() {
   const [receive, setReceive] = useState(null);
   const [damageFor, setDamageFor] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [editFor, setEditFor] = useState(null); // { item, form }
 
   const load = useCallback(() => {
     api.get(`/sales-management/return-dc/${encodeURIComponent(rdc)}/detail`).then(({ data }) => setD(data)).catch((e) => setD({ error: errMsg(e) }));
@@ -44,6 +89,18 @@ export default function ReturnChallanRecordPage() {
       const { data } = await api.post(`/sales-management/return-dc/${encodeURIComponent(rdc)}/warehouse-confirm`, { esign_data: receive.esign, signer_name: receive.name });
       toast.success(data.message || 'Received at the warehouse');
       setReceive(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+  const saveConfig = async () => {
+    const { item, form } = editFor;
+    if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) { toast.error('Processor, RAM and SSD are required'); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.patch(`/sales-management/return-dc/${encodeURIComponent(rdc)}/items/${item.id}/config`, { config: form });
+      const [tone, msg] = EDIT_RESULT[data.status] || ['good', 'Expected config updated'];
+      if (tone === 'crit') toast.error(msg); else toast.success(msg);
+      setEditFor(null);
       load();
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
@@ -63,12 +120,19 @@ export default function ReturnChallanRecordPage() {
     { key: 't', header: 'Laptop', render: (i) => <Link to={`/carret/stock/assets/${encodeURIComponent(i.ttspl_id || i.serial_number)}`}><DocNumber value={i.ttspl_id || i.serial_number} /></Link>, sub: (i) => [i.brand, i.model, i.ram, i.storage].filter(Boolean).join(' · ') },
     { key: 'p', header: 'Collected', render: (i) => tick(i.customer_otp_verified_at || d.customer_otp_verified_at, 'customer OTP'), sub: (i) => (i.tech_name ? `by ${i.tech_name}` : null) },
     { key: 'g', header: 'Gate', render: (i) => tick(i.gate_inward_at || d.gate_inward_at, 'inward') },
-    { key: 'c', header: 'Config check', render: (i) => tick(i.return_config_verified_at, i.return_config_result || 'script'), sub: (i) => i.return_laptop_condition },
+    { key: 'c', header: 'Config check', render: configCheck, sub: configCheckNote },
     { key: 'w', header: 'Warehouse', render: (i) => (i.warehouse_received_at ? <span><DateTime value={i.warehouse_received_at} /></span> : <span className="text-ink-3">not received</span>), sub: (i) => i.warehouse_receiver_name },
     {
       key: 'x',
       header: '',
-      render: (i) => (canDamage ? <Button variant="quiet" onClick={() => setDamageFor(i)}>Record damage</Button> : null),
+      render: (i) => (
+        <div className="flex flex-wrap" style={{ gap: '6px' }}>
+          {isSuper && d.status !== 'cancelled' && !i.warehouse_received_at && (
+            <Button variant="quiet" onClick={() => setEditFor({ item: i, form: initialEditConfig(i) })}>Edit config</Button>
+          )}
+          {canDamage && <Button variant="quiet" onClick={() => setDamageFor(i)}>Record damage</Button>}
+        </div>
+      ),
     },
   ];
   const damageCols = [
@@ -146,6 +210,39 @@ export default function ReturnChallanRecordPage() {
             {receive.esign
               ? <div className="c-stack"><img src={receive.esign} alt="Signature" style={{ height: 80, border: '1px solid var(--rule)', borderRadius: 'var(--d-radius)' }} /><Button variant="quiet" onClick={() => setReceive({ ...receive, esign: null })}>Sign again</Button></div>
               : <SignaturePadComponent onSave={(esign) => setReceive((x) => ({ ...x, esign }))} onCancel={() => setReceive(null)} />}
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer
+        open={Boolean(editFor)}
+        onClose={() => setEditFor(null)}
+        title={editFor ? `Expected config — ${editFor.item.ttspl_id || editFor.item.serial_number}` : ''}
+        footer={<Button variant="primary" disabled={busy} onClick={saveConfig}>{busy ? 'Saving…' : 'Save'}</Button>}
+      >
+        {editFor && (
+          <div className="c-stack">
+            <p className="text-ink-3">Super Admin only. Saves on the asset. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse receive.</p>
+            {EDIT_CONFIG_FIELDS.map(([key, label]) => {
+              const reading = laptopReadings(editFor.item)[key];
+              return (
+                <Field
+                  key={key}
+                  label={label}
+                  required={['processor', 'ram', 'ssd'].includes(key)}
+                  hint={reading ? (
+                    <span style={reading.matched ? undefined : { color: 'var(--alert-crit, #b91c1c)' }}>
+                      Laptop reported: {reading.value}
+                      {!reading.matched && (
+                        <button type="button" style={{ marginLeft: '8px', fontWeight: 600, color: 'var(--accent)', background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={() => setEditFor((x) => ({ ...x, form: { ...x.form, [key]: reading.value } }))}>Use this</button>
+                      )}
+                    </span>
+                  ) : undefined}
+                >
+                  <Input value={editFor.form[key]} onChange={(e) => setEditFor((x) => ({ ...x, form: { ...x.form, [key]: e.target.value } }))} maxLength={200} />
+                </Field>
+              );
+            })}
           </div>
         )}
       </Drawer>

@@ -160,6 +160,7 @@ export default function TicketRecordPage() {
           )}
           meta={[
             { label: 'Customer', value: tk.customer_name },
+            { label: 'Raised by', value: tk.ticket_contact_name || '—' },
             { label: 'Phone', value: tk.display_phone || '—' },
             { label: 'Priority', value: tk.priority },
             { label: 'Raised', value: <DateTime value={tk.created_at} /> },

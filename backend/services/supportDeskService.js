@@ -32,7 +32,7 @@ async function deskQueue({ allowedCustomerTypes = null } = {}) {
   }
   const tickets = (await pool.query(
     `SELECT t.id, t.customer_id, t.customer_name, t.priority, t.status, t.created_at, t.last_activity_at,
-            t.ticket_category, t.return_dc_number,
+            t.ticket_category, t.return_dc_number, t.ticket_contact_name,
             COALESCE(NULLIF(t.ticket_phone_override, ''), t.customer_phone) AS phone
        FROM support_tickets t
       WHERE t.status IN ('open', 'in_progress') ${scope}`,

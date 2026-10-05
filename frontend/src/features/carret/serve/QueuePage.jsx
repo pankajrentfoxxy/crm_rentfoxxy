@@ -33,6 +33,7 @@ export default function QueuePage() {
     const q = search.trim().toLowerCase();
     return (data?.tickets || []).filter((t) => (lane === 'all' || t.lane === lane)
       && (!q || String(t.id).includes(q) || String(t.customer_name || '').toLowerCase().includes(q)
+        || String(t.ticket_contact_name || '').toLowerCase().includes(q)
         || t.laptops.some((l) => String(l.ttspl || '').toLowerCase().includes(q))));
   }, [data, lane, search]);
 
@@ -40,7 +41,7 @@ export default function QueuePage() {
 
   const columns = [
     { key: 'n', header: 'Ticket', render: (t) => <DocNumber value={`#${t.id}`} />, sub: (t) => t.priority !== 'normal' ? t.priority : (t.ticket_category || null) },
-    { key: 'c', header: 'Customer', render: (t) => t.customer_name, sub: (t) => t.phone || null },
+    { key: 'c', header: 'Customer', render: (t) => t.customer_name, sub: (t) => [t.ticket_contact_name && `Raised by ${t.ticket_contact_name}`, t.phone].filter(Boolean).join(' · ') || null },
     {
       key: 'l',
       header: 'Laptops',
