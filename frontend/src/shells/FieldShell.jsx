@@ -42,7 +42,10 @@ export default function FieldShell({ title, tabs = [], pending = 0, onBack, chil
           </span>
         </header>
 
-        <main className="flex-1 min-w-0 overflow-x-hidden" style={{ padding: 'var(--d-pad-x)' }}>{children}</main>
+        <main className="flex-1 min-w-0 overflow-x-hidden" style={{ padding: 'var(--d-pad-x)' }}>
+          {/* A phone/tablet screen: on a desktop keep it a readable column, not a 1900px card. */}
+          <div style={{ maxWidth: '760px', margin: '0 auto' }}>{children}</div>
+        </main>
 
         {tabs.length > 0 && (
           <nav

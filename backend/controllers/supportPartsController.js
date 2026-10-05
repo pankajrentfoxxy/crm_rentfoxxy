@@ -1405,8 +1405,13 @@ exports.getTechnicianBucket = async (req, res) => {
     const isSupervisor = BUCKET_SUPERVISOR_ROLES.has(req.user.role);
     const params = [];
     let techFilter = '';
+    // Supervisors see everyone unless they ask for one person (?tech_id=, or ?mine=1).
+    const askedTech = req.query.mine === '1' ? Number(req.user.user_id) : parseInt(req.query.tech_id, 10);
     if (!isSupervisor) {
       params.push(req.user.user_id);
+      techFilter = `AND spr.assigned_to_tech = $1`;
+    } else if (Number.isInteger(askedTech) && askedTech > 0) {
+      params.push(askedTech);
       techFilter = `AND spr.assigned_to_tech = $1`;
     }
 
@@ -1484,8 +1489,25 @@ exports.getTechnicianBucket = async (req, res) => {
       oldPartsGrouped[key].old_parts.push(r);
     });
 
+    // Supervisors: who holds parts at all, for the person picker.
+    const holders = isSupervisor ? (await pool.query(`
+      SELECT u.user_id, u.name,
+             COUNT(*) FILTER (WHERE spr.status IN ('issued','return_requested'))::int AS with_them,
+             COUNT(DISTINCT spr.challan_id) FILTER (WHERE spr.status IN ('approved','challan_generated') AND spc.status = 'draft')::int AS to_sign,
+             COUNT(*) FILTER (WHERE spr.old_part_status = 'with_tech')::int AS old_parts
+        FROM support_part_requests spr
+        JOIN users u ON u.user_id = spr.assigned_to_tech
+        LEFT JOIN support_part_challans spc ON spc.id = spr.challan_id
+       WHERE spr.status IN ('issued','return_requested')
+          OR (spr.status IN ('approved','challan_generated') AND spc.status = 'draft')
+          OR spr.old_part_status = 'with_tech'
+       GROUP BY u.user_id, u.name
+       ORDER BY u.name`)).rows : [];
+
     res.json({
       success: true,
+      is_supervisor: isSupervisor,
+      holders,
       bucket: Object.values(grouped),
       old_parts_bucket: Object.values(oldPartsGrouped),
       awaiting: awaitingRows,

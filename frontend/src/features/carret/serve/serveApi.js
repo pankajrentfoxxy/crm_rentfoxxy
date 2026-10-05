@@ -3,7 +3,8 @@ import api from '../../../utils/api';
 
 const item = (id, suffix) => `/support/items/${id}${suffix}`;
 
-export const fetchMyWork = () => api.get('/support/my-work');
+export const fetchMyWork = (userId) => api.get('/support/my-work', { params: userId ? { user_id: userId } : undefined });
+export const fetchTeamWork = () => api.get('/support/team-work');
 export const fetchTicket = (ticketId) => api.get(`/support/tickets/${ticketId}`);
 export const markArrived = (id, body) => api.post(item(id, '/visit'), body);
 export const verifyLaptop = (id, code) => api.post(item(id, '/verify-ttspl'), { ttspl_input: code });
@@ -19,7 +20,7 @@ export const verifyVisitOtp = (id, otp) => api.post(item(id, '/verify-otp'), { o
 export const verifyPickupOtp = (id, otp) => api.post(item(id, '/verify-pickup-otp'), { otp });
 /** The customer keeps this laptop: it moves to a new Return DC with its own OTP. */
 export const collectLater = (id, body) => api.post(item(id, '/collect-later'), body);
-export const fetchMyParts = () => api.get('/support-parts/bucket');
+export const fetchMyParts = (params) => api.get('/support-parts/bucket', { params });
 export const markPartFitted = (reqId, body) => api.patch(`/support-parts/requests/${reqId}/mark-used`, body);
 
 /* ---- Lead desk ---- */

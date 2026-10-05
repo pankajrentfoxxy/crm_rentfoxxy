@@ -34,9 +34,11 @@ function addressText(a) {
   return [a.address || a.line1, a.city, a.state, a.pincode].filter(Boolean).join(', ');
 }
 
-async function myWork(userId) {
+/** Open technician jobs. userId = one person's (as complaint or pickup assignee); null = everyone's. */
+async function loadJobs(userId) {
   const rows = (await pool.query(
-    `SELECT i.*, t.customer_name, t.priority, t.customer_id,
+    `SELECT i.*, t.customer_name, t.priority, t.customer_id, t.ticket_contact_name,
+            ua.name AS assignee_name, up.name AS pickup_assignee_name,
             COALESCE(NULLIF(t.ticket_phone_override, ''), t.customer_phone) AS phone, t.ticket_alt_phone,
             t.ticket_address, t.pickup_address, t.top_level_remarks,
             (SELECT COUNT(*)::int FROM support_ticket_items s2
@@ -46,10 +48,12 @@ async function myWork(userId) {
                 AND COALESCE(s2.status, '') NOT IN ('cancelled', 'removed')) AS rdc_laptops
        FROM support_ticket_items i
        JOIN support_tickets t ON t.id = i.ticket_id
-      WHERE (i.assigned_to = $1 OR i.pickup_assigned_to = $1)
+       LEFT JOIN users ua ON ua.user_id = i.assigned_to
+       LEFT JOIN users up ON up.user_id = i.pickup_assigned_to
+      WHERE ($1::int IS NULL OR i.assigned_to = $1 OR i.pickup_assigned_to = $1)
         AND t.status NOT IN ('closed', 'cancelled')
         AND i.status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled', 'removed', 'delivered')`,
-    [userId]
+    [userId || null]
   )).rows;
   const sla = await slaForTickets(rows.map((r) => r.ticket_id));
   const jobs = [];
@@ -66,6 +70,10 @@ async function myWork(userId) {
       step,
       next,
       customer: r.customer_name,
+      contact_name: r.ticket_contact_name || null,
+      // Pickups go to the pickup assignee; visits to the item assignee.
+      assignee_id: (r.item_type === 'pickup' ? (r.pickup_assigned_to || r.assigned_to) : (r.assigned_to || r.pickup_assigned_to)) || null,
+      assignee_name: (r.item_type === 'pickup' ? (r.pickup_assignee_name || r.assignee_name) : (r.assignee_name || r.pickup_assignee_name)) || null,
       phone: r.phone,
       alt_phone: r.ticket_alt_phone || null,
       address: addressText(r.item_type === 'pickup' ? (r.pickup_address || r.ticket_address) : (r.ticket_address || r.pickup_address)),
@@ -100,4 +108,30 @@ async function myWork(userId) {
   return jobs;
 }
 
-module.exports = { myWork };
+const myWork = (userId) => loadJobs(userId);
+
+/** The lead's view: everyone with open technician jobs, the busiest / latest first. */
+async function teamWork() {
+  const jobs = await loadJobs(null);
+  const byTech = new Map();
+  for (const j of jobs) {
+    if (!j.assignee_id) continue;
+    const t = byTech.get(j.assignee_id) || { user_id: j.assignee_id, name: j.assignee_name, jobs: 0, late: 0, today: 0, visits: 0, pickups: 0 };
+    t.jobs += 1;
+    if (j.sla?.state === 'breached') t.late += 1;
+    if (j.kind === 'pickup') t.pickups += 1; else t.visits += 1;
+    if (j.appointment && new Date(j.appointment).toDateString() === new Date().toDateString()) t.today += 1;
+    byTech.set(j.assignee_id, t);
+  }
+  const technicians = [...byTech.values()].sort((a, b) => (b.late - a.late) || (b.jobs - a.jobs) || String(a.name).localeCompare(String(b.name)));
+  const assigned = jobs.filter((j) => j.assignee_id);
+  return {
+    technicians,
+    total: assigned.length,
+    late: assigned.filter((j) => j.sla?.state === 'breached').length,
+    // Ready for a technician but nobody holds them — the lead assigns these from the queue.
+    unassigned: jobs.length - assigned.length,
+  };
+}
+
+module.exports = { myWork, teamWork };

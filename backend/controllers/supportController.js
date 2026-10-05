@@ -6641,8 +6641,24 @@ exports.getCsatSummary = async (req, res) => {
 /** GET /my-work — the signed-in technician's support jobs with their next step (claude/carret-support.md). */
 exports.getMyWork = async (req, res) => {
     try {
-        const jobs = await require('../services/supportMyWorkService').myWork(req.user.user_id);
-        res.json({ success: true, jobs });
+        // A lead may look at one technician's list (?user_id=); everyone else sees their own.
+        const asked = parseInt(req.query.user_id, 10);
+        const other = Number.isInteger(asked) && asked > 0 && asked !== Number(req.user.user_id);
+        if (other && !isSupportLead(req.user)) {
+            return res.status(403).json({ success: false, message: 'Only a support lead can see another technician\'s work' });
+        }
+        const jobs = await require('../services/supportMyWorkService').myWork(other ? asked : req.user.user_id);
+        res.json({ success: true, jobs, viewing_other: other });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+};
+
+/** GET /team-work — the lead's view of every technician's open jobs (counts). */
+exports.getTeamWork = async (req, res) => {
+    try {
+        if (!isSupportLead(req.user)) return res.status(403).json({ success: false, message: 'Support lead only' });
+        res.json({ success: true, ...(await require('../services/supportMyWorkService').teamWork()) });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
