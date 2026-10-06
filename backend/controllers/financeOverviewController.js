@@ -98,8 +98,13 @@ const DEMO_EWAY_PENDING_WHERE = `
   )
 `;
 
-exports.getCounts = async (req, res) => {
-  try {
+// The sidebar polls /counts from every open tab every minute. The counts are
+// global, so compute them at most once per TTL and share one in-flight query.
+const COUNTS_TTL_MS = 5 * 60 * 1000;
+let countsCache = null; // { at, body }
+let countsInFlight = null;
+
+async function computeCounts() {
     const [draftRes, queueRes, dcInvRes] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS c FROM customer_invoices WHERE status = 'draft'`),
       pool.query(
@@ -122,12 +127,28 @@ exports.getCounts = async (req, res) => {
          ) AS c`
       ),
     ]);
-    res.json({
+    return {
       success: true,
       draft_invoices: draftRes.rows[0]?.c || 0,
       einvoice_queue: queueRes.rows[0]?.c || 0,
       dc_invoice_queue: dcInvRes.rows[0]?.c || 0,
-    });
+    };
+}
+
+exports.getCounts = async (req, res) => {
+  try {
+    if (countsCache && Date.now() - countsCache.at < COUNTS_TTL_MS) {
+      return res.json(countsCache.body);
+    }
+    if (!countsInFlight) {
+      countsInFlight = computeCounts()
+        .then((body) => {
+          countsCache = { at: Date.now(), body };
+          return body;
+        })
+        .finally(() => { countsInFlight = null; });
+    }
+    res.json(await countsInFlight);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
