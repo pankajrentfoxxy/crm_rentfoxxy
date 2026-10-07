@@ -4,7 +4,6 @@ const csv = require('csv-parser');
 const crypto = require('crypto');
 const prisma = require('../prisma/client');
 const pool = require('../config/db');
-const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
 const { listLeadAssigneeUsers, filterEligibleAssigneeIds } = require('../services/leadAssigneeService');
 const {
@@ -1016,9 +1015,6 @@ exports.createLead = async (req, res) => {
       }).catch((err) => console.warn('lead_assignment insert skipped:', err.message));
     }
 
-    // Trigger research in background (don't block response)
-    ensureResearch(lead).catch((err) => console.error('Lead research error:', err));
-
     res.status(201).json({ success: true, lead });
   } catch (error) {
     console.error('Create lead error:', error);
@@ -1069,7 +1065,7 @@ exports.uploadLeadsCsv = async (req, res) => {
             ? { assignedUserId: autoAssignee, assignedById: req.user.user_id, assignedAt: new Date() }
             : {};
 
-          const createdLead = await prisma.lead.create({
+          await prisma.lead.create({
             data: {
               ...payload,
               status: 'Pending',
@@ -1082,9 +1078,6 @@ exports.uploadLeadsCsv = async (req, res) => {
 
           if (duplicateOf) duplicates += 1;
           created += 1;
-
-          // Trigger research in background
-          ensureResearch(createdLead).catch((err) => console.error('Lead research error:', err));
         } catch (error) {
           errors.push({ row, message: error.message });
         }
@@ -1191,14 +1184,6 @@ exports.assignLeads = async (req, res) => {
 
     if (assign_unassigned_only && eligibleUserIds.length) {
       await updateAutoAssignConfig(eligibleUserIds, req.user.user_id);
-    }
-
-    const leads = await prisma.lead.findMany({
-      where: { leadId: { in: targetLeadIds } }
-    });
-
-    for (const lead of leads) {
-      await ensureResearch(lead);
     }
 
     const distribution = assignmentPlan.reduce((acc, item) => {
@@ -1707,25 +1692,6 @@ exports.ackFollowUpReminder = async (req, res) => {
   }
 };
 
-exports.runResearch = async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (await denyUnlessCanEditLead(req, res, lead)) return;
-
-    // Force refresh so API re-searches and updates all research fields
-    await ensureResearch(lead, { force: true });
-    const research = await prisma.leadCompanyResearch.findUnique({ where: { leadId: lead.leadId } });
-
-    res.json({ success: true, research });
-  } catch (error) {
-    console.error('Research error:', error);
-    res.status(500).json({ success: false, message: 'Server error running research' });
-  }
-};
-
 exports.updateResearchDetails = async (req, res) => {
   const { id } = req.params;
 
@@ -1900,20 +1866,6 @@ exports.updateLeadBasicDetails = async (req, res) => {
         notes: 'Admin updated lead basic details'
       }
     });
-
-    const companyChanged = (existing.companyName || null) !== (nextCompanyName || null);
-    const companyBrandChanged = nextCompanyBrand !== undefined && (existingCompanyBrandVal || null) !== (nextCompanyBrand || null);
-    if (companyChanged || companyBrandChanged) {
-      await ensureResearch(updated, { force: true });
-      await prisma.leadActivity.create({
-        data: {
-          leadId,
-          userId: req.user.user_id,
-          action: 'research_refreshed',
-          notes: `Research auto-refreshed after ${companyChanged ? 'company' : ''}${companyChanged && companyBrandChanged ? ' and ' : ''}${companyBrandChanged ? 'company brand' : ''} update`
-        }
-      });
-    }
 
     // Re-fetch to ensure we return fresh data including personalRemarks
     const fresh = await prisma.lead.findUnique({

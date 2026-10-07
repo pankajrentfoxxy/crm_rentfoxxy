@@ -75,7 +75,6 @@ router.get('/:id', leadsView, leadController.getLeadById);
 router.post('/', leadsCreate, leadController.createLead);
 router.post('/upload', leadsCreate, upload.single('file'), leadController.uploadLeadsCsv);
 router.post('/assign', canChangeAssignee, leadController.assignLeads);
-router.post('/:id/research', leadsEdit, leadController.runResearch);
 router.post('/:id/send-quotation', leadsEdit, leadController.sendLeadQuotation);
 router.post('/:id/orders', leadsCreate, leadController.createLeadOrder);
 router.put('/:id/research', leadsEdit, leadController.updateResearchDetails);

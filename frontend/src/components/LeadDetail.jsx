@@ -395,15 +395,6 @@ export default function LeadDetail({ api }) {
         }
     };
 
-    const handleResearch = async () => {
-        try {
-            await api.post(`/leads/${id}/research`);
-            loadLead();
-        } catch (err) {
-            alert('Failed to run research');
-        }
-    };
-
     const handleResearchField = (key, value) => {
         setResearchForm(prev => ({ ...prev, [key]: value }));
     };
@@ -1291,9 +1282,6 @@ export default function LeadDetail({ api }) {
                 <div className="flex items-center justify-between">
                     <h3 className="font-bold">Company Research</h3>
                     <div className="flex gap-2">
-                        <button onClick={handleResearch} className="text-sm bg-gray-100 px-3 py-2 rounded-lg">
-                            Run Research
-                        </button>
                         <button
                             onClick={() => setEditingResearch(prev => !prev)}
                             className="text-sm bg-blue-100 text-blue-700 px-3 py-2 rounded-lg"

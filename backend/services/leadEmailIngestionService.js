@@ -3,7 +3,6 @@ const { simpleParser } = require('mailparser');
 const pool = require('../config/db');
 const prisma = require('../prisma/client');
 const { getNextAutoAssignee, resolveForcedAutoAssignee } = require('./leadAutoAssignService');
-const { ensureResearch } = require('./leadResearchService');
 
 const LEAD_EMAIL_LOOKBACK_DAYS = parseInt(process.env.LEAD_EMAIL_LOOKBACK_DAYS || '14', 10);
 const LEAD_EMAIL_MAILBOXES = (process.env.LEAD_EMAIL_MAILBOXES || 'Sent,INBOX,[Gmail]/Sent Mail')
@@ -462,16 +461,8 @@ const runLeadEmailSync = async (options = {}) => {
                         await markMessageProcessed({ messageId, mailbox, subject, leadId });
                         if (beforeInsertLeadId) {
                             updated++;
-                            prisma.lead.findUnique({ where: { leadId } })
-                                .then((lead) => lead && ensureResearch(lead, { force: true }))
-                                .catch((err) => console.error('Lead research refresh error:', err));
                         } else {
                             created++;
-                            if (leadId) {
-                                prisma.lead.findUnique({ where: { leadId } })
-                                    .then((lead) => lead && ensureResearch(lead))
-                                    .catch((err) => console.error('Lead research error:', err));
-                            }
                         }
                     } catch (messageError) {
                         console.error(`⚠️ Lead sync message skipped in "${mailbox}": ${messageError.message}`);
