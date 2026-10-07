@@ -28,6 +28,7 @@ import {
   Boxes,
   ScanLine,
   Laptop,
+  MessageCircle,
 } from 'lucide-react';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
@@ -322,6 +323,13 @@ export const MENU_GROUPS = [
         section: 'customer_billing',
         children: financeMenuItems,
       },
+    ],
+  },
+  {
+    key: 'marketing',
+    label: 'Marketing',
+    items: [
+      { icon: MessageCircle, label: 'WhatsApp Campaigns', path: '/whatsapp-campaigns', section: 'whatsapp_campaigns' },
     ],
   },
   {

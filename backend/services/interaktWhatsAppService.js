@@ -212,7 +212,123 @@ async function postInterakt({ authHeader, payload, httpPost, timeoutMs }) {
   return {
     httpStatus: res.status,
     data: res.data,
+    headers: res.headers || {},
   };
+}
+
+// Network failures where the request provably never reached Interakt, so resending
+// cannot produce a duplicate. A timeout or a reset mid-request is NOT in this list:
+// Interakt may already have accepted the message.
+const SAFE_TO_RETRY_NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
+const OUTCOME_UNKNOWN_NETWORK_CODES = new Set(['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EPIPE', 'ERR_CANCELED']);
+
+function parseRetryAfterMs(headers) {
+  const raw = headers && (headers['retry-after'] || headers['Retry-After']);
+  if (raw == null || raw === '') return null;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 10 * 60 * 1000);
+  const at = Date.parse(raw);
+  if (!Number.isNaN(at)) return Math.max(0, Math.min(at - Date.now(), 10 * 60 * 1000));
+  return null;
+}
+
+function extractProviderError(data, httpStatus) {
+  if (!data) return `HTTP ${httpStatus}`;
+  if (typeof data === 'string') return data.slice(0, 500);
+  const msg = data.message || data.error?.message || data.error || data.detail;
+  const code = data.statusCode || data.code || data.error?.code;
+  const text = typeof msg === 'string' ? msg : JSON.stringify(msg || data).slice(0, 500);
+  return code ? `${text} (code ${code})` : text;
+}
+
+function buildTemplatePayload({
+  countryCode, phoneNumber, templateName, languageCode, headerValues, bodyValues, callbackData,
+}) {
+  const template = {
+    name: templateName,
+    languageCode: languageCode || 'en',
+    bodyValues: bodyValues || [],
+  };
+  if (Array.isArray(headerValues) && headerValues.length) template.headerValues = headerValues;
+  const payload = {
+    countryCode: countryCode || DEFAULT_COUNTRY,
+    phoneNumber,
+    type: 'Template',
+    template,
+  };
+  if (callbackData) payload.callbackData = String(callbackData).slice(0, 512);
+  return payload;
+}
+
+/**
+ * Single attempt at sending any approved template — used by bulk campaigns, which own
+ * their own retry, back-off and rate limiting. Never throws.
+ *
+ * @returns {Promise<{
+ *   ok: boolean, httpStatus: number|null, data: any, messageId: string|null,
+ *   error: string|null, errorCode: string|null,
+ *   retryable: boolean, outcomeUnknown: boolean, rateLimited: boolean, retryAfterMs: number|null,
+ * }>}
+ */
+async function sendTemplateMessage(opts = {}, deps = {}) {
+  const base = {
+    ok: false, httpStatus: null, data: null, messageId: null, error: null, errorCode: null,
+    retryable: false, outcomeUnknown: false, rateLimited: false, retryAfterMs: null,
+  };
+  if (!isEnabled()) {
+    return { ...base, error: 'WhatsApp sending is disabled (OUTBOUND_MESSAGING_ENABLED / INTERAKT_API_KEY)', errorCode: 'DISABLED' };
+  }
+  const payload = buildTemplatePayload(opts);
+  try {
+    const { httpStatus, data, headers } = await postInterakt({
+      authHeader: buildAuthHeader(),
+      payload,
+      httpPost: deps.httpPost,
+      timeoutMs: deps.timeoutMs || 20000,
+    });
+    if (isProviderSuccess(httpStatus, data)) {
+      const messageId = data?.id || data?.messageId || data?.data?.id || null;
+      return { ...base, ok: true, httpStatus, data, messageId: messageId ? String(messageId) : null };
+    }
+    const rateLimited = httpStatus === 429;
+    return {
+      ...base,
+      httpStatus,
+      data,
+      error: extractProviderError(data, httpStatus),
+      errorCode: rateLimited ? 'RATE_LIMITED' : `HTTP_${httpStatus}`,
+      retryable: shouldRetry(httpStatus, null),
+      rateLimited,
+      retryAfterMs: rateLimited ? parseRetryAfterMs(headers) : null,
+    };
+  } catch (err) {
+    const code = err?.code || null;
+    if (err?.response) {
+      // Custom httpPost that throws on non-2xx.
+      const httpStatus = err.response.status;
+      return {
+        ...base,
+        httpStatus,
+        data: err.response.data || null,
+        error: extractProviderError(err.response.data, httpStatus),
+        errorCode: httpStatus === 429 ? 'RATE_LIMITED' : `HTTP_${httpStatus}`,
+        retryable: shouldRetry(httpStatus, null),
+        rateLimited: httpStatus === 429,
+        retryAfterMs: httpStatus === 429 ? parseRetryAfterMs(err.response.headers) : null,
+      };
+    }
+    const message = err?.message || String(err);
+    if (SAFE_TO_RETRY_NETWORK_CODES.has(code)) {
+      return { ...base, error: `Network error: ${message}`, errorCode: code, retryable: true };
+    }
+    // Timeout / reset / anything unclassified: the request may have been accepted.
+    return {
+      ...base,
+      error: `No response from Interakt (${code || 'unknown error'}): the message may or may not have been delivered`,
+      errorCode: OUTCOME_UNKNOWN_NETWORK_CODES.has(code) ? 'OUTCOME_UNKNOWN' : (code || 'OUTCOME_UNKNOWN'),
+      outcomeUnknown: true,
+    };
+  }
 }
 
 /**
@@ -364,6 +480,10 @@ function fireAndForget(factory, label) {
 module.exports = {
   TEMPLATES,
   sendWhatsAppTemplate,
+  sendTemplateMessage,
+  buildTemplatePayload,
+  parseRetryAfterMs,
+  maskPhone,
   validateTemplatePayload,
   sanitizeValues,
   normalizePhone,

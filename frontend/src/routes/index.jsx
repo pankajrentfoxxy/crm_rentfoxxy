@@ -13,6 +13,7 @@ import { reportingRoutes } from './reportingRoutes';
 import { assetConfigurationRoutes } from './assetConfigurationRoutes';
 import { dispatchRoutes } from './dispatchRoutes';
 import { guardRoutes } from './guardRoutes';
+import { whatsappCampaignRoutes } from './whatsappCampaignRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -30,6 +31,7 @@ export const appRoutes = [
   ...technicianRoutes,
   ...financeRoutes,
   ...reportingRoutes,
+  ...whatsappCampaignRoutes,
 ];
 
 export {
@@ -48,4 +50,5 @@ export {
   financeRoutes,
   reportingRoutes,
   assetConfigurationRoutes,
+  whatsappCampaignRoutes,
 };

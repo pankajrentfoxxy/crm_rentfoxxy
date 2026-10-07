@@ -176,6 +176,8 @@ app.use('/api/part-vendor-repair', require('./routes/partVendorRepair'));
 app.use('/api/utils', require('./routes/utils'));
 app.use('/api/guard-gate', require('./routes/guardGate'));
 app.use('/api/taskflow', require('./routes/taskflow'));
+// Includes the public, token-checked Interakt webhook at /webhooks/interakt.
+app.use('/api/whatsapp-campaigns', require('./routes/whatsappCampaigns'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -265,6 +267,8 @@ server.listen(PORT, () => {
     startDispatchSlaWorker();
     const { startBluedartAwbSyncWorker } = require('./services/bluedartAwbSyncWorker');
     startBluedartAwbSyncWorker();
+    const { startWhatsAppCampaignWorker } = require('./services/whatsappCampaignWorker');
+    startWhatsAppCampaignWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }
@@ -308,6 +312,8 @@ server.listen(PORT, () => {
 
 const shutdownWorkers = async (signal) => {
   console.log(`${signal} received — shutting down background workers`);
+  // Stops claiming new contacts; requests already in flight finish or are recovered on boot.
+  require('./services/whatsappCampaignWorker').stopWhatsAppCampaignWorker();
   try {
     await stopLeadEmailIngestionWorker();
   } catch (err) {

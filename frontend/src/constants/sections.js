@@ -113,6 +113,10 @@ export const APPLICATION_SECTIONS = [
   'asset_configuration',
   'guard_gate_checking',
   'gate_dashboard',
+  'whatsapp_campaigns',
+  'whatsapp_campaigns_start',
+  'whatsapp_campaigns_pause',
+  'whatsapp_campaigns_cancel',
 ];
 
 export const SECTION_LABELS = {
@@ -230,6 +234,10 @@ export const SECTION_LABELS = {
   asset_configuration: 'Asset Configuration',
   guard_gate_checking: 'Guard Scanner',
   gate_dashboard: 'Gate Dashboard',
+  whatsapp_campaigns: 'WhatsApp Campaigns',
+  whatsapp_campaigns_start: 'WhatsApp Campaigns — start / resume (Edit)',
+  whatsapp_campaigns_pause: 'WhatsApp Campaigns — pause (Edit)',
+  whatsapp_campaigns_cancel: 'WhatsApp Campaigns — cancel (Edit)',
 };
 
 export const SECTION_GROUPS = {
@@ -273,6 +281,7 @@ export const SECTION_GROUPS = {
     'security_deposits', 'billing_dashboard', 'einvoice_ewb', 'dc_eway_bill', 'sale_in_place',
   ],
   Support: ['support_tickets', 'support_requests', 'support_settings', 'support_technician'],
+  Marketing: ['whatsapp_campaigns', 'whatsapp_campaigns_start', 'whatsapp_campaigns_pause', 'whatsapp_campaigns_cancel'],
   'Reports & Analytics': [
     'analytics_dashboard',
     'report_revenue',
@@ -304,6 +313,7 @@ export const GROUP_COLORS = {
   'Warehouse & Dispatch': 'text-sky-600 border-sky-200',
   'Finance & Billing': 'text-amber-600 border-amber-200',
   Support: 'text-pink-600 border-pink-200',
+  Marketing: 'text-green-600 border-green-200',
   'Reports & Analytics': 'text-violet-600 border-violet-200',
   'Settings & Admin': 'text-slate-600 border-slate-200',
 };
