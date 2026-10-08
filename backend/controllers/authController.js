@@ -1384,7 +1384,11 @@ exports.deleteUser = async (req, res) => {
     }
 
     // Login row has no FK to users, so it must be removed by hand either way.
-    await client.query(`DELETE FROM auth_credentials WHERE portal = 'crm' AND entity_id = $1`, [userId]);
+    // auth_credentials (migration 192) is not applied on every database.
+    const credTable = await client.query(`SELECT to_regclass('auth_credentials') AS t`);
+    if (credTable.rows[0].t) {
+      await client.query(`DELETE FROM auth_credentials WHERE portal = 'crm' AND entity_id = $1`, [userId]);
+    }
     await client.query(
       'UPDATE delivery_technicians SET is_active = false, updated_at = NOW() WHERE user_id = $1',
       [userId]
