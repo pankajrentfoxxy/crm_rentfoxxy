@@ -324,10 +324,14 @@ exports.submitQC = async (req, res) => {
         }
 
         // Append-only history snapshot (does not change QC workflow / unique current row)
+        // Savepoint so a failed snapshot does not abort the surrounding transaction.
+        await client.query('SAVEPOINT qc_history_snapshot');
         try {
             const { snapshotQcResultToHistory } = require('../services/productionQcReportService');
             await snapshotQcResultToHistory(client, qcId);
+            await client.query('RELEASE SAVEPOINT qc_history_snapshot');
         } catch (histErr) {
+            await client.query('ROLLBACK TO SAVEPOINT qc_history_snapshot');
             console.error('QC history snapshot failed:', histErr.message);
             // Do not fail the QC submit if history table is missing on an unmigrated env
         }
