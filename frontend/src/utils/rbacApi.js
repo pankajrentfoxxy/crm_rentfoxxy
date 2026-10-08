@@ -73,6 +73,11 @@ export async function updateUser(userId, payload) {
   return data;
 }
 
+export async function deleteUser(userId) {
+  const { data } = await api.delete(`/auth/users/${userId}`);
+  return data;
+}
+
 export async function updateUserStatus(userId, status, reason) {
   const { data } = await api.patch(`/auth/users/${userId}/status`, { status, reason });
   return data;

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle, Copy, Download, Key, LogIn, Pencil, Plus, Power, Search, X,
+  AlertCircle, Copy, Download, Key, LogIn, Pencil, Plus, Power, Search, Trash2, X,
 } from 'lucide-react';
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
@@ -14,6 +14,7 @@ import {
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import {
   createUser,
+  deleteUser,
   exportUsersCsv,
   exportUsersExcel,
   fetchAuthTeams,
@@ -127,6 +128,9 @@ export default function UserManagementPage() {
   const [statusModal, setStatusModal] = useState(null);
   const [statusReason, setStatusReason] = useState('');
   const [statusSaving, setStatusSaving] = useState(false);
+
+  const [deleteModal, setDeleteModal] = useState(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
 
   const [resetModal, setResetModal] = useState(null);
   const [resetManual, setResetManual] = useState(false);
@@ -298,6 +302,21 @@ export default function UserManagementPage() {
       showToast(err.response?.data?.message || 'Status update failed', 'error');
     } finally {
       setStatusSaving(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteModal) return;
+    setDeleteSaving(true);
+    try {
+      const data = await deleteUser(deleteModal.user_id);
+      showToast(data?.message || 'User deleted', 'success');
+      setDeleteModal(null);
+      loadUsers();
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Delete failed', 'error');
+    } finally {
+      setDeleteSaving(false);
     }
   };
 
@@ -688,6 +707,16 @@ export default function UserManagementPage() {
                                 </button>
                               </>
                             ) : null}
+                            {isSuperAdmin && u.user_id !== currentUser?.user_id ? (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteModal(u)}
+                                className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"
+                                title="Delete user"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -981,6 +1010,39 @@ export default function UserManagementPage() {
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"
               >
                 {statusSaving ? 'Saving...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setDeleteModal(null)} role="presentation" />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Delete {deleteModal.name}?</h3>
+            <p className="text-sm text-gray-600 mb-2">
+              <span className="font-medium">{deleteModal.email}</span> will be permanently deleted, signed out
+              everywhere and unable to log in. The email can be used again for a new user.
+            </p>
+            <p className="text-sm text-gray-500 mb-4">
+              Records they already worked on (tickets, invoices, logs) are not deleted. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModal(null)}
+                className="px-4 py-2 border rounded-lg text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleteSaving}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50"
+              >
+                {deleteSaving ? 'Deleting...' : 'Delete user'}
               </button>
             </div>
           </div>

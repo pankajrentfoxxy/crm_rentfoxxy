@@ -53,6 +53,12 @@ const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
 const hasUserMgmtAccess = (user) => ['admin', 'manager', 'super_admin'].includes(user?.role);
 const canViewUsers = (user) => ['admin', 'manager', 'super_admin', 'floor_manager'].includes(user?.role);
+// An archived (deleted-with-history) user keeps its row; its email is replaced
+// with one on this reserved domain, which is how such users are recognised.
+const DELETED_EMAIL_DOMAIN = '@deleted.invalid';
+const NOT_DELETED_SQL = `u.email NOT LIKE '%${DELETED_EMAIL_DOMAIN}'`;
+const isDeletedUser = (user) => String(user?.email || '').endsWith(DELETED_EMAIL_DOMAIN);
+
 const canManageTargetUser = (actor, target) => {
   if (!actor || !target) return false;
   if (['super_admin', 'admin'].includes(actor.role)) return true;
@@ -93,7 +99,7 @@ function buildUserListFilter(req) {
   const includeInactive = req.query.include_inactive === 'true'
     && ['admin', 'super_admin'].includes(req.user.role);
 
-  const conditions = [`u.role NOT IN ('vendor', 'customer')`];
+  const conditions = [`u.role NOT IN ('vendor', 'customer')`, NOT_DELETED_SQL];
   const params = [];
 
   if (!includeInactive) {
@@ -586,7 +592,7 @@ exports.getAllUsers = async (req, res) => {
          COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'pending_approval')::int AS pending_approval,
          COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'blocked')::int AS blocked
        FROM users u
-       WHERE u.role NOT IN ('vendor', 'customer')`
+       WHERE u.role NOT IN ('vendor', 'customer') AND ${NOT_DELETED_SQL}`
     );
 
     const countResult = await pool.query(
@@ -867,6 +873,9 @@ exports.updateUserStatus = async (req, res) => {
     }
     if (!canManageTargetUser(req.user, target.rows[0])) {
       return res.status(403).json({ success: false, message: 'Cannot modify this user' });
+    }
+    if (isDeletedUser(target.rows[0])) {
+      return res.status(400).json({ success: false, message: 'This user has been deleted' });
     }
     if (req.user.role === 'manager' && status === 'blocked') {
       return res.status(403).json({ success: false, message: 'Only admin can block users' });
@@ -1340,44 +1349,90 @@ exports.getPendingVendors = async (req, res) => {
 };
 
 // Soft Delete User (manager/admin with hierarchy checks)
+// Super Admin only. Tries a real DELETE first; a user with no history is gone
+// completely. If any business record still references the user (116 FKs to
+// users are NO ACTION — invoices, tickets, audit logs …) the row is kept so that
+// history stays valid, and the user is archived instead: hidden from the user
+// list, unable to sign in, sessions revoked, email freed for reuse. The original
+// address is kept in deactivation_reason.
 exports.deleteUser = async (req, res) => {
-  const { id } = req.params;
+  const userId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ success: false, message: 'Invalid user id' });
+  }
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Only Super Admin can delete users' });
+  }
+  if (userId === parseInt(req.user.user_id, 10)) {
+    return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
+  }
+
+  const actorId = parseInt(req.user.user_id, 10);
+  const client = await pool.connect();
   try {
-    if (!hasUserMgmtAccess(req.user)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-
-    const targetResult = await pool.query(
-      `SELECT user_id, role, email, active FROM users WHERE user_id = $1`,
-      [id]
+    await client.query('BEGIN');
+    const targetResult = await client.query(
+      `SELECT user_id, name, role, email FROM users
+        WHERE user_id = $1 AND role NOT IN ('vendor', 'customer')
+        FOR UPDATE`,
+      [userId]
     );
-    if (targetResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
     const target = targetResult.rows[0];
-
-    if (parseInt(target.user_id, 10) === parseInt(req.user.user_id, 10)) {
-      return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
-    }
-    if (!canManageTargetUser(req.user, target)) {
-      return res.status(403).json({ success: false, message: 'You cannot delete this user' });
+    if (!target || isDeletedUser(target)) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
-    await pool.query(
-      `UPDATE users
-       SET active = false,
-           permissions = ARRAY[]::text[],
-           team_id = NULL,
-           -- Cut existing sessions immediately. Without this the user kept full
-           -- access until their 30-day token expired.
-           token_version = token_version + 1
-       WHERE user_id = $1`,
-      [id]
+    // Login row has no FK to users, so it must be removed by hand either way.
+    await client.query(`DELETE FROM auth_credentials WHERE portal = 'crm' AND entity_id = $1`, [userId]);
+    await client.query(
+      'UPDATE delivery_technicians SET is_active = false, updated_at = NOW() WHERE user_id = $1',
+      [userId]
     );
 
-    res.json({ success: true, message: 'User deleted successfully' });
+    let mode = 'deleted';
+    await client.query('SAVEPOINT hard_delete');
+    try {
+      await client.query('DELETE FROM users WHERE user_id = $1', [userId]);
+    } catch (fkErr) {
+      if (fkErr.code !== '23503') throw fkErr;
+      await client.query('ROLLBACK TO SAVEPOINT hard_delete');
+      mode = 'archived';
+      await client.query('DELETE FROM user_teams WHERE user_id = $1', [userId]);
+      await client.query(
+        `UPDATE users
+            SET email = 'deleted-' || user_id || '-' || EXTRACT(EPOCH FROM NOW())::bigint || $3::text,
+                barcode = NULL,
+                active = false,
+                status = 'inactive',
+                deactivated_at = NOW(),
+                deactivated_by = $2,
+                deactivation_reason = 'Deleted (was ' || email || ')',
+                permissions = ARRAY[]::text[],
+                team_id = NULL,
+                -- Revoke live sessions now, not when the 30-day token expires.
+                token_version = token_version + 1,
+                updated_at = NOW()
+          WHERE user_id = $1`,
+        [userId, actorId, DELETED_EMAIL_DOMAIN]
+      );
+    }
+    await client.query('COMMIT');
+
+    console.log(`User ${userId} (${target.email}, ${target.role}) ${mode} by super_admin ${actorId}`);
+    res.json({
+      success: true,
+      mode,
+      message: mode === 'deleted'
+        ? `${target.name} has been deleted`
+        : `${target.name} has been deleted. Their past records (tickets, invoices, logs) are kept under their name.`,
+    });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Delete user error:', error);
     res.status(500).json({ success: false, message: 'Server error deleting user' });
+  } finally {
+    client.release();
   }
 };
 
