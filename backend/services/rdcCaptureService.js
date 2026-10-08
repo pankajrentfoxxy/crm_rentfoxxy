@@ -497,6 +497,84 @@ async function submitRdcSerial(tokenId, serialNumber) {
 const EDITABLE_CONFIG_FIELDS = ['brand', 'model', 'processor', 'generation', 'ram', 'ssd', 'gpu'];
 
 /**
+ * Super Admin: correct a Return DC unit's serial number. The TTSPL code stays the asset's
+ * key; the serial is rewritten on vendor_serial_numbers (audited like the vendor-management
+ * "Update serial number" screen) and its mirrors, the pickup row and any open access number.
+ * Mutates item.serial_number so the config edit that follows uses the new serial.
+ */
+async function changeRdcItemSerial(client, item, newSerialRaw, userId) {
+  const newSerial = String(newSerialRaw || '').trim().slice(0, 100);
+  const oldSerial = String(item.serial_number || '').trim();
+  if (newSerial.toUpperCase() === oldSerial.toUpperCase()) return { ok: true, changed: false };
+  if (newSerial.length < 3) return { ok: false, code: 400, message: 'Enter a valid serial number' };
+  if (!item.serial_id) {
+    return { ok: false, code: 409, message: 'Asset record not found for this unit — serial cannot be changed here' };
+  }
+
+  const dup = await client.query(
+    `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
+      WHERE LOWER(serial_number) = LOWER($1) AND deleted_at IS NULL AND serial_id <> $2
+      LIMIT 1`,
+    [newSerial, item.serial_id]
+  );
+  if (dup.rows.length) {
+    const other = dup.rows[0].inventory_asset_code;
+    return {
+      ok: false,
+      code: 409,
+      message: `Serial ${newSerial} already belongs to ${other || 'another asset'}. Duplicate serials not allowed`,
+    };
+  }
+
+  const vsnRes = await client.query(
+    `SELECT po_id, grn_id, inventory_asset_code, serial_number FROM vendor_serial_numbers
+      WHERE serial_id = $1 AND deleted_at IS NULL FOR UPDATE`,
+    [item.serial_id]
+  );
+  const vsn = vsnRes.rows[0];
+  if (!vsn) return { ok: false, code: 404, message: 'Asset record not found for this unit' };
+  await client.query(
+    `UPDATE vendor_serial_numbers SET serial_number = $2, updated_at = NOW() WHERE serial_id = $1`,
+    [item.serial_id, newSerial]
+  );
+  const assetOldSerial = vsn.serial_number || oldSerial;
+  const ttspl = vsn.inventory_asset_code || item.ttspl_id || item.unique_serial_number || null;
+
+  await client.query(
+    `INSERT INTO vendor_serial_number_audit (po_id, grn_id, old_serial, new_serial, changed_by_user_id)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [vsn.po_id, vsn.grn_id, assetOldSerial, newSerial, userId]
+  );
+  await client.query(
+    `UPDATE vendor_product_inventory SET serial_number = $2, updated_at = NOW() WHERE serial_id = $1`,
+    [item.serial_id, newSerial]
+  );
+  await client.query(
+    `UPDATE production_assets SET serial_number = $3, updated_at = NOW()
+      WHERE vendor_serial_id = $1 OR ($2::text IS NOT NULL AND ttspl_id = $2)`,
+    [item.serial_id, ttspl, newSerial]
+  );
+  if (ttspl) {
+    await client.query(
+      `UPDATE inventory SET serial_number = $2, updated_at = NOW() WHERE machine_number = $1`,
+      [ttspl, newSerial]
+    );
+  }
+  await client.query(
+    `UPDATE support_ticket_items SET serial_number = $2, updated_at = NOW() WHERE id = $1`,
+    [item.id, newSerial]
+  );
+  await client.query(
+    `UPDATE rdc_capture_tokens SET serial_number = $2
+      WHERE item_id = $1 AND status = 'pending'`,
+    [item.id, newSerial]
+  );
+
+  item.serial_number = newSerial;
+  return { ok: true, changed: true, previous: assetOldSerial, serial_number: newSerial };
+}
+
+/**
  * Super Admin: change a Return DC unit's expected configuration. It is saved to the asset
  * (production asset → vendor_serial_numbers.extra), the pickup row and any open access
  * number. If the laptop's last script reading now matches, the unit is accepted for
@@ -507,6 +585,13 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
   const item = items.find((i) => Number(i.id) === Number(itemId));
   if (!item) return { ok: false, code: 404, message: 'Unit not found on this Return DC' };
   if (item.warehouse_received_at) return { ok: false, code: 409, message: 'This unit is already received at the warehouse' };
+  const userId = user?.user_id || user?.id || null;
+
+  let serialChange = { changed: false };
+  if (config?.serial_number !== undefined) {
+    serialChange = await changeRdcItemSerial(client, item, config.serial_number, userId);
+    if (!serialChange.ok) return serialChange;
+  }
 
   const current = await expectedConfigForPickupItem(client, item);
   const next = { ...current };
@@ -518,7 +603,6 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
   if (!next.ram || !next.ssd || !next.processor) {
     return { ok: false, code: 400, message: 'Processor, RAM and SSD are required' };
   }
-  const userId = user?.user_id || user?.id || null;
 
   const productionAssetService = require('./productionAssetService');
   await productionAssetService.syncWorkingConfigFromInventory(client, {
@@ -578,6 +662,7 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
     edited_by_name: user?.name || user?.email || null,
     edited_at: new Date().toISOString(),
     previous_expected: current,
+    ...(serialChange.changed ? { previous_serial: serialChange.previous, serial_number: serialChange.serial_number } : {}),
   };
 
   if (item.return_config_verified_at) {
@@ -587,7 +672,7 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
         WHERE id = $1`,
       [item.id, JSON.stringify(editMeta)]
     );
-    return { ok: true, config: next, status: 'already_verified' };
+    return { ok: true, config: next, serial_number: item.serial_number, status: 'already_verified' };
   }
 
   const readRes = await client.query(
@@ -601,7 +686,7 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
     if (item.gate_inward_at) {
       await mintTokensForRdc(client, { rdcNumber, createdBy: userId, itemIds: [item.id] });
     }
-    return { ok: true, config: next, status: 'awaiting_script' };
+    return { ok: true, config: next, serial_number: item.serial_number, status: 'awaiting_script' };
   }
 
   const configResult = verifyConfigurationAgainst(expected, lastRead.actual_config);
@@ -619,7 +704,7 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
       `UPDATE support_ticket_items SET return_config_result = $2::jsonb, updated_at = NOW() WHERE id = $1`,
       [item.id, JSON.stringify(matchPayload)]
     );
-    return { ok: true, config: next, status: 'still_mismatch', errors: matchPayload.errors };
+    return { ok: true, config: next, serial_number: item.serial_number, status: 'still_mismatch', errors: matchPayload.errors };
   }
 
   await client.query(
@@ -646,10 +731,10 @@ async function editRdcItemConfig(client, { rdcNumber, itemId, config, user }) {
       item.id,
       JSON.stringify(matchPayload),
       lastRead.token_id,
-      String(lastRead.serial_number || item.serial_number || '').trim().toUpperCase() || null,
+      String((serialChange.changed ? item.serial_number : lastRead.serial_number) || item.serial_number || '').trim().toUpperCase() || null,
     ]
   );
-  return { ok: true, config: next, status: 'matched' };
+  return { ok: true, config: next, serial_number: item.serial_number, status: 'matched' };
 }
 
 module.exports = {

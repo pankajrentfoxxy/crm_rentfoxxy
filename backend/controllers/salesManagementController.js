@@ -4322,7 +4322,7 @@ exports.editReturnDcItemConfig = async (req, res) => {
     try {
       require('../services/returnDcListCache').invalidateReturnDcListCachesFireAndForget();
     } catch { /* ignore */ }
-    res.json({ success: true, config: result.config });
+    res.json({ success: true, config: result.config, serial_number: result.serial_number, status: result.status });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     console.error('editReturnDcItemConfig:', error);
