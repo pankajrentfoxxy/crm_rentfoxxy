@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
-const { sendEmailImmediate } = require('./emailQueueService');
+const { sendPasswordResetOtpEmail } = require('./userCredentialsEmailService');
 const { secureOtp } = require('../utils/secureRandom');
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -53,31 +53,8 @@ const getLatestOtpRow = async (email) => {
   return result.rows[0] || null;
 };
 
-const sendOtpEmail = async ({ email, name, otp }) => {
-  const subject = 'Rentfoxxy password reset code';
-  const bodyText = [
-    `Hello ${name || 'there'},`,
-    '',
-    `Your password reset verification code is: ${otp}`,
-    '',
-    `This code expires in ${OTP_EXPIRY_MINUTES} minutes.`,
-    'If you did not request this, you can ignore this email.',
-    '',
-    '— Rentfoxxy Technologies',
-  ].join('\n');
-  const bodyHtml = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a;">
-      <p>Hello ${name || 'there'},</p>
-      <p>Use this verification code to reset your password:</p>
-      <p style="font-size: 28px; font-weight: 700; letter-spacing: 6px; margin: 16px 0;">${otp}</p>
-      <p style="color: #64748b; font-size: 13px;">This code expires in ${OTP_EXPIRY_MINUTES} minutes.</p>
-      <p style="color: #64748b; font-size: 13px;">If you did not request this, you can ignore this email.</p>
-      <p style="color: #64748b; font-size: 12px;">— Rentfoxxy Technologies</p>
-    </div>
-  `;
-
-  await sendEmailImmediate({ toEmail: email, subject, bodyText, bodyHtml });
-};
+const sendOtpEmail = ({ email, name, otp }) =>
+  sendPasswordResetOtpEmail({ email, name, otp, expiresInMinutes: OTP_EXPIRY_MINUTES });
 
 async function requestPasswordResetOtp(rawEmail) {
   const email = normalizeEmail(rawEmail);

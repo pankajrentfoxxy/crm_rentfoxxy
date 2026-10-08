@@ -8,8 +8,9 @@
  * Each name resolves through a fallback chain, so a deployment only has to set the
  * accounts it actually has:
  *
- *   quotation -> QUOTATION_SMTP_* -> DISPATCH_SMTP_* -> SMTP_*
- *   dispatch  -> DISPATCH_SMTP_*  -> SMTP_*
+ *   quotation   -> QUOTATION_SMTP_* -> DISPATCH_SMTP_* -> SMTP_*
+ *   dispatch    -> DISPATCH_SMTP_*  -> SMTP_*
+ *   credentials -> NOREPLY_SMTP_*   -> DISPATCH_SMTP_* -> SMTP_*
  *   default   -> SMTP_*
  *
  * The From address is resolved separately, because it is not always the login:
@@ -40,6 +41,8 @@ function buildFromPrefix(prefix) {
 const CHAINS = Object.freeze({
   quotation: ['QUOTATION_SMTP_', 'DISPATCH_SMTP_', 'SMTP_'],
   dispatch: ['DISPATCH_SMTP_', 'SMTP_'],
+  // Login credentials and password-reset codes, sent from the no-reply mailbox.
+  credentials: ['NOREPLY_SMTP_', 'DISPATCH_SMTP_', 'SMTP_'],
   default: ['SMTP_'],
 });
 
@@ -54,8 +57,9 @@ function resolveMailer(name = 'default') {
 
 function getTransport(name = 'default') {
   const transport = resolveMailer(name)?.transport || null;
-  // Quotations must keep reaching customers while other outbound mail is blocked.
-  return name === 'quotation' ? exemptFromGuard(transport) : transport;
+  // Quotations must keep reaching customers while other outbound mail is blocked,
+  // and a user must still be able to receive their login or reset code.
+  return ['quotation', 'credentials'].includes(name) ? exemptFromGuard(transport) : transport;
 }
 
 /** Explicit override first, then the mailbox we actually authenticate as. */
@@ -63,6 +67,7 @@ function getFromAddress(name = 'default') {
   const overrides = {
     quotation: process.env.QUOTATION_FROM,
     dispatch: process.env.DISPATCH_SMTP_FROM,
+    credentials: process.env.NOREPLY_SMTP_FROM || process.env.DISPATCH_SMTP_FROM,
     default: process.env.EMAIL_FROM,
   };
   return overrides[name] || resolveMailer(name)?.user || null;

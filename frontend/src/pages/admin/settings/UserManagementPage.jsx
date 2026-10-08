@@ -255,11 +255,15 @@ export default function UserManagementPage() {
         showToast('User updated', 'success');
       } else {
         const generated = form.autoPassword ? generatePassword() : form.password;
-        await createUser({
+        const created = await createUser({
           ...payload,
           password: generated,
         });
-        showToast('User created', 'success');
+        if (created?.credentials_email_sent) {
+          showToast('User created — login details emailed to the user', 'success');
+        } else {
+          showToast('User created, but the login email could not be sent. Share the password manually.', 'error');
+        }
         // Show the password we just sent, not one echoed back by the server —
         // the API no longer returns it, and this is the only moment it is visible.
         if (generated) {

@@ -251,9 +251,22 @@ exports.register = async (req, res) => {
       console.warn('auth_credentials sync (create user):', syncErr.message);
     }
 
+    // The user is already created; a mail failure must not fail the request.
+    let credentialsEmailSent = false;
+    try {
+      const { sendNewUserCredentialsEmail } = require('../services/userCredentialsEmailService');
+      await sendNewUserCredentialsEmail({ name: user.name, email: user.email, password });
+      credentialsEmailSent = true;
+    } catch (mailErr) {
+      console.error(`New user credentials email to ${user.email} failed:`, mailErr.message);
+    }
+
     res.status(201).json({
       success: true,
-      message: 'User registered successfully',
+      message: credentialsEmailSent
+        ? 'User registered successfully. Login details emailed to the user.'
+        : 'User registered successfully, but the login email could not be sent. Share the password with the user.',
+      credentials_email_sent: credentialsEmailSent,
       user: { ...user, team_ids: resolvedTeamIds },
     });
   } catch (error) {
