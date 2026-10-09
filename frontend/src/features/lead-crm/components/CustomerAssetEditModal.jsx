@@ -32,6 +32,7 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
     screen_size: '',
     rent_monthly_rate: '',
     dc_number: '',
+    delivery_location: '',
     dispatched_at: '',
     delivered_at: '',
     returned_at: '',
@@ -54,6 +55,7 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
           ? String(asset.rent_monthly_rate)
           : '',
       dc_number: asset.dc_number || '',
+      delivery_location: asset.delivery_location || '',
       dispatched_at: toDateInputValue(asset.dispatch_date),
       delivered_at: toDateInputValue(asset.delivered_at),
       returned_at: isReturned ? toDateInputValue(asset.returned_at) : '',
@@ -92,6 +94,11 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
           body.returned_at = null;
         }
       } else {
+        // Only send the location when edited, so an untouched DC address isn't pinned as manual.
+        const location = form.delivery_location.trim();
+        if (location !== String(asset.delivery_location || '').trim()) {
+          body.delivery_location = location;
+        }
         if (form.dispatched_at.trim() !== '') {
           body.dispatched_at = form.dispatched_at.trim();
         } else {
@@ -157,6 +164,24 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
               placeholder={isReturned ? 'e.g. RDC001744' : 'e.g. DC/26-27/0910'}
             />
           </label>
+          {!isReturned ? (
+            <label className="block text-sm sm:col-span-2">
+              <span className="text-xs font-medium text-slate-600">Location</span>
+              <textarea
+                rows={2}
+                maxLength={500}
+                value={form.delivery_location}
+                onChange={(e) => setForm((f) => ({ ...f, delivery_location: e.target.value }))}
+                className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="Address where this laptop is"
+              />
+              <span className="block text-[11px] text-slate-500 mt-1">
+                {asset.location_is_manual
+                  ? 'Entered manually. Clear it to show the DC shipping address again.'
+                  : 'Taken from the DC shipping address. Editing it saves a manual location for this laptop.'}
+              </span>
+            </label>
+          ) : null}
           {isReturned ? (
             <>
               <label className="block text-sm">
