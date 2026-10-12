@@ -7,7 +7,7 @@ import {
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import {
-  createUser, fetchAssignableRoles, fetchRoles, fetchTeams, fetchUsers, resetUserPassword, setUserStatus, updateUser,
+  createUser, deleteUser, fetchAssignableRoles, fetchRoles, fetchTeams, fetchUsers, resetUserPassword, setUserStatus, updateUser,
 } from './controlApi';
 import { ACCESS, errMsg, roleLabel, useControlAccess } from './controlShared';
 
@@ -25,6 +25,8 @@ const STATUS = [
 const STATUS_LABEL = { active: 'Active', inactive: 'Inactive', blocked: 'Blocked', pending_approval: 'Pending approval', rejected: 'Rejected' };
 const LIMIT = 50;
 
+const ACT_TITLE = { status: 'Change status', password: 'Reset password', delete: 'Delete user' };
+
 const emptyForm = {
   name: '', email: '', mobile_no: '', role: '', team_ids: [], designation: '', department: '', employee_id: '', password: '',
 };
@@ -35,6 +37,8 @@ export default function UsersPage() {
   const canCreate = can(ACCESS.usersCreate);
   const canEdit = can(ACCESS.usersEdit);
   const canResetPw = can(ACCESS.usersResetPassword);
+  // Matches the backend: only Super Admin may delete a user.
+  const canDelete = me?.role === 'super_admin';
   const [res, setRes] = useState(null);
   const [status, setStatus] = useState('active');
   const [role, setRole] = useState('');
@@ -120,8 +124,9 @@ export default function UsersPage() {
           toast.success(`${body.name} updated`);
         }
       } else {
-        await createUser({ ...body, password: form.password });
-        toast.success(`${body.name} created`);
+        const { data } = await createUser({ ...body, password: form.password });
+        if (data?.credentials_email_sent) toast.success(`${body.name} created — login details emailed to them`);
+        else toast.error(`${body.name} created, but the login email could not be sent. Share the password with them.`);
       }
       setForm(null);
       load();
@@ -131,7 +136,10 @@ export default function UsersPage() {
   const submitAct = async () => {
     setBusy(true);
     try {
-      if (act.kind === 'status') {
+      if (act.kind === 'delete') {
+        const { data } = await deleteUser(act.user.user_id);
+        toast.success(data?.message || `${act.user.name} deleted`);
+      } else if (act.kind === 'status') {
         await setUserStatus(act.user.user_id, act.status, act.reason.trim() || undefined);
         toast.success(`${act.user.name} is now ${STATUS_LABEL[act.status].toLowerCase()}`);
       } else {
@@ -159,6 +167,7 @@ export default function UsersPage() {
           {canEdit && <Button variant="quiet" onClick={() => openEdit(u)}>Edit</Button>}
           {canEdit && !isSelf(u) && <Button variant="quiet" onClick={() => setAct({ kind: 'status', user: u, status: u.status === 'active' ? 'inactive' : 'active', reason: '' })}>Status</Button>}
           {canResetPw && <Button variant="quiet" onClick={() => setAct({ kind: 'password', user: u, password: '' })}>Reset password</Button>}
+          {canDelete && !isSelf(u) && <Button variant="quiet" onClick={() => setAct({ kind: 'delete', user: u })}>Delete</Button>}
         </div>
       ),
     },
@@ -229,7 +238,7 @@ export default function UsersPage() {
               <Field label="Department"><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} /></Field>
               <Field label="Employee ID"><Input value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} /></Field>
               {!form.user_id && (
-                <Field label="Password" required hint="At least 6 characters. Share it with the user."><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+                <Field label="Password" required hint="At least 6 characters. It is emailed to the user with their login details."><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
               )}
             </FormGrid>
             {form.user_id && form.role !== form.originalRole && (
@@ -259,10 +268,10 @@ export default function UsersPage() {
       <Drawer
         open={Boolean(act)}
         onClose={() => setAct(null)}
-        title={act?.kind === 'status' ? `Status — ${act?.user.name}` : `Reset password — ${act?.user.name}`}
+        title={`${ACT_TITLE[act?.kind] || ''} — ${act?.user.name}`}
         footer={(
           <Button variant="primary" disabled={busy || (needReason && !act.reason.trim())} onClick={submitAct}>
-            {act?.kind === 'status' ? 'Change status' : 'Reset password'}
+            {ACT_TITLE[act?.kind]}
           </Button>
         )}
       >
@@ -274,6 +283,14 @@ export default function UsersPage() {
             </Field>
             <Field label="Reason" required={needReason}><Textarea rows={3} value={act.reason} onChange={(e) => setAct({ ...act, reason: e.target.value })} /></Field>
             <Notice tone="info">Any status change signs the user out everywhere.</Notice>
+          </div>
+        )}
+        {act?.kind === 'delete' && (
+          <div className="c-stack">
+            <p><strong>{act.user.email}</strong> is deleted, signed out everywhere and can no longer sign in. The email can be used again for a new user.</p>
+            <Notice tone="warn" title="This cannot be undone">
+              Records they already worked on (tickets, invoices, logs) are kept under their name.
+            </Notice>
           </div>
         )}
         {act?.kind === 'password' && (

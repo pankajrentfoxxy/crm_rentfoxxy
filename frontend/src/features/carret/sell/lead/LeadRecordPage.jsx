@@ -8,7 +8,7 @@ import {
 } from '../../../../components/carret';
 import { usePermission } from '../../../../hooks/usePermission';
 import {
-  addLeadRemark, assignLeads, fetchAssignableUsers, fetchFollowUpLog, fetchLead, fetchLeadQuotations, runLeadResearch,
+  addLeadRemark, assignLeads, fetchAssignableUsers, fetchFollowUpLog, fetchLead, fetchLeadQuotations,
   updateLeadProfile,
 } from './leadApi';
 import { FollowUpDrawer, StatusDrawer, WinDrawer } from './LeadDrawers';
@@ -202,7 +202,6 @@ export default function LeadRecordPage() {
               { label: 'Employees', value: lead.companySize || r.employees },
             ]}
             />
-            {canEdit && <Button variant="quiet" style={{ marginTop: 8 }} onClick={() => runLeadResearch(lead.leadId).then(() => { toast.success('Looking the company up…'); setTimeout(load, 4000); }).catch((x) => toast.error(leadErr(x)))}>Look the company up</Button>}
           </Section>
         </div>
 

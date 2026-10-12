@@ -10,6 +10,7 @@ import { movementSellControlRoutes, VENDOR_RETURNS_SECTIONS } from './carret/mov
 import { moneyCustomerRoutes } from './carret/moneyCustomerRoutes';
 import sparePoReceiveRoutes from './carret/sparePoReceiveRoutes';
 import partsDisposalRoutes from './carret/partsDisposalRoutes';
+import whatsappCampaignCarretRoutes from './carret/whatsappCampaignRoutes';
 import { ACCESS, ControlGuard } from '../features/carret/control/controlShared';
 
 /**
@@ -270,6 +271,8 @@ export const carretRoutes = CARRET_ENABLED
       ...movementSellControlRoutes,
       ...sparePoReceiveRoutes,
       ...partsDisposalRoutes,
+      // Sell → Marketing → WhatsApp Campaigns (12 Oct 2026).
+      ...whatsappCampaignCarretRoutes,
     ]
   : [];
 

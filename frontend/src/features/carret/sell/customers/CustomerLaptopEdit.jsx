@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, DateTime, Drawer, Field, FormGrid, Input, Notice, Section,
+  Button, DateTime, Drawer, Field, FormGrid, Input, Notice, Section, Textarea,
 } from '../../../../components/carret';
 import { assetCalendarYmd } from '../../../lead-crm/leadCrmUtils';
 import { errMsg, fetchCustomerAssetActivity, updateCustomerLaptop } from './customersApi';
 
 /**
  * Correct a laptop's record with this customer — configuration, rent per month,
- * challan number and dates (PATCH /customers/:id/laptops/:serialId, section
+ * challan number, location and dates (PATCH /customers/:id/laptops/:serialId, section
  * customer_assets edit; each edit is logged in customer_asset_activity and
  * listed under "Recent laptop edits").
  */
@@ -22,6 +22,7 @@ function formFor(a) {
     ram: a.ram || '', storage: a.storage || '', gpu: a.gpu || '', screen_size: a.screen_size || '',
     rent_monthly_rate: a.rent_monthly_rate != null && a.rent_monthly_rate !== '' ? String(a.rent_monthly_rate) : '',
     dc_number: a.dc_number || '',
+    delivery_location: a.delivery_location || '',
     dispatched_at: assetCalendarYmd(a.dispatch_date),
     delivered_at: assetCalendarYmd(a.delivered_at),
     returned_at: returned ? assetCalendarYmd(a.returned_at) : '',
@@ -51,6 +52,9 @@ export function LaptopEditDrawer({ customerId, laptop, kind, onClose, onSaved })
       body.returned_at = f.returned_at || null;
     } else {
       body.dispatched_at = f.dispatched_at || null;
+      // Only send the location when edited, so an untouched DC address isn't pinned as manual.
+      const location = f.delivery_location.trim();
+      if (location !== String(laptop.delivery_location || '').trim()) body.delivery_location = location;
     }
     try {
       const { data } = await updateCustomerLaptop(customerId, laptop.serial_id, body);
@@ -82,6 +86,18 @@ export function LaptopEditDrawer({ customerId, laptop, kind, onClose, onSaved })
             <Field label="Delivered"><Input type="date" value={f.delivered_at} onChange={set('delivered_at')} /></Field>
             {f.returned && <Field label="Returned" error={datesBad ? 'Before the delivery date' : undefined}><Input type="date" value={f.returned_at} onChange={set('returned_at')} /></Field>}
           </FormGrid>
+          {!f.returned && (
+            <div style={{ marginTop: '12px' }}>
+              <Field
+                label="Location"
+                hint={laptop.location_is_manual
+                  ? 'Entered by hand. Clear it to show the challan shipping address again.'
+                  : 'Taken from the challan shipping address. Editing it saves a manual location for this laptop.'}
+              >
+                <Textarea rows={2} maxLength={500} value={f.delivery_location} onChange={set('delivery_location')} placeholder="Address where this laptop is" />
+              </Field>
+            </div>
+          )}
           <div style={{ marginTop: '12px' }}>
             <Notice tone="info">{f.returned
               ? 'Delivered is when the laptop reached this customer; returned is when it came back.'

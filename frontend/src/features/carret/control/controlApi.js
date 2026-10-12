@@ -27,6 +27,7 @@ export const fetchAssignableRoles = () => api.get('/auth/assignable-roles');
 export const fetchTeams = () => api.get('/auth/teams');
 export const createUser = (body) => api.post('/auth/register', body);
 export const updateUser = (id, body) => api.put(`/auth/users/${id}`, body);
+export const deleteUser = (id) => api.delete(`/auth/users/${id}`);
 export const setUserStatus = (id, status, reason) => api.patch(`/auth/users/${id}/status`, { status, reason });
 export const resetUserPassword = (id, newPassword) => api.post(`/auth/users/${id}/reset-password`, newPassword ? { new_password: newPassword } : {});
 

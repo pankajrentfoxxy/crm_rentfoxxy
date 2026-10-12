@@ -82,7 +82,7 @@ export const SECTIONS = [
     // Order to delivery is complete in Carret (25 Sep 2026): these open the new
     // screens. The old ones stay under "Old view" until the process is signed
     // off (hard rule 6), then they go.
-    groups: ['Leads', 'Order to delivery', 'Customers & more'],
+    groups: ['Leads', 'Order to delivery', 'Customers & more', 'Marketing'],
     items: [
       { group: 'Order to delivery', to: '/carret/sell/quotations', label: 'Quotations', section: 'sales_quotations', action: 'view' },
       { group: 'Order to delivery', to: '/carret/sell/sales-orders', label: 'Sales Orders', sections: SO_SECTIONS, section: 'sales_orders_doc', action: 'view' },
@@ -92,6 +92,9 @@ export const SECTIONS = [
       { group: 'Customers & more', to: '/carret/sell/demo', label: 'Demo Agreements', section: 'demo_management', action: 'view' },
       { group: 'Customers & more', to: '/carret/sell/sale-in-place', label: 'Sale in Place', section: 'sale_in_place', action: 'view' },
       { group: 'Customers & more', to: '/carret/sell/early-returns', label: 'Early Returns (lock-in)', sections: [...SO_SECTIONS, 'support_tickets', 'customer_billing'], section: 'sales_orders_doc', action: 'view' },
+      // WhatsApp Campaigns (12 Oct 2026): the new-UI pages for the feature production
+      // built in the old UI; the old /whatsapp-campaigns screens stay routed.
+      { group: 'Marketing', to: '/carret/sell/whatsapp-campaigns', label: 'WhatsApp Campaigns', section: 'whatsapp_campaigns', action: 'view' },
     ],
   },
   {
@@ -223,6 +226,11 @@ export const UNREACHABLE_BY_DESIGN = [
   '/support/*', '/support-parts/*', '/teams', '/vendor-management/*', '/inventory-management/*',
   // New-UI aliases and create forms reached from their list pages.
   '/carret', '/carret/money/credit-notes/new', '/carret/procure/repairs/new', '/carret/sell/sale-in-place/new',
+  '/carret/sell/whatsapp-campaigns/new',
+
+  // WhatsApp Campaigns in the old UI (production, 9 Oct 2026). Reached from the Old UI
+  // sidebar (menuConfig.js); the new menu opens /carret/sell/whatsapp-campaigns.
+  '/whatsapp-campaigns', '/whatsapp-campaigns/new',
 
   // Public, unauthenticated capture links (server.js mounts six families).
   '/', '/login', '/access', '/auth/impersonate',

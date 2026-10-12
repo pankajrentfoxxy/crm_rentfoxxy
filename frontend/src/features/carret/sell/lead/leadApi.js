@@ -18,5 +18,4 @@ export const fetchFollowUpBoard = (params) => api.get(`${L}/follow-ups/board`, {
 export const assignLeads = (leadIds, userId) => api.post(`${L}/assign`, { lead_ids: leadIds, sales_user_id: userId });
 export const addLeadRemark = (id, note) => api.post(`${L}/${id}/remarks`, { note });
 export const addLeadAddress = (id, body) => api.post(`${L}/${id}/addresses`, body);
-export const runLeadResearch = (id) => api.post(`${L}/${id}/research`);
 export const fetchLeadQuotations = (leadId) => api.get('/sales-management/quotations', { params: { source_lead_id: leadId, limit: 50 } });

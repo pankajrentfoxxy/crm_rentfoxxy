@@ -46,10 +46,11 @@ const EDIT_RESULT = {
   awaiting_script: ['good', 'Expected config updated — run the script on the laptop'],
   already_verified: ['good', 'Expected config updated'],
 };
-/** The expected config the unit is checked against. */
+/** The serial and the expected config the unit is checked against. */
 function initialEditConfig(i) {
   const e = i?.return_capture?.expected_config || {};
   return {
+    serial_number: i?.serial_number || '',
     brand: e.brand || i?.brand || '', model: e.model || i?.model || '', processor: e.processor || i?.processor || '',
     generation: e.generation || i?.generation || '', ram: e.ram || i?.ram || '', ssd: e.ssd || e.storage || i?.storage || '', gpu: e.gpu || '',
   };
@@ -94,6 +95,7 @@ export default function ReturnChallanRecordPage() {
   };
   const saveConfig = async () => {
     const { item, form } = editFor;
+    if (form.serial_number.trim().length < 3) { toast.error('Enter a valid serial number'); return; }
     if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) { toast.error('Processor, RAM and SSD are required'); return; }
     setBusy(true);
     try {
@@ -128,7 +130,7 @@ export default function ReturnChallanRecordPage() {
       render: (i) => (
         <div className="flex flex-wrap" style={{ gap: '6px' }}>
           {isSuper && d.status !== 'cancelled' && !i.warehouse_received_at && (
-            <Button variant="quiet" onClick={() => setEditFor({ item: i, form: initialEditConfig(i) })}>Edit config</Button>
+            <Button variant="quiet" onClick={() => setEditFor({ item: i, form: initialEditConfig(i) })}>Edit serial / config</Button>
           )}
           {canDamage && <Button variant="quiet" onClick={() => setDamageFor(i)}>Record damage</Button>}
         </div>
@@ -217,12 +219,25 @@ export default function ReturnChallanRecordPage() {
       <Drawer
         open={Boolean(editFor)}
         onClose={() => setEditFor(null)}
-        title={editFor ? `Expected config — ${editFor.item.ttspl_id || editFor.item.serial_number}` : ''}
+        title={editFor ? `Serial & expected config — ${editFor.item.ttspl_id || editFor.item.serial_number}` : ''}
         footer={<Button variant="primary" disabled={busy} onClick={saveConfig}>{busy ? 'Saving…' : 'Save'}</Button>}
       >
         {editFor && (
           <div className="c-stack">
-            <p className="text-ink-3">Super Admin only. Saves on the asset. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse receive.</p>
+            <p className="text-ink-3">Super Admin only. Saves on the asset; a serial change is audited and updates the asset record. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse receive.</p>
+            <Field
+              label="Serial number"
+              required
+              hint={editFor.item.return_captured_serial
+                && editFor.item.return_captured_serial.toUpperCase() !== editFor.form.serial_number.trim().toUpperCase() ? (
+                  <span style={{ color: 'var(--alert-crit, #b91c1c)' }}>
+                    Typed on laptop: {editFor.item.return_captured_serial}
+                    <button type="button" style={{ marginLeft: '8px', fontWeight: 600, color: 'var(--accent)', background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={() => setEditFor((x) => ({ ...x, form: { ...x.form, serial_number: x.item.return_captured_serial } }))}>Use this</button>
+                  </span>
+                ) : undefined}
+            >
+              <Input className="font-mono" value={editFor.form.serial_number} onChange={(e) => setEditFor((x) => ({ ...x, form: { ...x.form, serial_number: e.target.value } }))} maxLength={100} />
+            </Field>
             {EDIT_CONFIG_FIELDS.map(([key, label]) => {
               const reading = laptopReadings(editFor.item)[key];
               return (
