@@ -6,7 +6,6 @@ const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
 const customerScope = require('../middleware/customerScope');
 const {
-    // researchCompanyData,
     createCustomer,
     getCustomers,
     getCustomerById,
@@ -128,7 +127,6 @@ const requireDispatchAccess = (req, res, next) => {
     }
 };
 
-// router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
 
 const customerUploadDir = 'uploads/customers';
 if (!fs.existsSync(customerUploadDir)) fs.mkdirSync(customerUploadDir, { recursive: true });

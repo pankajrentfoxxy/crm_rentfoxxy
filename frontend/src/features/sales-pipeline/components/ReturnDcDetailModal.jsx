@@ -125,6 +125,7 @@ const EDIT_CONFIG_FIELDS = [
 function initialEditConfig(item) {
   const e = item?.return_capture?.expected_config || {};
   return {
+    serial_number: item?.serial_number || '',
     brand: e.brand || item?.brand || '',
     model: e.model || item?.model || '',
     processor: e.processor || item?.processor || '',
@@ -157,6 +158,10 @@ function EditUnitConfigModal({ rdcNumber, item, onClose, onSaved }) {
   const readings = laptopReadings(item);
 
   const save = async () => {
+    if (form.serial_number.trim().length < 3) {
+      toast.error('Enter a valid serial number');
+      return;
+    }
     if (!form.processor.trim() || !form.ram.trim() || !form.ssd.trim()) {
       toast.error('Processor, RAM and SSD are required');
       return;
@@ -181,12 +186,34 @@ function EditUnitConfigModal({ rdcNumber, item, onClose, onSaved }) {
       <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="border-b px-5 py-4 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold">Edit expected configuration</h3>
+            <h3 className="font-semibold">Edit serial &amp; expected configuration</h3>
             <p className="text-xs text-gray-500 font-mono">{item.ttspl_id || '—'} · SN {item.serial_number || '—'}</p>
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-5 space-y-3">
+          <label className="block text-xs text-gray-600">
+            Serial number
+            <input
+              type="text"
+              value={form.serial_number}
+              onChange={(e) => setForm((f) => ({ ...f, serial_number: e.target.value }))}
+              className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 font-mono"
+            />
+            {item.return_captured_serial
+              && item.return_captured_serial.toUpperCase() !== form.serial_number.trim().toUpperCase() ? (
+                <span className="block mt-0.5 text-[11px] text-red-700">
+                  Typed on laptop: {item.return_captured_serial}
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, serial_number: item.return_captured_serial }))}
+                    className="ml-2 font-semibold text-violet-800"
+                  >
+                    Use this
+                  </button>
+                </span>
+              ) : null}
+          </label>
           {EDIT_CONFIG_FIELDS.map(([key, label]) => {
             const reading = readings[key];
             return (
@@ -216,7 +243,7 @@ function EditUnitConfigModal({ rdcNumber, item, onClose, onSaved }) {
             );
           })}
           <p className="text-[11px] text-gray-500">
-            Saves on the asset. If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse inward.
+            Saves on the asset (a serial change is audited and updates the asset record). If the laptop&apos;s last script reading matches the new config, the unit is cleared for warehouse inward.
           </p>
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={onClose} disabled={saving} className="flex-1 py-2 border rounded-lg text-sm">Cancel</button>

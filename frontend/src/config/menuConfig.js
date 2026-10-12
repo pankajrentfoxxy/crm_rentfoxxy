@@ -29,6 +29,7 @@ import {
   Boxes,
   ScanLine,
   Laptop,
+  MessageCircle,
 } from 'lucide-react';
 import { SECTIONS as CARRET_NAV_SECTIONS } from './navigation';
 
@@ -346,6 +347,13 @@ export const MENU_GROUPS = [
         section: 'customer_billing',
         children: financeMenuItems,
       },
+    ],
+  },
+  {
+    key: 'marketing',
+    label: 'Marketing',
+    items: [
+      { icon: MessageCircle, label: 'WhatsApp Campaigns', path: '/whatsapp-campaigns', section: 'whatsapp_campaigns' },
     ],
   },
   {

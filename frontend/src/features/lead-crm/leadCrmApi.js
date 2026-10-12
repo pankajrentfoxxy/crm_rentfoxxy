@@ -22,7 +22,6 @@ export const addLeadAddress = (id, data) => api.post(`/leads/${id}/addresses`, d
 export const exportLeadsCsv = (params) => api.get('/leads/export-csv', { params, responseType: 'blob' });
 export const importLeadsCsv = (formData) => api.post('/leads/upload', formData);
 export const assignLeads = (data) => api.post('/leads/assign', data);
-export const runResearch = (id) => api.post(`/leads/${id}/research`);
 export const getFollowUps = (params) => api.get('/leads/follow-ups', { params });
 export const getFollowUpReminders = () => api.get('/leads/follow-up-reminders');
 export const ackFollowUpReminder = (leadId, data) =>

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /var/www/crm_rentfoxxy/backend && node /tmp/claude-0/-var-www-crm-rentfoxxy/7ea3999a-9c2a-4f9a-91ba-d4db52651e34/scratchpad/qcready_clear.js --apply)"
+    ]
+  }
+}

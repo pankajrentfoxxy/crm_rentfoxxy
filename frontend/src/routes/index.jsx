@@ -14,6 +14,7 @@ import { assetConfigurationRoutes } from './assetConfigurationRoutes';
 import { dispatchRoutes } from './dispatchRoutes';
 import { guardRoutes } from './guardRoutes';
 import { carretRoutes } from './carretRoutes';
+import { whatsappCampaignRoutes } from './whatsappCampaignRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -33,6 +34,7 @@ export const appRoutes = [
   ...reportingRoutes,
   // Empty unless REACT_APP_CARRET=1, so the router is unchanged by default.
   ...carretRoutes,
+  ...whatsappCampaignRoutes,
 ];
 
 export {
@@ -51,4 +53,5 @@ export {
   financeRoutes,
   reportingRoutes,
   assetConfigurationRoutes,
+  whatsappCampaignRoutes,
 };

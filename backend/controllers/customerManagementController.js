@@ -1780,6 +1780,15 @@ function mapDeliveryLocation(raw) {
   };
 }
 
+// A location typed in the asset edit modal. It only applies while the laptop is still on
+// the DC it was entered against, so a later re-dispatch shows that DC's address again.
+function manualLocationFor(override, dcNumber) {
+  const text = String(override?.text || '').trim();
+  if (!text) return null;
+  if ((override.dc_number || null) !== (dcNumber || null)) return null;
+  return text;
+}
+
 function locationSortKey(lap) {
   return String(lap.delivery_location || 'zzz_unknown').toLowerCase();
 }
@@ -1818,7 +1827,19 @@ function mapActiveAssetRow(r) {
       vendor_pending: Boolean(r.sale_in_place_vendor_pending),
       sales_order_number: r.sale_in_place_so_number || null,
     } : null,
-    ...mapDeliveryLocation(r.customer_shipping_address),
+    ...activeAssetLocation(r),
+  };
+}
+
+function activeAssetLocation(r) {
+  const manual = manualLocationFor(r.location_override, r.dc_number);
+  if (!manual) return { ...mapDeliveryLocation(r.customer_shipping_address), location_is_manual: false };
+  return {
+    delivery_location: manual,
+    delivery_city: null,
+    delivery_pincode: null,
+    delivery_address: manual,
+    location_is_manual: true,
   };
 }
 
@@ -2142,6 +2163,7 @@ const ACTIVE_SELECT_SQL = `
          pod.esign_url AS pod_esign_url,
          pod.pdf_path AS dc_pdf_path,
          pod.customer_shipping_address AS customer_shipping_address,
+         vsn.extra->'location_override' AS location_override,
          sip.reason AS sale_in_place_reason,
          sip.rent_stopped_on AS sale_in_place_rent_stopped_on,
          sip.vendor_pending AS sale_in_place_vendor_pending,
@@ -2629,6 +2651,15 @@ exports.updateCustomerAsset = async (req, res) => {
       dcNumber = raw == null || raw === '' ? null : String(raw).trim();
     }
 
+    let deliveryLocation;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'delivery_location')) {
+      const raw = req.body.delivery_location;
+      deliveryLocation = raw == null ? '' : String(raw).trim();
+      if (deliveryLocation.length > 500) {
+        return res.status(400).json({ success: false, message: 'Location is too long (max 500 characters)' });
+      }
+    }
+
     let dispatchedAt;
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'dispatched_at')) {
       const raw = req.body.dispatched_at;
@@ -2672,6 +2703,7 @@ exports.updateCustomerAsset = async (req, res) => {
       !Object.keys(specPayload).length
       && rentMonthlyRate === undefined
       && dcNumber === undefined
+      && deliveryLocation === undefined
       && dispatchedAt === undefined
       && deliveredAt === undefined
       && returnedAt === undefined
@@ -2755,7 +2787,35 @@ exports.updateCustomerAsset = async (req, res) => {
       returnedAt,
     });
 
-    if (!changes.length) {
+    const effectiveDcForLocation = dcNumber !== undefined ? dcNumber : row.current_dc_number;
+    let locationChanged = false;
+    if (deliveryLocation !== undefined && isActiveHeld) {
+      const oldLocation = manualLocationFor(extra.location_override, row.current_dc_number) || '';
+      const sameDc = (extra.location_override?.dc_number || null) === (effectiveDcForLocation || null);
+      if (oldLocation !== deliveryLocation || (deliveryLocation && !sameDc)) {
+        locationChanged = true;
+        if (deliveryLocation) {
+          extra.location_override = {
+            text: deliveryLocation,
+            dc_number: effectiveDcForLocation || null,
+            set_by: req.user?.user_id || null,
+            set_at: new Date().toISOString(),
+          };
+        } else {
+          delete extra.location_override;
+        }
+        if (oldLocation !== deliveryLocation) {
+          changes.push({
+            field: 'delivery_location',
+            label: 'Location',
+            oldValue: oldLocation || null,
+            newValue: deliveryLocation || null,
+          });
+        }
+      }
+    }
+
+    if (!changes.length && !locationChanged) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'No changes detected' });
     }
@@ -2784,7 +2844,7 @@ exports.updateCustomerAsset = async (req, res) => {
     const vsnPatch = [];
     const vsnParams = [];
     let p = 1;
-    if (Object.keys(specPayload).length) {
+    if (Object.keys(specPayload).length || locationChanged) {
       vsnPatch.push(`extra = $${p++}::jsonb`);
       vsnParams.push(JSON.stringify(extra));
     }
@@ -2969,6 +3029,7 @@ exports.updateCustomerAsset = async (req, res) => {
     };
     if (rentMonthlyRate !== undefined) responsePayload.rent_monthly_rate = rentMonthlyRate;
     if (dcNumber !== undefined) responsePayload.dc_number = dcNumber;
+    if (locationChanged) responsePayload.delivery_location = deliveryLocation || null;
     if (dispatchedAt !== undefined) responsePayload.dispatched_at = dispatchedAt;
     if (deliveredAt !== undefined) responsePayload.delivered_at = deliveredAt;
     if (returnedAt !== undefined) responsePayload.returned_at = returnedAt;

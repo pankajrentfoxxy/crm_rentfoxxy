@@ -543,11 +543,27 @@ async function listProductionQcReportUncached(query = {}, options = {}) {
   };
 }
 
+// Concurrent cache misses for the same key share one query instead of each
+// starting their own (they piled up and exhausted the pool under CPU throttling).
+const inFlightLists = new Map();
+
 async function listProductionQcReport(query = {}, options = {}) {
   const cacheKey = buildListCacheKey(query);
   const cached = await getCachedList(cacheKey);
-  const result = cached || await listProductionQcReportUncached(query, options);
-  if (!cached) await setCachedList(cacheKey, result);
+  let result = cached;
+  if (!result) {
+    let pending = inFlightLists.get(cacheKey);
+    if (!pending) {
+      pending = listProductionQcReportUncached(query, options)
+        .then(async (fresh) => {
+          await setCachedList(cacheKey, fresh);
+          return fresh;
+        })
+        .finally(() => inFlightLists.delete(cacheKey));
+      inFlightLists.set(cacheKey, pending);
+    }
+    result = await pending;
+  }
 
   if (options.includeCustomerVendor === false) {
     return {

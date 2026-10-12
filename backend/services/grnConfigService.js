@@ -20,11 +20,19 @@ const BRAND_NOISE = new Set([
   'technology', 'computer', 'computers', 'international', 'group', 'gmbh',
 ]);
 
+// Legal names some firmware reports in place of the brand stored on the PO
+// (older HP models report "Hewlett-Packard"). Keys are normBrand() output.
+const BRAND_ALIASES = new Map([
+  ['hewlett packard', 'hp'],
+  ['micro star', 'msi'],
+]);
+
 function normBrand(s) {
-  return norm(s)
+  const n = norm(s)
     .split(' ')
     .filter((t) => t && !BRAND_NOISE.has(t))
     .join(' ');
+  return BRAND_ALIASES.get(n) ?? n;
 }
 
 function normModel(s) {
