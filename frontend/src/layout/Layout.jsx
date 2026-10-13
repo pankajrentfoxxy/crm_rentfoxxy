@@ -419,6 +419,7 @@ export default function Layout({ children }) {
   if (showSupportNav2) addSearchRoute('Support', '/support', 'Support');
   if (canView('guard_gate_checking')) {
     addSearchRoute('Guard Scanner', '/guard/scanner', 'Warehouse Gate');
+    addSearchRoute('PO Inward', '/guard/po-inward', 'Warehouse Gate');
   }
   if (canView('gate_dashboard')) {
     addSearchRoute('Gate Dashboard', '/guard', 'Warehouse Gate');

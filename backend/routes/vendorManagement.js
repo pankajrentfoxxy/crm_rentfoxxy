@@ -109,6 +109,20 @@ router.post(
   ...purchaseOrders.receivePoLineUnitValidators,
   purchaseOrders.receivePoLineUnit
 );
+// Guard gate inwards on a PO (each one becomes its own GRN when received).
+router.get(
+  '/purchase-orders/:poId/gate-inwards',
+  authorize,
+  purchaseOrders.gateInwardListValidators,
+  purchaseOrders.listGateInwards
+);
+router.post(
+  '/purchase-orders/:poId/gate-inwards/:inwardId/close',
+  authorize,
+  purchaseOrders.gateInwardCloseValidators,
+  purchaseOrders.closeGateInward
+);
+router.get('/purchase-orders/:id/pdf', authorize, purchaseOrders.downloadPdfValidators, purchaseOrders.downloadPdf);
 const grnCapture = require('../controllers/grnSerialCapture.controller');
 router.post(
   '/purchase-orders/:poId/grn-capture-tokens',

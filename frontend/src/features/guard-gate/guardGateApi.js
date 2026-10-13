@@ -11,3 +11,8 @@ export const getGateSession = (sessionId) => api.get(`/guard-gate/sessions/${ses
 export const unscanGateUnit = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/unscan`, payload);
 export const cancelGateSession = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/cancel`, payload);
 export const recordGateReplacement = (sessionId, payload) => api.post(`/guard-gate/sessions/${sessionId}/replacement`, payload);
+
+// PO inward: guard counts laptops received against a vendor purchase order.
+export const lookupPoForInward = (po) => api.get('/guard-gate/po-inward/lookup', { params: { po } });
+export const getRecentPoInwards = (params) => api.get('/guard-gate/po-inward/recent', { params });
+export const createPoInward = (payload) => api.post('/guard-gate/po-inward', payload);

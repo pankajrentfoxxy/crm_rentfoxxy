@@ -217,6 +217,7 @@ export const MENU_GROUPS = [
     label: 'Warehouse Gate',
     items: [
       { icon: ScanLine, label: 'Guard Scanner', path: '/guard/scanner', section: 'guard_gate_checking' },
+      { icon: ScanLine, label: 'PO Inward', path: '/guard/po-inward', section: 'guard_gate_checking' },
       { icon: LayoutDashboard, label: 'Gate Dashboard', path: '/guard', section: 'gate_dashboard' },
     ],
   },

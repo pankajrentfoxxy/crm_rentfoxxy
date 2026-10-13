@@ -117,6 +117,28 @@ export function logPoDocumentActivity(poId, body) {
   return api.post(`${base}/purchase-orders/${poId}/activities`, body);
 }
 
+/** Download the PO PDF as a file (same document the vendor receives). */
+export async function downloadPurchaseOrderPdf(poId, poNumber) {
+  const res = await api.get(`${base}/purchase-orders/${poId}/pdf`, { responseType: 'blob' });
+  const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${String(poNumber || `PO-${poId}`).replace(/[^\w-]/g, '_')}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+/** Guard gate inwards recorded against a PO (each becomes its own GRN). */
+export function fetchPoGateInwards(poId) {
+  return api.get(`${base}/purchase-orders/${poId}/gate-inwards`);
+}
+
+export function closePoGateInward(poId, inwardId, reason) {
+  return api.post(`${base}/purchase-orders/${poId}/gate-inwards/${inwardId}/close`, { reason });
+}
+
 /** Laravel addProductReceived: vendor + PO stats + lines with received counts + GRNs */
 export function fetchProductReceivedContext(poId) {
   return api.get(`${base}/purchase-orders/${poId}/product-received`);
