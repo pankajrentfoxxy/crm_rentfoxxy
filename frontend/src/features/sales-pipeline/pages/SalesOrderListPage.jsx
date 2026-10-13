@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, ClipboardList, Eye, Banknote, Truck, Ban, FileSpreadsheet } from 'lucide-react';
+import { Plus, ClipboardList, Eye, Banknote, Truck, Ban, FileSpreadsheet, Copy } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
@@ -121,6 +121,7 @@ export default function SalesOrderListPage({ scope }) {
   const [paymentSo, setPaymentSo] = useState(null);
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
+  const [copySo, setCopySo] = useState(null);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -242,6 +243,16 @@ export default function SalesOrderListPage({ scope }) {
           tone="blue"
           onClick={() => navigate(salesOrderDetailPath(row.sales_order_number, scope), { state: listReturnState(location) })}
         />
+        {scope !== 'replacement' && (
+          <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="create">
+            <ActionIconButton
+              label="Copy SO"
+              icon={Copy}
+              tone="slate"
+              onClick={() => setCopySo(row.sales_order_number)}
+            />
+          </PermissionGate>
+        )}
         {!cancelled && (
           <>
             {hasAttachedLaptops && (
@@ -481,6 +492,15 @@ export default function SalesOrderListPage({ scope }) {
         prefillQuotation={prefillQuote}
         scope={scope}
       />
+      {scope !== 'replacement' && (
+        <SalesOrderForm
+          open={Boolean(copySo)}
+          copyFromSoNumber={copySo}
+          onClose={() => setCopySo(null)}
+          onSaved={handleSoSaved}
+          scope={scope}
+        />
+      )}
       <DCForm open={dcDrawer} onClose={() => { setDcDrawer(false); setPrefillSo(null); }} onSaved={load} prefillSo={prefillSo} />
       <PaymentModal open={Boolean(paymentSo)} soNumber={paymentSo} onClose={() => setPaymentSo(null)} onSaved={load} />
     </div>
