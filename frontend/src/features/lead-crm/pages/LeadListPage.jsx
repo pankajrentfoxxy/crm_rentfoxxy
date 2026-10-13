@@ -46,6 +46,8 @@ export default function LeadListPage() {
   });
 
   const canChangeAssignee = hasPermission('lead_assignee_change', 'edit') || hasPermission('leads', 'edit');
+  // Sales users see the Assignee filter only when granted View on Lead Assignee Change.
+  const canFilterAssignee = user?.role !== 'sales' || hasPermission('lead_assignee_change', 'view');
 
   const assignableUsers = useMemo(() => users, [users]);
 
@@ -286,7 +288,7 @@ export default function LeadListPage() {
             onChange={(statuses) => setFilters((f) => ({ ...f, statuses }))}
             allLabel="All statuses"
           />
-          {user?.role !== 'sales' && (
+          {canFilterAssignee && (
             <MultiSelectFilter
               options={assigneeOptions}
               value={filters.assignees}
