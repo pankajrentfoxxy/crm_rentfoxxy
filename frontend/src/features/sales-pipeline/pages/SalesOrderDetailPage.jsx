@@ -87,6 +87,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [editShippingOpen, setEditShippingOpen] = useState(false);
   const [partialCancelLine, setPartialCancelLine] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const visibleTabs = useMemo(() => TABS.filter((t) => {
@@ -180,6 +181,8 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     && !hasDcCreated
     && !isInPlaceSale
     && canEdit(scopeConfig?.permissionSection || 'sales_orders_doc');
+  // Same reach as the list page's "Create Sales Order": rental and sale only.
+  const canCopySo = resolvedScope === 'rental' || resolvedScope === 'sale';
   const listPath = salesOrderListPath(resolvedScope);
   const cameFromElsewhere = Boolean(location.state?.from);
   const dcNavState = useMemo(
@@ -321,6 +324,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
           {canEditSo ? (
             <Button variant="secondary" onClick={() => setEditOpen(true)}>Edit SO</Button>
           ) : null}
+          {canCopySo && (
+            <PermissionGate section={scopeConfig?.permissionSection || 'sales_orders_doc'} action="create">
+              <Button variant="secondary" onClick={() => setCopyOpen(true)}>Copy SO</Button>
+            </PermissionGate>
+          )}
         </div>
       </div>
 
@@ -616,6 +624,14 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         onClose={() => setEditOpen(false)}
         onSaved={load}
       />
+      {canCopySo && (
+        <SalesOrderForm
+          open={copyOpen}
+          copyFromSoNumber={soNumber}
+          scope={resolvedScope}
+          onClose={() => setCopyOpen(false)}
+        />
+      )}
     </div>
   );
 }

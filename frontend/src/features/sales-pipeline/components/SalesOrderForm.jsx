@@ -108,9 +108,16 @@ function linesFromSo(soLines) {
   }));
 }
 
-export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation, scope, editSoNumber }) {
+export default function SalesOrderForm({
+  open, onClose, onSaved, prefillQuotation, scope, editSoNumber, copyFromSoNumber,
+}) {
   const navigate = useNavigate();
   const isEdit = Boolean(editSoNumber);
+  // Copy: a new SO pre-filled from an existing one. It saves through the normal
+  // create path (new number allocated server-side); attached laptops live in
+  // sales_order_serials and are never carried over.
+  const isCopy = !isEdit && Boolean(copyFromSoNumber);
+  const sourceSoNumber = editSoNumber || copyFromSoNumber;
   const scopeConfig = getSoScopeConfig(scope);
   const defaultType = scopeConfig?.defaultQuotationType || 'rental';
   const defaultBranch = scopeConfig?.defaultBranch || branchForQuotationType(defaultType);
@@ -163,13 +170,15 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   }, [open, scope, defaultType, defaultBranch, isEdit]);
 
   useEffect(() => {
-    if (!open || !editSoNumber) return;
+    if (!open || !sourceSoNumber) return;
     setFromQuote(false);
-    getSalesOrderFull(editSoNumber).then((res) => {
+    getSalesOrderFull(sourceSoNumber).then((res) => {
       const data = res.data;
       const soLines = data?.lines || [];
       const head = soLines[0] || {};
-      setEditDocMeta({ created_at: head.created_at, sales_order_number: head.sales_order_number });
+      if (isEdit) {
+        setEditDocMeta({ created_at: head.created_at, sales_order_number: head.sales_order_number });
+      }
       const lineWfh = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
       const delivery = parseAddress(head.delivery_address) || {};
       setIsWfh(Boolean(lineWfh));
@@ -177,13 +186,15 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
         employee_name: delivery.employee_name || '',
         employee_phone: delivery.employee_phone || '',
       });
-      setLines(soLines.length ? linesFromSo(soLines) : [emptyLineItem()]);
+      const formLines = linesFromSo(soLines).map((l) => (isEdit ? l : { ...l, line_id: null }));
+      setLines(formLines.length ? formLines : [emptyLineItem()]);
       setForm({
         customer_id: head.customer_id || '',
         customer_name: head.customer_name || '',
         email: head.customer_email || '',
         customer_mobile: head.customer_mobile || '',
-        quotation_number: head.quotation_number || '',
+        // A copy is not the quotation's conversion, so it carries no quotation link.
+        quotation_number: isEdit ? (head.quotation_number || '') : '',
         quotation_type: head.quotation_type || defaultType,
         branch: head.branch || defaultBranch,
         security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
@@ -200,7 +211,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       }
     }).catch(() => toast.error('Failed to load sales order'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editSoNumber, defaultType, defaultBranch]);
+  }, [open, sourceSoNumber, isEdit, defaultType, defaultBranch]);
 
   useEffect(() => {
     if (!prefillQuotation || !open) return;
@@ -449,7 +460,9 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       <aside className="relative w-full max-w-[600px] bg-white shadow-xl flex flex-col max-h-full overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div>
-            <h2 className="font-semibold text-gray-900">{isEdit ? 'Edit Sales Order' : 'Create Sales Order'}</h2>
+            <h2 className="font-semibold text-gray-900">
+              {isEdit ? 'Edit Sales Order' : isCopy ? 'Copy Sales Order' : 'Create Sales Order'}
+            </h2>
             {scopeConfig && (
               <p className="text-xs font-semibold mt-0.5" style={{ color: scopeConfig.brandColor }}>
                 {scopeConfig.brandName}
@@ -459,7 +472,12 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {!isEdit ? (
+          {isCopy ? (
+            <p className="text-xs text-gray-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Copied from <span className="font-mono font-semibold">{copyFromSoNumber}</span>.
+              A new SO number is assigned on save. Laptops are not copied — attach them after creating.
+            </p>
+          ) : !isEdit ? (
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={fromQuote} onChange={(e) => setFromQuote(e.target.checked)} />
               Create from Quotation?
