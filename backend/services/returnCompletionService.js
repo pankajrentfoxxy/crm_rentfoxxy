@@ -145,7 +145,9 @@ async function processReturnedSerials(db, {
       continue;
     }
 
-    if (!['rented', 'on_demo', 'sold'].includes(s.inventory_status)) {
+    // on_loan: a loan laptop coming back. Like a demo it was never billed, so
+    // it re-enters QC with no rent end and no credit note (wasRented is false).
+    if (!['rented', 'on_demo', 'on_loan', 'sold'].includes(s.inventory_status)) {
       results.push({ serialId, skipped: true, reason: s.inventory_status });
       continue;
     }

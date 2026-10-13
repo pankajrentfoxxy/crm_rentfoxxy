@@ -15,7 +15,9 @@
  *   in_transit      — guard confirmed outward, en route
  *   rented          — delivered under a rental agreement (Rentfoxxy), earning
  *   on_demo         — delivered as a free demo (Rentfoxxy), not yet billed
- *   sold            — delivered as a sale (Gorefurbo)
+ *   on_loan         — temporary loan laptop at a customer whose own laptop is
+ *                     away for repair; never billed (services/loanLaptopService)
+ *   sold           — delivered as a sale (Gorefurbo)
  *   returned        — came back from customer, pending QC re-entry
  *   in_repair       — on the floor / under repair
  *   qc_failed       — failed QC (may go back to vendor)
@@ -32,6 +34,7 @@ const STATUS = Object.freeze({
   IN_TRANSIT: 'in_transit',
   RENTED: 'rented',
   ON_DEMO: 'on_demo',
+  ON_LOAN: 'on_loan',
   SOLD: 'sold',
   RETURNED: 'returned',
   IN_REPAIR: 'in_repair',
@@ -45,8 +48,9 @@ const ALLOWED = {
   in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'],
   reserved:        ['dispatch_ready', 'in_transit', 'in_stock'],
   dispatch_ready:  ['in_transit', 'in_stock'],
-  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock'],
+  in_transit:      ['rented', 'on_demo', 'on_loan', 'sold', 'in_stock'],
   on_demo:         ['rented', 'returned'],
+  on_loan:         ['rented', 'returned'],   // kept by the customer / taken back
   rented:          ['returned', 'sold'],   // 'sold' = sale in place (see markSoldInPlace)
   sold:            ['returned'],
   returned:        ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
@@ -74,6 +78,15 @@ function isAllowed(from, to) {
  * it goes back to the customer, so billing and the customer link must survive.
  */
 async function isOnRepairHold(db, serial) {
+  // A repair answered by the customer keeping their loan laptop is over: the
+  // original is not going back, so it must not keep the customer link.
+  const { loanSchemaReady } = require('./loanSchema');
+  const loanConverted = (await loanSchemaReady(db))
+    ? `AND NOT EXISTS (
+          SELECT 1 FROM support_loan_requests lr
+           WHERE lr.pickup_item_id = p.id AND lr.status = 'converted'
+        )`
+    : '';
   const r = await db.query(
     `SELECT 1
        FROM (
@@ -93,6 +106,7 @@ async function isOnRepairHold(db, serial) {
              AND (ro.pickup_item_id = p.id OR ro.old_serial_id = $1)
              AND ro.created_at >= COALESCE($4::timestamptz, $5::timestamptz, '1970-01-01'::timestamptz) - INTERVAL '1 day'
         )
+        ${loanConverted}
       LIMIT 1`,
     [serial.serial_id, serial.ttspl_id || '', serial.serial_number || '', serial.delivered_at || null, serial.cur_rent_start || null]
   );
@@ -231,6 +245,19 @@ async function transitionAsset(db, {
       // Demo is free until the customer "keeps" — clear any mistaken rental anchors.
       sets.push('rent_start_date = NULL', 'rent_billed_until = NULL');
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
+      break;
+    case STATUS.ON_LOAN:
+      if (customerId !== null) add('current_customer_id', customerId);
+      if (deliveredAt != null) {
+        add('delivered_at', new Date(deliveredAt));
+      } else if (from !== toStatus) {
+        add('delivered_at', new Date());
+      }
+      // A loan is never billed. With no rent anchor no invoice builder (prepaid,
+      // postpaid, on-DC-create, on-delivery) can pick the unit up; only an
+      // Accounts-approved conversion (convertLoanToRental) sets one.
+      sets.push('rent_start_date = NULL', 'rent_end_date = NULL', 'rent_billed_until = NULL');
+      add('returned_at', null);
       break;
     case STATUS.RETURNED:
       add('returned_at', new Date());
@@ -431,6 +458,24 @@ const convertDemoToRental = (db, serialId, { rentStartDate, rentMonthlyRate, act
     rentStartDate: toDateStr(rentStartDate), rentMonthlyRate: rentMonthlyRate ?? null,
     reason: 'Demo converted to rental (kept)', actorUserId, actorName });
 
+/** Loan DC delivered: in_transit -> on_loan. No rent anchor is set (never billed). */
+const markLoanDelivered = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, deliveredAt, actorUserId, actorName }) =>
+  transitionAsset(db, { serialId, toStatus: STATUS.ON_LOAN, dcNumber, customerId, entityCode,
+    dispatchMode, deliveredAt: deliveredAt || null,
+    reason: `Loan laptop delivered on ${dcNumber} (not billed)`, actorUserId, actorName });
+
+/**
+ * Customer keeps the loan laptop: on_loan -> rented at the Accounts-approved
+ * rate from the agreed effective date. The caller sets rent_billed_until to the
+ * day before so nothing earlier can ever be invoiced.
+ */
+const convertLoanToRental = (db, serialId, { rentStartDate, rentMonthlyRate, deliveredAt, reason, actorUserId, actorName }) =>
+  transitionAsset(db, { serialId, toStatus: STATUS.RENTED,
+    rentStartDate: toDateStr(rentStartDate), rentMonthlyRate: rentMonthlyRate ?? null,
+    // Keep the loan delivery date; the transition would otherwise restamp it.
+    deliveredAt: deliveredAt || null,
+    reason: reason || 'Loan laptop kept by customer — converted to rental', actorUserId, actorName });
+
 const markReturned = (db, serialId, { reason, rentEndDate, actorUserId, actorName }) =>
   transitionAsset(db, { serialId, toStatus: STATUS.RETURNED, rentEndDate: toDateStr(rentEndDate),
     reason: reason || 'Returned by customer', actorUserId, actorName });
@@ -541,6 +586,8 @@ module.exports = {
   markReturned,
   markSoldInPlace,
   convertDemoToRental,
+  markLoanDelivered,
+  convertLoanToRental,
   backToStock,
   findSerialByCode,
   bridgeSupportReplacement,

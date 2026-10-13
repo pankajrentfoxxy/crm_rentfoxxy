@@ -279,6 +279,8 @@ const FY_DOC_TYPES = {
   sales_order: { docType: 'so_rentfoxxy', prefix: 'SO', table: 'sales_order_lines', column: 'sales_order_number' },
   delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
   service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  loan_dc: { docType: 'loan_dc', prefix: 'LDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  loan_request: { docType: 'loan_request', prefix: 'LNR', table: 'support_loan_requests', column: 'request_number' },
   part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_return_dc: { docType: 'part_rpdc_rentfoxxy', prefix: 'RPDC', table: 'delivery_challan_lines', column: 'dc_number' },
   vendor_return_ticket: { docType: 'vendor_return_ticket', prefix: 'VRT', table: 'vendor_return_tickets', column: 'ticket_number' },
@@ -2369,6 +2371,16 @@ async function healStaleReturnedPassedSerials(db = pool) {
  * used to force inventory_status=reserved anyway — heal those units for attach/search.
  */
 async function healStaleReservedPassedSerials(db = pool) {
+  // A loan laptop is reserved with no SO line on purpose (services/loanLaptopService);
+  // releasing it here let any inventory search hand it to someone else's order.
+  const { loanSchemaReady } = require('./loanSchema');
+  const loanHold = (await loanSchemaReady(db))
+    ? `AND NOT EXISTS (
+          SELECT 1 FROM support_loan_requests lr
+           WHERE lr.loan_serial_id = vsn.serial_id
+             AND lr.status IN ('requested', 'pending_approval', 'approved', 'dc_generated')
+        )`
+    : '';
   await db.query(
     `UPDATE vendor_serial_numbers vsn SET
         inventory_status = 'in_stock',
@@ -2382,7 +2394,8 @@ async function healStaleReservedPassedSerials(db = pool) {
           SELECT 1 FROM sales_order_serials sos
            WHERE sos.serial_id = vsn.serial_id
              AND sos.status = 'attached'
-        )`
+        )
+        ${loanHold}`
   );
 }
 

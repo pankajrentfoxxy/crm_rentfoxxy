@@ -3760,6 +3760,13 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
         }
     });
 
+    // A loan laptop's return pickup closes its loan request (Option A).
+    if (!isRepair) {
+        await require('../services/loanLaptopService').onLoanReturnWarehouseReceived(
+            client, { ...it, floor_ticket_id: floorTicketId || it.floor_ticket_id }, { user_id: userId }
+        );
+    }
+
     return { floorTicketId };
 };
 

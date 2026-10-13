@@ -254,6 +254,8 @@ function classifyDocumentNumber(raw) {
   if (/^(G?DC)[\/-]/i.test(n) || /^G?DC-\d/i.test(n)) {
     return { docType: 'dc', docNumber: original };
   }
+  // Loan DC (LDC/26-27/0001) moves through the gate as an outbound DC.
+  if (/^LDC\//i.test(n)) return { docType: 'dc', docNumber: original };
   return null;
 }
 
@@ -533,6 +535,9 @@ async function loadOutboundDc(db, dcNumber) {
   } else if (purpose === 'service_return') {
     source_type = 'service_return';
     source_label = 'Service Return';
+  } else if (purpose === 'loan') {
+    source_type = 'loan';
+    source_label = 'Loan Laptop';
   }
 
   const sos = await db.query(
@@ -2537,7 +2542,7 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   if (!dcNumber) return null;
 
   const head = await db.query(
-    `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number,
+    `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number, dcl.dc_purpose,
             COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
        FROM delivery_challan_lines dcl
        LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
@@ -2547,6 +2552,7 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     [dcNumber]
   );
   const ctx = head.rows[0] || {};
+  const isLoanDc = String(ctx.dc_purpose || '') === 'loan';
   let rows = Array.isArray(serialRows) ? serialRows.filter((r) => r.serial_id) : [];
   if (!rows.length) {
     const sos = await db.query(
@@ -2566,7 +2572,8 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
 
   for (const row of rows) {
     if (!row.serial_id) continue;
-    const rentMonthlyRate = await resolveSerialRentRate(db, row.serial_id, dcNumber);
+    // A loan laptop carries no rental rate onto its challan (it is not billed).
+    const rentMonthlyRate = isLoanDc ? null : await resolveSerialRentRate(db, row.serial_id, dcNumber);
     try {
       await inventorySM.markDispatched(db, row.serial_id, {
         dcNumber,
@@ -2616,11 +2623,18 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     } catch (_) { /* table may not exist */ }
   }
 
+  if (isLoanDc) {
+    await require('./loanLaptopService').onLoanDcDispatched(db, dcNumber, {
+      user_id: actor.userId, name: actor.name,
+    });
+  }
+
   return {
     dcNumber,
     salesOrderNumber: ctx.sales_order_number || null,
     customerId: ctx.customer_id || null,
-    quotationType: ctx.quotation_type || null,
+    // 'loan' keeps the caller's first-rental-invoice step from firing.
+    quotationType: isLoanDc ? 'loan' : (ctx.quotation_type || null),
   };
 }
 
