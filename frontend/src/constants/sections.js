@@ -127,7 +127,7 @@ export const SECTION_LABELS = {
   taskflow: 'TaskFlow',
   analytics_dashboard: 'Analytics Dashboards (Manager & Sales)',
   leads: 'Leads',
-  lead_assignee_change: 'Lead Assignee Change (Sales team)',
+  lead_assignee_change: 'Lead Assignee (View = filter, Edit = change)',
   lead_follow_ups: 'Follow-ups',
   lead_conversion: 'Lead Conversion',
   customers: 'Customers',

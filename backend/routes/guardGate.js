@@ -20,4 +20,9 @@ router.post('/sessions/:sessionId/unscan', create, ctrl.unscanUnit);
 router.post('/sessions/:sessionId/cancel', create, ctrl.cancelSession);
 router.post('/sessions/:sessionId/replacement', create, ctrl.recordReplacement);
 
+// PO inward: guard counts laptops that arrived against a vendor purchase order.
+router.get('/po-inward/lookup', view, ctrl.poInwardLookup);
+router.get('/po-inward/recent', view, ctrl.poInwardRecent);
+router.post('/po-inward', create, ctrl.poInwardCreate);
+
 module.exports = router;

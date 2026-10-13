@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, LogOut, ScanLine, Shield } from 'lucide-react';
+import { LayoutDashboard, LogOut, PackagePlus, ScanLine, Shield } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import usePermission from '../../hooks/usePermission';
 
@@ -62,6 +62,19 @@ export default function GuardLayout({ children }) {
             >
               <ScanLine className="w-4 h-4" />
               Scanner
+            </NavLink>
+          )}
+          {canScanner && (
+            <NavLink
+              to="/guard/po-inward"
+              className={({ isActive }) =>
+                `flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${
+                  isActive ? 'bg-teal-500 text-white' : 'bg-slate-800 text-slate-300'
+                }`
+              }
+            >
+              <PackagePlus className="w-4 h-4" />
+              PO Inward
             </NavLink>
           )}
         </nav>

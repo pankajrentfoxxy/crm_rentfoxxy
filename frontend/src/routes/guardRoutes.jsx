@@ -6,6 +6,7 @@ import GuardLayout from '../features/guard-gate/GuardLayout';
 import GuardDashboardPage from '../features/guard-gate/GuardDashboardPage';
 import GuardScannerPage from '../features/guard-gate/GuardScannerPage';
 import GateReportPage from '../features/guard-gate/GateReportPage';
+import PoInwardPage from '../features/guard-gate/PoInwardPage';
 
 const withGuard = (section, node) => (
   <ProtectedRoute section={section} action="view">
@@ -39,4 +40,5 @@ export const guardRoutes = [
     ),
   },
   { path: '/guard/scanner', element: withGuard('guard_gate_checking', <GuardScannerPage />) },
+  { path: '/guard/po-inward', element: withGuard('guard_gate_checking', <PoInwardPage />) },
 ];
