@@ -115,6 +115,8 @@ export default function LeadsPage() {
   const { hasPermission, user } = usePermission();
   const canCreate = hasPermission('leads', 'create');
   const canEdit = hasPermission('leads', 'edit');
+  // Sales users see the Owner filter only with View on Lead Assignee (View = filter, Edit = change).
+  const canFilterOwner = user?.role !== 'sales' || hasPermission('lead_assignee_change', 'view');
   const canAssign = hasPermission('lead_assignee_change', 'edit') || (canEdit && ['super_admin', 'admin', 'manager'].includes(user?.role));
   const view = params.get('view') || 'list';
   // Older links used ?status=Hot — open the tab that status belongs to.
@@ -288,7 +290,7 @@ export default function LeadsPage() {
               <FilterBar
                 filters={[
                   { key: 'search', label: 'Search', type: 'search', placeholder: 'Name, company, phone, email, city' },
-                  ...(users.length ? [{ key: 'owner', label: 'Owner', options: [{ value: 'me', label: 'Mine' }, { value: 'unassigned', label: 'Unassigned' }, ...users.map((u) => ({ value: String(u.user_id), label: u.name }))] }] : []),
+                  ...(canFilterOwner && users.length ? [{ key: 'owner', label: 'Owner', options: [{ value: 'me', label: 'Mine' }, { value: 'unassigned', label: 'Unassigned' }, ...users.map((u) => ({ value: String(u.user_id), label: u.name }))] }] : []),
                   { key: 'source', label: 'Source', options: SOURCES.map((s) => ({ value: s, label: s })) },
                   { key: 'inquiry', label: 'Enquiry', options: INQUIRY },
                   { key: 'follow_up', label: 'Next call', options: FOLLOW },

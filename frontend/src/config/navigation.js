@@ -120,6 +120,7 @@ export const SECTIONS = [
 
       // ---- Gate & tracking: the crossing itself ----
       { group: 'Gate & tracking', to: '/carret/move/gate', label: 'Guard Gate', section: 'guard_gate_checking', action: 'view' },
+      { group: 'Gate & tracking', to: '/carret/procure/arrivals', label: 'PO Inward', sections: ['guard_gate_checking', 'vendor_management'], section: 'guard_gate_checking', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/deliveries', label: 'Delivery Register', sections: ['delivery_register_management', 'technician_bucket'], section: 'delivery_register_management', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/my-deliveries', label: 'My Deliveries & Pickups', sections: ['technician_bucket', 'delivery_my_deliveries'], section: 'technician_bucket', action: 'view' },
       { group: 'Gate & tracking', to: '/carret/move/technicians', label: 'Delivery Technicians', section: 'technician_bucket', action: 'view' },

@@ -38,6 +38,12 @@ const partsList = (v) => {
 };
 const today = () => new Date().toISOString().slice(0, 10);
 const NEEDS_CHECK = new Set(['on', 'part_missing']);
+// A line can take another laptop while the PO still wants one and, when the
+// guard counted per line, this delivery still has one of that line to receive.
+const lineOpen = (l) => Number(l.receivedQty) < Number(l.quantity) && (l.gate_qty == null || Number(l.on_delivery) < Number(l.gate_qty));
+const lineOptionLabel = (l) => (l.gate_qty == null
+  ? `${lineConfig(l)} — ${l.receivedQty || 0} of ${l.quantity} in`
+  : `${lineConfig(l)} — ${l.on_delivery || 0} of ${l.gate_qty} on this delivery · ${l.receivedQty || 0} of ${l.quantity} on the PO`);
 const blankUnit = (line) => ({
   line_index: line ?? 0, condition: 'on', missing_parts: [], serial: '', damage: '', waiver: '', rental_start_date: today(),
 });
@@ -70,8 +76,8 @@ export default function DeliveryReceivePage() {
         setUnit((u) => {
           const lines = data.data.lines || [];
           const cur = lines[u.line_index];
-          if (cur && Number(cur.receivedQty) < Number(cur.quantity)) return u;
-          const open = lines.findIndex((l) => Number(l.receivedQty) < Number(l.quantity));
+          if (cur && lineOpen(cur)) return u;
+          const open = lines.findIndex(lineOpen);
           return { ...u, line_index: open >= 0 ? open : 0 };
         });
       })
@@ -288,7 +294,7 @@ export default function DeliveryReceivePage() {
                   <Select
                     value={String(unit.line_index)}
                     onChange={(e) => changeLineOrCondition('line_index', Number(e.target.value))}
-                    options={lines.map((l, i) => ({ value: String(i), label: `${lineConfig(l)} — ${l.receivedQty || 0} of ${l.quantity} in`, disabled: Number(l.receivedQty) >= Number(l.quantity) }))}
+                    options={lines.filter((l) => l.gate_qty !== 0).map((l) => ({ value: String(l.line_index), label: lineOptionLabel(l), disabled: !lineOpen(l) }))}
                   />
                 </Field>
                 {rental && <Field label="Rent starts"><Input type="date" value={unit.rental_start_date} onChange={(e) => setU('rental_start_date', e.target.value)} /></Field>}

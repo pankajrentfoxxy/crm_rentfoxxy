@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeskShell from '../../../shells/DeskShell';
 import {
@@ -9,7 +10,7 @@ import { fetchPurchaseOrders, fetchSpareOrders, fetchVendors } from '../../vendo
 import SparePartsPoFormModal from '../../vendor-management/components/SparePartsPoFormModal';
 import { errMsg, vendorName } from './procureShared';
 import {
-  PO_TABS, PO_TYPES, SPO_TABS, poBillInfo, poQty, poStatus, poStatusLabel, poTypeLabel, spoStatusLabel,
+  PO_TABS, PO_TYPES, SPO_TABS, downloadPoPdf, poBillInfo, poQty, poStatus, poStatusLabel, poTypeLabel, spoStatusLabel,
 } from './poShared';
 
 /**
@@ -37,6 +38,7 @@ export default function PurchaseOrdersListPage({ kind = 'laptop' }) {
     : hasPermission('vendor_management', 'create');
   const [newSpare, setNewSpare] = useState(false);
   const [reload, setReload] = useState(0);
+  const [pdfBusy, setPdfBusy] = useState(null);
 
   const [tab, setTab] = useState('open');
   const [type, setType] = useState('');
@@ -187,6 +189,25 @@ export default function PurchaseOrdersListPage({ kind = 'laptop' }) {
     { key: 'status', header: 'Status', render: (r) => <StatusChip status={poStatus(r) === 'pending' && spare ? 'pending_approval' : poStatus(r)} label={label(poStatus(r))} /> },
     { key: 'value', header: 'Value', numeric: true, render: (r) => <Money value={r.total_amount} showZero={false} />, sub: (r) => (['rental_purchase', 'rent_to_own'].includes(r.purchase_order_type) ? 'per month' : null) },
     { key: 'date', header: 'Date', render: (r) => <DateTime value={r.purchase_order_date || r.created_at} />, sub: (r) => (r.expected_delivery_date ? <>due <DateTime value={r.expected_delivery_date} /></> : null) },
+    ...(spare ? [] : [{
+      key: 'pdf',
+      header: '',
+      render: (r) => (
+        <Button
+          variant="quiet"
+          title="Download PDF"
+          aria-label={`Download ${r.purchase_order_number} PDF`}
+          disabled={pdfBusy === r.po_id}
+          onClick={async (e) => {
+            e.stopPropagation();
+            setPdfBusy(r.po_id);
+            try { await downloadPoPdf(r.po_id, r.purchase_order_number); } catch (err) { toast.error(errMsg(err, 'Could not download the PDF')); } finally { setPdfBusy(null); }
+          }}
+        >
+          {pdfBusy === r.po_id ? '…' : 'PDF'}
+        </Button>
+      ),
+    }]),
   ];
 
   return (

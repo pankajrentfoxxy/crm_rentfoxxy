@@ -16,7 +16,7 @@ import {
 import { isManagerUser } from '../../vendor-management/vendorMgmtUi';
 import { errMsg } from './procureShared';
 import {
-  PO_BASE, isRentalType, isSuperAdmin, lineConfig, lineRate, openPoPdf, parseBillFiles, poBillInfo, poQty, poStatus, poTypeLabel,
+  PO_BASE, isRentalType, isSuperAdmin, lineConfig, lineRate, downloadPoPdf, openPoPdf, parseBillFiles, poBillInfo, poQty, poStatus, poTypeLabel,
 } from './poShared';
 import { LineSpecsDrawer, PoBillsSection, PoReplacementsSection } from './PoRecordParts';
 
@@ -92,6 +92,7 @@ export default function PurchaseOrderRecordPage() {
   const submit = () => run('submit', () => patchPurchaseOrderStatus(poId, 'pending_approval'), 'Sent for approval');
   const approve = () => run('approve', () => patchPurchaseOrderStatus(poId, 'approved'), 'Approved — the PO is emailed to the vendor');
   const pdf = () => run('pdf', () => openPoPdf(poId));
+  const download = () => run('download', () => downloadPoPdf(poId, po?.purchase_order_number));
   const deleteDraft = async () => {
     setBusy('delete');
     try {
@@ -165,6 +166,7 @@ export default function PurchaseOrderRecordPage() {
   const actions = po && (
     <>
       <Button onClick={pdf} disabled={busy === 'pdf'}>{busy === 'pdf' ? 'Opening…' : 'PDF'}</Button>
+      <Button variant="quiet" onClick={download} disabled={busy === 'download'}>{busy === 'download' ? 'Downloading…' : 'Download'}</Button>
       {canEdit && ['draft', 'pending', 'rejected', 'vendor_rejected', ''].includes(st) && <Button onClick={() => navigate(`/carret/procure/purchase-orders/${poId}/edit`)}>Edit</Button>}
       {canEdit && OPEN_STATES.includes(st) && qty.received === 0 && <Button onClick={() => setReasonFor('amend')}>Amend</Button>}
       {canEdit && OPEN_STATES.includes(st) && (openDeliveries || []).map((dv) => (

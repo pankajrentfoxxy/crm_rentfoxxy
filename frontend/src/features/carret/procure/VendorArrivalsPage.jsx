@@ -14,7 +14,8 @@ import { errMsg } from './procureShared';
  *
  * The guard logs every vendor delivery here BEFORE anything is received:
  * which PO, the vendor's challan (and invoice if it came with the laptops),
- * how many laptops came in. The warehouse then opens the delivery and
+ * how many laptops came in on each PO line (capped at ordered − received −
+ * already waiting at the gate). The warehouse then opens the delivery and
  * receives against it — its own GRN, capped at the guard's count — so
  * "arrived" and "received" can't drift apart.
  */
@@ -24,7 +25,7 @@ const TABS = [
   { key: 'received', label: 'Received', statuses: 'received' },
   { key: 'cancelled', label: 'Turned away', statuses: 'cancelled' },
 ];
-const blank = { po_id: '', laptop_count: '', vendor_challan_no: '', vendor_invoice_no: '', carrier_name: '', vehicle_no: '', notes: '' };
+const blank = { po_id: '', vendor_challan_no: '', vendor_invoice_no: '', carrier_name: '', vehicle_no: '', notes: '' };
 
 export default function VendorArrivalsPage() {
   const navigate = useNavigate();
@@ -39,6 +40,8 @@ export default function VendorArrivalsPage() {
   const [expected, setExpected] = useState(null);
   const [logOpen, setLogOpen] = useState(Boolean(params.get('po')) && canLog);
   const [form, setForm] = useState({ ...blank, po_id: params.get('po') || '' });
+  const [qty, setQty] = useState({}); // line_index -> count
+  const [poLines, setPoLines] = useState(null); // { lines, blocked_reason } for the picked PO
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
 
@@ -59,22 +62,40 @@ export default function VendorArrivalsPage() {
     label: `${p.purchase_order_number} · ${p.vendor_name || 'vendor?'} · ${p.remaining} still to come`,
   })), [expected]);
   const picked = (expected || []).find((p) => String(p.po_id) === String(form.po_id));
+  useEffect(() => {
+    setQty({});
+    setPoLines(null);
+    if (!form.po_id) return undefined;
+    let live = true;
+    api.get(`${base}/po/${form.po_id}`)
+      .then(({ data }) => { if (live) setPoLines(data.data); })
+      .catch((e) => { if (live) { setPoLines({ lines: [] }); toast.error(errMsg(e, 'Could not load the PO lines')); } });
+    return () => { live = false; };
+  }, [form.po_id]);
+  const total = Object.values(qty).reduce((n, v) => n + (parseInt(v, 10) || 0), 0);
 
   const set = (k) => (e) => { setForm((f) => ({ ...f, [k]: e.target.value })); setErrors((er) => ({ ...er, [k]: undefined })); };
 
   const save = async () => {
     const e = {};
     if (!form.po_id) e.po_id = 'Pick the purchase order on the vendor’s challan';
-    if (!(Number(form.laptop_count) > 0)) e.laptop_count = 'Count the laptops';
+    if (form.po_id && total <= 0) e.lines = 'Count the laptops that arrived on at least one line';
+    (poLines?.lines || []).forEach((l) => {
+      const n = parseInt(qty[l.line_index], 10) || 0;
+      if (n > l.available_to_inward) e.lines = `Line ${l.line_index + 1}: only ${l.available_to_inward} more can come in — check with procurement before letting extra laptops in`;
+    });
     if (!form.vendor_challan_no.trim()) e.vendor_challan_no = 'Enter the challan / delivery note number';
-    if (picked && Number(form.laptop_count) > picked.remaining) e.laptop_count = `Only ${picked.remaining} are still due on this PO — check with procurement before letting extra laptops in`;
     if (Object.keys(e).length) { setErrors(e); return; }
     setSaving(true);
     try {
-      const { data } = await api.post(base, { ...form, po_id: Number(form.po_id), laptop_count: Number(form.laptop_count) });
+      const lines = Object.entries(qty)
+        .map(([i, v]) => ({ line_index: Number(i), qty: parseInt(v, 10) || 0 }))
+        .filter((l) => l.qty > 0);
+      const { data } = await api.post(base, { ...form, po_id: Number(form.po_id), lines });
       toast.success(data.message || 'Delivery logged');
       setLogOpen(false);
       setForm(blank);
+      setQty({});
       setExpected(null);
       setTab('open');
       load();
@@ -130,15 +151,42 @@ export default function VendorArrivalsPage() {
         onClose={() => setLogOpen(false)}
         title="Log a vendor delivery"
         width="36rem"
-        footer={<Button variant="primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Log delivery'}</Button>}
+        footer={<Button variant="primary" disabled={saving || Boolean(poLines?.blocked_reason)} onClick={save}>{saving ? 'Saving…' : total ? `Log ${total} laptop(s)` : 'Log delivery'}</Button>}
       >
         <div className="c-stack">
           <Notice tone="info">Log it before the laptops go to the warehouse. The PO number is on the vendor’s challan.</Notice>
           <Field label="Purchase order" required error={errors.po_id} hint={picked ? `${picked.vendor_name} · ${picked.remaining} of ${picked.ordered} still to come${picked.expected_delivery_date ? ' · due ' + String(picked.expected_delivery_date).slice(0, 10) : ''}` : 'Only POs with laptops still due are listed'}>
             {expected === null ? <span className="text-ink-3">Loading…</span> : <Select value={form.po_id} onChange={set('po_id')} placeholder="Pick the PO" options={poOptions} />}
           </Field>
+          {form.po_id && (
+            <Field label="Laptops that arrived, per line" required error={errors.lines} hint={total ? `${total} laptop(s) in all` : 'Count only what is physically here'}>
+              {poLines === null ? <span className="text-ink-3">Loading…</span> : poLines.blocked_reason ? <Notice tone="warn">{poLines.blocked_reason}</Notice> : (
+                <div className="c-stack" style={{ gap: '8px' }}>
+                  {(poLines.lines || []).map((l) => (
+                    <div key={l.line_index} style={{ display: 'grid', gridTemplateColumns: '1fr 6rem', gap: '12px', alignItems: 'center' }}>
+                      <div>
+                        <div className="font-ui">{l.line_index + 1}. {l.label}</div>
+                        <div className="font-ui text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>
+                          Ordered {l.ordered} · received {l.received}{l.pending_grn ? ` · ${l.pending_grn} waiting for GRN` : ''} · <strong>{l.available_to_inward} can come in</strong>
+                        </div>
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={l.available_to_inward}
+                        inputMode="numeric"
+                        aria-label={`Laptops arrived on line ${l.line_index + 1}`}
+                        disabled={l.available_to_inward <= 0}
+                        value={qty[l.line_index] ?? ''}
+                        onChange={(e) => { setQty((q) => ({ ...q, [l.line_index]: e.target.value })); setErrors((er) => ({ ...er, lines: undefined })); }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Field>
+          )}
           <FormGrid cols={2}>
-            <Field label="Laptops that arrived" required error={errors.laptop_count}><Input type="number" min={1} inputMode="numeric" value={form.laptop_count} onChange={set('laptop_count')} /></Field>
             <Field label="Vendor challan no." required error={errors.vendor_challan_no}><Input value={form.vendor_challan_no} onChange={set('vendor_challan_no')} /></Field>
             <Field label="Vendor invoice no." hint="If the invoice came with the laptops"><Input value={form.vendor_invoice_no} onChange={set('vendor_invoice_no')} /></Field>
             <Field label="Vehicle no."><Input value={form.vehicle_no} onChange={set('vehicle_no')} /></Field>

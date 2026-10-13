@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Copy, Plus } from 'lucide-react';
 import DeskShell from '../../shells/DeskShell';
 import {
   DataTable, FilterBar, Panel, StatusChip, DocNumber, DateTime, Money, EmptyState, Button, Segmented, Tabs, Notice,
@@ -59,7 +59,7 @@ const RESOURCES = {
     ],
     create: { label: 'New sales order', to: '/carret/sell/sales-orders/new', section: SO_SECTIONS },
     open: (r) => `/carret/sell/sales-orders/${encodeURIComponent(r.sales_order_number)}`,
-    columns: () => [
+    columns: ({ canCreate, navigate }) => [
       { key: 'sales_order_number', header: 'Order', render: (r) => <DocNumber value={r.sales_order_number} /> },
       { key: 'customer_name', header: 'Customer' },
       {
@@ -81,6 +81,21 @@ const RESOURCES = {
       { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status === 'pending' ? 'confirmed' : r.status} /> },
       { key: 'total', header: 'Value', numeric: true, render: (r) => <Money value={r.total_value} showZero={false} /> },
       { key: 'created_at', header: 'Raised', render: (r) => <DateTime value={r.created_at} /> },
+      // Copy SO: a new order pre-filled from this one (not for replacement orders).
+      ...(canCreate ? [{
+        key: 'copy',
+        header: '',
+        render: (r) => (r.is_replacement_order ? null : (
+          <Button
+            variant="quiet"
+            aria-label={`Copy ${r.sales_order_number}`}
+            title="Copy SO"
+            onClick={(e) => { e.stopPropagation(); navigate(`/carret/sell/sales-orders/new?copy=${encodeURIComponent(r.sales_order_number)}`); }}
+          >
+            <Copy size={14} aria-hidden="true" /> Copy
+          </Button>
+        )),
+      }] : []),
     ],
   },
   customers: {
@@ -130,7 +145,7 @@ export default function SellListPage({ kind = 'sales-orders' }) {
     []
   );
 
-  const columns = useMemo(() => config.columns(), [config]);
+  const columns = useMemo(() => config.columns({ canCreate, navigate }), [config, canCreate, navigate]);
 
   return (
     <DeskShell

@@ -67,8 +67,20 @@ export async function openPoPdf(poId) {
   }
   const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
   if (w) w.location.href = url; else window.location.href = url;
-  // On the PO's activity, like the old screen. Not awaited: logging never holds up the PDF.
-  logPoDocument(poId, 'pdf_downloaded');
+  // The server logs pdf_downloaded on the PO's activity.
+}
+
+/** Saves the PO PDF as a file named after the PO number. */
+export async function downloadPoPdf(poId, poNumber) {
+  const res = await api.get(`${PO_BASE}/${poId}/pdf`, { responseType: 'blob' });
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${String(poNumber || `PO-${poId}`).replace(/[^\w-]/g, '_')}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 export const backendFile = (p) => (p ? `${getBackendOrigin().replace(/\/$/, '')}/${String(p).replace(/^\//, '')}` : null);

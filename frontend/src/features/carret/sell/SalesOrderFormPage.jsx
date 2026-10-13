@@ -98,6 +98,11 @@ export default function SalesOrderFormPage() {
   const [params] = useSearchParams();
   const fromQuotationParam = params.get('quotation') || '';
   const draftParam = editSo ? '' : (params.get('draft') || '');
+  // ?copy=<SO>: a new order pre-filled from an existing one. It is created
+  // through the normal path (new number on save); its quotation link and
+  // attached laptops are not carried over.
+  const copySo = editSo || draftParam ? '' : (params.get('copy') || '');
+  const sourceSo = editSo || copySo;
   const [draftId, setDraftId] = useState(draftParam);
   const [draftSaving, setDraftSaving] = useState(false);
   const loadedDraft = useRef('');
@@ -197,22 +202,26 @@ export default function SalesOrderFormPage() {
     });
   }, [draftParam]);
 
-  // Edit: load the order.
+  // Edit (or copy): load the order.
   useEffect(() => {
-    if (!editSo) return;
-    getSalesOrderFull(editSo).then(({ data }) => {
+    if (!sourceSo) return;
+    getSalesOrderFull(sourceSo).then(({ data }) => {
       const soLines = data?.lines || [];
       const h = soLines[0] || {};
-      if ((data?.delivery_challans || []).length) setEditLocked('This order already has a delivery challan, so it can no longer be edited. Change a line’s rate or configuration from the order instead.');
-      else if (String(data?.status) === 'cancelled') setEditLocked('This order is cancelled.');
-      else if (h.fulfillment_mode === 'in_place') setEditLocked('Sale-in-place orders cannot be edited.');
+      // Locks apply to editing only; a copy is a new order.
+      if (editSo) {
+        if ((data?.delivery_challans || []).length) setEditLocked('This order already has a delivery challan, so it can no longer be edited. Change a line’s rate or configuration from the order instead.');
+        else if (String(data?.status) === 'cancelled') setEditLocked('This order is cancelled.');
+        else if (h.fulfillment_mode === 'in_place') setEditLocked('Sale-in-place orders cannot be edited.');
+      }
       const t = ['sale', 'sales'].includes(String(h.quotation_type).toLowerCase()) ? 'sale' : (h.quotation_type || 'rental');
       setType(t);
       if (t === 'demo') setDemoBook(h.entity_code === 'gorefurbo' ? 'gorefurbo' : 'rentfoxxy');
-      setQuotationNumber(h.quotation_number && h.quotation_number !== 'N/A' ? h.quotation_number : '');
+      setQuotationNumber(editSo && h.quotation_number && h.quotation_number !== 'N/A' ? h.quotation_number : '');
       setCustomerId(h.customer_id ? String(h.customer_id) : '');
       setGst(h.gst_number || '');
-      setLines(soLines.length ? linesFromDoc(soLines) : [emptyLine()]);
+      const docLines = linesFromDoc(soLines).map((l) => (editSo ? l : { ...l, line_id: null }));
+      setLines(docLines.length ? docLines : [emptyLine()]);
       setSecurityType(h.security_type || (Number(h.security_amount) > 0 ? 'one_month_rental' : 'none'));
       setShipping(h.shiping_charges ?? '');
       const isW = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
@@ -223,7 +232,7 @@ export default function SalesOrderFormPage() {
       const ship = parseJson(h.customer_shipping_address);
       if (ship?.address) setShipChoice({ key: 'manual', manual: { ...ship, zip_code: ship.zip_code || ship.pincode || '' } });
     }).catch((e) => setLoadError(e?.response?.data?.message || 'Could not load the order.'));
-  }, [editSo]);
+  }, [sourceSo, editSo]);
 
   const customers = useMemo(() => filterCustomersForQuotation(meta?.customers || [], type), [meta, type]);
   const eligibleQuotes = useMemo(() => quotes.filter((q) => {
@@ -410,13 +419,18 @@ export default function SalesOrderFormPage() {
 
   return (
     <DeskShell
-      title={editSo ? `Edit ${editSo}` : (draftId ? 'New sales order (draft)' : 'New sales order')}
+      title={editSo ? `Edit ${editSo}` : copySo ? `Copy of ${copySo}` : (draftId ? 'New sales order (draft)' : 'New sales order')}
       breadcrumb="Sell / Sales orders"
       subtitle={editSo ? 'Changes regenerate the order PDF.' : 'The SO number is assigned when you create the order. A draft takes no number.'}
     >
       <div className="c-split">
         <div className="c-stack">
           {loadError && <Notice tone="crit" title="Could not load the form">{loadError}</Notice>}
+          {copySo && (
+            <Notice tone="info" title={`Copied from ${copySo}`}>
+              A new SO number is assigned when you create it. Laptops are not copied — attach them after creating.
+            </Notice>
+          )}
 
           <Section title="Order type">
             <div className="flex flex-wrap items-center" style={{ gap: '12px' }}>
