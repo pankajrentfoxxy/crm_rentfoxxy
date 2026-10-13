@@ -99,6 +99,16 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     });
 
     const [remarks, setRemarks] = useState('');
+
+    // QC1: the inspector types the laptop's full TTSPL + serial at submit; the
+
+    // server matches both exactly (never pre-filled from the ticket).
+
+    const [verifyTtspl, setVerifyTtspl] = useState('');
+
+    const [verifySerial, setVerifySerial] = useState('');
+
+    const serialNeeded = ticket?.received_condition !== 'not_on';
     const [signOff] = useState({
         checked_by: null
     });
@@ -216,6 +226,8 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             };
             const payload = {
                 qcStage,
+                verify_ttspl: verifyTtspl.trim() || undefined,
+                verify_serial: verifySerial.trim() || undefined,
                 header: safeHeader,
                 checklist,
                 grading,
@@ -273,6 +285,11 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     };
 
     const handleSubmit = async () => {
+        if (qcStage === 'QC1' && (!verifyTtspl.trim() || (serialNeeded && !verifySerial.trim()))) {
+            return alert(serialNeeded
+                ? "Type the laptop's full TTSPL ID and Serial number to submit QC1"
+                : "Type the laptop's full TTSPL ID to submit QC1");
+        }
         if (qcStage === 'QC1' && !specChecklistReady) {
             return alert('Please complete the specification checklist (all 6 fields)');
         }
@@ -789,6 +806,31 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                         rows="3"
                         placeholder="Any additional notes or observations..."
                     />
+                </div>
+            )}
+
+            {qcStage === 'QC1' && (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <h3 className="text-xl font-bold mb-1">Verify the laptop</h3>
+                    <p className="text-sm text-gray-500 mb-4">Type or scan both from the laptop on your bench. They must match its record exactly.</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input
+                            value={verifyTtspl}
+                            onChange={(e) => setVerifyTtspl(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                            className="w-full border border-gray-300 rounded-lg p-3 font-mono focus:ring-2 focus:ring-purple-500"
+                            placeholder="TTSPL ID * (full)"
+                            aria-label="TTSPL ID"
+                            autoComplete="off"
+                        />
+                        <input
+                            value={verifySerial}
+                            onChange={(e) => setVerifySerial(e.target.value.toUpperCase())}
+                            className="w-full border border-gray-300 rounded-lg p-3 font-mono focus:ring-2 focus:ring-purple-500"
+                            placeholder={serialNeeded ? 'Serial Number * (full)' : 'Serial Number (optional while NOT ON)'}
+                            aria-label="Serial Number"
+                            autoComplete="off"
+                        />
+                    </div>
                 </div>
             )}
 

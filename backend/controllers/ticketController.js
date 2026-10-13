@@ -1180,12 +1180,17 @@ async function assignTicketInner(req, res, db) {
     const preserveQcStageReassign =
       ['QC1', 'QC2'].includes(currentTicket.stage_name) && user_id && !target_stage_id && !team_id;
 
-    // Floor Manager → HW Technician: capture ON / NOT ON + identity when provided.
+    // Every assignment, at every stage: the person assigning types the
+    // laptop's TTSPL and serial in full and both must match the ticket
+    // exactly. Typed values never overwrite the record.
+    // Floor Manager → HW Technician also records ON / NOT ON; a laptop that
+    // came in NOT ON with no serial gets its first serial here once it is ON.
+    const { checkTicketIdentity, normalizeMachineId, isRealSerial } = require('../utils/machineIdentityVerify');
     const isFloorManagerAssign = currentTicket.stage_name === 'Floor Manager' && !!user_id;
+    const hasCondition = laptopConditionRaw != null && String(laptopConditionRaw).trim() !== '';
     let identityUpdates = null;
-    if (isFloorManagerAssign && laptopConditionRaw != null && String(laptopConditionRaw).trim() !== '') {
+    if (isFloorManagerAssign && hasCondition) {
       const { requiresSerialIdentity } = require('../constants/laptopConditions');
-      const { normalizeMachineId } = require('../utils/machineIdentityVerify');
       const condition = String(laptopConditionRaw || '').trim().toLowerCase();
       if (condition !== 'on' && condition !== 'not_on') {
         return res.status(400).json({
@@ -1193,32 +1198,28 @@ async function assignTicketInner(req, res, db) {
           message: 'Select whether the laptop is ON or NOT ON before assigning',
         });
       }
-      const ttspl = normalizeMachineId(assignTtspl);
-      if (!ttspl) {
-        return res.status(400).json({ success: false, message: 'TTSPL Number is required' });
-      }
       const needSerial = requiresSerialIdentity(condition);
-      const serial = normalizeMachineId(assignSerial);
-      if (needSerial && !serial) {
-        return res.status(400).json({
-          success: false,
-          message: 'Serial Number is required when the laptop is ON',
-        });
+      const typedSerial = normalizeMachineId(assignSerial);
+      const firstSerial = needSerial && !isRealSerial(currentTicket.serial_number);
+      if (firstSerial) {
+        // Nothing on record to match: the TTSPL must still match, and the serial is taken in full.
+        const t = checkTicketIdentity(currentTicket, { verify_ttspl: assignTtspl }, { label: 'Assign', condition: 'not_on' });
+        if (!t.ok) return res.status(400).json({ success: false, code: 'IDENTITY_MISMATCH', message: t.message });
+        if (!/^[A-Z0-9][A-Z0-9-]{4,}$/.test(typedSerial)) {
+          return res.status(400).json({ success: false, code: 'IDENTITY_MISMATCH', message: 'Assign: type the laptop\'s full Serial number (letters and digits, at least 5).' });
+        }
+      } else {
+        const t = checkTicketIdentity(currentTicket, { verify_ttspl: assignTtspl, verify_serial: assignSerial }, { label: 'Assign', condition });
+        if (!t.ok) return res.status(400).json({ success: false, code: 'IDENTITY_MISMATCH', message: t.message });
       }
       identityUpdates = {
         received_condition: condition,
-        ttspl_id: ttspl,
-        // Keep existing serial when NOT ON and none provided (column is NOT NULL)
-        serial_number: needSerial
-          ? serial
-          : (serial || normalizeMachineId(currentTicket.serial_number) || 'NOT_ON'),
+        ttspl_id: normalizeMachineId(currentTicket.ttspl_id),
+        serial_number: firstSerial ? typedSerial : (normalizeMachineId(currentTicket.serial_number) || 'NOT_ON'),
       };
-    } else if (isFloorManagerAssign && (assignTtspl || assignSerial)) {
-      // Partial identity without condition — reject so UI stays consistent
-      return res.status(400).json({
-        success: false,
-        message: 'Select whether the laptop is ON or NOT ON before assigning',
-      });
+    } else {
+      const t = checkTicketIdentity(currentTicket, { verify_ttspl: assignTtspl, verify_serial: assignSerial }, { label: 'Assign' });
+      if (!t.ok) return res.status(400).json({ success: false, code: 'IDENTITY_MISMATCH', message: t.message });
     }
 
     let updateQuery = 'UPDATE tickets SET ';

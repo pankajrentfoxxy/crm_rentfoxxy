@@ -12,6 +12,7 @@ import ChipLevelRepairPanel from '../../components/ChipLevelRepairPanel';
 import PartFulfillment from './components/PartFulfillment';
 import FinalTestingPanel from './components/FinalTestingPanel';
 import { ArrowRight, Clock, CheckCircle } from 'lucide-react';
+import promptLaptopIdentity from './promptLaptopIdentity';
 
 export default function TicketDetails() {
     const { id } = useParams(); 
@@ -73,8 +74,10 @@ export default function TicketDetails() {
   
     const handleAssign = async (userId) => {
       if (!userId) return;
+      const identity = promptLaptopIdentity();
+      if (!identity) return;
       try {
-        await api.post(`/tickets/${id}/assign`, { user_id: userId });
+        await api.post(`/tickets/${id}/assign`, { user_id: userId, ...identity });
         alert('Assigned successfully');
         loadTicketDetails();
       } catch (e) {

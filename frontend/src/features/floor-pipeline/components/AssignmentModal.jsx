@@ -45,14 +45,18 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
   const [laptopCondition, setLaptopCondition] = useState(
     ticket?.received_condition === 'not_on' ? 'not_on' : (ticket?.received_condition === 'on' ? 'on' : '')
   );
-  const [ttsplId, setTtsplId] = useState(ticket?.ttspl_id || '');
-  const [serialNumber, setSerialNumber] = useState(ticket?.serial_number || '');
+  // Typed (or scanned) from the laptop every time — never pre-filled from the
+  // ticket, or the check proves nothing. The server matches both exactly.
+  const [ttsplId, setTtsplId] = useState('');
+  const [serialNumber, setSerialNumber] = useState('');
 
   const team = teams.find((t) => t.key === tab) || teams[0];
   const isSalesQc = ticket?.ticket_type === 'sales_order_qc' || ticket?.priority === 'sales_order';
   const isQcStage = ['QC1', 'QC2'].includes(stageName);
   const isDispatchQcStage = stageName === 'Dispatch QC';
-  const needSerial = askPowerState && requiresSerialIdentity(laptopCondition || 'on');
+  const needSerial = askPowerState
+    ? requiresSerialIdentity(laptopCondition || 'on')
+    : requiresSerialIdentity(ticket?.received_condition);
 
   useEffect(() => {
     if (!open || !ticket) return;
@@ -61,10 +65,8 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
         : ticket.received_condition === 'on' ? 'on'
           : ''
     );
-    setTtsplId(ticket.ttspl_id || '');
-    setSerialNumber(
-      ticket.serial_number && ticket.serial_number !== 'NOT_ON' ? ticket.serial_number : ''
-    );
+    setTtsplId('');
+    setSerialNumber('');
   }, [open, ticket]);
 
   useEffect(() => {
@@ -95,30 +97,23 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
     : null;
 
   const handleAssign = async (userId) => {
-    if (askPowerState) {
-      if (laptopCondition !== 'on' && laptopCondition !== 'not_on') {
-        toast.error('Select whether the laptop is ON or NOT ON');
-        return;
-      }
-      if (!ttsplId.trim()) {
-        toast.error('TTSPL Number is required');
-        return;
-      }
-      if (needSerial && !serialNumber.trim()) {
-        toast.error('Serial Number is required when the laptop is ON');
-        return;
-      }
+    if (askPowerState && laptopCondition !== 'on' && laptopCondition !== 'not_on') {
+      toast.error('Select whether the laptop is ON or NOT ON');
+      return;
+    }
+    if (!ttsplId.trim()) {
+      toast.error('Type the laptop\'s full TTSPL ID');
+      return;
+    }
+    if (needSerial && !serialNumber.trim()) {
+      toast.error('Type the laptop\'s full Serial number');
+      return;
     }
     setAssigning(userId);
     try {
-      const body = { user_id: userId };
-      if (askPowerState) {
-        body.laptop_condition = laptopCondition;
-        body.ttspl_id = ttsplId.trim();
-        if (needSerial || serialNumber.trim()) {
-          body.serial_number = serialNumber.trim();
-        }
-      }
+      const body = { user_id: userId, ttspl_id: ttsplId.trim() };
+      if (serialNumber.trim()) body.serial_number = serialNumber.trim();
+      if (askPowerState) body.laptop_condition = laptopCondition;
       const { data } = await assignTicket(ticket.ticket_id, body);
       if (data.success) {
         toast.success(`Assigned to ${members.find((m) => m.user_id === userId)?.name || 'technician'}`);
@@ -181,29 +176,34 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
                 </button>
               </div>
             </div>
-            {laptopCondition ? (
-              <div className="space-y-2">
-                <input
-                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
-                  placeholder="TTSPL Number *"
-                  value={ttsplId}
-                  onChange={(e) => setTtsplId(e.target.value)}
-                  autoComplete="off"
-                />
-                <input
-                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
-                  placeholder={needSerial ? 'Serial Number *' : 'Serial Number (optional)'}
-                  value={serialNumber}
-                  onChange={(e) => setSerialNumber(e.target.value)}
-                  autoComplete="off"
-                />
-                {laptopCondition === 'not_on' ? (
-                  <p className="text-[11px] text-slate-500">
-                    Serial is optional while NOT ON. If the laptop powers on later, serial will be required before diagnosis can be completed.
-                  </p>
-                ) : null}
-              </div>
+            {laptopCondition === 'not_on' ? (
+              <p className="text-[11px] text-slate-500">
+                Serial is optional while NOT ON. If the laptop powers on later, serial will be required before diagnosis can be completed.
+              </p>
             ) : null}
+          </div>
+        ) : null}
+
+        {!askPowerState || laptopCondition ? (
+          <div className="px-4 py-3 border-b space-y-2">
+            <p className="text-xs font-semibold uppercase text-slate-600">Verify the laptop</p>
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+              placeholder="TTSPL ID * (full, from the label)"
+              value={ttsplId}
+              onChange={(e) => setTtsplId(e.target.value)}
+              autoComplete="off"
+              aria-label="TTSPL ID"
+            />
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+              placeholder={needSerial ? 'Serial Number * (full)' : 'Serial Number (optional while NOT ON)'}
+              value={serialNumber}
+              onChange={(e) => setSerialNumber(e.target.value)}
+              autoComplete="off"
+              aria-label="Serial Number"
+            />
+            <p className="text-[11px] text-slate-500">Type or scan both from the laptop. They must match its record exactly.</p>
           </div>
         ) : null}
 

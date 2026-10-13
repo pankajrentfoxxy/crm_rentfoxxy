@@ -803,7 +803,8 @@ exports.moveToStage = async (req, res) => {
     await closeOpenWorkLogs(client, newTicket.ticket_id);
     const sameTech = assignedUserId && ticket.assigned_user_id
       && Number(assignedUserId) === Number(ticket.assigned_user_id);
-    if (newTicket.status !== 'completed' && sameTech) {
+    const intoQc = ['QC1', 'QC2', 'Dispatch QC'].includes(effectiveToStage);
+    if (newTicket.status !== 'completed' && sameTech && !intoQc) {
       await startWorkLog(client, {
         ticketId: newTicket.ticket_id,
         userId: assignedUserId,

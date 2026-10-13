@@ -322,6 +322,17 @@ exports.submitQC = async (req, res) => {
             await client.query('ROLLBACK');
             return res.status(409).json({ success: false, message: notStarted });
         }
+        // QC1: the inspector re-types the laptop's TTSPL and serial at submit,
+        // matched exactly to the ticket — the result is recorded against the
+        // laptop actually on the bench.
+        if (qcStage === 'QC1') {
+            const { checkTicketIdentity } = require('../utils/machineIdentityVerify');
+            const idCheck = checkTicketIdentity(ticketBefore, req.body, { label: 'QC1' });
+            if (!idCheck.ok) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, code: 'IDENTITY_MISMATCH', message: idCheck.message });
+            }
+        }
         const claimedStage = req.body.qcStage;
         if (claimedStage && String(claimedStage) !== qcStage) {
             // Not an error: the client is simply out of date. The ticket wins, and

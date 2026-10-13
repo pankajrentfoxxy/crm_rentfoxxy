@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, DataTable, Drawer, EmptyState, Field, Notice, Segmented, Select, Textarea,
+  Button, DataTable, Drawer, EmptyState, Field, FormGrid, Input, Notice, Segmented, Select, Textarea,
 } from '../../../../components/carret';
 import api from '../../../../utils/api';
 import {
@@ -11,7 +11,7 @@ import DispatchQcChargerPanel from '../../../dispatch-charger/DispatchQcChargerP
 import DispatchQcSpecVerifyPanel from '../../../floor-pipeline/components/DispatchQcSpecVerifyPanel';
 import DispatchQcSubmitScanModal from '../../../dispatch-charger/DispatchQcSubmitScanModal';
 import { fetchTicketCharger } from '../../../dispatch-charger/dispatchChargerApi';
-import { Choice, QuestionSection, StepHead, errText, useFloorChecklists } from './workShared';
+import { Choice, QuestionSection, StepHead, TtsplInput, errText, useFloorChecklists } from './workShared';
 import PramanPanel from './PramanPanel';
 
 /**
@@ -167,6 +167,13 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
   const [charger, setCharger] = useState(null);
   const [showOpen, setShowOpen] = useState(false);
   const [praman, setPraman] = useState(null); // Dispatch QC: Praman Device ID + report (required to pass)
+  // QC1: the inspector types the laptop's full TTSPL + serial at submit (pass
+  // or fail); the server matches both exactly. Never pre-filled.
+  const [vTtspl, setVTtspl] = useState('');
+  const [vSerial, setVSerial] = useState('');
+  const verifyHere = stage === 'QC1';
+  const serialNeeded = ticket.received_condition !== 'not_on';
+  const verifyMissing = verifyHere && (!vTtspl.trim() || (serialNeeded && !vSerial.trim()));
 
   useEffect(() => {
     api.get(`/tickets/${ticket.ticket_id}/qc`, { params: { qc_stage: stage } }).then(({ data }) => {
@@ -206,6 +213,7 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
   const payloadBase = {
     qcStage: stage,
     checklist_version: 2,
+    ...(verifyHere ? { verify_ttspl: vTtspl.trim(), verify_serial: vSerial.trim() || undefined } : {}),
     replacedParts: fittedParts.map((p) => ({ part_name: p.part_name, part_code: p.prt_id || '', serial_number: p.prt_id || '' })),
   };
   const send = async (body) => {
@@ -251,6 +259,7 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
 
   const missing = [
     !gateOpen && 'finish step 1',
+    verifyMissing && 'type the TTSPL and serial',
     openCount && `answer ${openCount} more question${openCount > 1 ? 's' : ''}`,
     !grade && 'choose the grade',
     bad.length > 0 && !remarks.trim() && 'write a remark about the problems',
@@ -344,6 +353,17 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
         </>
       )}
 
+      {verifyHere && (
+        <Field label="Verify the laptop" hint="Type or scan both from the laptop on your bench. They must match its record exactly.">
+          <FormGrid cols={2}>
+            <Field label="TTSPL" required><TtsplInput value={vTtspl} onChange={setVTtspl} expected={ticket.ttspl_id} aria-label="TTSPL" /></Field>
+            <Field label="Serial" required={serialNeeded} hint={serialNeeded ? undefined : 'Optional while it will not power on'}>
+              <Input value={vSerial} onChange={(e) => setVSerial(e.target.value.toUpperCase())} className="font-mono" autoComplete="off" spellCheck={false} aria-label="Serial" />
+            </Field>
+          </FormGrid>
+        </Field>
+      )}
+
       <div className="c-actions-bar" style={{ alignItems: 'center' }}>
         {missing.length > 0 && <span className="text-ink-3" style={{ fontSize: '13px', marginRight: 'auto' }}>To submit: {missing.join(', ')}.</span>}
         {missing.length > 0 && openCount > 0 && gateOpen && <Button variant="quiet" onClick={() => setShowOpen(true)}>Show what's open</Button>}
@@ -356,10 +376,11 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
         open={drawer === 'fail'}
         onClose={() => setDrawer(null)}
         title={`Fail ${stage} now`}
-        footer={<Button variant="primary" disabled={busy || failWhy.trim().length < 5} onClick={() => failNow(failWhy.trim())}>Fail it</Button>}
+        footer={<Button variant="primary" disabled={busy || failWhy.trim().length < 5 || verifyMissing} onClick={() => failNow(failWhy.trim())}>Fail it</Button>}
       >
         <div className="c-stack">
           <p>{stage === 'QC2' ? 'It goes back to QC1.' : stage === 'QC1' ? 'It goes back to assembly.' : 'Choose below where it goes.'} {Number(ticket.qc_fail_count || 0) >= 2 ? 'This is its 3rd failure, so it goes to the floor manager.' : ''}</p>
+          {verifyMissing && <Notice tone="warn">Type the laptop's TTSPL and serial on the form first (Verify the laptop).</Notice>}
           <Field label="Why it fails" required><Textarea rows={4} value={failWhy} onChange={(e) => setFailWhy(e.target.value)} /></Field>
           {stage === 'Dispatch QC' && (
             <Choice name="dq-mode-now" value={next.mode} onChange={(v) => setNext((n) => ({ ...n, mode: v }))} options={[

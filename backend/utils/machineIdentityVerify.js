@@ -82,8 +82,52 @@ function resolveItemVerifications(raw, ticketIds = []) {
   return map;
 }
 
+const isRealSerial = (v) => {
+  const n = normalizeMachineId(v);
+  return Boolean(n) && n !== 'NOT_ON';
+};
+
+/**
+ * The person acting types the laptop's TTSPL and serial in full, from its
+ * label; both must equal the ticket's record exactly — no partial match, no
+ * pre-filled values. Serial is required while the laptop is ON (or when
+ * `condition` says it is). Used at every floor assignment and at QC1 start
+ * and submit.
+ *
+ * @param {{ ttspl_id?: string, serial_number?: string, received_condition?: string }} ticket
+ * @param {object} body  request body: verify_ttspl / ttspl_id / ttspl, verify_serial / serial_number / serial
+ * @param {{ label?: string, condition?: string }} [opts]
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+function checkTicketIdentity(ticket, body = {}, opts = {}) {
+  // eslint-disable-next-line global-require
+  const { requiresSerialIdentity } = require('../constants/laptopConditions');
+  const label = opts.label || 'This laptop';
+  const requireSerial = requiresSerialIdentity(opts.condition || ticket?.received_condition);
+  const typedTtspl = normalizeMachineId(body.verify_ttspl ?? body.ttspl_id ?? body.ttspl);
+  const typedSerial = normalizeMachineId(body.verify_serial ?? body.serial_number ?? body.serial);
+  const recordTtspl = normalizeMachineId(ticket?.ttspl_id);
+  const recordSerial = isRealSerial(ticket?.serial_number) ? normalizeMachineId(ticket.serial_number) : '';
+
+  if (!typedTtspl) return { ok: false, message: `${label}: type the laptop's full TTSPL ID.` };
+  if (requireSerial && !typedSerial) return { ok: false, message: `${label}: type the laptop's full Serial number (it is ON).` };
+  if (!recordTtspl) return { ok: false, message: `${label}: this ticket has no TTSPL ID on record — ask the floor manager to fix it before continuing.` };
+  if (typedTtspl !== recordTtspl) {
+    return { ok: false, message: `${label}: TTSPL ID ${typedTtspl} does not match this laptop. Type the full TTSPL ID from the laptop's label.` };
+  }
+  if (typedSerial || requireSerial) {
+    if (!recordSerial) return { ok: false, message: `${label}: this ticket has no Serial number on record — ask the floor manager to fix it before continuing.` };
+    if (typedSerial !== recordSerial) {
+      return { ok: false, message: `${label}: Serial number ${typedSerial} does not match this laptop. Type the full Serial number from the laptop.` };
+    }
+  }
+  return { ok: true };
+}
+
 module.exports = {
   normalizeMachineId,
+  isRealSerial,
+  checkTicketIdentity,
   checkTtsplAndSerial,
   assertTtsplAndSerial,
   resolveItemVerifications,

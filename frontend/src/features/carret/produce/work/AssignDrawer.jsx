@@ -7,6 +7,9 @@ import { errText, TtsplInput } from './workShared';
 
 /**
  * Triage (a new laptop at Floor Manager) or reassign (any other stage).
+ * Every assignment, at every stage, asks for the laptop's TTSPL and serial
+ * typed or scanned in full (never pre-filled); the server matches both
+ * exactly against the ticket.
  * Triage: confirm it powers on or not, scan TTSPL + serial, give it to a
  * technician — it moves to Diagnosis with them. Assign / reassign at any other
  * stage: pick someone on the stage's team or anyone at all; the laptop stays at
@@ -36,8 +39,8 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
   useEffect(() => {
     if (!open || !ticket) return;
     setPowers(ticket.received_condition === 'not_on' ? 'not_on' : ticket.received_condition === 'on' ? 'on' : '');
-    setTtspl(ticket.ttspl_id || '');
-    setSerial(ticket.serial_number && ticket.serial_number !== 'NOT_ON' ? ticket.serial_number : '');
+    setTtspl('');
+    setSerial('');
     setWho(null);
     setMembers(null);
     setScope('team');
@@ -62,18 +65,19 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
     .filter((m) => m.user_id !== ticket.assigned_user_id || scope === 'team')
     .filter((m) => { const hay = `${m.name} ${m.role || ''} ${(m.teams || []).join(' ')}`.toLowerCase(); return words.every((w) => hay.includes(w)); });
   const least = (list || []).reduce((b, m) => (b == null || (m.active_tickets ?? 0) < (b.active_tickets ?? 0) ? m : b), null);
+  const serialNeeded = triage ? powers === 'on' : ticket.received_condition !== 'not_on';
   const missing = [
     triage && !powers && 'say whether it powers on',
-    triage && !ttspl.trim() && 'scan the TTSPL',
-    triage && powers === 'on' && !serial.trim() && 'scan the serial',
+    !ttspl.trim() && 'scan the TTSPL',
+    serialNeeded && !serial.trim() && 'scan the serial',
     !who && 'pick a person',
   ].filter(Boolean);
 
   const go = async () => {
     setBusy(true);
     try {
-      const body = { user_id: who };
-      if (triage) Object.assign(body, { laptop_condition: powers, ttspl_id: ttspl.trim(), serial_number: serial.trim() || undefined });
+      const body = { user_id: who, ttspl_id: ttspl.trim(), serial_number: serial.trim() || undefined };
+      if (triage) body.laptop_condition = powers;
       else Object.assign(body, { keep_stage: true, reason: reason.trim() || undefined });
       await assignTicket(ticket.ticket_id, body);
       toast.success(triage ? 'Triaged and assigned' : (ticket.assigned_user_id ? 'Reassigned' : 'Assigned'));
@@ -104,12 +108,12 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
             <Field label="Does it power on?" required>
               <Segmented value={powers} onChange={setPowers} label="Powers on" options={[{ value: 'on', label: 'Yes' }, { value: 'not_on', label: "No, it won't power on" }]} />
             </Field>
-            <FormGrid cols={2}>
-              <Field label="TTSPL" required><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket?.ttspl_id} /></Field>
-              <Field label="Serial" required={powers === 'on'} hint={powers === 'not_on' ? 'Optional while it will not power on' : undefined}><Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" /></Field>
-            </FormGrid>
           </>
         )}
+        <FormGrid cols={2}>
+          <Field label="TTSPL" required hint="Full ID, from the laptop's label"><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket?.ttspl_id} aria-label="TTSPL" /></Field>
+          <Field label="Serial" required={serialNeeded} hint={serialNeeded ? 'Full serial, from the laptop' : 'Optional while it will not power on'}><Input value={serial} onChange={(e) => setSerial(e.target.value.toUpperCase())} className="font-mono" autoComplete="off" spellCheck={false} aria-label="Serial" /></Field>
+        </FormGrid>
         {!triage && ticket.assigned_user_id && (
           <p className="text-ink-2" style={{ margin: 0 }}>Now with <b>{ticket.assigned_user_name || 'someone'}</b>. The laptop stays at {ticket.stage_name}; only the person changes.</p>
         )}

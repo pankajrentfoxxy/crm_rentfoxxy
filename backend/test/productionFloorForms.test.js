@@ -180,13 +180,31 @@ describe('floor stage forms — real handlers (rolled back)', () => {
     await C.query('ROLLBACK TO SAVEPOINT mv');
   });
 
+  it('QC1 submit: the TTSPL and serial must be typed in full and match (13 Oct)', async () => {
+    const qc = require('../controllers/qcController');
+    await putAt('QC1');
+    const body = { force_fail_reason: 'Will not start — no display' };
+    let r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body, user: mgr });
+    assert.equal(r.code, 400);
+    assert.equal(r.body.code, 'IDENTITY_MISMATCH');
+    r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { ...body, verify_ttspl: String(t.ttspl_id).slice(0, -1), verify_serial: t.serial_number }, user: mgr });
+    assert.equal(r.code, 400);
+    assert.match(r.body.message, /TTSPL ID .* does not match/);
+    if (t.received_condition !== 'not_on') {
+      r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { ...body, verify_ttspl: t.ttspl_id, verify_serial: String(t.serial_number).slice(0, -1) }, user: mgr });
+      assert.equal(r.code, 400);
+      assert.match(r.body.message, /Serial number .* does not match/);
+    }
+  });
+
   it('QC submit: unanswered questions are refused; "fail now" fails with the reason', async () => {
     const qc = require('../controllers/qcController');
     await putAt('QC1');
-    let r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { checklist_version: 2, checklist: { keyboard: 'WORKING' }, grading: { final_grade: 'A' } }, user: mgr });
+    const identity = { verify_ttspl: t.ttspl_id, verify_serial: t.serial_number };
+    let r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { ...identity, checklist_version: 2, checklist: { keyboard: 'WORKING' }, grading: { final_grade: 'A' } }, user: mgr });
     assert.equal(r.code, 400);
     assert.equal(r.body.code, 'QC_INCOMPLETE');
-    r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { force_fail_reason: 'Will not start — no display' }, user: mgr });
+    r = await h.call(qc.submitQC, { params: { id: t.ticket_id }, body: { ...identity, force_fail_reason: 'Will not start — no display' }, user: mgr });
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.equal(r.body.result, 'FAIL');
     assert.equal(await stageOf(), 'Assembly & Software');

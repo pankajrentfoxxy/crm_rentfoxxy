@@ -348,11 +348,13 @@ function AssignQcDrawer({ ticket, onClose, onDone }) {
   const [who, setWho] = useState('');
   const [priority, setPriority] = useState('high');
   const [notes, setNotes] = useState('');
+  const [ttspl, setTtspl] = useState('');
+  const [serial, setSerial] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!ticket) return;
-    setWho(''); setPriority('high'); setNotes('');
+    setWho(''); setPriority('high'); setNotes(''); setTtspl(''); setSerial('');
     getTeamMembers('Dispatch QC Team')
       .then(({ data }) => {
         const list = data?.members || [];
@@ -370,9 +372,11 @@ function AssignQcDrawer({ ticket, onClose, onDone }) {
 
   const save = async () => {
     if (!who) { toast.error('Choose who does the Dispatch QC'); return; }
+    // Every assignment verifies the laptop: full TTSPL + serial, matched exactly on the server.
+    if (!ttspl.trim() || !serial.trim()) { toast.error('Type the laptop\'s full TTSPL ID and Serial number'); return; }
     setBusy(true);
     try {
-      await assignTicket(ticket.ticket_id, { user_id: Number(who) });
+      await assignTicket(ticket.ticket_id, { user_id: Number(who), ttspl_id: ttspl.trim(), serial_number: serial.trim() });
       if (priority !== 'high') await updateTicket(ticket.ticket_id, { priority });
       if (notes.trim()) await logTicketNote(ticket.ticket_id, { notes: notes.trim() });
       toast.success(`Dispatch QC for ${ticket.ttspl || `ticket #${ticket.ticket_id}`} assigned`);
@@ -410,6 +414,14 @@ function AssignQcDrawer({ ticket, onClose, onDone }) {
               options={members.map((m) => ({ value: String(m.user_id), label: `${m.name}${m.active_tickets != null ? ` — ${m.active_tickets} open` : ''}` }))}
             />
           </Field>
+          <FormGrid cols={2}>
+            <Field label="TTSPL" required hint="Full ID, from the laptop's label">
+              <Input value={ttspl} onChange={(e) => setTtspl(e.target.value.toUpperCase().replace(/\s+/g, ''))} className="font-mono" autoComplete="off" spellCheck={false} aria-label="TTSPL" />
+            </Field>
+            <Field label="Serial" required hint="Full serial, from the laptop">
+              <Input value={serial} onChange={(e) => setSerial(e.target.value.toUpperCase())} className="font-mono" autoComplete="off" spellCheck={false} aria-label="Serial" />
+            </Field>
+          </FormGrid>
           <Field label="Priority">
             <Select value={priority} onChange={(e) => setPriority(e.target.value)} options={['low', 'normal', 'high', 'urgent'].map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) }))} />
           </Field>

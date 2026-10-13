@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Loader2, Search, Plus, ArrowRight, CheckCircle } from 'lucide-react';
 import api from '../../utils/api';
 import BulkMoveModal from './components/BulkMoveModal';
+import promptLaptopIdentity from './promptLaptopIdentity';
 
 
 export default function TicketsList() {
@@ -67,26 +68,30 @@ export default function TicketsList() {
     const handleAssign = async (ticketId, userId) => {
       try {
         if (!userId) return;
-        await api.post(`/tickets/${ticketId}/assign`, { user_id: userId });
+        const identity = promptLaptopIdentity();
+        if (!identity) return;
+        await api.post(`/tickets/${ticketId}/assign`, { user_id: userId, ...identity });
         alert('Assigned successfully');
         loadTickets();
       } catch (error) {
         console.error(error);
-        alert('Failed to assign');
+        alert(error.response?.data?.message || 'Failed to assign');
       }
     };
   
     const handlePriorityAssign = async (ticketId) => {
       const sel = ticketPriorityAssign[ticketId];
       if (!sel?.user_id || !sel?.stage_id) return;
+      const identity = promptLaptopIdentity();
+      if (!identity) return;
       try {
-        await api.post(`/tickets/${ticketId}/assign`, { user_id: sel.user_id, target_stage_id: parseInt(sel.stage_id, 10) });
+        await api.post(`/tickets/${ticketId}/assign`, { user_id: sel.user_id, target_stage_id: parseInt(sel.stage_id, 10), ...identity });
         alert('Assigned and moved successfully');
         setTicketPriorityAssign(prev => ({ ...prev, [ticketId]: {} }));
         loadTickets();
       } catch (error) {
         console.error(error);
-        alert('Failed to assign');
+        alert(error.response?.data?.message || 'Failed to assign');
       }
     };
   
