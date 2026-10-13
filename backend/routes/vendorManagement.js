@@ -130,6 +130,20 @@ router.post(
   ...purchaseOrders.receivePoLineUnitValidators,
   purchaseOrders.receivePoLineUnit
 );
+// Guard gate inwards on a PO (each one becomes its own GRN when received).
+router.get(
+  '/purchase-orders/:poId/gate-inwards',
+  authorize,
+  purchaseOrders.gateInwardListValidators,
+  purchaseOrders.listGateInwards
+);
+router.post(
+  '/purchase-orders/:poId/gate-inwards/:inwardId/close',
+  authorizeEdit,
+  purchaseOrders.gateInwardCloseValidators,
+  purchaseOrders.closeGateInward
+);
+
 const grnCapture = require('../controllers/grnSerialCapture.controller');
 router.post(
   '/purchase-orders/:poId/grn-capture-tokens',
@@ -162,6 +176,7 @@ const deliveries = require('../controllers/vendorManagement/vendorDeliveries.con
 const gateOrVendorView = [authMiddleware, checkAnySectionPermission(['guard_gate_checking', 'vendor_management'], 'view')];
 const gateOrVendorCreate = [authMiddleware, checkAnySectionPermission(['guard_gate_checking', 'vendor_management'], 'create')];
 router.get('/deliveries/expected', gateOrVendorView, deliveries.expected);
+router.get('/deliveries/po/:poId(\\d+)', gateOrVendorView, deliveries.poLines);
 router.get('/deliveries', gateOrVendorView, deliveries.listValidators, deliveries.list);
 router.post('/deliveries', gateOrVendorCreate, deliveries.createValidators, deliveries.create);
 router.get('/deliveries/:id', authorize, deliveries.getOne);
@@ -210,7 +225,7 @@ router.post(
 
 router.get('/purchase-orders/:poId/activities', authorize, purchaseOrders.listPurchaseOrderActivities);
 router.post('/purchase-orders/:poId/activities', authorizeEdit, purchaseOrders.logPurchaseOrderDocumentActivity);
-router.get('/purchase-orders/:id/pdf', authorize, purchaseOrders.getValidators, purchaseOrders.downloadPdf);
+router.get('/purchase-orders/:id/pdf', authorize, purchaseOrders.downloadPdfValidators, purchaseOrders.downloadPdf);
 router.post('/purchase-orders/:id/amend', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.amend);
 router.post('/purchase-orders/:id/cancel', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.cancel);
 router.post('/purchase-orders/:id/short-close', authorizeEdit, purchaseOrders.reasonValidators, purchaseOrders.shortClose);

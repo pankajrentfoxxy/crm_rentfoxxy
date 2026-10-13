@@ -18,6 +18,7 @@ import {
   Plus,
   ExternalLink,
   Copy,
+  ShieldCheck,
   UserCircle,
   KeyRound,
   AlertTriangle,
@@ -27,6 +28,7 @@ import {
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
 import {
+  closePoGateInward,
   createGrnCaptureToken,
   fetchGrnCaptureTokenStatus,
   fetchProductReceivedContext,
@@ -228,6 +230,7 @@ export default function ProductReceivedPage() {
   const [receivedCondition, setReceivedCondition] = useState(DEFAULT_CONDITION);
   const [missingParts, setMissingParts] = useState([]);
   const [modalBusy, setModalBusy] = useState(false);
+  const [selectedInwardId, setSelectedInwardId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -253,6 +256,13 @@ export default function ProductReceivedPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const open = (ctx?.gate_inwards || []).filter((i) => ['pending_grn', 'partially_received'].includes(i.status));
+    if (!open.some((i) => i.inward_id === selectedInwardId)) {
+      setSelectedInwardId(open.length ? open[open.length - 1].inward_id : null);
+    }
+  }, [ctx, selectedInwardId]);
 
   function resetReceiveWizardUi() {
     setReceiveLineIndex(null);
@@ -306,12 +316,36 @@ export default function ProductReceivedPage() {
     );
   }
 
+  // GRN is taken only against laptops the guard inwarded at the gate.
+  const gateInwards = ctx?.gate_inwards || [];
+  const openInwards = gateInwards.filter((i) => ['pending_grn', 'partially_received'].includes(i.status));
+  const selectedInward = openInwards.find((i) => i.inward_id === selectedInwardId) || null;
+
+  function inwardRemainingOnLine(idx) {
+    const l = selectedInward?.lines?.find((x) => x.line_index === idx);
+    return l ? Math.max(0, Number(l.remaining) || 0) : 0;
+  }
+
   function remainingOnLine(idx) {
     const line = lines[idx];
     if (!line) return 0;
     const ordered = Number(line.quantity) || 0;
     const got = Number(line.receivedQty) || 0;
-    return Math.max(0, ordered - got);
+    return Math.max(0, Math.min(ordered - got, inwardRemainingOnLine(idx)));
+  }
+
+  async function onCloseInward(inw) {
+    const reason = window.prompt(
+      `Close ${inw.inward_number}? Nothing more can be received on it.\nReason (e.g. only 1 laptop actually arrived):`
+    );
+    if (!reason || !reason.trim()) return;
+    try {
+      await closePoGateInward(poId, inw.inward_id, reason.trim());
+      toast.success(`${inw.inward_number} closed`);
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not close the inward');
+    }
   }
 
   function openReceiveWizard(lineIndex) {
@@ -469,6 +503,7 @@ export default function ProductReceivedPage() {
         missing_parts: receivedCondition === 'part_missing' ? missingParts : undefined,
       };
       if (activeGrnId) body.grn_id = activeGrnId;
+      if (selectedInwardId) body.gate_inward_id = selectedInwardId;
 
       const { data } = await receivePoLineUnit(poId, body);
       if (data.success) {
@@ -685,6 +720,76 @@ export default function ProductReceivedPage() {
                 </div>
               </div>
             </div>
+            {/* Guard gate inwards — each one becomes its own GRN */}
+            {!receiveMutationsBlocked || gateInwards.length ? (
+              <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-slate-50/60">
+                  <ShieldCheck className="w-5 h-5 text-teal-600" />
+                  <h2 className="text-sm font-semibold text-slate-900 m-0">Guard gate inwards</h2>
+                  <span className="text-xs text-slate-500">Select the delivery you are taking the GRN for</span>
+                </div>
+                {!openInwards.length && !receiveMutationsBlocked ? (
+                  <p className="px-4 py-3 text-sm text-amber-800 bg-amber-50 m-0">
+                    No laptops are waiting at the gate for this PO. The guard must first inward the delivery
+                    (Guard Gate → PO Inward → enter the PO number and the laptops received). Then take the GRN here.
+                  </p>
+                ) : null}
+                {gateInwards.length ? (
+                  <div className="divide-y divide-slate-100">
+                    {gateInwards.map((inw) => {
+                      const isOpen = ['pending_grn', 'partially_received'].includes(inw.status);
+                      const selected = inw.inward_id === selectedInwardId;
+                      return (
+                        <label
+                          key={inw.inward_id}
+                          className={`flex flex-wrap items-start gap-3 px-4 py-3 text-sm ${isOpen ? 'cursor-pointer hover:bg-slate-50' : 'opacity-70'} ${selected ? 'bg-teal-50/70' : ''}`}
+                        >
+                          <input
+                            type="radio"
+                            name="gate-inward"
+                            className="mt-1"
+                            disabled={!isOpen || receiveLineIndex !== null}
+                            checked={selected}
+                            onChange={() => setSelectedInwardId(inw.inward_id)}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold text-slate-900">{inw.inward_number}</span>
+                              <span className="text-xs text-slate-500">
+                                {new Date(inw.created_at).toLocaleString()} · {inw.guard_name || 'Guard'}
+                              </span>
+                              <span className="text-[11px] font-semibold uppercase rounded-full px-2 py-0.5 border bg-white text-slate-700">
+                                {formatWorkflowStatus(inw.status)}
+                              </span>
+                              {inw.grn_number ? (
+                                <span className="text-xs font-medium text-teal-700">{inw.grn_number}</span>
+                              ) : null}
+                            </div>
+                            <p className="text-xs text-slate-600 mt-1 mb-0">
+                              {inw.lines.map((l) => `Product ${l.line_index + 1}: ${l.received}/${l.qty} received`).join(' · ')}
+                              {inw.vendor_doc_number ? ` · Vendor doc: ${inw.vendor_doc_number}` : ''}
+                              {inw.close_reason ? ` · Closed: ${inw.close_reason}` : ''}
+                            </p>
+                          </div>
+                          {isOpen ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-rose-700 tabular-nums">{inw.remaining_qty} to receive</span>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); onCloseInward(inw); }}
+                                className="text-xs rounded border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-100"
+                              >
+                                Close
+                              </button>
+                            </div>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {/* Items table */}
             <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
               {/* Mobile cards */}
@@ -723,12 +828,12 @@ export default function ProductReceivedPage() {
                       </div>
                       <button
                         type="button"
-                        disabled={complete || receiveMutationsBlocked}
+                        disabled={complete || receiveMutationsBlocked || remainingOnLine(idx) <= 0}
                         onClick={() => openReceiveWizard(idx)}
                         className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed bg-teal-700 hover:bg-teal-800 text-white"
                       >
                         {receiveMutationsBlocked ? null : complete ? null : <Plus className="w-4 h-4" />}
-                        {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : 'Receive'}
+                        {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : remainingOnLine(idx) <= 0 ? 'Not inwarded' : `Receive (${remainingOnLine(idx)})`}
                       </button>
                     </div>
                   );
@@ -798,12 +903,12 @@ export default function ProductReceivedPage() {
                           <td className="px-3 py-3 align-middle">
                             <button
                               type="button"
-                              disabled={complete || receiveMutationsBlocked}
+                              disabled={complete || receiveMutationsBlocked || remainingOnLine(idx) <= 0}
                               onClick={() => openReceiveWizard(idx)}
                               className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed bg-teal-700 hover:bg-teal-800 text-white"
                             >
                               {receiveMutationsBlocked ? null : complete ? null : <Plus className="w-4 h-4" />}
-                              {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : 'Receive'}
+                              {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : remainingOnLine(idx) <= 0 ? 'Not inwarded' : `Receive (${remainingOnLine(idx)})`}
                             </button>
                           </td>
                         </tr>
@@ -893,6 +998,7 @@ export default function ProductReceivedPage() {
                 <p className="text-xs text-slate-500 mb-2">Product {receiveLineIndex + 1}</p>
                 {lines[receiveLineIndex] ? <ItemDescriptionCard line={lines[receiveLineIndex]} /> : null}
                 <p className="text-xs text-slate-600 mt-2 tabular-nums">
+                  {selectedInward ? <span>Gate inward <strong>{selectedInward.inward_number}</strong> · </span> : null}
                   Remaining to receive: <strong>{remainingOnLine(receiveLineIndex)}</strong>
                   {receiveStep === 'serials' && bulkQuantity > 0 ? (
                     <span className="text-slate-500">

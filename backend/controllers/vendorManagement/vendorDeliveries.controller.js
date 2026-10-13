@@ -12,6 +12,7 @@ const { body, param, query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const po = require('./purchaseOrders.controller');
+const gateInward = require('../../services/poGateInwardService');
 
 const RECEIVABLE = ['approved', 'sent', 'vendor_accepted', 'processing'];
 const isManager = (u) => u?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(String(u?.role || '').toLowerCase());
@@ -80,53 +81,59 @@ async function list(req, res) {
 
 const createValidators = [
   body('po_id').isInt().toInt(),
-  body('laptop_count').isInt({ min: 1, max: 1000 }).toInt().withMessage('Count the laptops that arrived'),
+  body('lines').optional().isArray({ min: 1, max: 100 }),
+  body('lines.*.line_index').optional().isInt({ min: 0 }).toInt(),
+  body('lines.*.qty').optional().isInt({ min: 0, max: 1000 }).toInt(),
+  body('laptop_count').optional({ nullable: true }).isInt({ min: 1, max: 1000 }).toInt(),
   body('vendor_challan_no').isString().trim().isLength({ min: 1, max: 100 }).withMessage("Enter the vendor's challan or delivery note number"),
   body('vendor_invoice_no').optional({ nullable: true }).isString().trim().isLength({ max: 100 }),
   body('carrier_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   body('vehicle_no').optional({ nullable: true }).isString().trim().isLength({ max: 50 }),
   body('notes').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
 ];
-/** POST /deliveries — the guard logs a vendor delivery at the gate. */
+/**
+ * POST /deliveries — the guard logs a vendor delivery at the gate, counted per
+ * PO line (lines: [{ line_index, qty }]). A bare laptop_count is accepted only
+ * for a single-line PO. Same service as Guard Gate -> PO Inward.
+ */
 async function create(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return bad(res, errors);
-  const p = (await pool.query(
-    'SELECT po_id, vendor_id, status, purchase_order_number FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL',
-    [req.body.po_id]
-  )).rows[0];
-  if (!p) return res.status(404).json({ success: false, message: 'Purchase order not found' });
-  if (!RECEIVABLE.includes(String(p.status || '').toLowerCase())) {
-    return res.status(409).json({ success: false, message: `${p.purchase_order_number} is ${p.status}: laptops can't be received on it. Call procurement before letting the delivery in.` });
+  let { lines } = req.body;
+  if (!Array.isArray(lines) || !lines.length) {
+    const p = (await pool.query('SELECT line_items FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL', [req.body.po_id])).rows[0];
+    if (!p) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (po.parseLineItemsJson(p.line_items).length !== 1 || !req.body.laptop_count) {
+      return res.status(400).json({ success: false, message: 'Count the laptops that arrived for each PO line.' });
+    }
+    lines = [{ line_index: 0, qty: req.body.laptop_count }];
   }
-  const client = await pool.connect();
-  let row;
   try {
-    await client.query('BEGIN');
-    const ins = await client.query(
-      `INSERT INTO vendor_deliveries (po_id, vendor_id, vendor_challan_no, vendor_invoice_no, laptop_count, carrier_name, vehicle_no, notes, logged_by)
-       VALUES ($1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9) RETURNING delivery_id`,
-      [p.po_id, p.vendor_id, req.body.vendor_challan_no, req.body.vendor_invoice_no || '', req.body.laptop_count,
-        req.body.carrier_name || '', req.body.vehicle_no || '', req.body.notes || '', req.user?.user_id || null]
-    );
-    const id = ins.rows[0].delivery_id;
-    row = (await client.query(
-      "UPDATE vendor_deliveries SET delivery_number = 'VD-' || LPAD($1::text, 6, '0') WHERE delivery_id = $1 RETURNING *",
-      [id]
-    )).rows[0];
-    await client.query('COMMIT');
+    const row = await gateInward.createInward({
+      poId: req.body.po_id,
+      lines,
+      vendorDocNumber: req.body.vendor_challan_no,
+      vendorInvoiceNo: req.body.vendor_invoice_no,
+      carrierName: req.body.carrier_name,
+      vehicleNumber: req.body.vehicle_no,
+      remarks: req.body.notes,
+      user: req.user,
+    });
+    res.status(201).json({ success: true, data: row, message: `${row.delivery_number} logged — ${row.laptop_count} laptop(s) for ${row.purchase_order_number}` });
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('vendor delivery create:', e);
-    return res.status(500).json({ success: false, message: 'Server error' });
-  } finally {
-    client.release();
+    if (!e.status) throw e;
+    res.status(e.status).json({ success: false, message: e.message });
   }
-  await logVendorAudit({
-    actorUserId: req.user?.user_id, vendorId: p.vendor_id, entityType: 'vendor_delivery', entityId: String(row.delivery_id),
-    action: 'arrived', payload: { po_id: p.po_id, laptop_count: row.laptop_count, vendor_challan_no: row.vendor_challan_no },
-  });
-  res.status(201).json({ success: true, data: row, message: `${row.delivery_number} logged — ${row.laptop_count} laptop(s) for ${p.purchase_order_number}` });
+}
+
+/** GET /deliveries/po/:poId — the PO's lines as the gate sees them (no prices). */
+async function poLines(req, res) {
+  try {
+    res.json({ success: true, data: await gateInward.lookupPo({ poId: Number(req.params.poId) }) });
+  } catch (e) {
+    if (!e.status) throw e;
+    res.status(e.status).json({ success: false, message: e.message });
+  }
 }
 
 /** GET /deliveries/:id — the delivery with its PO lines and every unit received on it. */
@@ -153,9 +160,24 @@ async function getOne(req, res) {
       ORDER BY s.serial_id`,
     [d.grn_id]
   )).rows : [];
+  // The guard's count per line (413). None for a delivery logged before it:
+  // then laptop_count caps the whole delivery.
+  const gate = (await pool.query('SELECT line_index, qty FROM vendor_delivery_lines WHERE delivery_id = $1', [id])).rows;
+  const gateQty = new Map(gate.map((g) => [Number(g.line_index), Number(g.qty)]));
+  const onLine = (i) => units.filter((u) => Number(u.line_index) === i).length;
   res.json({
     success: true,
-    data: { ...d, lines: lines.map((l, i) => ({ ...l, line_index: i })), units },
+    data: {
+      ...d,
+      counted_per_line: gate.length > 0,
+      lines: lines.map((l, i) => ({
+        ...l,
+        line_index: i,
+        gate_qty: gate.length ? (gateQty.get(i) || 0) : null,
+        on_delivery: onLine(i),
+      })),
+      units,
+    },
   });
 }
 
@@ -256,6 +278,7 @@ module.exports = {
   expected: wrap('expected', expected),
   list: wrap('list', list),
   create: wrap('create', create),
+  poLines: wrap('poLines', poLines),
   getOne: wrap('getOne', getOne),
   complete: wrap('complete', complete),
   setInvoice: wrap('setInvoice', setInvoice),

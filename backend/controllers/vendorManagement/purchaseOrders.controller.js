@@ -50,6 +50,17 @@ const {
 } = require('../../services/grnCaptureGateService');
 const { transitionAsset, STATUS } = require('../../services/inventoryStateMachine');
 const {
+  claimInwardForReceive,
+  refreshInwardStatus,
+  listInwardsForPo,
+  closeInward,
+} = require('../../services/poGateInwardService');
+
+function parseGateInwardId(raw) {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+const {
   LAPTOP_CONDITIONS,
   PART_CATEGORIES,
   CONDITION_VALUES,
@@ -525,6 +536,7 @@ async function getProductReceivedContext(req, res) {
         remaining_qty: Math.max(0, orderQty - receivedQty)
       },
       grns: grnsR.rows,
+      gate_inwards: await listInwardsForPo(pool, poId),
       laptop_conditions: LAPTOP_CONDITIONS,
       part_categories: PART_CATEGORIES
     }
@@ -552,10 +564,7 @@ async function receiveProductSerial(req, res) {
   const lineIndex = Number(req.body.line_index);
   const serial_number = String(req.body.serial_number || '').trim();
 
-  let grnId =
-    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
-      ? null
-      : Number(req.body.grn_id);
+  const gateInwardId = parseGateInwardId(req.body.gate_inward_id);
 
   const r = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
     poId
@@ -623,31 +632,15 @@ async function receiveProductSerial(req, res) {
   try {
     await client.query('BEGIN');
 
-    if (grnId != null && Number.isFinite(grnId)) {
-      const g = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
-        [grnId, poId]
-      );
-      if (!g.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Invalid GRN for this purchase order.' });
-      }
-      finalGrnId = grnId;
-    } else {
-      const last = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
-        [poId]
-      );
-      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
-      else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (po_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
-          [poId]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-        grnWasNew = true;
-      }
-    }
+    // Every receipt is against a guard gate inward; each inward has its own GRN.
+    const claim = await claimInwardForReceive(client, {
+      poId,
+      inwardId: gateInwardId,
+      lineIndex,
+      qty: 1,
+    });
+    finalGrnId = claim.grnId;
+    grnWasNew = claim.grnWasNew;
 
     const reintake = await resolveSerialForGrnIntake(client, serial_number, {
       reason: 'grn_receive_on_po_line',
@@ -702,12 +695,16 @@ async function receiveProductSerial(req, res) {
       caller: 'purchaseOrders.receiveProductSerial',
     });
 
+    await refreshInwardStatus(client, gateInwardId);
     await client.query('COMMIT');
   } catch (e) {
     try {
       await client.query('ROLLBACK');
     } catch (_) {
       /* ignore */
+    }
+    if (e.status) {
+      return res.status(e.status).json({ success: false, message: e.message });
     }
     if (String(e.code) === '23505') {
       return res.status(409).json({ success: false, message: 'Serial number already exists' });
@@ -798,6 +795,7 @@ const receivePoLineBulkValidators = [
   body('serial_numbers').isArray({ min: 1 }).withMessage('serial_numbers required'),
   body('serial_numbers.*').trim().notEmpty(),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  body('gate_inward_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
   body('bill_status').optional().isIn(['pending', 'received']),
   body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   // Part 5.1 (P4) — bulk receive had no token parameter at all, so up to
@@ -834,13 +832,10 @@ async function receivePoLineBulk(req, res) {
   const rental_start_date = String(req.body.rental_start_date).trim();
   const quantity = Number(req.body.quantity);
 
-  let grnId =
-    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
-      ? null
-      : Number(req.body.grn_id);
-
   const serialsRaw = req.body.serial_numbers;
   const serialsNorm = serialsRaw.map((s) => String(s || '').trim().toUpperCase());
+
+  const gateInwardId = parseGateInwardId(req.body.gate_inward_id);
 
   const r = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
     poId
@@ -922,31 +917,15 @@ async function receivePoLineBulk(req, res) {
   try {
     await client.query('BEGIN');
 
-    if (grnId != null && Number.isFinite(grnId)) {
-      const g = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
-        [grnId, poId]
-      );
-      if (!g.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Invalid GRN for this purchase order.' });
-      }
-      finalGrnId = grnId;
-    } else {
-      const last = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
-        [poId]
-      );
-      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
-      else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (po_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
-          [poId]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-        grnWasNew = true;
-      }
-    }
+    // Every receipt is against a guard gate inward; each inward has its own GRN.
+    const claim = await claimInwardForReceive(client, {
+      poId,
+      inwardId: gateInwardId,
+      lineIndex,
+      qty: quantity,
+    });
+    finalGrnId = claim.grnId;
+    grnWasNew = claim.grnWasNew;
 
     for (const serial of serialsNorm) {
       const reintake = await resolveSerialForGrnIntake(client, serial, {
@@ -1049,12 +1028,16 @@ async function receivePoLineBulk(req, res) {
       });
     }
 
+    await refreshInwardStatus(client, gateInwardId);
     await client.query('COMMIT');
   } catch (e) {
     try {
       await client.query('ROLLBACK');
     } catch (_) {
       /* ignore */
+    }
+    if (e.status) {
+      return res.status(e.status).json({ success: false, message: e.message });
     }
     if (String(e.code) === '23505') {
       return res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
@@ -1158,6 +1141,7 @@ const receivePoLineUnitValidators = [
     .withMessage('rental_start_date must be YYYY-MM-DD'),
   body('serial_number').trim().notEmpty(),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  body('gate_inward_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
   body('bill_status').optional().isIn(['pending', 'received']),
   body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   body('apply_bill_settings').optional().isBoolean().toBoolean(),
@@ -1199,10 +1183,9 @@ async function receivePoLineUnit(req, res) {
     return res.status(400).json({ success: false, message: 'Say why this laptop is rejected at the door (at least 5 characters).' });
   }
 
-  let grnId =
-    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
-      ? null
-      : Number(req.body.grn_id);
+  // Carret sends delivery_id, the old Receive goods screen gate_inward_id:
+  // both name the same vendor_deliveries row.
+  const gateInwardId = parseGateInwardId(req.body.gate_inward_id ?? deliveryId);
 
   const r = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
     poId
@@ -1299,68 +1282,17 @@ async function receivePoLineUnit(req, res) {
       }
     }
 
-    if (deliveryId) {
-      // D4/D7: the delivery the guard logged. Its first receipt opens a GRN of
-      // its own; later receipts on it join that GRN. Never more laptops than
-      // the guard counted in.
-      const d = (await client.query(
-        'SELECT * FROM vendor_deliveries WHERE delivery_id = $1 FOR UPDATE', [deliveryId]
-      )).rows[0];
-      if (!d || Number(d.po_id) !== poId) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'That gate entry is not for this purchase order.' });
-      }
-      if (!['arrived', 'receiving'].includes(d.status)) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ success: false, message: `This delivery is already ${d.status}.` });
-      }
-      if (d.grn_id) {
-        const onIt = (await client.query(
-          'SELECT COUNT(*)::int AS n FROM vendor_serial_numbers WHERE grn_id = $1 AND deleted_at IS NULL', [d.grn_id]
-        )).rows[0].n;
-        if (onIt + 1 > Number(d.laptop_count)) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({ success: false, message: `The guard logged ${d.laptop_count} laptop(s) on ${d.delivery_number}, and ${onIt} are already received. Ask the guard to correct the count if more arrived.` });
-        }
-        finalGrnId = d.grn_id;
-      } else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (po_id, meta, delivery_id, vendor_challan_no, vendor_invoice_no, bill_name)
-           VALUES ($1, $2::jsonb, $3, $4, $5, $5) RETURNING grn_id`,
-          [poId, JSON.stringify({ delivery_number: d.delivery_number }), d.delivery_id, d.vendor_challan_no, d.vendor_invoice_no]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-        grnWasNew = true;
-        await client.query(
-          "UPDATE vendor_deliveries SET grn_id = $1, status = 'receiving', updated_at = NOW() WHERE delivery_id = $2",
-          [finalGrnId, d.delivery_id]
-        );
-      }
-    } else if (grnId != null && Number.isFinite(grnId)) {
-      const g = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
-        [grnId, poId]
-      );
-      if (!g.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Invalid GRN for this purchase order.' });
-      }
-      finalGrnId = grnId;
-    } else {
-      const last = await client.query(
-        `SELECT grn_id FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
-        [poId]
-      );
-      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
-      else {
-        const insG = await client.query(
-          `INSERT INTO vendor_goods_received_notes (po_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
-          [poId]
-        );
-        finalGrnId = insG.rows[0].grn_id;
-        grnWasNew = true;
-      }
-    }
+    // D4/D7: every receipt is against the delivery the guard logged at the
+    // gate. Its first receipt opens a GRN of its own; later receipts on it
+    // join that GRN, never past what the guard counted on that PO line.
+    const claim = await claimInwardForReceive(client, {
+      poId,
+      inwardId: gateInwardId,
+      lineIndex,
+      qty: 1,
+    });
+    finalGrnId = claim.grnId;
+    grnWasNew = claim.grnWasNew;
 
     const reintake = await resolveSerialForGrnIntake(client, serial_number, {
       reason: 'grn_receive_po_line_unit',
@@ -1530,12 +1462,16 @@ async function receivePoLineUnit(req, res) {
       });
     }
 
+    await refreshInwardStatus(client, gateInwardId);
     await client.query('COMMIT');
   } catch (e) {
     try {
       await client.query('ROLLBACK');
     } catch (_) {
       /* ignore */
+    }
+    if (e.status) {
+      return res.status(e.status).json({ success: false, message: e.message });
     }
     if (String(e.code) === '23505') {
       return res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
@@ -3258,7 +3194,11 @@ const shortClose = (req, res) => poAction(req, res, {
 });
 
 /** GET /purchase-orders/:id/pdf — the PO as the vendor gets it. */
+const downloadPdfValidators = [param('id').isInt().toInt()];
+
 async function downloadPdf(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
     const r = await pool.query(
       `SELECT p.*, v.email AS vendor_email, v.business_name AS vendor_business_name, v.first_name AS vendor_first_name,
@@ -3273,9 +3213,52 @@ async function downloadPdf(req, res) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${String(r.rows[0].purchase_order_number).replace(/[^\w-]/g, '_')}.pdf"`);
     fs.createReadStream(absolutePath).on('close', () => fs.unlink(absolutePath, () => {})).pipe(res);
+    safeLogPurchaseOrderActivity({
+      poId: r.rows[0].po_id,
+      activityType: ACTIVITY_TYPES.DOCUMENT,
+      action: 'pdf_downloaded',
+      description: `${req.user?.name || 'User'} downloaded the PDF of Purchase Order ${r.rows[0].purchase_order_number}.`,
+      user: req.user,
+    });
   } catch (e) {
     console.error('PO pdf:', e);
     res.status(500).json({ success: false, message: 'Could not make the PDF' });
+  }
+}
+
+const gateInwardListValidators = [param('poId').isInt().toInt()];
+
+async function listGateInwards(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+  try {
+    res.json({ success: true, data: await listInwardsForPo(pool, Number(req.params.poId)) });
+  } catch (e) {
+    console.error('listGateInwards:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+const gateInwardCloseValidators = [
+  param('poId').isInt().toInt(),
+  param('inwardId').isInt().toInt(),
+  body('reason').isString().trim().notEmpty().isLength({ max: 2000 }),
+];
+
+async function closeGateInward(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+  try {
+    await closeInward({
+      poId: Number(req.params.poId),
+      inwardId: Number(req.params.inwardId),
+      reason: req.body.reason,
+      user: req.user,
+    });
+    res.json({ success: true, data: await listInwardsForPo(pool, Number(req.params.poId)) });
+  } catch (e) {
+    if (!e.status) console.error('closeGateInward:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message });
   }
 }
 
@@ -3290,6 +3273,12 @@ module.exports = {
   cancel,
   shortClose,
   downloadPdf,
+  downloadPdfValidators,
+  gateInwardListValidators,
+  listGateInwards,
+  gateInwardCloseValidators,
+  closeGateInward,
+  receiveQtyHelpers: { buildReceivedQtyMapsForPoIds, enrichLineItemsWithReceived, parseLineItemsJson },
   listValidators,
   list,
   nextNumber,

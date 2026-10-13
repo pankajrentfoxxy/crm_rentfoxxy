@@ -203,3 +203,45 @@ exports.reportColumnValues = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Unable to load column values.' });
   }
 };
+
+// ── PO inward: guard counts laptops that arrived against a vendor PO ──
+const poInward = require('../services/poGateInwardService');
+
+exports.poInwardLookup = async (req, res) => {
+  try {
+    const data = await poInward.lookupPo({ poNumber: req.query.po || req.query.po_number || '' });
+    return res.json({ success: true, data });
+  } catch (err) {
+    if (!err.status) console.error('guardGate.poInwardLookup', err);
+    return res.status(err.status || 500).json({ success: false, message: err.status ? err.message : 'Unable to load the purchase order.' });
+  }
+};
+
+exports.poInwardRecent = async (req, res) => {
+  try {
+    return res.json({ success: true, data: await poInward.listRecentInwards({ limit: req.query.limit }) });
+  } catch (err) {
+    console.error('guardGate.poInwardRecent', err);
+    return res.status(500).json({ success: false, message: 'Unable to load PO inwards.' });
+  }
+};
+
+exports.poInwardCreate = async (req, res) => {
+  try {
+    const b = req.body || {};
+    const data = await poInward.createInward({
+      poId: Number(b.po_id),
+      lines: b.lines,
+      vendorDocNumber: b.vendor_doc_number,
+      vendorInvoiceNo: b.vendor_invoice_no,
+      carrierName: b.carrier_name,
+      vehicleNumber: b.vehicle_number,
+      remarks: b.remarks,
+      user: actorFromReq(req),
+    });
+    return res.status(201).json({ success: true, data, message: `${data.inward_number} saved: ${data.total_qty} laptop(s) inwarded against ${data.purchase_order_number}.` });
+  } catch (err) {
+    if (!err.status) console.error('guardGate.poInwardCreate', err);
+    return res.status(err.status || 500).json({ success: false, message: err.status ? err.message : 'Unable to save the PO inward.' });
+  }
+};

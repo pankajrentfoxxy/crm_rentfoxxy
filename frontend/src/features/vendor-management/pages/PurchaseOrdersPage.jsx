@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  Download,
   ExternalLink,
   Eye,
   FileText,
@@ -32,6 +33,7 @@ import {
   uploadPurchaseOrderBills,
   deletePurchaseOrderBillFile,
   removePurchaseOrderBill,
+  downloadPurchaseOrderPdf,
 } from '../vendorManagementApi';
 import PoActivityPanel from '../components/PoActivityPanel';
 import PoReplacementsPanel from '../components/PoReplacementsPanel';
@@ -614,6 +616,19 @@ export default function PurchaseOrdersPage() {
 
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [previewTab, setPreviewTab] = useState('details');
+  const [pdfBusyId, setPdfBusyId] = useState(null);
+
+  async function onDownloadPdf(po) {
+    if (!po?.po_id || pdfBusyId) return;
+    setPdfBusyId(po.po_id);
+    try {
+      await downloadPurchaseOrderPdf(po.po_id, po.purchase_order_number);
+    } catch (e) {
+      toast.error('Could not download the PO PDF');
+    } finally {
+      setPdfBusyId(null);
+    }
+  }
   const [specEditIndex, setSpecEditIndex] = useState(null);
   const [specEditDraft, setSpecEditDraft] = useState(emptyLineSpecDraft());
   const [specEditSaving, setSpecEditSaving] = useState(false);
@@ -1514,7 +1529,7 @@ export default function PurchaseOrdersPage() {
                   ) : null}
                 </div>
 
-                {(showSubmit || showManagerActions || showEye) && (
+                {(
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
                     {showSubmit ? (
                       <button
@@ -1543,6 +1558,14 @@ export default function PurchaseOrdersPage() {
                         </button>
                       </>
                     ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onDownloadPdf(r)}
+                      disabled={pdfBusyId === r.po_id}
+                      className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <Download className="w-4 h-4" /> PDF
+                    </button>
                     {showEye && !showSubmit ? (
                       <Link
                         to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
@@ -1683,9 +1706,17 @@ export default function PurchaseOrdersPage() {
                       </div>
                     </td>
                     <td className="p-3">
-                      {showSubmit ? (
-                        <span className="text-gray-300 text-xs">—</span>
-                      ) : showEye ? (
+                      <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onDownloadPdf(r)}
+                        disabled={pdfBusyId === r.po_id}
+                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        title="Download PO PDF"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                      {showSubmit ? null : showEye ? (
                         <Link
                           to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
                           className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50"
@@ -1693,9 +1724,8 @@ export default function PurchaseOrdersPage() {
                         >
                           <Eye className="w-4 h-4" />
                         </Link>
-                      ) : (
-                        <span className="text-gray-300 text-xs">—</span>
-                      )}
+                      ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -2464,6 +2494,16 @@ export default function PurchaseOrdersPage() {
                   <p className="text-xs text-slate-500 font-mono mt-0.5">{preview.detail.purchase_order_number}</p>
                 ) : null}
               </div>
+              {preview.detail ? (
+                <button
+                  type="button"
+                  onClick={() => onDownloadPdf(preview.detail)}
+                  disabled={pdfBusyId === preview.detail.po_id}
+                  className="ml-auto mr-1 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" /> Download PDF
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={closePreview}

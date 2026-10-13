@@ -1,9 +1,29 @@
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const pool = require('../config/db');
 const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
+const { mergeCompany } = require('../utils/companyDefaults');
+const { escapeHtml } = require('../utils/escapeHtml');
+const { amountInIndianWords } = require('../utils/indianAmountWords');
+const { STATE_NAMES } = require('../utils/invoiceItemFormatting');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/vendor-po-documents');
+const LOGO_PATH = path.join(__dirname, '../assets/rentfoxxy-logo.png');
+const GST_RATE = 18;
+const LAPTOP_HSN = '847130';
+const BUYER_STATE_CODE = '06'; // TrueTech Services is registered in Haryana.
+
+// Vendor `state` is free text: "MH", "maharashtra", "Delhi"... map the common ones to GST codes.
+const STATE_ALIASES = {
+  hr: '06', haryana: '06', dl: '07', delhi: '07', 'new delhi': '07', mh: '27', maharashtra: '27',
+  up: '09', 'uttar pradesh': '09', ka: '29', karnataka: '29', tn: '33', 'tamil nadu': '33',
+  gj: '24', gujarat: '24', rj: '08', rajasthan: '08', pb: '03', punjab: '03', wb: '19',
+  'west bengal': '19', ts: '36', tg: '36', telangana: '36', ap: '37', 'andhra pradesh': '37',
+  kl: '32', kerala: '32', ch: '04', chandigarh: '04', mp: '23', 'madhya pradesh': '23',
+  uk: '05', uttarakhand: '05', hp: '02', 'himachal pradesh': '02', br: '10', bihar: '10',
+  od: '21', or: '21', odisha: '21', jh: '20', jharkhand: '20', cg: '22', chhattisgarh: '22',
+};
 
 function ensureUploadDir() {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -36,147 +56,408 @@ function formatCurrency(n) {
   return v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function stateCodeFromGstin(gstin) {
+  const g = String(gstin || '').trim().toUpperCase();
+  return /^\d{2}[A-Z0-9]{13}$/.test(g) ? g.slice(0, 2) : '';
+}
+
+function stateCodeFromText(state) {
+  const s = String(state || '').trim().toLowerCase().replace(/_/g, ' ');
+  if (!s) return '';
+  if (STATE_ALIASES[s]) return STATE_ALIASES[s];
+  const hit = Object.entries(STATE_NAMES).find(([, name]) => name.toLowerCase() === s);
+  return hit ? hit[0] : '';
+}
+
+function stateLabel(code, fallbackText) {
+  if (code && STATE_NAMES[code]) return `${STATE_NAMES[code]} (${code})`;
+  return fallbackText ? formatPoType(fallbackText) : '—';
+}
+
+function paymentTermsLabel(vendor) {
+  const t = String(vendor?.po_payment_terms || '').toLowerCase();
+  const base = {
+    postpaid_monthly: 'Postpaid monthly',
+    prepaid: 'Advance / prepaid',
+    postpaid: 'Postpaid',
+  }[t] || (t ? formatPoType(t) : '');
+  const days = Number(vendor?.credit_days) || 0;
+  if (base && days) return `${base}, ${days} day(s) credit`;
+  return base || (days ? `${days} day(s) credit` : 'As agreed');
+}
+
+function logoDataUri() {
+  try {
+    if (!fs.existsSync(LOGO_PATH)) return '';
+    return `data:image/png;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`;
+  } catch {
+    return '';
+  }
+}
+
+async function loadVendor(po, vendorArg) {
+  if (po.vendor_id) {
+    try {
+      const r = await pool.query(
+        `SELECT vendor_id, business_name, first_name, last_name, email, phone, address, city, state,
+                pincode, gst_number, pan_number, msme_number, contact_person_name, contact_person_phone,
+                po_payment_terms, credit_days
+           FROM vendors WHERE vendor_id = $1`,
+        [po.vendor_id]
+      );
+      if (r.rows[0]) return { ...r.rows[0], ...Object.fromEntries(Object.entries(vendorArg || {}).filter(([, v]) => v)) };
+    } catch (e) {
+      console.warn('PO pdf vendor load:', e.message);
+    }
+  }
+  return {
+    business_name: vendorArg?.business_name || po.vendor_business_name,
+    first_name: vendorArg?.first_name || po.vendor_first_name,
+    email: vendorArg?.email || po.vendor_email,
+    phone: po.vendor_phone,
+    address: po.vendor_address,
+    state: po.vendor_state,
+    gst_number: vendorArg?.gst_number || po.vendor_gst,
+  };
+}
+
+async function loadCompany() {
+  try {
+    const r = await pool.query(
+      `SELECT code, legal_name, gstin, pan, email, phone, address, state_code, logo_url
+         FROM companies WHERE code = 'rentfoxxy' LIMIT 1`
+    );
+    return mergeCompany(r.rows[0] ? { ...r.rows[0], code: 'rentfoxxy' } : { code: 'rentfoxxy' });
+  } catch {
+    return mergeCompany({ code: 'rentfoxxy' });
+  }
+}
+
+/** Line rows + GST split. Intra-state = vendor's GST state equals ours (Haryana). */
+function computePoTotals(po, vendor, company) {
+  const buyerCode = String(company.state_code || BUYER_STATE_CODE).padStart(2, '0').slice(0, 2);
+  const vendorCode = stateCodeFromGstin(vendor.gst_number) || stateCodeFromText(vendor.state);
+  const intra = vendorCode ? vendorCode === buyerCode : !!po.is_same_state;
+  const isDirect = String(po.purchase_order_type || '').toLowerCase() === 'direct_purchase';
+  // D3: on a rental PO the rate is the monthly rent, and each line carries an asset value.
+  const isRental = ['rental_purchase', 'rent_to_own'].includes(String(po.purchase_order_type || '').toLowerCase());
+
+  const rows = parseLineItems(po.line_items).map((line, idx) => {
+    const qty = Number(line.quantity ?? line.qty) || 0;
+    const rate = Number(line.rate ?? line.unit_price ?? line.price) || 0;
+    const taxable = round2(qty * rate);
+    const gst = round2((taxable * GST_RATE) / 100);
+    const periodMonths = Number(isDirect ? line.warranty : (line.vendor_locking_period ?? line.locking_period)) || 0;
+    return {
+      sn: idx + 1,
+      title: [line.brand || line.brand_name, line.model || line.model_name || line.product_name].filter(Boolean).join(' ') || 'Item',
+      category: line.category || 'Laptop',
+      specs: [line.processor, line.generation, line.ram, line.storage, line.screen_size, line.gpu]
+        .filter((x) => x != null && !['', '-', '—', 'na', 'n/a'].includes(String(x).trim().toLowerCase()))
+        .map((x) => String(x).trim()),
+      period: periodMonths ? `${periodMonths} month${periodMonths === 1 ? '' : 's'}` : '',
+      hsn: line.hsn_code || LAPTOP_HSN,
+      assetValue: Number(line.asset_value) || 0,
+      qty,
+      rate,
+      taxable,
+      gst,
+      total: round2(taxable + gst),
+    };
+  });
+
+  const subtotal = round2(rows.reduce((s, r) => s + r.taxable, 0));
+  const tax = round2(rows.reduce((s, r) => s + r.gst, 0));
+  const half = round2(tax / 2);
+  return {
+    rows,
+    intra,
+    isDirect,
+    isRental,
+    vendorCode,
+    buyerCode,
+    subtotal,
+    cgst: intra ? half : 0,
+    sgst: intra ? round2(tax - half) : 0,
+    igst: intra ? 0 : tax,
+    tax,
+    grandTotal: round2(subtotal + tax),
+    totalQty: rows.reduce((s, r) => s + r.qty, 0),
+  };
+}
+
+function buildPoHtml({ po, vendor, company, t }) {
+  const esc = escapeHtml;
+  const poNumber = po.purchase_order_number || `PO-${po.po_id}`;
+  const logo = logoDataUri();
+  const vendorName = vendor.business_name || [vendor.first_name, vendor.last_name].filter(Boolean).join(' ') || 'Vendor';
+  const vendorAddr = [vendor.address, vendor.city, vendor.pincode].filter(Boolean).join(', ');
+  const contactName = vendor.contact_person_name && vendor.contact_person_name !== vendorName ? vendor.contact_person_name : '';
+  const periodHead = t.isDirect ? 'Warranty' : 'Locking';
+  const showPeriod = t.rows.some((r) => r.period);
+  const cancelled = String(po.status || '').toLowerCase() === 'cancelled';
+  const amendment = Number(po.amendment_no) > 0 ? Number(po.amendment_no) : 0;
+  const rateHead = t.isRental ? 'Rent / month (₹)' : 'Rate (₹)';
+  const perMonth = t.isRental ? ' / month' : '';
+
+  const itemRows = t.rows.map((r) => `
+    <tr>
+      <td class="c">${r.sn}</td>
+      <td>
+        <div class="item">${esc(r.title)}</div>
+        ${r.specs.length ? `<div class="spec">${esc(r.specs.join(' | '))}</div>` : ''}
+        ${t.isRental && r.assetValue ? `<div class="spec">Asset value ₹${formatCurrency(r.assetValue)}</div>` : ''}
+      </td>
+      <td class="c">${esc(r.hsn)}</td>
+      ${showPeriod ? `<td class="c">${esc(r.period || '—')}</td>` : ''}
+      <td class="n">${r.qty}</td>
+      <td class="n">${formatCurrency(r.rate)}</td>
+      <td class="n">${formatCurrency(r.taxable)}</td>
+      <td class="c">${GST_RATE}%</td>
+      <td class="n">${formatCurrency(r.gst)}</td>
+      <td class="n b">${formatCurrency(r.total)}</td>
+    </tr>`).join('');
+
+  const taxRows = t.intra
+    ? `<tr><td>CGST @ ${GST_RATE / 2}%</td><td class="n">${formatCurrency(t.cgst)}</td></tr>
+       <tr><td>SGST @ ${GST_RATE / 2}%</td><td class="n">${formatCurrency(t.sgst)}</td></tr>`
+    : `<tr><td>IGST @ ${GST_RATE}%</td><td class="n">${formatCurrency(t.igst)}</td></tr>`;
+
+  const terms = [
+    `Payment terms: ${paymentTermsLabel(vendor)}.`,
+    'Please quote this PO number on your tax invoice, delivery challan and all correspondence.',
+    t.isRental ? 'Rent is billed monthly per laptop from the date it is received at our warehouse, at the rent per month shown.' : null,
+    `Goods must match the configuration above. Units that are dead, damaged or not to specification may be rejected at the GRN.`,
+    t.isDirect
+      ? 'Warranty period is counted from the date of goods receipt (GRN) at our warehouse.'
+      : 'Locking period is counted from the date of goods receipt (GRN) at our warehouse.',
+    `Tax invoice must be raised on ${company.legal_name}, GSTIN ${company.gstin}, with ${t.intra ? 'CGST + SGST' : 'IGST'}.`,
+  ].filter(Boolean);
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${esc(poNumber)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1f2937; font-size: 10.5px; margin: 0; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #f97316; padding-bottom: 10px; }
+  .brand img { height: 46px; }
+  .brand .legal { font-weight: 700; font-size: 13px; margin-top: 6px; }
+  .brand .meta { color: #4b5563; line-height: 1.45; margin-top: 2px; max-width: 330px; }
+  .doc { text-align: right; }
+  .doc h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: 1px; color: #111827; }
+  .doc table { margin-left: auto; border-collapse: collapse; }
+  .doc td { padding: 1.5px 0 1.5px 10px; text-align: right; }
+  .doc td.k { color: #6b7280; }
+  .doc td.v { font-weight: 600; }
+  .parties { display: flex; gap: 10px; margin-top: 12px; }
+  .box { flex: 1; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; }
+  .box h3 { margin: 0 0 4px; font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px; color: #f97316; }
+  .box .name { font-weight: 700; font-size: 11.5px; margin-bottom: 2px; }
+  .box div { line-height: 1.45; }
+  .box .lbl { color: #6b7280; }
+  table.items { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  table.items th { background: #1f2937; color: #fff; font-weight: 600; font-size: 9.5px; padding: 6px 5px; text-align: left; }
+  table.items td { border-bottom: 1px solid #e5e7eb; padding: 6px 5px; vertical-align: top; }
+  table.items tr:nth-child(even) td { background: #fafafa; }
+  table.items tfoot td { background: #f3f4f6; font-weight: 700; border-bottom: none; }
+  .item { font-weight: 600; }
+  .spec { color: #6b7280; font-size: 9.5px; margin-top: 2px; }
+  .n { text-align: right; white-space: nowrap; }
+  .c { text-align: center; white-space: nowrap; }
+  .b { font-weight: 700; }
+  th.n { text-align: right; } th.c { text-align: center; }
+  .summary { display: flex; gap: 12px; margin-top: 12px; align-items: flex-start; }
+  .words { flex: 1; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; }
+  .words .lbl { color: #6b7280; font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .words .val { font-weight: 600; margin-top: 3px; text-transform: capitalize; }
+  table.totals { width: 270px; border-collapse: collapse; }
+  table.totals td { padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
+  table.totals tr.grand td { background: #f97316; color: #fff; font-weight: 700; font-size: 12px; border: none; }
+  .terms { margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+  .terms h3 { margin: 0 0 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  .terms ol { margin: 0; padding-left: 16px; color: #374151; line-height: 1.5; }
+  .remarks { margin-top: 8px; color: #374151; }
+  .sign { display: flex; justify-content: space-between; margin-top: 28px; }
+  .sign .blk { width: 46%; }
+  .sign .line { border-top: 1px solid #9ca3af; margin-top: 38px; padding-top: 4px; color: #4b5563; }
+  .foot { margin-top: 16px; text-align: center; color: #9ca3af; font-size: 8.5px; }
+  .void { position: fixed; top: 38%; left: 0; right: 0; text-align: center; font-size: 96px; font-weight: 700;
+          color: #dc2626; opacity: .13; transform: rotate(-30deg); letter-spacing: 6px; z-index: 0; }
+  .cancel-note { margin-top: 8px; color: #dc2626; font-weight: 600; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+</style></head>
+<body>
+  ${cancelled ? '<div class="void">CANCELLED</div>' : ''}
+  <div class="head">
+    <div class="brand">
+      ${logo ? `<img src="${logo}" alt="Rentfoxxy">` : '<div class="legal">Rentfoxxy</div>'}
+      <div class="legal">${esc(company.legal_name)}</div>
+      <div class="meta">
+        ${esc(company.address)}<br>
+        GSTIN: <b>${esc(company.gstin)}</b>${company.pan ? ` &nbsp;|&nbsp; PAN: ${esc(company.pan)}` : ''}<br>
+        ${esc(company.email)}${company.phone ? ` &nbsp;|&nbsp; ${esc(company.phone)}` : ''} &nbsp;|&nbsp; www.rentfoxxy.com
+      </div>
+    </div>
+    <div class="doc">
+      <h1>PURCHASE ORDER</h1>
+      <table>
+        <tr><td class="k">PO No.</td><td class="v">${esc(poNumber)}</td></tr>
+        ${amendment ? `<tr><td class="k">Amendment</td><td class="v">${amendment}</td></tr>` : ''}
+        <tr><td class="k">PO Date</td><td class="v">${esc(formatPdfDateIstOrDash(po.purchase_order_date))}</td></tr>
+        <tr><td class="k">PO Type</td><td class="v">${esc(formatPoType(po.purchase_order_type))}</td></tr>
+        ${po.expected_delivery_date ? `<tr><td class="k">Expected Delivery</td><td class="v">${esc(formatPdfDateIstOrDash(po.expected_delivery_date))}</td></tr>` : ''}
+        <tr><td class="k">Place of Supply</td><td class="v">${esc(stateLabel(t.buyerCode))}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="parties">
+    <div class="box">
+      <h3>Vendor (Supplier)</h3>
+      <div class="name">${esc(vendorName)}</div>
+      ${vendorAddr ? `<div>${esc(vendorAddr)}</div>` : ''}
+      <div><span class="lbl">State:</span> ${esc(stateLabel(t.vendorCode, vendor.state))}</div>
+      <div><span class="lbl">GSTIN:</span> <b>${esc(vendor.gst_number || 'Unregistered')}</b>${vendor.pan_number ? ` &nbsp; <span class="lbl">PAN:</span> ${esc(vendor.pan_number)}` : ''}</div>
+      ${vendor.msme_number ? `<div><span class="lbl">MSME:</span> ${esc(vendor.msme_number)}</div>` : ''}
+      ${contactName ? `<div><span class="lbl">Contact:</span> ${esc(contactName)}${vendor.contact_person_phone ? `, ${esc(vendor.contact_person_phone)}` : ''}</div>` : ''}
+      ${vendor.phone || vendor.email ? `<div>${[vendor.phone, vendor.email].filter(Boolean).map(esc).join(' &nbsp;|&nbsp; ')}</div>` : ''}
+    </div>
+    <div class="box">
+      <h3>Bill To</h3>
+      <div class="name">${esc(company.legal_name)}</div>
+      <div>${esc(company.address)}</div>
+      <div><span class="lbl">State:</span> ${esc(stateLabel(t.buyerCode))}</div>
+      <div><span class="lbl">GSTIN:</span> <b>${esc(company.gstin)}</b></div>
+    </div>
+    <div class="box">
+      <h3>Ship To</h3>
+      <div class="name">${esc(company.legal_name)} (Rentfoxxy Warehouse)</div>
+      <div>${esc(company.address)}</div>
+      <div><span class="lbl">State:</span> ${esc(stateLabel(t.buyerCode))}</div>
+      <div><span class="lbl">GSTIN:</span> <b>${esc(company.gstin)}</b></div>
+    </div>
+  </div>
+
+  <table class="items">
+    <thead><tr>
+      <th class="c">#</th><th>Description</th><th class="c">HSN</th>
+      ${showPeriod ? `<th class="c">${periodHead}</th>` : ''}
+      <th class="n">Qty</th><th class="n">${rateHead}</th><th class="n">Taxable (₹)</th>
+      <th class="c">GST</th><th class="n">GST (₹)</th><th class="n">Amount (₹)</th>
+    </tr></thead>
+    <tbody>${itemRows || `<tr><td colspan="${showPeriod ? 10 : 9}" class="c">No items</td></tr>`}</tbody>
+    <tfoot><tr>
+      <td colspan="${showPeriod ? 4 : 3}">Total</td>
+      <td class="n">${t.totalQty}</td><td></td>
+      <td class="n">${formatCurrency(t.subtotal)}</td><td></td>
+      <td class="n">${formatCurrency(t.tax)}</td>
+      <td class="n">${formatCurrency(t.grandTotal)}</td>
+    </tr></tfoot>
+  </table>
+
+  <div class="summary">
+    <div class="words">
+      <div class="lbl">Amount in words${perMonth}</div>
+      <div class="val">${esc(amountInIndianWords(t.grandTotal))}</div>
+      <div class="lbl" style="margin-top:8px">GST</div>
+      <div>${t.intra
+    ? `Intra-state supply (${esc(stateLabel(t.vendorCode || t.buyerCode))} → ${esc(stateLabel(t.buyerCode))}): CGST + SGST`
+    : `Inter-state supply (${esc(stateLabel(t.vendorCode, vendor.state))} → ${esc(stateLabel(t.buyerCode))}): IGST`}</div>
+    </div>
+    <table class="totals">
+      <tr><td>Taxable value</td><td class="n">${formatCurrency(t.subtotal)}</td></tr>
+      ${taxRows}
+      <tr class="grand"><td>${t.isRental ? 'Total per month (₹)' : 'Grand Total (₹)'}</td><td class="n">${formatCurrency(t.grandTotal)}</td></tr>
+    </table>
+  </div>
+
+  <div class="terms">
+    <h3>Terms &amp; Conditions</h3>
+    <ol>${terms.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+    ${po.remarks ? `<div class="remarks"><b>Remarks:</b> ${esc(po.remarks)}</div>` : ''}
+    ${cancelled && po.cancel_reason ? `<div class="cancel-note">This purchase order was cancelled: ${esc(po.cancel_reason)}</div>` : ''}
+  </div>
+
+  <div class="sign">
+    <div class="blk"><div>&nbsp;</div><div class="line">Vendor acceptance (sign &amp; stamp)</div></div>
+    <div class="blk" style="text-align:right">
+      <div>For <b>${esc(company.legal_name)}</b></div>
+      <div class="line">Authorised Signatory</div>
+    </div>
+  </div>
+  <div class="foot">This is a computer-generated purchase order from the Rentfoxxy CRM.</div>
+</body></html>`;
+}
+
+/** Old plain pdfkit layout — used only if headless Chrome is unavailable. */
+async function renderPlainPdf({ po, vendor, company, t }, absolutePath) {
+  const poNumber = po.purchase_order_number || `PO-${po.po_id}`;
+  await new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 48, size: 'A4' });
+    const stream = fs.createWriteStream(absolutePath);
+    doc.pipe(stream);
+    doc.fontSize(18).fillColor('#111827').text(company.legal_name, { align: 'center' });
+    doc.fontSize(9).fillColor('#4B5563').text(`${company.address} | GSTIN ${company.gstin}`, { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(14).fillColor('#111827').text('PURCHASE ORDER', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).fillColor('#374151');
+    doc.text(`PO Number: ${poNumber}${Number(po.amendment_no) > 0 ? ` (Amendment ${po.amendment_no})` : ''}    PO Date: ${formatPdfDateIstOrDash(po.purchase_order_date)}`);
+    if (String(po.status || '').toLowerCase() === 'cancelled') {
+      doc.fillColor('#DC2626').text(`CANCELLED${po.cancel_reason ? `: ${po.cancel_reason}` : ''}`).fillColor('#374151');
+    }
+    doc.text(`Vendor: ${vendor.business_name || vendor.first_name || 'Vendor'}  GSTIN: ${vendor.gst_number || '—'}`);
+    if (vendor.address) doc.text(vendor.address);
+    doc.moveDown();
+    t.rows.forEach((r) => {
+      doc.fontSize(9).fillColor('#111827').text(`${r.sn}. ${r.title} — ${r.specs.join(' | ')}`);
+      doc.fillColor('#4B5563').text(`   HSN ${r.hsn} | Qty ${r.qty} x Rs ${formatCurrency(r.rate)} = Rs ${formatCurrency(r.taxable)} + GST ${GST_RATE}% Rs ${formatCurrency(r.gst)}`);
+    });
+    doc.moveDown();
+    doc.fontSize(10).fillColor('#111827').text(`Taxable value: Rs ${formatCurrency(t.subtotal)}`);
+    if (t.intra) {
+      doc.text(`CGST ${GST_RATE / 2}%: Rs ${formatCurrency(t.cgst)}   SGST ${GST_RATE / 2}%: Rs ${formatCurrency(t.sgst)}`);
+    } else {
+      doc.text(`IGST ${GST_RATE}%: Rs ${formatCurrency(t.igst)}`);
+    }
+    doc.text(`${t.isRental ? 'Total per month' : 'Grand Total'}: Rs ${formatCurrency(t.grandTotal)}`);
+    if (po.remarks) doc.text(`Remarks: ${po.remarks}`);
+    doc.end();
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
+}
+
 /**
- * Generate a purchase order PDF for vendor email / portal download.
+ * Generate the purchase order PDF (vendor email on approval, vendor portal, CRM download).
  * @param {{ po: object, vendor?: object }} params
  * @returns {Promise<{ relativePath: string, absolutePath: string }>}
  */
-async function generatePurchaseOrderPdf({ po, vendor }) {
+async function generatePurchaseOrderPdf({ po, vendor: vendorArg }) {
   ensureUploadDir();
   const poNumber = po.purchase_order_number || `PO-${po.po_id}`;
   const fileName = `${poNumber.replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const absolutePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/vendor-po-documents/${fileName}`;
 
-  const lines = parseLineItems(po.line_items);
-  const companyName = process.env.COMPANY_NAME || 'Rentfoxxy Technologies Pvt Ltd';
-  const companyGst = process.env.COMPANY_GSTIN || '';
+  const [vendor, company] = await Promise.all([loadVendor(po, vendorArg), loadCompany()]);
+  const t = computePoTotals(po, vendor, company);
 
-  const isRental = ['rental_purchase', 'rent_to_own'].includes(String(po.purchase_order_type || '').toLowerCase());
-  const sub = Number(po.sub_total_amount) || lines.reduce((n, l) => n + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0);
-  const total = Number(po.total_amount) || sub;
-  const gst = Math.round((total - sub) * 100) / 100;
-  const v = {
-    name: vendor?.business_name || po.vendor_business_name || vendor?.first_name || po.vendor_first_name || 'Vendor',
-    address: [vendor?.address || po.vendor_address, vendor?.city || po.vendor_city, vendor?.state || po.vendor_state, vendor?.pincode || po.vendor_pincode]
-      .filter(Boolean).join(', ').replace(/_/g, ' '),
-    gst: vendor?.gst_number || po.vendor_gst,
-    phone: vendor?.phone || po.vendor_phone,
-    email: vendor?.email || po.vendor_email,
-  };
-  const status = String(po.status || '').toLowerCase();
-
-  await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
-    const stream = fs.createWriteStream(absolutePath);
-    doc.pipe(stream);
-    const W = doc.page.width - 80;
-    const L = 40;
-
-    if (status === 'cancelled') {
-      doc.save().rotate(-30, { origin: [300, 420] }).fontSize(80).fillColor('#DC2626').opacity(0.15)
-        .text('CANCELLED', 60, 380).restore().opacity(1);
-    }
-
-    doc.fontSize(16).fillColor('#111827').text(companyName, L, 40);
-    doc.fontSize(8).fillColor('#4B5563');
-    if (process.env.COMPANY_ADDRESS) doc.text(process.env.COMPANY_ADDRESS, { width: W / 2 });
-    if (companyGst) doc.text(`GSTIN: ${companyGst}`);
-    doc.fontSize(14).fillColor('#111827').text('PURCHASE ORDER', L, 40, { width: W, align: 'right' });
-    doc.fontSize(9).fillColor('#374151');
-    const head = [
-      `PO No: ${poNumber}${Number(po.amendment_no) > 0 ? `  (Amendment ${po.amendment_no})` : ''}`,
-      `Date: ${formatPdfDateIstOrDash(po.purchase_order_date)}`,
-      `Type: ${formatPoType(po.purchase_order_type)}`,
-      po.expected_delivery_date ? `Deliver by: ${formatPdfDateIstOrDash(po.expected_delivery_date)}` : null,
-    ].filter(Boolean);
-    head.forEach((t) => doc.text(t, { width: W, align: 'right' }));
-
-    const boxY = Math.max(doc.y, 110) + 10;
-    doc.fontSize(9).fillColor('#111827').text('Vendor', L, boxY, { underline: true });
-    doc.fillColor('#374151').text(v.name, { width: W / 2 - 10 });
-    if (v.address) doc.text(v.address, { width: W / 2 - 10 });
-    if (v.gst) doc.text(`GSTIN: ${v.gst}`);
-    if (v.phone || v.email) doc.text([v.phone, v.email].filter(Boolean).join(' · '), { width: W / 2 - 10 });
-    const leftEnd = doc.y;
-    doc.fillColor('#111827').text('Deliver to', L + W / 2, boxY, { underline: true });
-    doc.fillColor('#374151').text(companyName, { width: W / 2 });
-    if (process.env.COMPANY_ADDRESS) doc.text(process.env.COMPANY_ADDRESS, { width: W / 2 });
-    doc.text(`Place of supply: ${String(po.po_state || '—').replace(/_/g, ' ')}`, { width: W / 2 });
-    doc.y = Math.max(leftEnd, doc.y) + 12;
-
-    // Line table
-    const cols = isRental
-      ? [['#', 18], ['Laptop', W - 18 - 36 - 60 - 55 - 70 - 75], ['Qty', 36], ['Rent / month', 60], ['Lock-in', 55], ['Asset value', 70], ['Rent / month total', 75]]
-      : [['#', 18], ['Laptop', W - 18 - 36 - 75 - 60 - 85], ['Qty', 36], ['Price', 75], ['Warranty', 60], ['Amount', 85]];
-    const row = (cells, bold) => {
-      const y = doc.y;
-      let x = L;
-      let h = 0;
-      doc.fontSize(8).fillColor(bold ? '#111827' : '#374151').font(bold ? 'Helvetica-Bold' : 'Helvetica');
-      cells.forEach((c, i) => {
-        const w = cols[i][1];
-        doc.text(String(c ?? ''), x + 2, y, { width: w - 4, align: i >= 2 ? 'right' : 'left' });
-        h = Math.max(h, doc.y - y);
-        x += w;
-      });
-      doc.y = y + h + 4;
-      doc.moveTo(L, doc.y - 2).lineTo(L + W, doc.y - 2).strokeColor('#E5E7EB').stroke();
-      doc.font('Helvetica');
-    };
-    row(cols.map((c) => c[0]), true);
-    lines.forEach((l, i) => {
-      if (doc.y > doc.page.height - 160) doc.addPage();
-      const cfg = [l.brand, l.model || l.model_name, l.processor, l.generation, l.ram, l.storage, l.gpu, l.screen_size].filter(Boolean).join(' · ');
-      const qty = Number(l.quantity) || 0;
-      const rate = Number(l.rate) || 0;
-      const months = l.vendor_locking_period ?? l.locking_period ?? l.tenure_months;
-      const warranty = l.warranty ?? l.warranty_months;
-      row(isRental
-        ? [i + 1, cfg + (l.remarks ? `\n${l.remarks}` : ''), qty, `Rs ${formatCurrency(rate)}`, months ? `${months} months` : '—', l.asset_value ? `Rs ${formatCurrency(l.asset_value)}` : '—', `Rs ${formatCurrency(qty * rate)}`]
-        : [i + 1, cfg + (l.remarks ? `\n${l.remarks}` : ''), qty, `Rs ${formatCurrency(rate)}`, warranty ? `${warranty} months` : '—', `Rs ${formatCurrency(qty * rate)}`]);
-    });
-
-    doc.moveDown(0.5);
-    const tot = (label, val, bold) => {
-      const y = doc.y;
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor('#111827');
-      doc.text(label, L + W - 260, y, { width: 150, align: 'right', lineBreak: false });
-      doc.text(`Rs ${formatCurrency(val)}`, L + W - 100, y, { width: 100, align: 'right', lineBreak: false });
-      doc.font('Helvetica');
-      doc.x = L;
-      doc.y = y + 14;
-    };
-    tot(isRental ? 'Rent per month' : 'Subtotal', sub);
-    if (po.is_same_state) { tot('CGST 9%', gst / 2); tot('SGST 9%', gst / 2); } else tot('IGST 18%', gst);
-    tot(isRental ? 'Total per month' : 'Total', total, true);
-
-    doc.moveDown();
-    doc.fontSize(9).fillColor('#111827').text('Terms', L, doc.y, { underline: true });
-    doc.fontSize(8).fillColor('#374151');
-    const terms = [
-      isRental ? 'Rent is billed monthly per laptop from the date it is received at our warehouse, at the rent per month shown.' : null,
-      isRental ? 'Lock-in is the minimum rental period per laptop.' : 'Warranty runs from the date of delivery.',
-      'Every laptop must match the configuration ordered. Laptops that do not, or are dead on arrival, are rejected at receipt and returned at the vendor\'s cost.',
-      'Quote this PO number on the delivery challan and on the invoice.',
-      po.remarks ? String(po.remarks) : null,
-    ].filter(Boolean);
-    terms.forEach((t, i) => doc.text(`${i + 1}. ${t}`, { width: W }));
-    if (status === 'cancelled' && po.cancel_reason) {
-      doc.moveDown().fillColor('#DC2626').fontSize(9).text(`This purchase order was cancelled: ${po.cancel_reason}`);
-    }
-
-    doc.moveDown(2);
-    doc.fontSize(9).fillColor('#111827').text(`For ${companyName}`, L, doc.y, { width: W, align: 'right' });
-    doc.moveDown(2).text('Authorised signatory', { width: W, align: 'right' });
-    doc.fontSize(7).fillColor('#9CA3AF').text('System-generated purchase order.', L, doc.page.height - 50, { width: W, align: 'center' });
-
-    doc.end();
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
+  try {
+    // eslint-disable-next-line global-require
+    const { renderHtmlToPdf } = require('./customerInvoicePdfService');
+    await renderHtmlToPdf(buildPoHtml({ po, vendor, company, t }), absolutePath);
+  } catch (e) {
+    console.error('PO pdf (html) failed, using plain layout:', e.message);
+    await renderPlainPdf({ po, vendor, company, t }, absolutePath);
+  }
 
   return { relativePath, absolutePath };
 }
 
-module.exports = { generatePurchaseOrderPdf, formatPoType };
+module.exports = { generatePurchaseOrderPdf, formatPoType, computePoTotals, buildPoHtml };
