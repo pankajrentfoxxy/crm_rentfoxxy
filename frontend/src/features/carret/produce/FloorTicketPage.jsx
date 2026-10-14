@@ -86,7 +86,8 @@ export default function FloorTicketPage() {
   else if (stage === 'Hold') next = <Notice tone="warn" title={`On hold (from ${t.hold_from_stage_name || '—'})`} action={lead && <Button variant="primary" onClick={() => setDrawer('release')}>Release</Button>}>{t.hold_reason}</Notice>;
   else if (!t.assigned_user_id && stage === 'Floor Manager') next = <Notice tone="info" title="New on the floor — waiting to be received and assigned" action={canAssign && <Button variant="primary" onClick={() => setAssignOpen(true)}>Receive & assign</Button>}>Check it powers on, confirm the TTSPL and serial, and give it to a technician.</Notice>;
   else if (!t.assigned_user_id) next = <Notice tone="info" title="Waiting to be picked up" action={<Button variant="primary" disabled={busy === 'claim'} onClick={() => run('claim', () => claimTicket(t.ticket_id), 'Claimed — it is yours')}>Claim</Button>}>Anyone on the {stageLabel(stage)} team can claim it.</Notice>;
-  else if (mine && !work && WORK_STAGES.includes(stage)) next = <Notice tone="info" title="Start work to begin the timer" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>Scan or type the TTSPL and the serial from the laptop, so the right laptop is on the bench.</Notice>;
+  // (Start work is asked for once, in the Work tab where the task opens — it
+  // used to be asked here as well, so the page showed two Start work buttons.)
   else if (stage === 'Pending Inventory') next = <Notice tone="good" title="Passed QC — waiting to go into stock" action={<Button variant="primary" onClick={() => navigate('/carret/produce/into-stock')}>Receive into a slot</Button>}>The warehouse scans the serial into a carret slot; only then is it in stock.</Notice>;
   else if (!mine && t.assigned_user_id) next = <Notice tone="info" title={`With ${t.assigned_user_name || 'a technician'}`}>{canAssign ? 'You can reassign it.' : 'Only they work on it and run its timer.'}</Notice>;
 
@@ -219,7 +220,9 @@ export default function FloorTicketPage() {
                 ? (mine && WORK_STAGES.includes(stage) && !work
                   ? (
                     <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
-                      Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the {stageLabel(stage)} task opens.
+                      {t.received_condition === 'not_on'
+                        ? `Scan or type the TTSPL ID from the laptop (the serial is optional — it arrived not powering on). The timer starts and the ${stageLabel(stage)} task opens.`
+                        : `Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the ${stageLabel(stage)} task opens.`}
                     </Notice>
                   )
                   // Diagnosis and the repair stages: only the person it is
