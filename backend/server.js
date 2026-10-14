@@ -172,6 +172,7 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/loan-laptops', require('./routes/loanLaptops'));
 app.use('/api/technician-performance', require('./routes/technicianPerformance'));
 app.use('/api/qc-performance', require('./routes/qcPerformance'));
+app.use('/api/my-performance', require('./routes/myPerformance'));
 app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/early-returns', require('./routes/earlyReturns'));
 app.use('/api/service-billing', require('./routes/serviceBilling'));

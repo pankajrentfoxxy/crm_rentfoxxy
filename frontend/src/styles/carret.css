@@ -599,3 +599,9 @@
 .c-standing small{ font-weight:600; font-size:11.5px; padding:1px 6px; border-radius:999px; background:var(--accent-soft); color:var(--accent) }
 .c-th-sort{ background:none; border:0; padding:0; font:inherit; color:inherit; cursor:pointer; text-transform:inherit; letter-spacing:inherit }
 .c-th-sort:hover, .c-th-sort.is-on{ color:var(--accent) }
+
+/* My performance headline (produce/performance/MyPerformancePage) */
+.c-my-head{ display:flex; flex-wrap:wrap; align-items:center; gap:16px 28px }
+.c-my-big{ font-size:15px; color:var(--ink-3) }
+.c-my-big b{ font-size:40px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.02em }
+.c-my-big span{ font-size:20px; font-weight:600 }

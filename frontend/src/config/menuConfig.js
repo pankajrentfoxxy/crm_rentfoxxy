@@ -61,6 +61,7 @@ export const floorPipelineAccordionChildren = [
   // New-UI page (15 Oct 2026); opens in the new layout.
   { label: 'Floor Performance', path: '/carret/produce/performance', section: 'technician_performance' },
   { label: 'QC Performance', path: '/carret/produce/performance?view=qc', section: 'qc_performance' },
+  { label: 'My Performance', path: '/carret/produce/my-performance', section: 'my_performance' },
 ];
 
 /** Inventory accordion — laptop stock only (parts live under Part Management). */

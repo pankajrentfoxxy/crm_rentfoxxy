@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Button, DataTable, EmptyState, Section, StatTile,
 } from '../../../components/carret';
+import { usePermission } from '../../../hooks/usePermission';
 
 /**
  * Today page → floor work counts (migration 425).
@@ -26,10 +27,14 @@ function Tile({ label, value, delta, to, onOpen, family }) {
 }
 
 function MyWork({ mine, dayLabel, onOpen }) {
+  const { hasPermission } = usePermission();
   if (mine.unavailable) return <Section title="My floor work"><EmptyState title="Could not load" body={mine.unavailable} /></Section>;
   const live = !mine.live_unavailable;
   return (
-    <Section title="My floor work">
+    <Section
+      title="My floor work"
+      actions={hasPermission('my_performance', 'view') && <Button variant="quiet" onClick={() => onOpen('/carret/produce/my-performance?period=month')}>My performance →</Button>}
+    >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '12px' }}>
         <Tile label="Assigned to me" value={mine.assigned} delta={live ? 'open laptops with me now' : mine.live_unavailable} to={live ? board({ view: 'mine' }) : null} onOpen={onOpen} />
         <Tile label="Waiting for Start work" value={mine.waiting_start} delta={live ? 'scan the laptop to begin' : mine.live_unavailable} to={live && mine.waiting_start ? board({ view: 'mine' }) : null} onOpen={onOpen} family={mine.waiting_start ? 'moving' : undefined} />

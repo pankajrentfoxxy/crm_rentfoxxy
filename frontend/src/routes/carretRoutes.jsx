@@ -72,6 +72,7 @@ const EarlyReturnsPage = React.lazy(() => import('../features/carret/serve/Early
 const ServiceBillingPage = React.lazy(() => import('../features/carret/serve/ServiceBillingPage'));
 const ServeLoansListPage = React.lazy(() => import('../features/carret/serve/loan/LoansListPage'));
 const TechnicianPerformancePage = React.lazy(() => import('../features/carret/produce/performance/TechnicianPerformancePage'));
+const MyPerformancePage = React.lazy(() => import('../features/carret/produce/performance/MyPerformancePage'));
 const ServeLoanRecordPage = React.lazy(() => import('../features/carret/serve/loan/LoanRecordPage'));
 const ServeLoanPolicyPage = React.lazy(() => import('../features/carret/serve/loan/LoanPolicyPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
@@ -252,6 +253,8 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/produce/tickets/:ticketId', element: guardAny(FLOOR_TICKETS_BASE_SECTIONS, 'view', <FloorTicketPage />) },
       // Technician performance (migration 415): managers / floor managers.
       { path: '/carret/produce/performance', element: guardAny(['technician_performance', 'qc_performance'], 'view', <TechnicianPerformancePage />) },
+      // My performance (migration 427): a technician's / QC inspector's own numbers.
+      { path: '/carret/produce/my-performance', element: guard('my_performance', 'view', <MyPerformancePage />) },
       { path: '/carret/produce/parts-desk', element: guardAny(['parts_approval', 'parts_inventory'], 'view', <PartsDeskPage />) },
       { path: '/carret/produce/into-stock', element: guard('pending_inventory', 'view', <IntoStockPage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
