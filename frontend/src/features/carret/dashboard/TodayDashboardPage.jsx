@@ -8,6 +8,7 @@ import { SECTIONS } from '../../../config/navigation';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import { buildBlocks } from './todayTiles';
+import FloorWorkBlock from './FloorWorkBlock';
 
 /**
  * Today (claude/pending.md item 11) — the new UI's home. One page for the day
@@ -146,9 +147,12 @@ export default function TodayDashboardPage() {
     ? blocks.filter((b) => data[b.key] && b.tiles.some((t) => data[b.key][t.key] && canOpen(t.sections)))
     : [];
 
+  // Floor work counts (migration 425) are their own block, outside the tile list.
+  const floorWork = data?.floor_work && (data.floor_work.mine || data.floor_work.team) ? data.floor_work : null;
+
   // Nothing on the dashboard for this user: send them to a screen they can use
   // (what /carret/home did before it became the dashboard).
-  if (data && !visible.length) {
+  if (data && !visible.length && !floorWork) {
     const first = firstAllowedScreen(hasPermission);
     if (first) return <Navigate to={first} replace />;
   }
@@ -178,9 +182,10 @@ export default function TodayDashboardPage() {
         )}
         {state.loading && !data && <EmptyState title="Loading…" />}
         {state.error && <EmptyState title="Could not load the dashboard" body={state.error} />}
-        {data && !visible.length && (
+        {data && !visible.length && !floorWork && (
           <EmptyState title="Nothing to show" body="No area of the dashboard is enabled for your role yet." />
         )}
+        {floorWork && <FloorWorkBlock data={floorWork} dayLabel={isToday ? 'today' : `on ${fmtDay(date)}`} onOpen={onOpen} />}
         {data && visible.map((b) => (
           <Block key={b.key} block={b} data={data[b.key]} canOpen={canOpen} onOpen={onOpen} />
         ))}

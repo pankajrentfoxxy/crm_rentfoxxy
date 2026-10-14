@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DocNumber, EmptyState, Input, Panel, Segmented, StatusChip,
+  Button, DataTable, DocNumber, EmptyState, Input, Notice, Panel, Segmented, StatusChip,
 } from '../../../components/carret';
 import { useAuth } from '../../../context/AuthContext';
 import { usePermission } from '../../../hooks/usePermission';
@@ -66,12 +66,17 @@ export default function FloorBoardPage() {
   // Same rule as the ticket page: floor leads, or "Assign floor tickets" (migration 409).
   const canAssign = isFloorLead(user) || hasPermission('floor_ticket_assign', 'edit');
   // ?stage= lets a menu entry open one stage (Movement → Dispatch QC).
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const stageParam = params.get('stage') || '';
   const [stage, setStage] = useState(stageParam);
   useEffect(() => { setStage(stageParam); }, [stageParam]);
   // A technician opens on their own work; a floor manager on the whole floor.
-  const [view, setView] = useState(isFloorLead(user) ? 'queue' : 'mine');
+  // ?view= and ?assignee= let the Today page's tiles open exactly their rows.
+  const viewParam = ['queue', 'mine', 'unassigned', 'stuck'].includes(params.get('view')) ? params.get('view') : null;
+  const assignee = Number(params.get('assignee')) || null;
+  const assigneeName = params.get('who') || '';
+  const [view, setView] = useState(viewParam || (isFloorLead(user) ? 'queue' : 'mine'));
+  useEffect(() => { if (viewParam) setView(viewParam); }, [viewParam]);
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [data, setData] = useState(null);
@@ -81,10 +86,10 @@ export default function FloorBoardPage() {
 
   useEffect(() => { const t = setTimeout(() => setQ(search.trim()), 300); return () => clearTimeout(t); }, [search]);
   const load = useCallback(() => {
-    fetchBoard({ stage: stage || undefined, view, search: q || undefined })
+    fetchBoard({ stage: stage || undefined, view, search: q || undefined, assignee: assignee || undefined })
       .then(({ data: d }) => setData(d))
       .catch((e) => { toast.error(errMsg(e, 'Could not load the floor')); setData({ rows: [], stages: [], counts: {} }); });
-  }, [stage, view, q]);
+  }, [stage, view, q, assignee]);
   useEffect(() => { load(); }, [load]);
 
   const claim = async (r) => {
@@ -190,6 +195,15 @@ export default function FloorBoardPage() {
   return (
     <DeskShell title="Floor" breadcrumb="Production" subtitle="Every laptop being refurbished, stage by stage.">
       <div className="c-stack">
+        {assignee && (
+          <Notice
+            tone="info"
+            title={`Showing ${assigneeName || 'one person'}'s laptops`}
+            action={<Button variant="quiet" onClick={() => { const p = new URLSearchParams(params); p.delete('assignee'); p.delete('who'); setParams(p, { replace: true }); }}>Show everyone</Button>}
+          >
+            Opened from the Today page's floor team table.
+          </Notice>
+        )}
         <div className="c-pills" role="group" aria-label="Stage">
           <button type="button" className={stage === '' ? 'is-on' : ''} aria-pressed={stage === ''} onClick={() => setStage('')}>
             All stages <span className="c-pill-n">{counts.total ?? 0}</span>

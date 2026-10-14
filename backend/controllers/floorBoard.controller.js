@@ -18,6 +18,7 @@ exports.board = async (req, res) => {
       stage: req.query.stage || null,
       view: req.query.view || 'queue',
       search: req.query.search || null,
+      assignee: Number(req.query.assignee) || null,
     });
     res.json({ success: true, ...data });
   } catch (e) {

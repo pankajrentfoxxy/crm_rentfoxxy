@@ -411,6 +411,20 @@ async function moneyBlock(req, { date, isToday, can }) {
  * @param req   express request (user, permissionCache)
  * @param date  YYYY-MM-DD (IST day) or empty for today
  */
+/* ------------------------------------------------------------ floor work */
+
+async function floorWorkBlock(req, { date, isToday, can }) {
+  const floorWork = require('./floorWorkService');
+  const out = {};
+  if (await can('floor_my_work')) {
+    out.mine = await tile('floor_work.mine', () => floorWork.myWork(pool, req.user.user_id, { date, isToday }));
+  }
+  if (await can('floor_team_work')) {
+    out.team = await tile('floor_work.team', async () => ({ members: await floorWork.teamWork(pool, { date, isToday }) }));
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function todayDashboard(req, { date: requested } = {}) {
   const today = istToday();
   const date = requested || today;
@@ -456,6 +470,8 @@ async function todayDashboard(req, { date: requested } = {}) {
     stock: await stockBlock(req, ctx),
     support: (await can('support_tickets')) ? await supportBlock(req, ctx) : null,
     money: await moneyBlock(req, ctx),
+    // Floor work counts (migration 425): my own, and every team member's.
+    floor_work: await floorWorkBlock(req, ctx),
   };
 
   return {

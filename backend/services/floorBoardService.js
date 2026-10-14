@@ -65,6 +65,9 @@ async function listBoard(req, q = {}) {
   if (q.stage) { fp.push(q.stage); filters.push(`s.stage_name = $${fp.length}`); }
   if (q.view === 'mine' && userId) { fp.push(userId); filters.push(`t.assigned_user_id = $${fp.length}`); }
   if (q.view === 'unassigned') filters.push('t.assigned_user_id IS NULL');
+  // One person's laptops (the Today page's floor team table). Inside the
+  // visibility clause above, so it can only narrow what the user may see.
+  if (q.assignee) { fp.push(Number(q.assignee)); filters.push(`t.assigned_user_id = $${fp.length}`); }
   if (q.search) {
     fp.push(`%${String(q.search).trim()}%`);
     filters.push(`(t.ttspl_id ILIKE $${fp.length} OR t.serial_number ILIKE $${fp.length} OR v.serial_number ILIKE $${fp.length} OR t.model ILIKE $${fp.length})`);
