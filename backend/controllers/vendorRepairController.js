@@ -20,12 +20,15 @@ async function requireDiagnosisFailedProcess(req, res, next) {
   const cache = req.permissionCache || (req.permissionCache = {});
   const uid = req.user.user_id;
   const role = req.user.role;
-  if (await hasPermission(uid, role, 'diagnosis_failed', 'can_create', cache)) return next();
-  if (await hasPermission(uid, role, 'diagnosis_failed', 'can_edit', cache)) return next();
+  // Sending a laptop to a vendor for repair is the vendor-repair team's job
+  // (warehouse / procurement), not the floor's: the floor marks it diagnosis
+  // failed, which is a separate action (15 Oct 2026).
+  if (await hasPermission(uid, role, 'vendor_repair_dc', 'can_create', cache)) return next();
+  if (await hasPermission(uid, role, 'vendor_repair_dc', 'can_edit', cache)) return next();
   if (svc.WAREHOUSE_ROLES.has(role)) return next();
   return res.status(403).json({
     success: false,
-    message: 'Diagnosis Failed — Out for Repair access required',
+    message: 'Vendor Repair DC access required to send laptops out for repair',
   });
 }
 

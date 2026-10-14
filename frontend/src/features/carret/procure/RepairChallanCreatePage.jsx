@@ -37,8 +37,9 @@ export default function RepairChallanCreatePage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { user, hasPermission } = usePermission();
-  // requireDiagnosisFailedProcess: diagnosis_failed create/edit OR a warehouse role.
-  const canCreate = REPAIR_WAREHOUSE_ROLES.has(user?.role) || hasPermission('diagnosis_failed', 'create') || hasPermission('diagnosis_failed', 'edit');
+  // requireDiagnosisFailedProcess: vendor_repair_dc create/edit OR a warehouse role.
+  // Same rule as the server (requireDiagnosisFailedProcess): the vendor-repair team.
+  const canCreate = REPAIR_WAREHOUSE_ROLES.has(user?.role) || hasPermission('vendor_repair_dc', 'create') || hasPermission('vendor_repair_dc', 'edit');
   const canHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const wanted = useMemo(() => new Set(String(params.get('tickets') || '').split(',').filter(Boolean).map(String)), [params]);
 

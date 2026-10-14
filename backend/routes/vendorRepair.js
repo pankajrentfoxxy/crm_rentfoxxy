@@ -31,19 +31,25 @@ const uploadVrdcEwayDoc = multer({
 });
 
 const invView = checkSectionPermission('inventory_management', 'view');
-/** Laptop Vendor Repair DC list/detail/PDF — dedicated RBAC (+ legacy floor viewers). */
+/**
+ * Laptop Vendor Repair DC list/detail/PDF — the vendor-repair team's own
+ * sections only. The general floor_pipeline fallback let every floor
+ * technician and floor manager open Vendor Returns (15 Oct 2026).
+ */
 const vendorRepairView = checkAnySectionPermission(
-  ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'floor_pipeline', 'vendor_management'],
+  ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'vendor_management'],
   'view'
 );
+// The floor's Diagnosis Failed list (old UI, floor managers) and the vendor
+// team's "To repair" tab read the same list.
 const diagnosisFailedView = checkAnySectionPermission(
-  ['diagnosis_failed', 'floor_pipeline'],
+  ['diagnosis_failed', 'vendor_repair_dc'],
   'view'
 );
 
 router.use(authMiddleware);
 
-router.get('/company-defaults', checkAnySectionPermission(['vendor_repair_dc', 'floor_pipeline', 'diagnosis_failed'], 'view'), ctrl.getCompanyDefaults);
+router.get('/company-defaults', checkAnySectionPermission(['vendor_repair_dc', 'vendor_repair_dc_dispatch'], 'view'), ctrl.getCompanyDefaults);
 router.get('/dc', vendorRepairView, ctrl.listVendorRepairDcs);
 router.get('/diagnosis-failed', diagnosisFailedView, ctrl.listDiagnosisFailed);
 router.get('/inventory', invView, ctrl.listOutForRepairInventory);

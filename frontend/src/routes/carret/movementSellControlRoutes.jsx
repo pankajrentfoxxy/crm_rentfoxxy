@@ -39,14 +39,14 @@ const guardAny = (sections, action, node) => (
 );
 
 /** GET /api/vendor-repair/dc/:dc — vendorRepairView in routes/vendorRepair.js. */
-export const REPAIR_VIEW_SECTIONS = ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'floor_pipeline', 'vendor_management'];
-/** GET /api/vendor-repair/diagnosis-failed — diagnosisFailedView. */
-export const DIAGNOSIS_FAILED_SECTIONS = ['diagnosis_failed', 'floor_pipeline'];
+export const REPAIR_VIEW_SECTIONS = ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'vendor_management'];
+/** Making a repair challan (POST /out-for-repair — requireDiagnosisFailedProcess): the vendor-repair team. */
+export const DIAGNOSIS_FAILED_SECTIONS = ['vendor_repair_dc'];
 /**
  * Vendor returns list: the union of its tabs' API sections (each tab hides
  * itself without its own). Replaces the guard on /carret/procure/returns.
  */
-export const VENDOR_RETURNS_SECTIONS = ['vendor_return_to_vendor', 'vendor_management', 'vendor_return_ticket', ...REPAIR_VIEW_SECTIONS.filter((s) => s !== 'vendor_management'), 'diagnosis_failed'];
+export const VENDOR_RETURNS_SECTIONS = ['vendor_return_to_vendor', 'vendor_management', 'vendor_return_ticket', ...REPAIR_VIEW_SECTIONS.filter((s) => s !== 'vendor_management')];
 /** routes/scrapChallan.js viewAny. */
 const SCRAP_CHALLAN_SECTIONS = ['scrap_challans', 'parts_discarded', 'parts_procurement', 'parts_inventory', 'part_vendor_repair', 'inventory_management'];
 /** routes/supportParts.js requireSupportOrWarehouse. */

@@ -31,8 +31,10 @@ import { REPAIR_WAREHOUSE_ROLES, VRDC_STATUS_LABEL, vrdcChip } from './repairSha
  */
 const RETURN_SECTIONS = ['vendor_return_to_vendor', 'vendor_management'];
 const REQUEST_SECTIONS = ['vendor_return_ticket', 'vendor_return_to_vendor', 'vendor_management'];
-const REPAIR_SECTIONS = ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'floor_pipeline', 'vendor_management'];
-const TO_REPAIR_SECTIONS = ['diagnosis_failed', 'floor_pipeline'];
+// Vendor-repair sections only (15 Oct 2026): floor_pipeline / diagnosis_failed
+// opened this page to every floor technician and floor manager.
+const REPAIR_SECTIONS = ['vendor_repair_dc', 'vendor_repair_dc_dispatch', 'vendor_management'];
+const TO_REPAIR_SECTIONS = ['vendor_repair_dc', 'vendor_repair_dc_dispatch'];
 const TABS = [
   { key: 'send', label: 'To send back', sections: RETURN_SECTIONS },
   { key: 'challans', label: 'Return challans', sections: RETURN_SECTIONS },
@@ -65,7 +67,7 @@ export default function VendorReturnsPage() {
   const isWarehouse = REPAIR_WAREHOUSE_ROLES.has(user?.role);
   // Backend requireVendorRepairDispatch (cancel) / requireDiagnosisFailedProcess (create).
   const canRepairDispatch = isWarehouse || hasPermission('vendor_repair_dc_dispatch', 'create') || hasPermission('vendor_repair_dc_dispatch', 'edit');
-  const canMakeRepair = isWarehouse || hasPermission('diagnosis_failed', 'create') || hasPermission('diagnosis_failed', 'edit');
+  const canMakeRepair = isWarehouse || hasPermission('vendor_repair_dc', 'create') || hasPermission('vendor_repair_dc', 'edit');
 
   const tabs = useMemo(() => TABS.filter((t) => any(t.sections)), [hasPermission]); // eslint-disable-line react-hooks/exhaustive-deps
   const wantedTab = params.get('tab');
