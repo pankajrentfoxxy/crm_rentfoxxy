@@ -58,6 +58,8 @@ export const floorPipelineAccordionChildren = [
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
   { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'diagnosis_failed', countKey: 'diagnosis_failed' },
   { label: 'QC Ready', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
+  // New-UI page (15 Oct 2026); opens in the new layout.
+  { label: 'Technician Performance', path: '/carret/produce/performance', section: 'technician_performance' },
 ];
 
 /** Inventory accordion — laptop stock only (parts live under Part Management). */

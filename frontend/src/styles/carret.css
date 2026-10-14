@@ -576,3 +576,26 @@
 }
 .c-qsec{ overflow:hidden }
 .c-qsec-h + .c-prog-thin{ margin-top:-1px }
+
+/* ── Technician performance (produce/performance) ── */
+.c-perf-bar{ display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px }
+.c-perf-nav{ display:flex; flex-wrap:wrap; align-items:center; gap:6px }
+.c-perf-title{ font-weight:600; color:var(--ink); min-width:9rem; text-align:center }
+.c-perf-tiles{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:12px }
+.c-perf-how{ border:1px solid var(--rule); border-radius:var(--d-radius-lg); background:var(--surface); padding:10px 14px; font-size:13px; color:var(--ink-2) }
+.c-perf-how summary{ cursor:pointer; font-weight:600; color:var(--ink) }
+.c-perf-how ul{ margin:8px 0 0; padding-left:18px; display:flex; flex-direction:column; gap:4px }
+.c-perf-mini{ display:grid; grid-template-columns:repeat(auto-fit, minmax(96px,1fr)); gap:8px }
+.c-perf-mini > div{ border:1px solid var(--rule); border-radius:var(--d-radius); padding:8px 10px; display:flex; flex-direction:column }
+.c-perf-mini span{ font-size:12px; color:var(--ink-3) }
+.c-perf-mini b{ font-size:18px; color:var(--ink); font-variant-numeric:tabular-nums }
+.c-meter{ position:relative; padding:4px 0 }
+.c-meter-track{ display:flex; height:8px; border-radius:999px; background:var(--rule); overflow:hidden; gap:0 }
+.c-meter-track span{ display:block; height:100% }
+.c-meter-target{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:var(--ink); border-radius:1px }
+.c-standing{ display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:4px 6px; font-size:12.5px; font-weight:600; color:var(--ink-2); margin-top:2px }
+.c-standing.is-good span{ color:var(--alert-good) }
+.c-standing.is-bad span{ color:var(--alert-crit) }
+.c-standing small{ font-weight:600; font-size:11.5px; padding:1px 6px; border-radius:999px; background:var(--accent-soft); color:var(--accent) }
+.c-th-sort{ background:none; border:0; padding:0; font:inherit; color:inherit; cursor:pointer; text-transform:inherit; letter-spacing:inherit }
+.c-th-sort:hover, .c-th-sort.is-on{ color:var(--accent) }

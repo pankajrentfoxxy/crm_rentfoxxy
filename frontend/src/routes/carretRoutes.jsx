@@ -71,6 +71,7 @@ const SupportChargesToBillPage = React.lazy(() => import('../features/carret/ser
 const EarlyReturnsPage = React.lazy(() => import('../features/carret/serve/EarlyReturnsPage'));
 const ServiceBillingPage = React.lazy(() => import('../features/carret/serve/ServiceBillingPage'));
 const ServeLoansListPage = React.lazy(() => import('../features/carret/serve/loan/LoansListPage'));
+const TechnicianPerformancePage = React.lazy(() => import('../features/carret/produce/performance/TechnicianPerformancePage'));
 const ServeLoanRecordPage = React.lazy(() => import('../features/carret/serve/loan/LoanRecordPage'));
 const ServeLoanPolicyPage = React.lazy(() => import('../features/carret/serve/loan/LoanPolicyPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
@@ -249,6 +250,8 @@ export const carretRoutes = CARRET_ENABLED
       // links from Sell / Movement can open the new page without locking out
       // chip-level or QC users who could open the old one.
       { path: '/carret/produce/tickets/:ticketId', element: guardAny(FLOOR_TICKETS_BASE_SECTIONS, 'view', <FloorTicketPage />) },
+      // Technician performance (migration 415): managers / floor managers.
+      { path: '/carret/produce/performance', element: guard('technician_performance', 'view', <TechnicianPerformancePage />) },
       { path: '/carret/produce/parts-desk', element: guardAny(['parts_approval', 'parts_inventory'], 'view', <PartsDeskPage />) },
       { path: '/carret/produce/into-stock', element: guard('pending_inventory', 'view', <IntoStockPage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },
