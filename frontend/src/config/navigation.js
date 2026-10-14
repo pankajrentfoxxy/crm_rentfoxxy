@@ -50,7 +50,7 @@ export const SECTIONS = [
     // until the process is signed off (hard rule 6).
     groups: ['Production'],
     items: [
-      { group: 'Production', to: '/carret/produce/floor', label: 'Floor', sections: ['floor_pipeline', 'floor_tickets'], section: 'floor_pipeline', action: 'view' },
+      { group: 'Production', to: '/carret/produce/floor', label: 'Floor', match: ['/carret/produce/tickets'], sections: ['floor_pipeline', 'floor_tickets'], section: 'floor_pipeline', action: 'view' },
       { group: 'Production', to: '/carret/produce/parts-desk', label: 'Parts Desk', sections: ['parts_approval', 'parts_inventory'], section: 'parts_approval', action: 'view' },
       { group: 'Production', to: '/carret/produce/into-stock', label: 'Into Stock', section: 'pending_inventory', action: 'view' },
       { group: 'Production', to: '/carret/produce/performance', label: 'Technician Performance', section: 'technician_performance', action: 'view' },
@@ -232,6 +232,7 @@ export const UNREACHABLE_BY_DESIGN = [
   // New-UI aliases and create forms reached from their list pages.
   '/carret', '/carret/money/credit-notes/new', '/carret/procure/repairs/new', '/carret/sell/sale-in-place/new',
   '/carret/sell/whatsapp-campaigns/new',
+  '/carret/no-access',
 
   // WhatsApp Campaigns in the old UI (production, 9 Oct 2026). Reached from the Old UI
   // sidebar (menuConfig.js); the new menu opens /carret/sell/whatsapp-campaigns.

@@ -74,6 +74,6 @@ export default function HomeRedirect() {
   for (const [section, path] of LANDING_ORDER) {
     if (canView(section)) return <Navigate to={path} replace />;
   }
-  // Last resort — the floor dashboard (every internal role has 'dashboard').
-  return <Navigate to="/dashboard" replace />;
+  // Last resort: the new UI's Today page (or the old dashboard without it).
+  return <Navigate to={CARRET_ON ? '/carret/home' : '/dashboard'} replace />;
 }

@@ -21,12 +21,15 @@ import ProtectedRoute from '../../router/ProtectedRoute';
 const CARRET_ENABLED = process.env.REACT_APP_CARRET === '1';
 
 const TodayDashboardPage = React.lazy(() => import('../../features/carret/dashboard/TodayDashboardPage'));
+const NoAccessPage = React.lazy(() => import('../../features/carret/NoAccessPage'));
 
 export const dashboardRoutes = CARRET_ENABLED
   ? [
       // Login only: the page shows just the tiles this user may see.
       { path: '/carret/home', element: <ProtectedRoute><React.Suspense fallback={null}><TodayDashboardPage /></React.Suspense></ProtectedRoute> },
       { path: '/carret', element: <Navigate to="/carret/home" replace /> },
+      // A refused new-UI page lands here (router/ProtectedRoute), not on the old /dashboard.
+      { path: '/carret/no-access', element: <ProtectedRoute><React.Suspense fallback={null}><NoAccessPage /></React.Suspense></ProtectedRoute> },
     ]
   : [];
 

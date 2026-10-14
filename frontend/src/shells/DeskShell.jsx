@@ -57,10 +57,14 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
     for (const s of SECTIONS) {
       for (const i of s.items) {
         const [path, query = ''] = i.to.split('?');
-        if (pathname !== path && !pathname.startsWith(`${path}/`)) continue;
+        // `match`: record pages a link also covers (Floor covers a floor
+        // ticket, /carret/produce/tickets/:id, which is not under its path).
+        const under = (p) => pathname === p || pathname.startsWith(`${p}/`);
+        const hit = under(path) ? path : (i.match || []).find(under);
+        if (!hit) continue;
         const want = [...new URLSearchParams(query)];
         if (!want.every(([k, v]) => qs.get(k) === v)) continue;
-        const score = path.length * 10 + want.length;
+        const score = hit.length * 10 + want.length;
         if (score > bestScore) { best = i.to; bestScore = score; }
       }
     }
@@ -68,9 +72,14 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
   }, [pathname, search]);
   const { hasPermission, user } = usePermission();
 
+  // Open the section of this page's link; a page no link covers opens the
+  // section of its URL area (/carret/produce/... → Production). It used to
+  // fall back to the first section, so record pages opened Procurement.
   const [openSection, setOpenSection] = useState(() => {
     const match = SECTIONS.find((s) => s.items.some((i) => i.to === currentTo));
-    return match?.key || SECTIONS[0].key;
+    const area = pathname.split('/')[2];
+    // A page in no area (e.g. No access) opens none, rather than the first.
+    return match?.key || SECTIONS.find((s) => s.key === area)?.key || null;
   });
 
   // A section with no visible children does not render at all — an empty
@@ -205,7 +214,8 @@ export default function DeskShell({ title, subtitle, breadcrumb, actions, childr
             </button>
             <div className="ml-auto flex items-center" style={{ gap: '8px' }}>
               {/* The old CRM stays available until each process is signed off. */}
-              <Link to={hasPermission('dashboard', 'view') ? '/dashboard' : '/'} className="c-btn" title="Back to the old interface">
+              {/* '/' opens the user's own first old-UI page (the old /dashboard is gone from the new UI). */}
+              <Link to="/" className="c-btn" title="Back to the old interface">
                 <ArrowLeftRight size={16} aria-hidden="true" /> Old UI
               </Link>
               <ThemeToggle />

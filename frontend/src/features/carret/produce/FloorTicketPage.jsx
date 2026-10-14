@@ -174,7 +174,9 @@ export default function FloorTicketPage() {
                 {serial && t.ttspl_id && <span><span className="c-idstrip-k">S/N</span><span className="font-mono">{serial}</span></span>}
                 {cfg && <span className="text-ink">{cfg}</span>}
                 {t.po_number && <span><span className="c-idstrip-k">PO</span><span className="font-mono">{t.po_number}</span></span>}
-                {lifeKey && <Link to={`/carret/stock/lifecycle/${encodeURIComponent(lifeKey)}`} className="text-accent" style={{ fontWeight: 500 }}>Lifecycle →</Link>}
+                {/* The Lifecycle page shows rentals and money (Inventory management view);
+                    the link shows only to people who can open it. */}
+                {lifeKey && hasPermission('inventory_management', 'view') && <Link to={`/carret/stock/lifecycle/${encodeURIComponent(lifeKey)}`} className="text-accent" style={{ fontWeight: 500 }}>Lifecycle →</Link>}
               </div>
             </div>
             <div className="flex flex-wrap items-center" style={{ gap: 'var(--d-gap)' }}>{actions}</div>

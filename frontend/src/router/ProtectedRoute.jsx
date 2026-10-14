@@ -15,7 +15,7 @@ export default function ProtectedRoute({
   action = 'view',
   allowedRoles,
   allowedPermissions,
-  fallback = '/dashboard',
+  fallback,
 }) {
   const { isAuthenticated, user, loading, effectivePermissions } = useAuth();
   const location = useLocation();
@@ -47,7 +47,14 @@ export default function ProtectedRoute({
     if (user?.role === 'guard') {
       return <Navigate to="/guard" replace />;
     }
-    return <Navigate to={fallback} replace />;
+    // A refused new-UI page says so in the new UI; anything else goes home
+    // ('/' picks the first page the user may open). Never the old /dashboard,
+    // which is not part of the new UI (15 Oct 2026).
+    if (fallback) return <Navigate to={fallback} replace />;
+    if (location.pathname.startsWith('/carret')) {
+      return <Navigate to="/carret/no-access" replace state={{ from: location.pathname }} />;
+    }
+    return <Navigate to="/" replace />;
   }
 
   if (user?.role === 'guard' && !location.pathname.startsWith('/guard')) {

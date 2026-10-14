@@ -17,7 +17,14 @@ function guard(section, action, element) {
 }
 
 export const salesRoutes = [
-  { path: '/dashboard', element: guard('dashboard', 'view', withLayout(<Dashboard />)) },
+  // The old dashboard is not part of the new UI (15 Oct 2026): with it on,
+  // /dashboard opens the new UI's Today page instead.
+  {
+    path: '/dashboard',
+    element: process.env.REACT_APP_CARRET === '1'
+      ? <Navigate to="/carret/home" replace />
+      : guard('dashboard', 'view', withLayout(<Dashboard />)),
+  },
   { path: '/tickets', element: guard('tickets', 'view', withLayout(<TicketsList />)) },
   { path: '/tickets/:id', element: guard('tickets', 'view', withLayout(<TicketDetails />)) },
   { path: '/tickets/create', element: guard('tickets', 'create', withLayout(<CreateTicket />)) },

@@ -43,7 +43,7 @@ export function ControlGuard({ rule, children }) {
   const can = useControlAccess();
   if (loading) return null;
   if (!isAuthenticated) return <Navigate to="/login" />;
-  if (!can(rule)) return <Navigate to={user?.role === 'guard' ? '/guard' : '/dashboard'} replace />;
+  if (!can(rule)) return <Navigate to={user?.role === 'guard' ? '/guard' : '/carret/no-access'} replace />;
   return children;
 }
 
