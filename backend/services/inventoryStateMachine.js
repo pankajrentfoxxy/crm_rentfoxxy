@@ -305,8 +305,9 @@ async function transitionAsset(db, {
     }
     // Support S7: a customer's own laptop, in for repair and due back to them on
     // a Service DC, is not stock — the floor may put it "in stock" when repaired,
-    // but no sales order may take it. (The Service DC delivers it without a
-    // reservation, so this never blocks the return itself.)
+    // but no sales order may take it. Its own Service DC (a service_return
+    // challan on the same ticket) is the one move allowed: createServiceDc
+    // writes that challan first, then marks the laptop dispatch_ready on it.
     const dueBack = (await client.query(
       `SELECT st.id AS ticket_id, COALESCE(st.customer_name, '') AS customer
          FROM support_ticket_items i
@@ -317,8 +318,12 @@ async function transitionAsset(db, {
             OR (NULLIF(i.unique_serial_number, '') IS NOT NULL AND UPPER(i.unique_serial_number) = UPPER($2))
             OR (NULLIF(i.serial_number, '') IS NOT NULL AND UPPER(i.serial_number) = UPPER($2))
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM delivery_challan_lines d
+             WHERE d.dc_number = $3 AND d.dc_purpose = 'service_return' AND d.support_ticket_id = st.id
+          )
         LIMIT 1`,
-      [serial.ttspl_id || '', serial.serial_number || '']
+      [serial.ttspl_id || '', serial.serial_number || '', dcNumber || null]
     )).rows[0];
     if (dueBack) {
       throw new TransitionRefused({

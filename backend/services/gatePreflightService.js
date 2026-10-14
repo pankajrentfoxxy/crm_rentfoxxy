@@ -132,11 +132,15 @@ async function runGatePreflight(db, {
   const state = checkChallanState(head);
   if (state) failures.push(state);
 
-  // A Loan DC (services/loanLaptopService) carries one laptop picked only from
-  // QC-passed stock, and is created with pre_dispatch_qc_passed = TRUE; it has
-  // no Sales Order, so no Dispatch QC record is ever raised for it.
-  const isLoanDc = String(head?.dc_purpose || '') === 'loan';
-  const qc = isLoanDc ? null : await checkDispatchQc(db, dcNumber);
+  // Dispatch QC records are raised for Sales Order challans only. Two kinds of
+  // challan never get one, and their laptops are checked elsewhere:
+  //  - a Loan DC (services/loanLaptopService): one laptop picked only from
+  //    QC-passed stock, created with pre_dispatch_qc_passed = TRUE;
+  //  - a Service DC (supportServiceDcService): the customer's own repaired
+  //    laptop, which only reaches stock through floor QC (Support S7).
+  // Without this every such challan was refused at the gate.
+  const noDispatchQc = ['loan', 'service_return'].includes(String(head?.dc_purpose || ''));
+  const qc = noDispatchQc ? null : await checkDispatchQc(db, dcNumber);
   if (qc) failures.push(qc);
 
   const eway = await checkEwayBill(db, head);
