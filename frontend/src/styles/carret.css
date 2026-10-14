@@ -605,3 +605,77 @@
 .c-my-big{ font-size:15px; color:var(--ink-3) }
 .c-my-big b{ font-size:40px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.02em }
 .c-my-big span{ font-size:20px; font-weight:600 }
+
+/* ── Floor performance: colour system (produce/performance) ─────────────────
+   Each metric keeps one colour everywhere: blue = volume, green = correct /
+   passed, red = failed / missed, amber = waiting, violet = rates, teal =
+   targets. Built on the lifecycle + alert tokens; violet and teal are new and
+   defined for both themes. */
+:root{
+  --perf-blue: var(--lc-idle);        --perf-blue-soft: var(--lc-idle-soft);
+  --perf-green: var(--alert-good);    --perf-green-soft: var(--lc-earning-soft);
+  --perf-red: var(--alert-crit);      --perf-red-soft: var(--alert-crit-soft);
+  --perf-amber: var(--alert-warn);    --perf-amber-soft: var(--lc-moving-soft);
+  --perf-violet: #6D3FC8;             --perf-violet-soft: #EFE8FB;
+  --perf-teal: #0F766E;               --perf-teal-soft: #DDF1EE;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --perf-violet: #A98BF0; --perf-violet-soft: #251B3D; --perf-teal: #3BB5A6; --perf-teal-soft: #0F2A27; }
+}
+:root[data-theme="dark"]{ --perf-violet: #A98BF0; --perf-violet-soft: #251B3D; --perf-teal: #3BB5A6; --perf-teal-soft: #0F2A27; }
+
+.c-pf-toolbar{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px 16px; padding:10px 14px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--d-radius-lg) }
+.c-pf-toolbar .c-perf-bar{ gap:8px 12px }
+@media (min-width:1100px){
+  .c-pf-toolbar .c-perf-bar, .c-pf-toolbar .c-perf-nav{ flex-wrap:nowrap }
+  .c-pf-toolbar .c-perf-bar{ flex:0 0 auto }
+  .c-pf-toolbar .c-perf-title{ white-space:nowrap }
+}
+.c-pf-switch{ display:inline-flex; padding:3px; border-radius:999px; background:var(--surface-3); gap:2px }
+.c-pf-switch button{ border:0; background:none; font:inherit; font-size:13.5px; font-weight:600; color:var(--ink-3); padding:6px 14px; border-radius:999px; cursor:pointer }
+.c-pf-switch button.is-on{ background:var(--surface); color:var(--ink); box-shadow:var(--shadow) }
+
+.c-pf-kpis{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:12px }
+.c-pf-kpi{ position:relative; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-radius:var(--d-radius-lg); background:var(--surface); border:1px solid var(--rule); border-top:3px solid var(--k); min-width:0 }
+.c-pf-kpi-h{ display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--ink-3) }
+.c-pf-kpi-i{ flex:none; width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--ks); color:var(--k) }
+.c-pf-kpi-v{ font-size:28px; font-weight:700; line-height:1.1; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.01em }
+.c-pf-kpi-v small{ font-size:15px; font-weight:600; color:var(--ink-3); margin-left:4px }
+.c-pf-kpi-s{ font-size:12.5px; color:var(--ink-3) }
+.c-pf-kpi .c-prog{ height:6px; background:var(--ks) }
+.c-pf-kpi .c-prog span{ background:var(--k) }
+.t-blue{ --k:var(--perf-blue); --ks:var(--perf-blue-soft) }
+.t-green{ --k:var(--perf-green); --ks:var(--perf-green-soft) }
+.t-red{ --k:var(--perf-red); --ks:var(--perf-red-soft) }
+.t-amber{ --k:var(--perf-amber); --ks:var(--perf-amber-soft) }
+.t-violet{ --k:var(--perf-violet); --ks:var(--perf-violet-soft) }
+.t-teal{ --k:var(--perf-teal); --ks:var(--perf-teal-soft) }
+
+.c-pf-card{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--d-radius-lg); min-width:0 }
+.c-pf-card-h{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px 16px; border-bottom:1px solid var(--rule) }
+.c-pf-card-h h3{ margin:0; font-size:15px; font-weight:650; color:var(--ink) }
+.c-pf-card-h .c-pf-count{ font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--surface-3); color:var(--ink-2) }
+.c-pf-card-h .c-pf-right{ margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.c-pf-card-b{ padding:12px 16px }
+.c-pf-card .c-table-wrap{ border:0; border-radius:0 }
+.c-pf-card .c-sub{ font-family:var(--font-ui); font-size:12px }
+.c-perf-mini > div.t-blue, .c-perf-mini > div.t-green, .c-perf-mini > div.t-red, .c-perf-mini > div.t-amber, .c-perf-mini > div.t-violet, .c-perf-mini > div.t-teal{ border-color:transparent; background:var(--ks) }
+.c-perf-mini > div[class^="t-"] b{ color:var(--k) }
+
+.c-pf-who{ display:flex; align-items:center; gap:10px; min-width:11rem }
+.c-pf-av{ flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center; font-size:12.5px; font-weight:700; background:var(--ks); color:var(--k) }
+.c-pf-who b{ display:block; font-weight:600; color:var(--ink); white-space:nowrap }
+.c-pf-who small{ display:block; font-size:12px; color:var(--ink-3) }
+
+.c-pf-pill{ display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; background:var(--ks); color:var(--k); white-space:nowrap }
+.c-pf-num{ font-variant-numeric:tabular-nums; font-weight:600 }
+.c-pf-num.t-green, .c-pf-num.t-red, .c-pf-num.t-amber, .c-pf-num.t-violet, .c-pf-num.t-blue{ color:var(--k) }
+.c-pf-num.is-zero{ color:var(--ink-4); font-weight:500 }
+.c-pf-prog{ display:flex; flex-direction:column; gap:6px; min-width:12rem }
+.c-pf-corr{ font-variant-numeric:tabular-nums; white-space:nowrap }
+.c-pf-corr b{ font-size:16px; color:var(--ink) }
+.c-pf-corr span{ color:var(--ink-3); font-size:13px }
+.c-pf-legend{ display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12.5px; color:var(--ink-2) }
+.c-pf-legend i{ display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px }
+.c-pf-how dt{ font-weight:650; color:var(--ink); margin-top:10px }
+.c-pf-how dd{ margin:2px 0 0; color:var(--ink-2); font-size:13.5px }

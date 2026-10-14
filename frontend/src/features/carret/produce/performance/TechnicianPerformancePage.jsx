@@ -1,6 +1,6 @@
 import React from 'react';
 import DeskShell from '../../../../shells/DeskShell';
-import { EmptyState, Notice, Tabs } from '../../../../components/carret';
+import { EmptyState, Notice } from '../../../../components/carret';
 import { usePermission } from '../../../../hooks/usePermission';
 import PeriodBar, { usePeriodParams } from './PeriodBar';
 import TechniciansView from './TechniciansView';
@@ -34,13 +34,19 @@ export default function TechnicianPerformancePage() {
     <DeskShell
       title="Floor performance"
       breadcrumb="Production"
-      subtitle={view === 'qc'
-        ? 'QC checks by each inspector across QC1, QC2 and Dispatch QC, what was missed, and the result against target — for the incentive.'
-        : 'Laptops finished by each floor technician, how many passed QC, and the result against target — for the incentive.'}
+      subtitle="Work done, QC result and incentive against target."
     >
       <div className="c-stack">
-        {tabs.length > 1 && <Tabs tabs={tabs} value={view} onChange={(v) => set({ view: v === 'qc' ? 'qc' : '' })} />}
-        <PeriodBar period={period} />
+        <div className="c-pf-toolbar">
+          {tabs.length > 1 ? (
+            <div className="c-pf-switch" role="tablist" aria-label="Team">
+              {tabs.map((t) => (
+                <button key={t.key} type="button" role="tab" aria-selected={view === t.key} className={view === t.key ? 'is-on' : ''} onClick={() => set({ view: t.key === 'qc' ? 'qc' : '' })}>{t.label}</button>
+              ))}
+            </div>
+          ) : <span />}
+          <PeriodBar period={period} />
+        </div>
         {isFuture && <Notice tone="info" title="This period has not started">Nothing to count yet.</Notice>}
         {!tabs.length && <EmptyState title="No access" />}
         {view === 'tech' && canTech && <TechniciansView from={from} to={to} isFuture={isFuture} />}

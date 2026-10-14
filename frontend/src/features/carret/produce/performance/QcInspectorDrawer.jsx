@@ -23,13 +23,12 @@ export function QcChecks({ data, from, to }) {
     <div className="c-stack">
       <div className="c-perf-mini">
         {[
-          ['Checks', t.checks], ['QC1', t.qc1], ['QC2', t.qc2], ['Dispatch QC', t.dispatch_qc],
-          ['Caught', t.fails_found], ['Missed', t.missed], ['Correct', t.correct], ['Target', t.target],
-        ].map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+          ['Checks', t.checks, 'blue'], ['QC1', t.qc1, 'blue'], ['QC2', t.qc2, 'blue'], ['Dispatch QC', t.dispatch_qc, 'blue'],
+          ['Caught', t.fails_found, 'blue'], ['Missed', t.missed, 'red'], ['Correct', t.correct, 'green'], ['Target', t.target, 'teal'],
+        ].map(([k, v, tone]) => <div key={k} className={`t-${tone}`}><span>{k}</span><b>{v}</b></div>)}
       </div>
       <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>
-        {data.inspector.daily_target ? `Target ${data.inspector.daily_target} checks a day${data.inspector.own_target ? ' (their own)' : ' (default)'}.` : 'No target — QC is not their role; a manager can set one.'}
-        {' '}Correct = checks − missed{t.open ? `; ${t.open} passes are still in their window, so this can still drop` : ''}.
+        {data.inspector.daily_target ? `Target ${data.inspector.daily_target}/day${data.inspector.own_target ? ' (own)' : ' (default)'}` : 'No target'} · Correct = checks − missed
       </p>
       {from !== to && (
         <div>

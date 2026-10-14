@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Checkbox, DataTable, EmptyState, Notice, Section, StatTile,
+  CheckCircle2, Clock3, Gauge, Info, Trophy, Wrench, XCircle,
+} from 'lucide-react';
+import {
+  Button, Checkbox, DataTable, EmptyState, Notice,
 } from '../../../../components/carret';
 import { usePermission } from '../../../../hooks/usePermission';
+import { COLOUR, DailyChart, fetchPerformance } from './perfShared';
 import {
-  DailyChart, Legend, Standing, TargetMeter, fetchPerformance, targetText,
-} from './perfShared';
+  Card, HowDrawer, KpiCard, Num, TargetCell, Who,
+} from './perfUi';
 import TechnicianDrawer from './TechnicianDrawer';
 import TargetsDrawer from './TargetsDrawer';
 
@@ -34,6 +38,7 @@ export default function TechniciansView({ from, to, isFuture }) {
   const [hideIdle, setHideIdle] = useState(true);
   const [open, setOpen] = useState(null);
   const [targetsOpen, setTargetsOpen] = useState(false);
+  const [howOpen, setHowOpen] = useState(false);
 
   const load = useCallback(() => {
     setData(null);
@@ -58,89 +63,97 @@ export default function TechniciansView({ from, to, isFuture }) {
     </button>
   );
 
-  // Most important first (they stay in view on a phone): who, correct, against target.
   const columns = [
     {
       key: 'n',
       header: sortHeader('name', 'Technician'),
-      width: '12rem',
-      render: (t) => <span style={{ whiteSpace: 'nowrap' }}>{t.name}</span>,
-      sub: (t) => targetText(t),
+      render: (t) => <Who id={t.user_id} name={t.name} sub={t.daily_target ? `${t.daily_target}/day${t.own_target ? ' · own' : ''}` : 'No target'} />,
     },
-    { key: 'k', header: sortHeader('correct', 'Correct'), numeric: true, render: (t) => <b>{t.correct}</b>, sub: (t) => `of ${t.target}` },
     {
       key: 'v',
-      header: sortHeader('vs_target', 'Against target'),
-      render: (t) => (
-        <div style={{ minWidth: '12rem' }}>
-          <TargetMeter correct={t.correct} failed={t.failed} awaiting={t.awaiting} target={t.target} />
-          <Standing s={t.standing} eligible={t.eligible} provisional={t.provisional} />
-        </div>
-      ),
+      header: sortHeader('vs_target', 'Correct vs target'),
+      render: (t) => <TargetCell correct={t.correct} target={t.target} bad={t.failed} pending={t.awaiting} standing={t.standing} eligible={t.eligible} provisional={t.provisional} />,
     },
-    { key: 'c', header: sortHeader('completed', 'Jobs done'), numeric: true, render: (t) => t.completed, sub: (t) => (t.reworks ? `+${t.reworks} rework` : null) },
-    { key: 'f', header: sortHeader('failed', 'QC failed'), numeric: true, render: (t) => (t.failed ? <b style={{ color: 'var(--alert-crit)' }}>{t.failed}</b> : 0) },
-    { key: 'p', header: 'QC passed', numeric: true, render: (t) => t.passed },
-    { key: 'a', header: 'Awaiting QC', numeric: true, render: (t) => t.awaiting },
-    { key: 'r', header: sortHeader('pass_rate', 'First-time pass'), numeric: true, render: (t) => (t.first_time_pass_rate == null ? '—' : `${t.first_time_pass_rate}%`) },
-    { key: 'dx', header: 'Diagnosis', numeric: true, render: (t) => t.diagnosis },
-    { key: 'as', header: 'Assembly', numeric: true, render: (t) => t.assembly },
+    { key: 'c', header: sortHeader('completed', 'Jobs'), numeric: true, render: (t) => <Num value={t.completed} tone="blue" />, sub: (t) => (t.reworks ? `+${t.reworks} rework` : null) },
+    { key: 'p', header: 'Passed', numeric: true, render: (t) => <Num value={t.passed} tone="green" /> },
+    { key: 'f', header: sortHeader('failed', 'Failed'), numeric: true, render: (t) => <Num value={t.failed} tone="red" /> },
+    { key: 'a', header: 'Awaiting', numeric: true, render: (t) => <Num value={t.awaiting} tone="amber" /> },
+    { key: 'r', header: sortHeader('pass_rate', 'Pass %'), numeric: true, render: (t) => (t.first_time_pass_rate == null ? <span className="c-pf-num is-zero">—</span> : <span className="c-pf-num t-violet">{t.first_time_pass_rate}%</span>) },
+    { key: 'dx', header: 'Diagnosis', numeric: true, render: (t) => <Num value={t.diagnosis} /> },
+    { key: 'as', header: 'Assembly', numeric: true, render: (t) => <Num value={t.assembly} /> },
   ];
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
   return (
     <>
       <div className="c-stack">
-        {canEdit && <div className="flex" style={{ justifyContent: 'flex-end' }}><Button onClick={() => setTargetsOpen(true)}>Technician daily targets</Button></div>}
         {error && <Notice tone="crit" title="Could not load">{error}</Notice>}
         {!data && !error && <EmptyState title="Loading…" />}
         {data && (
           <>
-            <div className="c-perf-tiles">
-              <StatTile label="Jobs done" value={team.completed} delta={team.reworks ? `+${team.reworks} reworks (not counted)` : 'Final Testing finished'} />
-              <StatTile label="Correct jobs" value={`${team.correct}`} unit={`/ ${team.target} target`} delta={team.target ? `${Math.round((team.correct / team.target) * 100)}% of the team target` : 'No target'} />
-              <StatTile label="QC failed" value={team.failed} delta={failPct == null ? '—' : `${failPct}% of jobs`} />
-              <StatTile label="Awaiting QC" value={team.awaiting} delta={team.awaiting ? 'Figures can still drop' : 'All jobs judged'} />
-              <StatTile label="First-time QC pass" value={team.first_time_pass_rate == null ? '—' : `${team.first_time_pass_rate}%`} delta="of jobs QC has judged" />
-              <StatTile label="At or above target" value={`${team.eligible}`} unit={`of ${team.with_target}`} delta="technicians with a target, earning the incentive" />
+            <div className="c-pf-kpis">
+              <KpiCard tone="blue" icon={Wrench} label="Jobs done" value={team.completed} sub={team.reworks ? `+${team.reworks} reworks` : 'Final Testing done'} />
+              <KpiCard tone="green" icon={CheckCircle2} label="Correct" value={team.correct} unit={team.target ? `/ ${team.target}` : null} progress={team.target ? pct(team.correct, team.target) : null} sub={team.target ? `${pct(team.correct, team.target)}% of target` : 'No target'} />
+              <KpiCard tone="red" icon={XCircle} label="QC failed" value={team.failed} sub={failPct == null ? '—' : `${failPct}% of jobs`} />
+              <KpiCard tone="amber" icon={Clock3} label="Awaiting QC" value={team.awaiting} sub={team.awaiting ? 'May still change' : 'All judged'} />
+              <KpiCard tone="violet" icon={Gauge} label="Pass rate" value={team.first_time_pass_rate == null ? '—' : `${team.first_time_pass_rate}%`} sub="First time at QC" />
+              <KpiCard tone="teal" icon={Trophy} label="On target" value={team.eligible} unit={`/ ${team.with_target}`} progress={team.with_target ? pct(team.eligible, team.with_target) : null} sub="Earning incentive" />
             </div>
 
-            <details className="c-perf-how">
-              <summary>How these numbers are counted</summary>
-              <ul>
-                <li><b>Job</b> — {data.definitions.job} Credited to the technician the laptop was assigned to.</li>
-                <li><b>QC result</b> — failed if the laptop then failed QC1, QC2 or Dispatch QC; passed once it went through QC2 into stock (or through Dispatch QC); otherwise awaiting QC.</li>
-                <li><b>Correct</b> — {data.definitions.correct} Awaiting jobs count as correct until QC says otherwise.</li>
-                <li><b>Rework</b> — {data.definitions.rework}</li>
-                <li><b>Target</b> — {data.definitions.target} This period: {data.period.workingDays} working day{data.period.workingDays === 1 ? '' : 's'}.</li>
-                <li><b>Incentive</b> — earned when correct jobs reach the target. Example: target 10, finished 14, 4 failed QC → 10 correct → on target.</li>
-              </ul>
-            </details>
-
             {from !== to && (
-              <Section title="Team, day by day">
-                <Legend />
-                <DailyChart days={data.days} dailyTarget={teamDailyTarget} />
-              </Section>
+              <Card
+                title="Day by day"
+                right={(
+                  <span className="c-pf-legend">
+                    <span><i style={{ background: COLOUR.passed }} />Passed</span>
+                    <span><i style={{ background: COLOUR.awaiting }} />Awaiting</span>
+                    <span><i style={{ background: COLOUR.failed }} />Failed</span>
+                    <span><i style={{ background: 'transparent', borderTop: `2px dashed ${COLOUR.target}`, height: 0, width: 14 }} />Target</span>
+                  </span>
+                )}
+                bodyPad
+              >
+                <DailyChart days={data.days} dailyTarget={teamDailyTarget} height={220} />
+              </Card>
             )}
 
-            <Section
-              title={`Technicians · ${rows.length}`}
-              actions={<Checkbox label="Hide technicians with no work" checked={hideIdle} onChange={(e) => setHideIdle(e.target.checked)} />}
+            <Card
+              title="Technicians"
+              count={rows.length}
+              right={(
+                <>
+                  <Checkbox label="Hide idle" checked={hideIdle} onChange={(e) => setHideIdle(e.target.checked)} />
+                  <Button variant="quiet" onClick={() => setHowOpen(true)}><Info size={14} aria-hidden="true" /> How it's counted</Button>
+                  {canEdit && <Button onClick={() => setTargetsOpen(true)}>Daily targets</Button>}
+                </>
+              )}
             >
-              <p className="text-ink-3" style={{ margin: '0 0 8px', fontSize: '13px' }}>Click a technician to see every laptop behind their numbers. Click a column title to sort.</p>
               <DataTable
                 rows={rows}
                 rowKey={(t) => t.user_id}
                 onRowClick={(t) => setOpen(t)}
                 columns={columns}
-                empty={<EmptyState title="No floor work in this period" body={isFuture ? undefined : 'Try another day, or untick "Hide technicians with no work".'} />}
+                empty={<EmptyState title="No floor work in this period" body={isFuture ? undefined : 'Try another period, or untick "Hide idle".'} />}
               />
-            </Section>
+            </Card>
           </>
         )}
       </div>
 
       <TechnicianDrawer tech={open} from={from} to={to} onClose={() => setOpen(null)} />
+      <HowDrawer
+        open={howOpen}
+        onClose={() => setHowOpen(false)}
+        items={data ? [
+          ['Job', `${data.definitions.job} Credited to the technician it was assigned to.`],
+          ['Passed / Failed / Awaiting', 'Failed if the laptop then failed QC1, QC2 or Dispatch QC; passed once through QC2 into stock (or Dispatch QC); otherwise awaiting.'],
+          ['Correct', `${data.definitions.correct} Awaiting jobs count until QC says otherwise.`],
+          ['Rework', data.definitions.rework],
+          ['Target', `${data.definitions.target} This period: ${data.period.workingDays} working day(s).`],
+          ['Incentive', 'Earned when correct ≥ target. Example: target 10, finished 14, 4 failed QC → 10 correct → on target.'],
+        ] : []}
+      />
       {canEdit && (
         <TargetsDrawer
           open={targetsOpen}

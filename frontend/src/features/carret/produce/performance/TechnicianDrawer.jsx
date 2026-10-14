@@ -7,7 +7,6 @@ import { DailyChart, Legend, QcChip, fetchTechnician } from './perfShared';
 
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'Could not load';
 
-/** One technician: their days and every laptop behind the numbers. */
 /** One technician's period: totals, day chart, and every laptop behind them. */
 export function TechnicianJobs({ data, from, to }) {
   const [show, setShow] = useState('all');
@@ -18,18 +17,17 @@ export function TechnicianJobs({ data, from, to }) {
     <div className="c-stack">
       <div className="c-perf-mini">
         {[
-          ['Jobs done', t.completed],
-          ['QC passed', t.passed],
-          ['QC failed', t.failed],
-          ['Awaiting QC', t.awaiting],
-          ['Correct', t.correct],
-          ['Target', t.target],
-          ['Reworks', t.reworks],
-        ].map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+          ['Jobs done', t.completed, 'blue'],
+          ['QC passed', t.passed, 'green'],
+          ['QC failed', t.failed, 'red'],
+          ['Awaiting QC', t.awaiting, 'amber'],
+          ['Correct', t.correct, 'green'],
+          ['Target', t.target, 'teal'],
+          ['Reworks', t.reworks, 'violet'],
+        ].map(([k, v, tone]) => <div key={k} className={`t-${tone}`}><span>{k}</span><b>{v}</b></div>)}
       </div>
       <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>
-        Target {data.technician.daily_target} a day{data.technician.own_target ? ' (their own)' : ' (default)'}.
-        Correct = jobs − QC failed{t.awaiting ? `; ${t.awaiting} still awaiting QC, so this can still drop` : ''}.
+        Target {data.technician.daily_target}/day{data.technician.own_target ? ' (own)' : ' (default)'} · Correct = jobs − QC failed
       </p>
 
       {multiDay && (

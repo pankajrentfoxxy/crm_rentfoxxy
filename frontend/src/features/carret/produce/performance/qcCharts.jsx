@@ -8,15 +8,15 @@ import { COLOUR, dayLabel } from './perfShared';
  * QC inspectors' chart pieces (Floor performance → QC inspectors and the
  * inspector drawer). Status tokens only; every mark also has a word.
  */
-const QC_COLOUR = { held: COLOUR.passed, open: COLOUR.awaiting, missed: COLOUR.failed, caught: 'var(--accent)', target: COLOUR.target };
+export const QC_COLOUR = { held: COLOUR.passed, open: COLOUR.awaiting, missed: COLOUR.failed, caught: 'var(--perf-blue)', target: COLOUR.target };
 
 export function QcLegend() {
   return (
     <ul className="c-chart-legend">
-      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.held }} />Passed — held up</li>
-      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.open }} />Passed — still in its window</li>
-      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.missed }} />Passed — missed</li>
-      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.caught }} />Failed — defect caught</li>
+      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.held }} />Held</li>
+      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.open }} />Open</li>
+      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.missed }} />Missed</li>
+      <li><span className="c-chart-swatch" style={{ background: QC_COLOUR.caught }} />Caught</li>
       <li><span className="c-chart-swatch" style={{ background: 'transparent', borderTop: `2px dashed ${QC_COLOUR.target}`, height: 0, width: 14 }} />Target</li>
     </ul>
   );

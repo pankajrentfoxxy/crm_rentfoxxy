@@ -27,9 +27,9 @@ export const saveQcTargets = (body) => api.put('/qc-performance/targets', body);
 export const targetText = (p) => (p.daily_target ? `Target ${p.daily_target}/day${p.own_target ? ' (own)' : ''}` : 'No target');
 
 export const COLOUR = {
-  passed: 'var(--alert-good)',
-  failed: 'var(--alert-crit)',
-  awaiting: 'var(--rule-2)',
+  passed: 'var(--perf-green)',
+  failed: 'var(--perf-red)',
+  awaiting: 'var(--perf-amber)',
   target: 'var(--ink-2)',
 };
 
