@@ -143,6 +143,8 @@ export const SECTIONS = [
       { group: 'Support desk', to: '/carret/serve/tickets/new', label: 'New ticket', section: 'support_tickets', action: 'create' },
       { group: 'Support desk', to: '/carret/serve/technician-bucket', label: 'Technician bucket', sections: ['technician_bucket', 'support_tickets'], section: 'technician_bucket', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/parts-desk', label: 'Parts desk', section: 'support_part_challan', action: 'view' },
+      { group: 'Support desk', to: '/carret/serve/loans', label: 'Loan laptops', sections: ['loan_laptops', 'loan_laptop_approval'], section: 'loan_laptops', action: 'view' },
+      { group: 'Support desk', to: '/carret/serve/loans/policy', label: 'Loan replacement policy', sections: ['loan_laptop_policy'], section: 'loan_laptop_policy', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/issues', label: 'Issue insights', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/insights', label: 'SLA & feedback', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/settings', label: 'Support settings', sections: ['support_settings', 'support_tickets'], section: 'support_settings', action: 'view' },
@@ -169,6 +171,7 @@ export const SECTIONS = [
       { group: 'GST & e-way', to: '/carret/money/gst/queue', label: 'Invoice & E-way Queue', section: 'einvoice_ewb', action: 'view' },
       { group: 'GST & e-way', to: '/carret/money/gst/eway-bills', label: 'E-way Bills', section: 'einvoice_ewb', action: 'view' },
       { group: 'Charges', to: '/carret/money/support-charges', label: 'Support Charges to Bill', section: 'customer_billing', action: 'view' },
+      { group: 'Charges', to: '/carret/serve/loans?queue=pending_approval', label: 'Loan laptop approvals', section: 'loan_laptop_approval', action: 'view' },
       { group: 'Charges', to: '/carret/money/delivery-charges', label: 'Delivery Charges', section: 'customer_billing', action: 'view' },
       { group: 'Charges', to: '/carret/money/service-billing', label: 'Service Billing (gorefurbo)', section: 'customer_billing', action: 'view' },
     ],
@@ -215,7 +218,7 @@ export const UNREACHABLE_BY_DESIGN = [
   // new screens. These old screens stay routed and are reached from the Old UI
   // sidebar (menuConfig.js) until each process is signed off.
   '/customer-management/customers', '/delivery-register-management/technicians', '/dispatch/pending-orders',
-  '/guard', '/guard/scanner', '/tickets', '/lead-crm/*',
+  '/guard', '/guard/scanner', '/guard/po-inward', '/tickets', '/lead-crm/*',
   '/settings/users', '/settings/roles', '/settings/role-permissions', '/settings/user-permissions', '/settings/role-reference',
   '/customer-inventory', '/floor-pipeline/*',
 
@@ -232,6 +235,10 @@ export const UNREACHABLE_BY_DESIGN = [
   // WhatsApp Campaigns in the old UI (production, 9 Oct 2026). Reached from the Old UI
   // sidebar (menuConfig.js); the new menu opens /carret/sell/whatsapp-campaigns.
   '/whatsapp-campaigns', '/whatsapp-campaigns/new',
+
+  // Loan laptops in the old UI (production, 13 Oct 2026). Reached from the Old UI
+  // sidebar (menuConfig.js); the new menu opens /carret/serve/loans.
+  '/loan-laptops', '/loan-laptops/policy',
 
   // Public, unauthenticated capture links (server.js mounts six families).
   '/', '/login', '/access', '/auth/impersonate',

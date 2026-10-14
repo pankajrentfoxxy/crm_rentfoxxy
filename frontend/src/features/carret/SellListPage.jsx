@@ -39,13 +39,28 @@ const RESOURCES = {
     ],
     create: { label: 'New quotation', to: '/carret/sell/quotations/new', section: ['sales_quotations'] },
     open: (r) => `/carret/sell/quotations/${encodeURIComponent(r.quotation_number)}`,
-    columns: () => [
+    columns: ({ canCreate, navigate }) => [
       { key: 'quotation_number', header: 'Quotation', render: (r) => <DocNumber value={r.quotation_number} /> },
       { key: 'customer_name', header: 'Customer', render: (r) => r.company_name || r.customer_name, sub: (r) => r.contact_name || null },
       { key: 'quotation_type', header: 'Type', render: (r) => typeLabel(r.quotation_type) },
       { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status === 'pending' ? 'draft' : r.status} /> },
       { key: 'total', header: 'Value', numeric: true, render: (r) => <Money value={r.total_value} showZero={false} /> },
       { key: 'created_at', header: 'Raised', render: (r) => <DateTime value={r.created_at} /> },
+      // Copy: a new quotation pre-filled from this one (new number on save).
+      ...(canCreate ? [{
+        key: 'copy',
+        header: '',
+        render: (r) => (
+          <Button
+            variant="quiet"
+            aria-label={`Copy ${r.quotation_number}`}
+            title="Copy quotation"
+            onClick={(e) => { e.stopPropagation(); navigate(`/carret/sell/quotations/new?copy=${encodeURIComponent(r.quotation_number)}`); }}
+          >
+            <Copy size={14} aria-hidden="true" /> Copy
+          </Button>
+        ),
+      }] : []),
     ],
   },
   'sales-orders': {

@@ -1,19 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
   Button, Field, Input, Select, FormGrid, Section, Notice, Segmented, Money, Checkbox, Textarea, SearchSelect,
 } from '../../../components/carret';
 import { ENTITIES } from '../../../config/entities';
-import { getQuotationMeta, createQuotation, sendQuotationEmail } from '../../sales-pipeline/salesPipelineApi';
+import {
+  getQuotation, getQuotationMeta, createQuotation, sendQuotationEmail,
+} from '../../sales-pipeline/salesPipelineApi';
 import {
   filterCustomersForQuotation, isCustomerEligibleForQuotation, customerTypeMismatchMessage,
 } from '../../../utils/customerType';
 import { INDIAN_STATES, slugifyState, matchIndianState } from '../../../constants/indianStates';
 import GstinField from './GstinField';
 import {
-  customerGstin, gstinError, SECURITY_OPTIONS, securityMonths, securityTypeFor,
+  customerGstin, gstinError, parseJson, SECURITY_OPTIONS, securityMonths, securityTypeFor,
 } from './sellShared';
 import LineItemsEditor, {
   emptyLine, linesToPayload, linesTotal, firstMissing, fieldLabel,
@@ -37,6 +39,27 @@ const TYPES = [
   { value: 'sale', label: 'Sale', entity: ENTITIES.sale },
 ];
 
+/** A stored quotation's lines, as editor lines (a copy keeps every field but the id). */
+function linesFromQuotation(rows) {
+  return rows.map((l) => ({
+    ...emptyLine(),
+    brand: l.brand || '',
+    model_name: l.model_name || l.model || '',
+    processor: l.processor || '',
+    generation: l.generation || '',
+    ram: l.ram || '',
+    storage: l.storage || '',
+    gpu: l.gpu || '',
+    screen_size: l.screen_size || '',
+    quantity: l.quantity || l.main_quantity || 1,
+    rate: l.rate || '',
+    locking_period: l.locking_period || '',
+    technical_warranty: l.technical_warranty || '',
+    battery_charger_warranty: l.battery_charger_warranty || '',
+    remark: l.remark || '',
+  }));
+}
+
 const blankParty = {
   customer_id: '', contact_name: '', company_name: '', customer_mobile: '', email: '', GST_number: '',
 };
@@ -45,6 +68,12 @@ export default function QuotationFormPage() {
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const prefill = navState?.prefill || {};
+  // ?copy=<EST>: a new quotation pre-filled from an existing one. It saves
+  // through the normal create path, so the number is allocated server-side;
+  // the source is only read, and its lead link and status are not carried over.
+  const [params] = useSearchParams();
+  const copyFrom = params.get('copy') || '';
+  const [copyNote, setCopyNote] = useState('');
 
   const [meta, setMeta] = useState(null);
   const [metaError, setMetaError] = useState('');
@@ -83,6 +112,48 @@ export default function QuotationFormPage() {
       .then(({ data }) => { setMeta(data); setMetaError(''); })
       .catch((e) => setMetaError(e?.response?.data?.message || 'Could not load customers.'));
   }, [type]);
+
+  // Copy: load the source once. Validity stays the fresh +7 days.
+  useEffect(() => {
+    if (!copyFrom) return undefined;
+    let live = true;
+    getQuotation(copyFrom).then(({ data }) => {
+      if (!live) return;
+      const qLines = data?.lines || [];
+      const h = qLines[0] || {};
+      const t = ['sale', 'sales'].includes(String(h.quotation_type).toLowerCase()) ? 'sale' : 'rental';
+      setType(t);
+      setParty({
+        customer_id: h.customer_id ? String(h.customer_id) : '',
+        contact_name: h.contact_name || h.customer_name || '',
+        company_name: h.company_name || h.customer_name || '',
+        customer_mobile: h.customer_mobile || '',
+        email: h.customer_email || '',
+        GST_number: h.gst_number || '',
+      });
+      const copied = linesFromQuotation(qLines);
+      setLines(copied.length ? copied : [emptyLine()]);
+      // Security is stored as an amount; read it back as months of rent.
+      if (t !== 'sale') {
+        const rent = linesTotal(copied);
+        const months = Number(h.security_amount) > 0 && rent > 0 ? Math.round(Number(h.security_amount) / rent) : 0;
+        setSecurityType(h.security_type || securityTypeFor(months));
+      }
+      setShipping(Number(h.shiping_charges) ? String(h.shiping_charges) : '');
+      if (h.supply_state) { setSupplyState(h.supply_state); setSupplyTouched(true); }
+      setTerms(h.terms || '');
+      setRemarks(h.quotation_remarks || '');
+      setSend((x) => ({ ...x, to: h.customer_email || '' }));
+      const ship = parseJson(h.customer_shipping_address);
+      if (ship?.address) {
+        const manual = { ...ship, zip_code: ship.zip_code || ship.pincode || '' };
+        if (h.customer_id) setShipChoice({ key: 'manual', manual });
+        else setProspectShip({ on: true, address: manual });
+      }
+      setCopyNote('');
+    }).catch(() => { if (live) setCopyNote(`Could not load ${copyFrom} to copy.`); });
+    return () => { live = false; };
+  }, [copyFrom]);
 
   const customers = useMemo(
     () => filterCustomersForQuotation(meta?.customers || [], type),
@@ -211,7 +282,7 @@ export default function QuotationFormPage() {
 
   return (
     <DeskShell
-      title="New quotation"
+      title={copyFrom ? 'Copy quotation' : 'New quotation'}
       breadcrumb="Sell / Quotations"
       subtitle={meta?.quotation_number
         ? `Will be numbered about ${meta.quotation_number} — the final number is taken when you save.`
@@ -220,6 +291,11 @@ export default function QuotationFormPage() {
       <div className="c-split">
         <div className="c-stack">
           {metaError && <Notice tone="crit" title="Could not load the form">{metaError}</Notice>}
+          {copyFrom && (
+            <Notice tone={copyNote ? 'crit' : 'info'} title={`Copied from ${copyFrom}`}>
+              {copyNote || 'A new quotation number is assigned on save; review the customer, items and validity before sending.'}
+            </Notice>
+          )}
           {prefill.lead_id && (
             <Notice tone="info" title={`From lead ${prefill.lead_name || `#${prefill.lead_id}`}`}>
               The quotation will be linked to this lead.

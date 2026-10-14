@@ -70,6 +70,9 @@ const ServePartsDeskPage = React.lazy(() => import('../features/carret/serve/Par
 const SupportChargesToBillPage = React.lazy(() => import('../features/carret/serve/ChargesToBillPage'));
 const EarlyReturnsPage = React.lazy(() => import('../features/carret/serve/EarlyReturnsPage'));
 const ServiceBillingPage = React.lazy(() => import('../features/carret/serve/ServiceBillingPage'));
+const ServeLoansListPage = React.lazy(() => import('../features/carret/serve/loan/LoansListPage'));
+const ServeLoanRecordPage = React.lazy(() => import('../features/carret/serve/loan/LoanRecordPage'));
+const ServeLoanPolicyPage = React.lazy(() => import('../features/carret/serve/loan/LoanPolicyPage'));
 const VendorRentalsPage = React.lazy(() => import('../features/carret/procure/VendorRentalsPage'));
 const FloorBoardPage = React.lazy(() => import('../features/carret/produce/FloorBoardPage'));
 const FloorTicketPage = React.lazy(() => import('../features/carret/produce/FloorTicketPage'));
@@ -216,6 +219,10 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/serve/insights', element: guard('support_tickets', 'view', <ServeInsightsPage />) },
       { path: '/carret/serve/issues', element: guard('support_tickets', 'view', <ServeIssueInsightsPage />) },
       { path: '/carret/serve/requests', element: guard('support_tickets', 'view', <ServeRequestsPage />) },
+      // Loan laptops (production 13 Oct 2026): Support raise, Accounts approve.
+      { path: '/carret/serve/loans', element: guardAny(['loan_laptops', 'loan_laptop_approval'], 'view', <ServeLoansListPage />) },
+      { path: '/carret/serve/loans/policy', element: guardAny(['loan_laptop_policy', 'loan_laptops', 'loan_laptop_approval'], 'view', <ServeLoanPolicyPage />) },
+      { path: '/carret/serve/loans/:id', element: guardAny(['loan_laptops', 'loan_laptop_approval'], 'view', <ServeLoanRecordPage />) },
       { path: '/carret/serve/settings', element: guardAny(['support_settings', 'support_tickets'], 'view', <ServeSettingsPage />) },
       { path: '/carret/serve/technician-bucket', element: guardAny(['technician_bucket', 'support_tickets'], 'view', <ServeTechBucketPage />) },
       { path: '/carret/money/support-charges', element: guard('customer_billing', 'view', <SupportChargesToBillPage />) },

@@ -18,6 +18,7 @@ import ServiceChargesPanel from './ServiceChargesPanel';
 import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
 import TicketReturnDcsPanel from './TicketReturnDcsPanel';
+import TicketLoanPanel from './loan/TicketLoanPanel';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -187,6 +188,7 @@ export default function TicketRecordPage() {
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
         </Section>
         <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
+        <TicketLoanPanel ticketId={tk.id} refreshKey={items.map((i) => `${i.id}:${i.status}`).join(',')} />
         <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
         <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
         <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
