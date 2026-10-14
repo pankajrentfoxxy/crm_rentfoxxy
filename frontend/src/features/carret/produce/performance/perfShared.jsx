@@ -17,6 +17,14 @@ export const fetchPerformance = (params) => api.get('/technician-performance', {
 export const fetchTechnician = (userId, params) => api.get(`/technician-performance/technician/${userId}`, { params });
 export const fetchTargets = () => api.get('/technician-performance/targets');
 export const saveTargets = (body) => api.put('/technician-performance/targets', body);
+// QC inspectors (migration 423).
+export const fetchQcPerformance = (params) => api.get('/qc-performance', { params });
+export const fetchQcInspector = (userId, params) => api.get(`/qc-performance/inspector/${userId}`, { params });
+export const fetchQcTargets = () => api.get('/qc-performance/targets');
+export const saveQcTargets = (body) => api.put('/qc-performance/targets', body);
+
+/** "Target 25/day", "(own)", or "No target" for someone outside the job's roles. */
+export const targetText = (p) => (p.daily_target ? `Target ${p.daily_target}/day${p.own_target ? ' (own)' : ''}` : 'No target');
 
 export const COLOUR = {
   passed: 'var(--alert-good)',

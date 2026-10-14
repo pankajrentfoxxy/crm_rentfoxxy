@@ -3,15 +3,23 @@ import toast from 'react-hot-toast';
 import {
   Button, DataTable, Drawer, EmptyState, Field, Input, Notice,
 } from '../../../../components/carret';
-import { fetchTargets, saveTargets } from './perfShared';
+import { fetchTargets as fetchTechTargets, saveTargets as saveTechTargets } from './perfShared';
 
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'Could not save';
 
 /**
- * Daily targets: one default for every technician, and an optional own target
- * for anyone (a trainee, a senior). Empty = follow the default.
+ * Daily targets: one default for the job's role, and an optional own target
+ * for anyone (a trainee, a senior, a floor manager who often steps in).
+ * Empty = follow the default. Used for technicians and QC inspectors
+ * (`fetch` / `save` / `unitText` decide which).
  */
-export default function TargetsDrawer({ open, technicians = [], onClose, onSaved }) {
+export default function TargetsDrawer({
+  open, technicians = [], onClose, onSaved,
+  fetch: fetchTargets = fetchTechTargets, save: saveTargets = saveTechTargets,
+  title = 'Daily targets',
+  unitText = 'Laptops each technician should finish (Final Testing done) per working day, Monday to Saturday.',
+  defaultHint = 'Applies to floor technicians. Anyone else has a target only if you set one below.',
+}) {
   const [def, setDef] = useState('');
   const [own, setOwn] = useState({});
   const [meta, setMeta] = useState(null);
@@ -25,7 +33,7 @@ export default function TargetsDrawer({ open, technicians = [], onClose, onSaved
       setOwn(Object.fromEntries((d.per_technician || []).map((r) => [r.user_id, String(r.daily_target)])));
       setMeta(d);
     }).catch((e) => toast.error(errMsg(e)));
-  }, [open]);
+  }, [open, fetchTargets]);
 
   const save = async () => {
     setBusy(true);
@@ -53,16 +61,15 @@ export default function TargetsDrawer({ open, technicians = [], onClose, onSaved
     <Drawer
       open={open}
       onClose={onClose}
-      title="Daily targets"
+      title={title}
       width="34rem"
       footer={<Button variant="primary" disabled={busy || invalid} onClick={save}>{busy ? 'Saving…' : 'Save targets'}</Button>}
     >
       <div className="c-stack">
         <p style={{ margin: 0 }}>
-          Laptops each technician should finish (Final Testing done) per working day, Monday to Saturday.
-          A week or month target is this × the working days so far.
+          {unitText} A week or month target is this × the working days so far.
         </p>
-        <Field label="Default daily target" required hint={meta?.updated_by ? `Last set by ${meta.updated_by}` : undefined}>
+        <Field label="Default daily target" required hint={[defaultHint, meta?.updated_by ? `Last set by ${meta.updated_by}.` : null].filter(Boolean).join(' ')}>
           <Input type="number" min="0" max="200" value={def} onChange={(e) => setDef(e.target.value)} style={{ maxWidth: '8rem' }} />
         </Field>
         <Notice tone="info" title="Own targets">Leave empty to follow the default.</Notice>
@@ -71,7 +78,7 @@ export default function TargetsDrawer({ open, technicians = [], onClose, onSaved
             rows={technicians}
             rowKey={(t) => t.user_id}
             columns={[
-              { key: 'n', header: 'Technician', render: (t) => t.name, sub: (t) => t.role },
+              { key: 'n', header: 'Person', render: (t) => t.name, sub: (t) => t.role },
               {
                 key: 't',
                 header: 'Own daily target',

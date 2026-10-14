@@ -53,7 +53,7 @@ export const SECTIONS = [
       { group: 'Production', to: '/carret/produce/floor', label: 'Floor', match: ['/carret/produce/tickets'], sections: ['floor_pipeline', 'floor_tickets'], section: 'floor_pipeline', action: 'view' },
       { group: 'Production', to: '/carret/produce/parts-desk', label: 'Parts Desk', sections: ['parts_approval', 'parts_inventory'], section: 'parts_approval', action: 'view' },
       { group: 'Production', to: '/carret/produce/into-stock', label: 'Into Stock', section: 'pending_inventory', action: 'view' },
-      { group: 'Production', to: '/carret/produce/performance', label: 'Technician Performance', section: 'technician_performance', action: 'view' },
+      { group: 'Production', to: '/carret/produce/performance', label: 'Floor Performance', sections: ['technician_performance', 'qc_performance'], section: 'technician_performance', action: 'view' },
       { group: 'Production', to: '/carret/produce/parts', label: 'Parts Catalogue', section: 'parts_inventory', action: 'view' },
       { group: 'Production', to: '/carret/stock/part-repairs', label: 'Part Repairs', sections: ['part_vendor_repair', 'parts_procurement', 'parts_inventory', 'inventory_management'], section: 'part_vendor_repair', action: 'view' },
     ],

@@ -30,6 +30,8 @@
 const pool = require('../config/db');
 
 const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
+/** Roles the default daily target applies to (others need their own). */
+const TECHNICIAN_ROLES = new Set(['team_member', 'team_lead', 'technician']);
 const DIAGNOSIS_DONE_ACTIONS = [
   'Diagnosis Completed', 'Sent to Chip Level Repair', 'Sent to Body & Paint',
   'Entered Assembly & Software', 'Entered Chip Level Repair', 'Entered Body & Paint',
@@ -151,16 +153,18 @@ async function loadStageCounts(db, { from, to }) {
   return new Map(rows.filter((r) => r.tech_id).map((r) => [Number(r.tech_id), r]));
 }
 
-/** Default + per-technician daily targets. */
-async function loadTargets(db) {
+/** Default + per-person daily targets. kind: 'technician' | 'qc' (migration 423). */
+async function loadTargets(db, kind = 'technician') {
   const { rows } = await db.query(
     `SELECT tt.user_id, tt.daily_target, tt.updated_at, u.name AS updated_by_name
        FROM technician_performance_targets tt
-       LEFT JOIN users u ON u.user_id = tt.updated_by`
+       LEFT JOIN users u ON u.user_id = tt.updated_by
+      WHERE COALESCE(tt.kind, 'technician') = $1`,
+    [kind]
   );
   const def = rows.find((r) => r.user_id == null);
   return {
-    default: def ? Number(def.daily_target) : 10,
+    default: def ? Number(def.daily_target) : (kind === 'qc' ? 25 : 10),
     default_updated_at: def?.updated_at || null,
     default_updated_by: def?.updated_by_name || null,
     byUser: new Map(rows.filter((r) => r.user_id != null).map((r) => [Number(r.user_id), Number(r.daily_target)])),
@@ -222,7 +226,10 @@ async function summary(db = pool, { from: fromRaw, to: toRaw } = {}) {
   const technicians = people.map((p) => {
     const mine = jobs.filter((j) => Number(j.tech_id) === Number(p.user_id));
     const t = tally(mine);
-    const daily = targets.byUser.has(Number(p.user_id)) ? targets.byUser.get(Number(p.user_id)) : targets.default;
+    // The default target is for floor technicians; anyone else credited with
+    // a job (a floor manager who took one over) has none unless given their own.
+    const daily = targets.byUser.has(Number(p.user_id)) ? targets.byUser.get(Number(p.user_id))
+      : (TECHNICIAN_ROLES.has(p.role) ? targets.default : 0);
     const target = daily * range.workingDays;
     const sc = stageCounts.get(Number(p.user_id)) || {};
     return {
@@ -264,7 +271,7 @@ async function summary(db = pool, { from: fromRaw, to: toRaw } = {}) {
       job: 'A laptop whose Final Testing was finished (Diagnosis → Assembly → Final Testing done).',
       correct: 'Jobs minus those that then failed QC1, QC2 or Dispatch QC.',
       rework: 'A second Final Testing on the same laptop after a failure — shown, not counted toward the target.',
-      target: 'Daily target × working days (Mon–Sat) in the period, up to today. The team target adds up the technicians who worked in the period.',
+      target: 'Daily target × working days (Mon–Sat) in the period, up to today. The default target applies to floor technicians; anyone else has one only if a manager sets it. The team target adds up the technicians who worked in the period.',
     },
     default_daily_target: targets.default,
     team: {
@@ -272,6 +279,7 @@ async function summary(db = pool, { from: fromRaw, to: toRaw } = {}) {
       target: teamTarget,
       daily_target: worked.reduce((s, x) => s + x.daily_target, 0),
       technicians: worked.length,
+      with_target: worked.filter((x) => x.target > 0).length,
       eligible: worked.filter((x) => x.eligible).length,
       above: worked.filter((x) => x.standing.key === 'above').length,
     },
@@ -287,7 +295,7 @@ async function technicianDetail(db = pool, { userId, from: fromRaw, to: toRaw })
   const user = (await db.query('SELECT user_id, name, role FROM users WHERE user_id = $1', [uid])).rows[0];
   if (!user) throw new PerformanceError('Technician not found', 404);
   const [jobs, targets] = await Promise.all([loadJobs(db, { ...range, techId: uid }), loadTargets(db)]);
-  const daily = targets.byUser.has(uid) ? targets.byUser.get(uid) : targets.default;
+  const daily = targets.byUser.has(uid) ? targets.byUser.get(uid) : (TECHNICIAN_ROLES.has(user.role) ? targets.default : 0);
   const days = daysBetween(range.from, range.to).map((day) => ({
     day,
     working: isWorkingDay(day),
@@ -317,11 +325,14 @@ async function technicianDetail(db = pool, { userId, from: fromRaw, to: toRaw })
   };
 }
 
-async function getTargets(db = pool) {
-  const t = await loadTargets(db);
+async function getTargets(db = pool, kind = 'technician') {
+  const t = await loadTargets(db, kind);
   const { rows } = await db.query(
     `SELECT tt.user_id, u.name, tt.daily_target FROM technician_performance_targets tt
-       JOIN users u ON u.user_id = tt.user_id ORDER BY u.name`
+       JOIN users u ON u.user_id = tt.user_id
+      WHERE COALESCE(tt.kind, 'technician') = $1
+      ORDER BY u.name`,
+    [kind]
   );
   return { default_daily_target: t.default, updated_at: t.default_updated_at, updated_by: t.default_updated_by, per_technician: rows };
 }
@@ -330,7 +341,7 @@ async function getTargets(db = pool) {
  * body: { default_daily_target?, per_technician?: [{ user_id, daily_target|null }] }
  * null removes a technician's own target (they follow the default again).
  */
-async function saveTargets(db, body = {}, actorId = null) {
+async function saveTargets(db, body = {}, actorId = null, kind = 'technician') {
   const num = (v, label) => {
     const n = Number(v);
     if (!Number.isInteger(n) || n < 0 || n > 200) throw new PerformanceError(`${label} must be a whole number from 0 to 200`);
@@ -339,32 +350,34 @@ async function saveTargets(db, body = {}, actorId = null) {
   if (body.default_daily_target !== undefined) {
     const n = num(body.default_daily_target, 'The default daily target');
     await db.query(
-      `INSERT INTO technician_performance_targets (user_id, daily_target, updated_by, updated_at)
-       VALUES (NULL, $1, $2, NOW())
-       ON CONFLICT ((COALESCE(user_id, 0))) DO UPDATE SET daily_target = EXCLUDED.daily_target, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-      [n, actorId]
+      `INSERT INTO technician_performance_targets (kind, user_id, daily_target, updated_by, updated_at)
+       VALUES ($3, NULL, $1, $2, NOW())
+       ON CONFLICT (kind, (COALESCE(user_id, 0))) DO UPDATE SET daily_target = EXCLUDED.daily_target, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [n, actorId, kind]
     );
   }
   for (const row of Array.isArray(body.per_technician) ? body.per_technician : []) {
     const uid = Number(row.user_id);
     if (!uid) continue;
     if (row.daily_target === null || row.daily_target === '') {
-      await db.query('DELETE FROM technician_performance_targets WHERE user_id = $1', [uid]);
+      await db.query('DELETE FROM technician_performance_targets WHERE user_id = $1 AND COALESCE(kind, \'technician\') = $2', [uid, kind]);
     } else {
       const n = num(row.daily_target, 'A daily target');
       await db.query(
-        `INSERT INTO technician_performance_targets (user_id, daily_target, updated_by, updated_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT ((COALESCE(user_id, 0))) DO UPDATE SET daily_target = EXCLUDED.daily_target, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-        [uid, n, actorId]
+        `INSERT INTO technician_performance_targets (kind, user_id, daily_target, updated_by, updated_at)
+         VALUES ($4, $1, $2, $3, NOW())
+         ON CONFLICT (kind, (COALESCE(user_id, 0))) DO UPDATE SET daily_target = EXCLUDED.daily_target, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+        [uid, n, actorId, kind]
       );
     }
   }
-  return getTargets(db);
+  return getTargets(db, kind);
 }
 
 module.exports = {
   PerformanceError, summary, technicianDetail, getTargets, saveTargets,
   // exported for tests
   normaliseRange, tally, standing, isWorkingDay,
+  // shared with qcPerformanceService
+  loadTargets, daysBetween,
 };

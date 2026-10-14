@@ -251,7 +251,7 @@ export const carretRoutes = CARRET_ENABLED
       // chip-level or QC users who could open the old one.
       { path: '/carret/produce/tickets/:ticketId', element: guardAny(FLOOR_TICKETS_BASE_SECTIONS, 'view', <FloorTicketPage />) },
       // Technician performance (migration 415): managers / floor managers.
-      { path: '/carret/produce/performance', element: guard('technician_performance', 'view', <TechnicianPerformancePage />) },
+      { path: '/carret/produce/performance', element: guardAny(['technician_performance', 'qc_performance'], 'view', <TechnicianPerformancePage />) },
       { path: '/carret/produce/parts-desk', element: guardAny(['parts_approval', 'parts_inventory'], 'view', <PartsDeskPage />) },
       { path: '/carret/produce/into-stock', element: guard('pending_inventory', 'view', <IntoStockPage />) },
       { path: '/carret/produce/parts', element: guard('parts_inventory', 'view', <PartsListPage />) },

@@ -59,7 +59,8 @@ export const floorPipelineAccordionChildren = [
   { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'diagnosis_failed', countKey: 'diagnosis_failed' },
   { label: 'QC Ready', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
   // New-UI page (15 Oct 2026); opens in the new layout.
-  { label: 'Technician Performance', path: '/carret/produce/performance', section: 'technician_performance' },
+  { label: 'Floor Performance', path: '/carret/produce/performance', section: 'technician_performance' },
+  { label: 'QC Performance', path: '/carret/produce/performance?view=qc', section: 'qc_performance' },
 ];
 
 /** Inventory accordion — laptop stock only (parts live under Part Management). */
