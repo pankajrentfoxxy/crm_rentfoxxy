@@ -19,6 +19,7 @@ export default function QuotationListPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [prefill, setPrefill] = useState({});
   const [expanded, setExpanded] = useState(null);
+  const [copyQuote, setCopyQuote] = useState(null);
 
   useEffect(() => {
     if (location.state?.openForm) {
@@ -125,6 +126,9 @@ export default function QuotationListPage() {
                 <Link to="/sales-pipeline/sales-orders" state={{ fromQuote: row.quotation_number }} className="text-sm text-emerald-700 font-semibold">Create SO</Link>
               )}
               <button type="button" className="text-sm text-gray-600 font-semibold" onClick={() => onResend(row)}>Send Email</button>
+              <PermissionGate section="sales_quotations" action="create">
+                <button type="button" className="text-sm text-slate-700 font-semibold" onClick={() => setCopyQuote(row.quotation_number)}>Copy</button>
+              </PermissionGate>
             </div>
           </div>
         ))}
@@ -167,6 +171,9 @@ export default function QuotationListPage() {
                       <Link to="/sales-pipeline/sales-orders" state={{ fromQuote: row.quotation_number }} className="text-xs text-emerald-700">Create SO</Link>
                     )}
                     <button type="button" className="text-xs text-gray-600" onClick={() => onResend(row)}>Send Email</button>
+                    <PermissionGate section="sales_quotations" action="create">
+                      <button type="button" className="text-xs text-slate-700" onClick={() => setCopyQuote(row.quotation_number)}>Copy</button>
+                    </PermissionGate>
                   </td>
                 </tr>
                 {expanded === row.quotation_number && row.lines?.length > 0 && (
@@ -186,6 +193,15 @@ export default function QuotationListPage() {
         onClose={() => { setFormOpen(false); setPrefill({}); }}
         onSaved={load}
       />
+      {copyQuote && (
+        <QuotationForm
+          key={copyQuote}
+          open
+          copyFromQuotationNumber={copyQuote}
+          onClose={() => setCopyQuote(null)}
+          onSaved={load}
+        />
+      )}
     </div>
   );
 }

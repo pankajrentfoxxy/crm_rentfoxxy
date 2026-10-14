@@ -6,7 +6,7 @@ import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-manag
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
 import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
-  createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, sendQuotationEmail,
+  createQuotation, getCustomerAddresses, getCustomerDetail, getQuotation, getQuotationMeta, sendQuotationEmail,
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatDate, formatConfig, lineTotal, typeLabel, countLaptops,
@@ -56,11 +56,46 @@ function buildBillingAddress(customer) {
   };
 }
 
+function parseAddress(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function linesFromQuotation(quoteLines) {
+  return (quoteLines || []).map((l) => ({
+    brand: l.brand || '',
+    model_name: l.model_name || l.model || '',
+    processor: l.processor || '',
+    generation: l.generation || '',
+    ram: l.ram || '',
+    storage: l.storage || '',
+    gpu: l.gpu || '',
+    screen_size: l.screen_size || '',
+    quantity: l.quantity || l.main_quantity || 1,
+    rate: l.rate || '',
+    locking_period: l.locking_period || '',
+    technical_warranty: l.technical_warranty || '',
+    battery_charger_warranty: l.battery_charger_warranty || '',
+    remark: l.remark || '',
+  }));
+}
+
+const sameAddress = (a, b) => Boolean(a && b)
+  && String(a.address || '').trim() === String(b.address || '').trim()
+  && String(a.zip_code || '').trim() === String(b.zip_code || '').trim();
+
 const emptyManualShipping = () => ({
   name: '', phone: '', country: 'India', state: '', city: '', zip_code: '', address: '',
 });
 
-export default function QuotationForm({ open, onClose, onSaved, initialCustomerId, prefill = {} }) {
+export default function QuotationForm({
+  open, onClose, onSaved, initialCustomerId, prefill = {}, copyFromQuotationNumber,
+}) {
+  // Copy: a new quotation pre-filled from an existing one. It saves through the
+  // normal create path, so the EST number is allocated server-side; the source
+  // quotation is only read, and its lead link and status are not carried over.
+  const isCopy = Boolean(copyFromQuotationNumber);
   const [meta, setMeta] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [customerDetail, setCustomerDetail] = useState(null);
@@ -93,6 +128,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   }, [open, initialCustomerId]);
 
   const loadCustomerDetail = async (customerId) => {
+    let loadedOptions = null;
     if (!customerId) {
       setCustomerDetail(null);
       setBillingAddress(null);
@@ -158,6 +194,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       setCustomerDetail(customer);
       setBillingAddress(billing);
       setShippingOptions(options);
+      loadedOptions = options;
       setSelectedShippingValue('billing');
       setManualShipping({
         name: customer.name || customer.customer_name || '',
@@ -171,6 +208,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     } catch {
       toast.error('Failed to load customer addresses');
     }
+    return loadedOptions;
   };
 
   const onCustomerChange = async (customerId) => {
@@ -250,6 +288,57 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.customer_id, customers.length]);
+
+  useEffect(() => {
+    if (!open || !copyFromQuotationNumber || !customers.length) return;
+    let cancelled = false;
+    getQuotation(copyFromQuotationNumber).then(async (res) => {
+      if (cancelled) return;
+      const quoteLines = res.data?.lines || [];
+      const head = quoteLines[0] || {};
+      const quotationType = head.quotation_type || 'rental';
+      const security = Number(head.security_amount) || 0;
+      const lineFormLines = linesFromQuotation(quoteLines);
+      const total = sumLines(lineFormLines);
+      setLines(lineFormLines.length ? lineFormLines : [emptyLineItem()]);
+      setForm((f) => ({
+        ...f,
+        customer_id: head.customer_id ? String(head.customer_id) : '',
+        quotation_type: quotationType,
+        branch: branchForQuotationType(quotationType),
+        supply_state: head.supply_state || f.supply_state,
+        contact_name: head.contact_name || head.customer_name || '',
+        company_name: head.company_name || head.customer_name || '',
+        customer_name: head.company_name || head.customer_name || '',
+        email: head.customer_email || '',
+        customer_mobile: head.customer_mobile || '',
+        GST_number: head.gst_number || '',
+        // One month's rent was stored as an amount; keep that choice when it still matches.
+        security_type: security > 0 && Math.abs(security - total) < 0.01 ? 'one_month_rental' : 'none',
+        security_amount: security > 0 && Math.abs(security - total) >= 0.01 ? String(security) : '',
+        shiping_charges: Number(head.shiping_charges) ? String(head.shiping_charges) : '',
+        source_lead_id: '',
+      }));
+      setSendEmail(head.customer_email || '');
+
+      // Billing comes from the customer's current record; the shipping address
+      // panel only exists for a linked customer, so a lead-only copy has none.
+      const shipping = parseAddress(head.customer_shipping_address);
+      if (head.customer_id) {
+        const options = await loadCustomerDetail(String(head.customer_id));
+        if (cancelled || !shipping) return;
+        const match = (options || []).find((o) => o.value !== 'manual' && sameAddress(o.address, shipping));
+        if (match) {
+          setSelectedShippingValue(match.value);
+        } else {
+          setManualShipping({ ...emptyManualShipping(), ...shipping });
+          setSelectedShippingValue('manual');
+        }
+      }
+    }).catch(() => toast.error('Failed to load quotation'));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, copyFromQuotationNumber, customers.length]);
 
   const onTypeChange = (quotationType) => {
     setForm((prev) => {
@@ -353,10 +442,16 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <aside className="relative w-full max-w-[600px] bg-white shadow-xl flex flex-col max-h-full overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 className="font-semibold text-gray-900">Create Quotation</h2>
+          <h2 className="font-semibold text-gray-900">{isCopy ? 'Copy Quotation' : 'Create Quotation'}</h2>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {isCopy && (
+            <p className="text-xs text-gray-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Copied from <span className="font-mono font-semibold">{copyFromQuotationNumber}</span>.
+              A new quotation number is assigned on save; review the customer, items and validity before sending.
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2">
               <label className="text-xs font-medium text-gray-600">Existing customer (optional)</label>
