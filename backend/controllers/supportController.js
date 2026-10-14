@@ -3995,7 +3995,9 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
             // so the transit days went unbilled. Extend to the warehouse receipt
             // date. Only ever moves the date forward, so re-running is safe and a
             // receipt that predates the stamped end never shortens billing.
-            await client.query(
+            // A loan laptop (on_loan before this receipt) was never on rent,
+            // so it gets no rent end at all (services/loanLaptopService).
+            if (vsn.inventory_status !== 'on_loan') await client.query(
                 `UPDATE vendor_serial_numbers vsn
                     SET rent_end_date = sub.recv, updated_at = NOW()
                    FROM (
