@@ -132,7 +132,11 @@ async function runGatePreflight(db, {
   const state = checkChallanState(head);
   if (state) failures.push(state);
 
-  const qc = await checkDispatchQc(db, dcNumber);
+  // A Loan DC (services/loanLaptopService) carries one laptop picked only from
+  // QC-passed stock, and is created with pre_dispatch_qc_passed = TRUE; it has
+  // no Sales Order, so no Dispatch QC record is ever raised for it.
+  const isLoanDc = String(head?.dc_purpose || '') === 'loan';
+  const qc = isLoanDc ? null : await checkDispatchQc(db, dcNumber);
   if (qc) failures.push(qc);
 
   const eway = await checkEwayBill(db, head);

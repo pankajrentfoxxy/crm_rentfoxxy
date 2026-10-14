@@ -15,6 +15,7 @@ import { dispatchRoutes } from './dispatchRoutes';
 import { guardRoutes } from './guardRoutes';
 import { carretRoutes } from './carretRoutes';
 import { whatsappCampaignRoutes } from './whatsappCampaignRoutes';
+import { loanLaptopRoutes } from './loanLaptopRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -22,6 +23,7 @@ export const appRoutes = [
   ...dispatchRoutes,
   ...guardRoutes,
   ...supportRoutes,
+  ...loanLaptopRoutes,
   ...warehouseRoutes,
   ...teamRoutes,
   ...settingsRoutes,

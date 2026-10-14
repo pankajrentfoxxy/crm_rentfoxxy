@@ -47,6 +47,16 @@ async function fetchDeploymentGaps(db, { customerId = null } = {}) {
     customerFilter = ` AND dcl.customer_id = $${params.length}`;
   }
 
+  // A Loan DC is not a rental delivery: re-"delivering" its laptop would make
+  // a free loan rented. Only a converted loan (customer kept it) counts, as its
+  // Loan DC is then the laptop's rental document.
+  const { loanSchemaReady } = require('./loanSchema');
+  const loanFilter = (await loanSchemaReady(db))
+    ? `AND (COALESCE(dcl.dc_purpose, 'standard') <> 'loan'
+            OR EXISTS (SELECT 1 FROM support_loan_requests lr
+                        WHERE lr.loan_dc_number = dcl.dc_number AND lr.status = 'converted'))`
+    : `AND COALESCE(dcl.dc_purpose, 'standard') <> 'loan'`;
+
   const { rows } = await db.query(
     `WITH outbound AS (
        SELECT
@@ -63,6 +73,7 @@ async function fetchDeploymentGaps(db, { customerId = null } = {}) {
        ${DC_SERIAL_ELEMENTS_SQL}
        WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
          AND dcl.status = 'delivered'
+         ${loanFilter}
          ${customerFilter}
      ),
      latest_outbound AS (

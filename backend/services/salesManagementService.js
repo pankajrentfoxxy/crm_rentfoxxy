@@ -375,6 +375,8 @@ const FY_DOC_TYPES = {
   sales_order: { docType: 'so_rentfoxxy', prefix: 'SO', table: 'sales_order_lines', column: 'sales_order_number' },
   delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
   service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  loan_dc: { docType: 'loan_dc', prefix: 'LDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  loan_request: { docType: 'loan_request', prefix: 'LNR', table: 'support_loan_requests', column: 'request_number' },
   part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_return_dc: { docType: 'part_rpdc_rentfoxxy', prefix: 'RPDC', table: 'delivery_challan_lines', column: 'dc_number' },
   vendor_return_ticket: { docType: 'vendor_return_ticket', prefix: 'VRT', table: 'vendor_return_tickets', column: 'ticket_number' },

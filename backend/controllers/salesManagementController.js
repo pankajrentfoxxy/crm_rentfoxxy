@@ -264,6 +264,10 @@ async function regenerateDcPdfForNumber(dcNumber) {
     const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
     return regenerateServiceDcPdfByNumber(pool, dcNumber);
   }
+  if (String(lines[0]?.dc_purpose || '').toLowerCase() === 'loan') {
+    const { regenerateLoanDcPdf } = require('../services/loanDcPdfService');
+    return regenerateLoanDcPdf(pool, dcNumber);
+  }
 
   const pdfPath = await generateDocumentPdf({
     docType: 'delivery_challan',
@@ -6214,6 +6218,12 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}, opts = 
     return { service_dc: true, ...serviceDcEarly };
   }
 
+  // Loan DC: the laptop goes on_loan, never rented — no rent starts on delivery.
+  const loanEarly = await require('../services/loanLaptopService').onLoanDcDelivered(client, dcNumber, actor);
+  if (loanEarly.handled) {
+    return { loan_dc: true, ...loanEarly };
+  }
+
   const ctx = await getDcContext(client, dcNumber);
   const quotationType = ctx.quotation_type || 'rental';
   const targetStatus = inventorySM.deliveredStatusForType(quotationType);
@@ -6521,15 +6531,17 @@ async function performDcDelivery(client, {
 }) {
   // FOR UPDATE so two clicks serialise: without it a double-click re-ran the
   // whole routine, re-stamping delivered_at and potentially invoicing twice.
+  // Postgres rejects FOR UPDATE with DISTINCT, so lock every line and
+  // de-duplicate the statuses here.
   const dcState = await client.query(
-    `SELECT DISTINCT LOWER(COALESCE(status, '')) AS status
+    `SELECT LOWER(COALESCE(status, '')) AS status
        FROM delivery_challan_lines WHERE dc_number = $1 FOR UPDATE`,
     [dcNumber]
   );
   if (!dcState.rows.length) {
     return { ok: false, statusCode: 404, message: 'Delivery challan not found' };
   }
-  const states = dcState.rows.map((r) => r.status);
+  const states = [...new Set(dcState.rows.map((r) => r.status))];
   if (states.includes('cancelled')) {
     return {
       ok: false,

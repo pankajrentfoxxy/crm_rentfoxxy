@@ -169,6 +169,7 @@ app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
+app.use('/api/loan-laptops', require('./routes/loanLaptops'));
 app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/early-returns', require('./routes/earlyReturns'));
 app.use('/api/service-billing', require('./routes/serviceBilling'));

@@ -254,6 +254,8 @@ function classifyDocumentNumber(raw) {
   if (/^(G?DC)[\/-]/i.test(n) || /^G?DC-\d/i.test(n)) {
     return { docType: 'dc', docNumber: original };
   }
+  // Loan DC (LDC/26-27/0001) moves through the gate as an outbound DC.
+  if (/^LDC\//i.test(n)) return { docType: 'dc', docNumber: original };
   return null;
 }
 
@@ -533,6 +535,9 @@ async function loadOutboundDc(db, dcNumber) {
   } else if (purpose === 'service_return') {
     source_type = 'service_return';
     source_label = 'Service Return';
+  } else if (purpose === 'loan') {
+    source_type = 'loan';
+    source_label = 'Loan Laptop';
   }
 
   const sos = await db.query(
@@ -2550,7 +2555,7 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   if (!dcNumber) return null;
 
   const head = await db.query(
-    `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number,
+    `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode, dcl.sales_order_number, dcl.dc_purpose,
             -- Part 3.2: the fields the gate pre-flight checks. The gate could
             -- not refuse anything before because it never asked for them.
             dcl.status, dcl.awb_number, dcl.porter_tracking_id, dcl.eway_required, dcl.eway_bill_number,
@@ -2564,6 +2569,7 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     [dcNumber]
   );
   const ctx = head.rows[0] || {};
+  const isLoanDc = String(ctx.dc_purpose || '') === 'loan';
 
   // Part 3.2 / DC1 / Decision 4 — the gate is now a gate.
   //
@@ -2609,7 +2615,8 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
 
   for (const row of rows) {
     if (!row.serial_id) continue;
-    const rentMonthlyRate = await resolveSerialRentRate(db, row.serial_id, dcNumber);
+    // A loan laptop carries no rental rate onto its challan (it is not billed).
+    const rentMonthlyRate = isLoanDc ? null : await resolveSerialRentRate(db, row.serial_id, dcNumber);
     // Part 2.2, bypass-register A. The catch logged and then forced the write
     // anyway, which meant the gate could put a unit in_transit from any state
     // at all — including one already delivered to someone else.
@@ -2652,11 +2659,18 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
     } catch (_) { /* table may not exist */ }
   }
 
+  if (isLoanDc) {
+    await require('./loanLaptopService').onLoanDcDispatched(db, dcNumber, {
+      user_id: actor.userId, name: actor.name,
+    });
+  }
+
   return {
     dcNumber,
     salesOrderNumber: ctx.sales_order_number || null,
     customerId: ctx.customer_id || null,
-    quotationType: ctx.quotation_type || null,
+    // 'loan' keeps the caller's first-rental-invoice step from firing.
+    quotationType: isLoanDc ? 'loan' : (ctx.quotation_type || null),
   };
 }
 

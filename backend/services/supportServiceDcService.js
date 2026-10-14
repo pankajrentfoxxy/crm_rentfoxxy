@@ -1224,4 +1224,9 @@ module.exports = {
   onServiceDcDelivered,
   tryCloseServiceDcTicket,
   listEligibleItems,
+  // Shared with the Loan DC (services/loanLaptopService).
+  normalizeDispatch,
+  resolveBillingIdentity,
+  resolveSerialForPickupItem,
+  findOpenFloorTicket,
 };

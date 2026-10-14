@@ -33,6 +33,7 @@ const {
   recordSecurityDeposits,
 } = require('./billingSecurityService');
 const { loadZohoBillingAcks } = require('./billingZohoService');
+const { loanSchemaReady, isLoanSchemaKnownReady } = require('./loanSchema');
 
 const billingLog = logger.child ? logger.child({ module: 'billing' }) : logger;
 
@@ -272,16 +273,32 @@ async function runBillingBatch(runName, fn) {
  * So does a repair whose ticket was closed without a Service DC: support can no
  * longer send that laptop back on the ticket (a new SO is needed), so it is not
  * coming back to this rental (rule 2026-09-30).
+ *
+ * Except when the repair ended with the customer keeping their loan laptop
+ * (services/loanLaptopService approveConversion): the ticket closes without a
+ * Service DC, but the original's rent runs to the Accounts-approved end date
+ * stored on it (rent_end_date), not to its warehouse receipt weeks earlier.
+ * Built per call because the loan table only exists once migration 262 ran.
  */
-const REPAIR_CLOSED_WITHOUT_SDC_SQL = `(
+function repairClosedWithoutSdcSql() {
+  const loanConverted = isLoanSchemaKnownReady()
+    ? `AND NOT EXISTS (
+      SELECT 1 FROM support_loan_requests lr
+       WHERE lr.pickup_item_id = sti.id AND lr.status = 'converted'
+    )`
+    : '';
+  return `(
   sti.service_dc_number IS NULL
   AND (
     sti.status = 'closed'
     OR EXISTS (SELECT 1 FROM support_tickets st WHERE st.id = sti.ticket_id AND st.status = 'closed')
   )
+  ${loanConverted}
 )`;
+}
 
-const REPAIR_HOLD_PICKUP_SQL = `(
+function repairHoldPickupSql() {
+  return `(
   COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
   AND NOT EXISTS (
     SELECT 1 FROM support_replacement_orders ro
@@ -290,13 +307,28 @@ const REPAIR_HOLD_PICKUP_SQL = `(
             OR ro.old_machine_serial IN (sti.ttspl_id, sti.unique_serial_number))
        AND ro.created_at >= sti.created_at - INTERVAL '7 days'
   )
-  AND NOT ${REPAIR_CLOSED_WITHOUT_SDC_SQL}
+  AND NOT ${repairClosedWithoutSdcSql()}
 )`;
+}
+
+/** Loan DCs never start rent (services/loanLaptopService). */
+const NOT_LOAN_DC_SQL = (alias) => `COALESCE(${alias}.dc_purpose, 'standard') <> 'loan'`;
+
+async function isLoanDcNumber(db, dcNumber) {
+  if (!dcNumber) return false;
+  if (/^LDC\//i.test(String(dcNumber).trim())) return true;
+  const r = await db.query(
+    `SELECT 1 FROM delivery_challan_lines WHERE dc_number = $1 AND dc_purpose = 'loan' LIMIT 1`,
+    [dcNumber]
+  );
+  return r.rows.length > 0;
+}
 
 async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
   const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
   const bySerial = new Map();
   if (!customerId || !ids.length) return bySerial;
+  await loanSchemaReady(client);
   const { rows } = await client.query(
     `SELECT DISTINCT ON (vsn.serial_id)
             vsn.serial_id,
@@ -305,7 +337,7 @@ async function loadCustomerWarehouseReturnDates(client, customerId, serialIds) {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
-        AND NOT ${REPAIR_HOLD_PICKUP_SQL}
+        AND NOT ${repairHoldPickupSql()}
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -483,6 +515,7 @@ const DC_SERIAL_ELEM_SQL = `
 async function buildCompletedOccupancyLines(client, {
   customerId, month, year, includeCurrentMonthStarts = false, pendingLines = [],
 }) {
+  await loanSchemaReady(client);
   const { prevStart, prevEnd } = previousMonthRange(month, year);
   const monthEnd = new Date(year, month, 0);
   const windowStart = prevStart;
@@ -500,6 +533,8 @@ async function buildCompletedOccupancyLines(client, {
           AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
           AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
           AND NULLIF(split_part(elem, '|', 3), '') <> ''
+          -- A loan stay (Loan DC -> loan return) is never charged.
+          AND ${NOT_LOAN_DC_SQL('dcl')}
      ),
      ret AS (
        SELECT UPPER(COALESCE(sti.ttspl_id, sti.unique_serial_number, '')) AS ttspl,
@@ -513,7 +548,7 @@ async function buildCompletedOccupancyLines(client, {
           AND COALESCE(rl.status, '') NOT IN ('cancelled')
         WHERE sti.item_type = 'pickup'
           AND sti.warehouse_received_at IS NOT NULL
-          AND NOT ${REPAIR_HOLD_PICKUP_SQL}
+          AND NOT ${repairHoldPickupSql()}
      ),
      occ AS (
        SELECT DISTINCT ON (o.ttspl, o.delivery_date)
@@ -851,6 +886,7 @@ async function buildCustomerInvoiceLines(client, {
   customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts = false,
   serialIds = [],
 }) {
+  await loanSchemaReady(client);
   // Deliveries in the invoice month wait for the NEXT month as catch-up
   // (sent 10 Aug or 1 Sep → next invoice bills that start span + the new month).
   // includeCurrentMonthStarts is only for rare same-month backfills.
@@ -901,9 +937,9 @@ async function buildCustomerInvoiceLines(client, {
        LEFT JOIN LATERAL (
          SELECT sti.id,
                 (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date AS recv,
-                ${REPAIR_HOLD_PICKUP_SQL} AS repair_hold,
+                ${repairHoldPickupSql()} AS repair_hold,
                 (COALESCE(sti.pickup_type, CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' END) = 'repair'
-                 AND ${REPAIR_CLOSED_WITHOUT_SDC_SQL}) AS repair_closed
+                 AND ${repairClosedWithoutSdcSql()}) AS repair_closed
            FROM support_ticket_items sti
           WHERE sti.item_type = 'pickup'
             AND COALESCE(sti.status, '') NOT IN ('cancelled')
@@ -1232,6 +1268,7 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
         AND COALESCE(dcl.status, '') NOT IN ('cancelled', 'rejected')
         AND dcl.delivered_at IS NOT NULL
         AND (dcl.delivered_at AT TIME ZONE 'Asia/Kolkata')::date <= $2::date
+        AND ${NOT_LOAN_DC_SQL('dcl')}
         AND (
           ${dcDeliveredUnitsSql('dcl')}::text ILIKE '%|' || vsn.inventory_asset_code || '%'
           OR ${dcDeliveredUnitsSql('dcl')}::text ILIKE vsn.serial_id::text || '|%'
@@ -1242,6 +1279,50 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
     [customerId, toLocalYmd(monthEnd)]
   );
 
+  // Loan laptops kept by this customer bill from the Accounts-approved
+  // effective date (their Loan DC is excluded above), and the original they
+  // replaced stops on the approved end date. Nothing else marks the original
+  // as gone: it only ever had a repair pickup, which is not a return here.
+  const loanStartBySerial = new Map();
+  const originalEndBySerial = new Map();
+  if (await loanSchemaReady(client)) {
+    const loans = await client.query(
+      `SELECT lr.loan_serial_id, lr.original_serial_id,
+              lr.conversion_effective_date::text AS effective_date,
+              lr.original_rent_end_date::text AS original_end,
+              vsn.serial_id,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+              vsn.serial_number,
+              vsn.current_dc_number AS dc_number,
+              vsn.inventory_status,
+              vsn.rent_monthly_rate,
+              COALESCE(vsn.rent_monthly_rate, lr.conversion_rent_monthly_rate) AS billed_rate,
+              COALESCE(vsn.extra->>'brand', '') AS brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
+              COALESCE(vsn.extra->>'processor', '') AS processor,
+              COALESCE(vsn.extra->>'generation', '') AS generation,
+              COALESCE(vsn.extra->>'ram', '') AS ram,
+              COALESCE(vsn.extra->>'storage', '') AS storage
+         FROM support_loan_requests lr
+         JOIN vendor_serial_numbers vsn ON vsn.serial_id = lr.loan_serial_id AND vsn.deleted_at IS NULL
+        WHERE lr.customer_id = $1
+          AND lr.status = 'converted'
+          AND lr.conversion_effective_date <= $2::date`,
+      [customerId, toLocalYmd(monthEnd)]
+    );
+    const present = new Set(serialsRes.rows.map((row) => Number(row.serial_id)));
+    for (const loan of loans.rows) {
+      loanStartBySerial.set(Number(loan.loan_serial_id), parseInvoiceLineDate(loan.effective_date));
+      if (loan.original_serial_id && loan.original_end) {
+        originalEndBySerial.set(Number(loan.original_serial_id), parseInvoiceLineDate(loan.original_end));
+      }
+      if (!present.has(Number(loan.serial_id))) {
+        serialsRes.rows.push(loan);
+        present.add(Number(loan.serial_id));
+      }
+    }
+  }
+
   const lineItems = [];
   let periodStart = null;
   let periodEnd = null;
@@ -1250,9 +1331,12 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
   const outboundDeliveryBySerial = await loadCustomerOutboundDeliveryDates(client, customerId, serialIds);
 
   for (const row of serialsRes.rows) {
-    const delivered = outboundDeliveryBySerial.get(Number(row.serial_id));
+    const delivered = loanStartBySerial.get(Number(row.serial_id))
+      || outboundDeliveryBySerial.get(Number(row.serial_id));
     if (!delivered || delivered > monthEnd) continue;
-    const returnedOn = warehouseReturnBySerial.get(Number(row.serial_id));
+    let returnedOn = warehouseReturnBySerial.get(Number(row.serial_id));
+    const originalEnd = originalEndBySerial.get(Number(row.serial_id));
+    if (originalEnd && (!returnedOn || originalEnd < returnedOn)) returnedOn = originalEnd;
     if (returnedOn && returnedOn < monthStart) continue;
 
     let billStart = delivered > monthStart ? delivered : new Date(monthStart);
@@ -2775,6 +2859,7 @@ async function createRepairWindowCreditNote(db, {
 async function createMissingReturnCreditNotes(client, {
   customerId, actorUserId = null, month = null, year = null,
 }) {
+  await loanSchemaReady(client);
   const params = [customerId];
   let returnWindowSql = '';
   if (month && year) {
@@ -2798,7 +2883,7 @@ async function createMissingReturnCreditNotes(client, {
        JOIN support_ticket_items sti
          ON sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
-        AND NOT ${REPAIR_HOLD_PICKUP_SQL}
+        AND NOT ${repairHoldPickupSql()}
         AND (
           sti.ttspl_id = vsn.inventory_asset_code
           OR sti.unique_serial_number = vsn.inventory_asset_code
@@ -2990,6 +3075,7 @@ async function consolidateAllPendingReturnCreditNotes() {
 }
 
 async function listCreditNoteEligibleCustomerIds(month, year) {
+  await loanSchemaReady(pool);
   const monthEnd = new Date(year, month, 0);
   const { prevStart } = previousMonthRange(month, year);
   const res = await pool.query(
@@ -3009,7 +3095,7 @@ async function listCreditNoteEligibleCustomerIds(month, year) {
              ON sti.return_dc_number = rl.dc_number
             AND sti.item_type = 'pickup'
             AND sti.warehouse_received_at IS NOT NULL
-            AND NOT ${REPAIR_HOLD_PICKUP_SQL}
+            AND NOT ${repairHoldPickupSql()}
           WHERE rl.movement_type = 'return'
             AND COALESCE(rl.status, '') NOT IN ('cancelled')
             AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
@@ -3696,6 +3782,11 @@ async function maybeInvoiceOnRentalDcCreate({
   }
   if (!customerId || !dcNumber) {
     return { skipped: true, reason: !customerId ? 'no customer' : 'no dc' };
+  }
+  // A loan laptop keeps a leftover rate from its last rental; the step below
+  // would stamp rent_start_date = today on it and start billing a free loan.
+  if (await isLoanDcNumber(pool, dcNumber)) {
+    return { skipped: true, reason: 'loan DC (not billed)' };
   }
 
   try {
@@ -4504,8 +4595,9 @@ module.exports = {
   collapseDuplicateRentalLines,
   collapseDuplicateCatchupOnDraft,
   ensureInvoiceSecurityLines,
-  // Exported for test/moneyLeaks.test.js: the BL3 postpaid guard is only
-  // observable from inside the builder — whether a line was pushed and whether
-  // the watermark UPDATE was issued.
+  // Line builders take the caller's client: tests run them in a rolled-back
+  // transaction to see what an invoice run would bill (test/moneyLeaks.test.js
+  // also checks the BL3 postpaid guard from inside the builder).
+  buildCustomerInvoiceLines,
   buildPostpaidInvoiceLines,
 };

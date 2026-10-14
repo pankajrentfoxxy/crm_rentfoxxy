@@ -10,6 +10,7 @@ const { STATUS } = require('./inventoryStateMachine');
 const SUPPORT_TICKET_ELIGIBLE_STATUSES = Object.freeze([
   STATUS.RENTED,
   STATUS.ON_DEMO,
+  STATUS.ON_LOAN, // loan laptop: its return pickup, or a fault while on loan
   STATUS.SOLD,
   'out_stock', // ERP legacy — treated as deployed rental
 ]);

@@ -66,7 +66,7 @@ function shapeAsset(r) {
 /* ------------------------------------------------------------------ list */
 
 const STATUS_FILTERS = new Set([
-  'in_stock', 'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold', 'returned',
+  'in_stock', 'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'on_loan', 'sold', 'returned',
   'in_repair', 'qc_failed', 'scrapped', 'returned_to_vendor', 'at_gate',
 ]);
 
@@ -83,7 +83,7 @@ async function listAssets({ search = '', status = '', view = '', tag = '', moved
   }
   if (status && STATUS_FILTERS.has(status)) { params.push(status); where.push(`v.inventory_status = $${params.length}`); }
   if (view === 'ready') where.push(READY_SQL);
-  if (view === 'with_customer') where.push(`v.inventory_status IN ('rented','on_demo','sold')`);
+  if (view === 'with_customer') where.push(`v.inventory_status IN ('rented','on_demo','on_loan','sold')`);
   if (view === 'on_floor') where.push(`v.inventory_status IN ('in_repair','returned','qc_failed','at_gate') OR (v.inventory_status = 'in_stock' AND NOT ${READY_SQL})`);
   // Moved into a state on an IST day, from the status audit (the Today
   // dashboard's "went on rent" / "came back" tiles link here).
@@ -413,6 +413,7 @@ async function notEarning({ days = 30 } = {}) {
     } else if (r.at_vendor) reason = 'At vendor for repair';
     else if (r.inventory_status === 'in_stock') reason = r.qc_status === 'passed' ? 'Ready, not rented' : 'In stock, not QC-passed';
     else if (r.inventory_status === 'on_demo') reason = 'On free demo';
+    else if (r.inventory_status === 'on_loan') reason = 'On free loan (support repair)';
     else reason = { in_repair: 'In repair', returned: 'Returned, waiting for QC', qc_failed: 'Failed QC', reserved: 'Reserved on an order', dispatch_ready: 'Waiting to dispatch', at_gate: 'At the gate' }[r.inventory_status] || r.inventory_status;
     return {
       ...r,

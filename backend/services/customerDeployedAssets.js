@@ -7,6 +7,7 @@
 const DEPLOYED_WITH_CUSTOMER_STATUSES = Object.freeze([
   'rented',
   'on_demo',
+  'on_loan', // temporary loan laptop (not billed) — services/loanLaptopService
   'sold',
   'reserved',
   'dispatch_ready',

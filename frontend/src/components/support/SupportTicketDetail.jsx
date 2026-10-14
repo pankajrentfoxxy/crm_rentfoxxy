@@ -20,6 +20,7 @@ import CreatePickupModal from './components/CreatePickupModal';
 import EditPickupModal from './components/EditPickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
+import TicketLoanSection from '../../features/loan-laptops/components/TicketLoanSection';
 import RepairSwapPanel from './components/RepairSwapPanel';
 import ResendLaptopPanel from './components/ResendLaptopPanel';
 import NewReplacementOrderPanel from './components/NewReplacementOrderPanel';
@@ -1464,6 +1465,13 @@ export default function SupportTicketDetail() {
             isLead={ticketLead}
             onRefresh={load}
           />
+
+          {!isCancelled && (
+            <TicketLoanSection
+              ticketId={ticket.id}
+              refreshKey={(data.items || []).filter((i) => i.item_type === 'pickup').map((i) => `${i.id}:${i.status}`).join(',')}
+            />
+          )}
 
           <section className="support-v3-card">
             <div className="support-v3-tabs mb-3">

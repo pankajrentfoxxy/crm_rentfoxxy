@@ -160,6 +160,8 @@ export const financeMenuItems = [
   { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
   // Sale in place (lost / damaged / buyout): no DC, so the Zoho invoice is attached to the SO.
   { icon: FileText, label: 'Sale Invoice Queue', path: '/finance/sale-invoice-queue', section: 'einvoice_ewb' },
+  // Loan laptop price approvals and "customer keeps it" conversions.
+  { icon: Laptop, label: 'Loan Laptop Approvals', path: '/loan-laptops?queue=pending_approval', section: 'loan_laptop_approval' },
 ];
 
 export const leadCrmAccordionChildren = [
@@ -380,6 +382,12 @@ export const MENU_GROUPS = [
         label: 'Replacement Sales Orders',
         path: '/sales-pipeline/sales-orders-replacement',
         section: 'sales_orders_replacement',
+      },
+      {
+        icon: Laptop,
+        label: 'Loan Laptops',
+        path: '/loan-laptops',
+        section: 'loan_laptops',
       },
     ],
   },

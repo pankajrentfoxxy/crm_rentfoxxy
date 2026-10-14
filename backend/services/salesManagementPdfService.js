@@ -965,8 +965,20 @@ function titleCaseState(value) {
 // Same layout as the standard Delivery Challan (seller block, billing + shipping
 // boxes, laptop table) with a two-party sign-off: the delivering technician and
 // the customer receiving the unit. No pricing — a service return is not a sale.
-async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }) {
+// variant re-labels the same layout for other no-SO challans (Loan DC). Omitted,
+// the Service DC prints exactly as before.
+async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [], variant = {} }) {
   ensureUploadDir();
+  const v = {
+    numberLabel: 'Service DC Number',
+    title: 'SERVICE DELIVERY CHALLAN',
+    subtitle: 'Repaired unit return to customer',
+    badge: 'Service Return',
+    gateDocType: 'sdc',
+    refs: [['Original DC Number', header.original_dc_number], ['Sales Order Number', header.sales_order_number]],
+    footer: 'This Service Delivery Challan records return of the repaired unit to the customer under the original rental/sale agreement. No new Sales Order is created.',
+    ...variant,
+  };
   const fileName = `${String(serviceDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/sales-documents/${fileName}`;
@@ -981,7 +993,7 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
   let gateQrPng = null;
   try {
     const { ensureGateQrPng } = require('./gateQrService');
-    gateQrPng = (await ensureGateQrPng({ docType: 'sdc', docNumber: serviceDcNumber })).png;
+    gateQrPng = (await ensureGateQrPng({ docType: v.gateDocType, docNumber: serviceDcNumber })).png;
   } catch (_) { /* optional */ }
 
   await new Promise((resolve, reject) => {
@@ -1001,9 +1013,9 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
       doc.font('Helvetica-Bold').fontSize(11).fillColor(color || C.ink).text(value, x, y + 2, { width: 104, align: 'center' });
       doc.font('Helvetica').fontSize(7).fillColor(C.sub).text(label, x, y + 18, { width: 104, align: 'center' });
     };
-    num('Service DC Number', serviceDcNumber, 192, C.docNum);
-    num('Original DC Number', header.original_dc_number, 298, C.teal);
-    num('Sales Order Number', header.sales_order_number, 404, C.ink);
+    num(v.numberLabel, serviceDcNumber, 192, C.docNum);
+    num(v.refs[0]?.[0], v.refs[0]?.[1], 298, C.teal);
+    num(v.refs[1]?.[0], v.refs[1]?.[1], 404, C.ink);
     if (gateQrPng) {
       const { drawGateQr } = require('./gateQrService');
       drawGateQr(doc, gateQrPng, { x: R - 40, y: 38, size: 36, caption: 'Gate scan' });
@@ -1015,9 +1027,9 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     // ── Seller block + title ─────────────────────────────────────────────
     const blockTop = y;
     doc.font('Helvetica-Bold').fontSize(15).fillColor(accent)
-      .text('SERVICE DELIVERY CHALLAN', L + W / 2, blockTop, { width: W / 2, align: 'right' });
+      .text(v.title, L + W / 2, blockTop, { width: W / 2, align: 'right' });
     doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-      .text('Repaired unit return to customer', L + W / 2, blockTop + 18, { width: W / 2, align: 'right' });
+      .text(v.subtitle, L + W / 2, blockTop + 18, { width: W / 2, align: 'right' });
     if (header.support_ticket_id) {
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
         .text(`Support Ticket: #${header.support_ticket_id}`, L + W / 2, blockTop + 32, { width: W / 2, align: 'right' });
@@ -1042,7 +1054,7 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     y += 8;
 
     // Type badge + dispatch tags
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Service Return', L, y);
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text(v.badge, L, y);
     y += 16;
     const tags = [];
     const shipBy = String(header.dispatch_mode || '').toLowerCase();
@@ -1211,7 +1223,7 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
     y += boxH + 12;
 
     doc.font('Helvetica').fontSize(7).fillColor(C.sub)
-      .text('This Service Delivery Challan records return of the repaired unit to the customer under the original rental/sale agreement. No new Sales Order is created.', L, y, { width: W, align: 'center' });
+      .text(v.footer, L, y, { width: W, align: 'center' });
 
     doc.end();
     stream.on('finish', resolve);

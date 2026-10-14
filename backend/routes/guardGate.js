@@ -24,7 +24,7 @@ router.get('/preflight/:dcNumber', view, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT status, awb_number, porter_tracking_id, eway_required, eway_bill_number,
-              eway_asset_value, dispatch_mode, ship_by
+              eway_asset_value, dispatch_mode, ship_by, dc_purpose
          FROM delivery_challan_lines
         WHERE dc_number = $1
         LIMIT 1`,
