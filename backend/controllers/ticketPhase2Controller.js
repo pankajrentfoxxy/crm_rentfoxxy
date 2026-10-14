@@ -728,7 +728,10 @@ exports.moveToStage = async (req, res) => {
         teamId: nextStage.team_id,
         ticketId: ticket.ticket_id,
         targetStageName: effectiveToStage,
-        transitionKey
+        transitionKey,
+        // QC2 is never the QC1 inspector (15 Oct 2026): skip whoever moved it
+        // out of QC1 and whoever held it there.
+        exclude: transitionKey === 'QC1→QC2' ? [req.user?.user_id, ticket.assigned_user_id] : [],
       });
     } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey) || bothHwSw) {
       assignedUserId = ticket.assigned_user_id;

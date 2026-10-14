@@ -207,14 +207,16 @@ exports.getQC2Assignees = async (req, res) => {
             return res.json({ success: true, assignees: [] });
         }
         const teamId = stageRes.rows[0].team_id;
+        // Asked by the QC1 inspector's form: they can't be their own QC2.
         const result = await pool.query(
             `SELECT DISTINCT u.user_id, u.name, u.email
              FROM users u
              LEFT JOIN user_teams ut ON u.user_id = ut.user_id AND ut.team_id = $1
              WHERE (u.team_id = $1 OR ut.team_id = $1)
                AND COALESCE(u.active, true) = true
+               AND u.user_id <> $2
              ORDER BY u.name ASC`,
-            [teamId]
+            [teamId, req.user?.user_id || 0]
         );
         res.json({ success: true, assignees: result.rows });
     } catch (error) {
@@ -555,6 +557,15 @@ exports.submitQC = async (req, res) => {
                     ? parseInt(assignToUserId, 10)
                     : null;
                 if (manualId != null && !Number.isNaN(manualId)) {
+                    // 15 Oct 2026: QC2 is a second pair of eyes — never the
+                    // inspector who just passed QC1.
+                    if (Number(manualId) === Number(req.user.user_id)) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({
+                            success: false,
+                            message: 'You passed QC1 — choose someone else for QC2 (or leave it to the rotation).'
+                        });
+                    }
                     const eligible = await fetchOrderedMemberIds(client, team_id);
                     if (!eligible.includes(manualId)) {
                         await client.query('ROLLBACK');
@@ -571,7 +582,9 @@ exports.submitQC = async (req, res) => {
                     }
                 } else {
                     try {
-                        assignedUserId = await pickNextAssigneeForTeam(client, team_id);
+                        // The QC1 inspector is skipped (15 Oct 2026); with
+                        // nobody else free the ticket waits in the QC2 queue.
+                        assignedUserId = await pickNextAssigneeForTeam(client, team_id, { exclude: [req.user.user_id] });
                     } catch (rrErr) {
                         console.error('QC2 round-robin assignment failed:', rrErr);
                         assignedUserId = null;

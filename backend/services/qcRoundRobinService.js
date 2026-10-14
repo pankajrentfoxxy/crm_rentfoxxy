@@ -20,25 +20,37 @@ async function fetchOrderedMemberIds(client, teamId) {
 /**
  * @param {import('pg').PoolClient} client — must be inside BEGIN (uses FOR UPDATE)
  * @param {number} teamId — teams.team_id for QC1 or QC2 stage
+ * @param {{ exclude?: number[] }} [opts] — people who must not get this one
+ *        (15 Oct 2026: the inspector who passed QC1 is never its QC2). The
+ *        rotation skips them; if nobody else is left it returns null and the
+ *        ticket waits in the team's queue.
  * @returns {Promise<number|null>}
  */
-async function pickNextAssigneeForTeam(client, teamId) {
+async function pickNextAssigneeForTeam(client, teamId, { exclude = [] } = {}) {
     if (teamId == null) return null;
     const ids = await fetchOrderedMemberIds(client, teamId);
-    if (ids.length === 0) return null;
+    const skip = new Set((exclude || []).filter((x) => x != null).map(Number));
+    const allowed = ids.filter((id) => !skip.has(Number(id)));
+    if (allowed.length === 0) return null;
     if (ids.length === 1) return ids[0];
 
     const stRes = await client.query(
         `SELECT last_assigned_user_id FROM qc_round_robin_state WHERE team_id = $1 FOR UPDATE`,
         [teamId]
     );
-    let nextIdx = 0;
+    let lastIdx = -1;
     if (stRes.rows.length > 0) {
         const last = stRes.rows[0].last_assigned_user_id;
-        const lastIdx = last != null ? ids.indexOf(last) : -1;
-        nextIdx = (lastIdx + 1) % ids.length;
+        lastIdx = last != null ? ids.indexOf(last) : -1;
     }
-    const picked = ids[nextIdx];
+    // The next member after the last pick, in the team's fixed order, who is
+    // not excluded.
+    let picked = null;
+    for (let step = 1; step <= ids.length; step += 1) {
+        const candidate = ids[(lastIdx + step + ids.length) % ids.length];
+        if (!skip.has(Number(candidate))) { picked = candidate; break; }
+    }
+    if (picked == null) return null;
     await client.query(
         `INSERT INTO qc_round_robin_state (team_id, last_assigned_user_id, updated_at)
          VALUES ($1, $2, CURRENT_TIMESTAMP)
@@ -100,26 +112,28 @@ async function findLastStageWorker(client, ticketId, stageName) {
  * Pick a QC assignee inside the caller's transaction (avoids nested pool connections).
  * Falls back to the ticket's previous worker at the target stage, then any team member.
  */
-async function resolveQcAssignee(client, { teamId, ticketId, targetStageName, transitionKey }) {
+async function resolveQcAssignee(client, { teamId, ticketId, targetStageName, transitionKey, exclude = [] }) {
     if (teamId == null) return null;
+    const skip = new Set((exclude || []).filter((x) => x != null).map(Number));
+    const ok = (id) => (id != null && !skip.has(Number(id)) ? id : null);
 
     let userId = null;
     try {
-        userId = await pickNextAssigneeForTeam(client, teamId);
+        userId = await pickNextAssigneeForTeam(client, teamId, { exclude });
     } catch (err) {
         console.error('QC round-robin failed:', err.message);
     }
 
     if (!userId && transitionKey === 'QC2→QC1' && ticketId) {
-        userId = await findLastStageWorker(client, ticketId, 'QC1');
+        userId = ok(await findLastStageWorker(client, ticketId, 'QC1'));
     }
 
     if (!userId && targetStageName) {
-        userId = await findLastStageWorker(client, ticketId, targetStageName);
+        userId = ok(await findLastStageWorker(client, ticketId, targetStageName));
     }
 
     if (!userId) {
-        const ids = await fetchOrderedMemberIds(client, teamId);
+        const ids = (await fetchOrderedMemberIds(client, teamId)).filter((id) => !skip.has(Number(id)));
         userId = ids[0] ?? null;
         if (userId) {
             await recordAssigneeForTeam(client, teamId, userId);

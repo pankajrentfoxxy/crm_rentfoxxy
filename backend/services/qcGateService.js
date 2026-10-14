@@ -50,6 +50,20 @@ async function assertMayPassQc(db, { ticketId, user, stageName }) {
   if (worked) {
     throw new QcGateError(`You worked on this laptop, so someone else must pass its ${stageName}.`);
   }
+  // 15 Oct 2026: QC2 is a second pair of eyes. The rotation already skips the
+  // QC1 inspector; this stops them claiming it from the queue and passing it.
+  // "This cycle" = the latest QC1 pass that brought the laptop to QC2.
+  if (stageName === 'QC2') {
+    const qc1 = (await (db || pool).query(
+      `SELECT performed_by FROM production_ticket_history
+        WHERE ticket_id = $1 AND previous_stage = 'QC1' AND current_stage = 'QC2' AND action ILIKE '%passed%'
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [ticketId]
+    )).rows[0];
+    if (qc1 && user?.user_id && Number(qc1.performed_by) === Number(user.user_id)) {
+      throw new QcGateError('You passed this laptop\'s QC1, so someone else must pass its QC2.');
+    }
+  }
 }
 
 /** PD3 — the latest QC2 configuration check for this ticket must have matched. */
