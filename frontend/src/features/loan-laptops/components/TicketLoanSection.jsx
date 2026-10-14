@@ -8,7 +8,7 @@ import CreateLoanRequestModal from './CreateLoanRequestModal';
 import { getTicketLoanContext } from '../loanLaptopApi';
 
 /** "Loan laptop" card on the support ticket: live loans + raise one per repair pickup. */
-export default function TicketLoanSection({ ticketId }) {
+export default function TicketLoanSection({ ticketId, refreshKey = '' }) {
   const { hasPermission } = usePermission();
   const canRaise = hasPermission('loan_laptops', 'edit');
   const [ctx, setCtx] = useState(null);
@@ -19,7 +19,7 @@ export default function TicketLoanSection({ ticketId }) {
     getTicketLoanContext(ticketId)
       .then(({ data }) => setCtx(data.data))
       .catch(() => setCtx(null)); // feature not installed / no access: hide quietly
-  }, [ticketId, canRaise]);
+  }, [ticketId, canRaise, refreshKey]); // refreshKey: a repair pickup was raised or moved on the ticket
   useEffect(() => { load(); }, [load]);
 
   if (!ctx) return null;
@@ -52,6 +52,11 @@ export default function TicketLoanSection({ ticketId }) {
           <div className="text-sm min-w-0">
             <span className="font-mono font-semibold text-slate-900">{p.ttspl_id}</span>
             <span className="text-slate-500"> · repair pickup ({p.status})</span>
+            <p className="text-xs text-slate-500">
+              {p.warehouse_received_at ? 'Original received at warehouse'
+                : p.original_collected ? 'Original collected from customer, in transit'
+                  : 'Original not yet collected — a loan laptop can still be sent now'}
+            </p>
             {!p.eligible && <p className="text-xs text-slate-500">{p.reasons.join('; ')}</p>}
           </div>
           {p.eligible && (

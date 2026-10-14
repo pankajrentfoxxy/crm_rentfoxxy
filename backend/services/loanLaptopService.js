@@ -1,8 +1,11 @@
 /**
  * Loan laptop (temporary replacement) workflow.
  *
- * A rental customer's laptop is picked up for repair; support lends them a
- * laptop from stock until it comes back. No Sales Order is created or touched.
+ * A rental customer's laptop goes for repair; support lends them a laptop from
+ * stock until it comes back. No Sales Order is created or touched. The loan can
+ * be raised and dispatched as soon as the repair pickup exists — collecting the
+ * original (technician, courier, BlueDart, porter…) runs independently on that
+ * pickup's Return DC; only repair completion and conversion wait for it.
  *
  *   requested ─▶ pending_approval ─▶ approved ─▶ dc_generated ─▶ dispatched ─▶ loan_active
  *        └──────(policy allows)──────▲                                         │
@@ -251,7 +254,37 @@ async function evaluateRepairCompletion(db, request) {
       reasons.push(`original laptop is ${serial.inventory_status || 'unknown'}, not back in stock`);
     }
   }
-  return { done: reasons.length === 0, reasons, service_dc_number: item.service_dc_number || null };
+  return {
+    done: reasons.length === 0,
+    reasons,
+    original_received: Boolean(item.warehouse_received_at),
+    service_dc_number: item.service_dc_number || null,
+  };
+}
+
+/**
+ * A loan can now be live before its repair pickup is collected, so cancelling
+ * that pickup (or its ticket) would orphan the loan. Refuse until the loan is
+ * cancelled or closed. `itemIds` null = every pickup on the ticket.
+ */
+async function assertNoLiveLoanForPickups(db, { ticketId, itemIds = null }) {
+  if (!(await require('./loanSchema').loanSchemaReady(db))) return;
+  const r = await db.query(
+    `SELECT request_number, status FROM support_loan_requests
+      WHERE ticket_id = $1
+        AND ($2::int[] IS NULL OR pickup_item_id = ANY($2::int[]))
+        AND status NOT IN ('rejected', 'cancelled', 'returned', 'converted')
+      ORDER BY id LIMIT 1`,
+    [ticketId, itemIds && itemIds.length ? itemIds.map(Number) : (itemIds ? [0] : null)]
+  );
+  const live = r.rows[0];
+  if (live) {
+    throw new LoanError(
+      `Loan ${live.request_number} (${live.status}) is linked to this repair pickup — cancel or close the loan first`,
+      409,
+      { code: 'LOAN_LINKED' }
+    );
+  }
 }
 
 async function getTicketLoanContext(db, ticketId) {
@@ -277,7 +310,8 @@ async function getTicketLoanContext(db, ticketId) {
   for (const item of items.rows) {
     if (!isRepairPickup(item)) continue;
     const reasons = [];
-    if (!pickupHasLeftCustomer(item)) reasons.push('laptop has not been picked up from the customer yet');
+    // The loan may go out before the original is collected: the repair pickup
+    // and the Loan DC are tracked independently on the same ticket.
     if (['resolved', 'closed'].includes(item.status)) reasons.push(`repair pickup is ${item.status}`);
     if (ticket.status === 'closed' || ticket.status === 'cancelled') reasons.push(`ticket is ${ticket.status}`);
     if (activeByItem.has(Number(item.id))) {
@@ -295,6 +329,7 @@ async function getTicketLoanContext(db, ticketId) {
       serial_number: item.serial_number,
       picked_up_at: item.picked_up_at,
       warehouse_received_at: item.warehouse_received_at,
+      original_collected: pickupHasLeftCustomer(item),
       original: serial ? {
         serial_id: serial.serial_id,
         ttspl_id: serial.ttspl_id,
@@ -387,7 +422,7 @@ async function createLoanRequest(db, {
   const ticketRes = await db.query(`SELECT * FROM support_tickets WHERE id = $1`, [ticketId]);
   const ticket = ticketRes.rows[0];
   if (!isRepairPickup(item)) throw new LoanError('A loan laptop can only be issued against a repair pickup');
-  if (!pickupHasLeftCustomer(item)) throw new LoanError('The customer\'s laptop has not been picked up for repair yet');
+  if (['cancelled', 'resolved', 'closed'].includes(item.status)) throw new LoanError(`Repair pickup is ${item.status}`);
   if (['closed', 'cancelled'].includes(ticket.status)) throw new LoanError(`Ticket is ${ticket.status}`);
 
   const existing = await db.query(
@@ -752,6 +787,11 @@ async function markRepairCompleted(db, id, { override = false, remarks = null, a
   const actorRow = actorOf(actor);
   if (!check.done && !override) {
     throw new LoanError(`Original laptop is not repaired yet: ${check.reasons.join('; ')}`, 409, { reasons: check.reasons });
+  }
+  // The loan may have gone out before the original was collected; an override
+  // must never stand in for the warehouse actually receiving it.
+  if (!check.original_received) {
+    throw new LoanError('The original laptop has not been received at the warehouse yet', 409, { reasons: check.reasons });
   }
   if (!check.done && override && !String(remarks || '').trim()) {
     throw new LoanError('Explain why repair completion is being overridden');
@@ -1348,8 +1388,35 @@ async function getLoanRequest(db, id) {
   const repair = [STATUS.LOAN_ACTIVE, STATUS.DISPATCHED].includes(request.status)
     ? await evaluateRepairCompletion(db, request)
     : null;
+  // The original's collection runs independently of the loan dispatch.
+  const pickupRes = await db.query(
+    `SELECT sti.id, sti.status, sti.pickup_method, sti.pickup_courier_name, sti.pickup_awb,
+            sti.picked_up_at, sti.warehouse_received_at, sti.return_dc_number,
+            dcl.dispatch_mode AS rdc_dispatch_mode, dcl.courier_name AS rdc_courier_name,
+            dcl.awb_number AS rdc_awb_number, dcl.status AS rdc_status
+       FROM support_ticket_items sti
+       LEFT JOIN LATERAL (
+         SELECT dispatch_mode, courier_name, awb_number, status FROM delivery_challan_lines
+          WHERE dc_number = sti.return_dc_number AND movement_type = 'return' LIMIT 1
+       ) dcl ON TRUE
+      WHERE sti.id = $1`,
+    [request.pickup_item_id]
+  );
+  const p = pickupRes.rows[0];
   return {
     ...request,
+    original_pickup: p ? {
+      item_id: p.id,
+      status: p.status,
+      collected: pickupHasLeftCustomer(p),
+      picked_up_at: p.picked_up_at,
+      warehouse_received_at: p.warehouse_received_at,
+      return_dc_number: p.return_dc_number,
+      return_dc_status: p.rdc_status,
+      method: p.pickup_method || p.rdc_dispatch_mode || null,
+      courier_name: p.pickup_courier_name || p.rdc_courier_name || null,
+      awb_number: p.pickup_awb || p.rdc_awb_number || null,
+    } : null,
     events: events.rows,
     loan_laptop: slim(loan),
     original_laptop: slim(original),
@@ -1368,6 +1435,7 @@ module.exports = {
   istYmd,
   addDaysYmd,
   getTicketLoanContext,
+  assertNoLiveLoanForPickups,
   listAvailableLaptops,
   createLoanRequest,
   approveLoanRequest,

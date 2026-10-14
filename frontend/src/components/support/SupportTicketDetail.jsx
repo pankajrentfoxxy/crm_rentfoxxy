@@ -1466,7 +1466,12 @@ export default function SupportTicketDetail() {
             onRefresh={load}
           />
 
-          {!isCancelled && <TicketLoanSection ticketId={ticket.id} />}
+          {!isCancelled && (
+            <TicketLoanSection
+              ticketId={ticket.id}
+              refreshKey={(data.items || []).filter((i) => i.item_type === 'pickup').map((i) => `${i.id}:${i.status}`).join(',')}
+            />
+          )}
 
           <section className="support-v3-card">
             <div className="support-v3-tabs mb-3">

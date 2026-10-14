@@ -1726,6 +1726,7 @@ exports.cancelTicket = async (req, res) => {
               WHERE ticket_id = $1`,
             [ticketId]
         );
+        await require('../services/loanLaptopService').assertNoLiveLoanForPickups(client, { ticketId });
 
         if (req.body?.force_inventory_revert) {
             await client.query(
@@ -4386,6 +4387,14 @@ const voidReturnDcForReplacement = async (client, ticketId, openRdc, userId, rea
             { status: 400 }
         );
     }
+    const voidedPickups = await client.query(
+        `SELECT id FROM support_ticket_items
+          WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
+        [ticketId, openRdc.dc_number]
+    );
+    await require('../services/loanLaptopService').assertNoLiveLoanForPickups(client, {
+        ticketId, itemIds: voidedPickups.rows.map((r) => r.id),
+    });
     await client.query(
         `UPDATE support_ticket_items
             SET status = 'cancelled', return_dc_number = NULL,
@@ -5239,6 +5248,9 @@ exports.cancelReturnPickup = async (req, res) => {
                 AND ($2::text IS NULL OR return_dc_number = $2 OR return_dc_number IS NULL)`,
             [ticketId, rdc]
         );
+        await require('../services/loanLaptopService').assertNoLiveLoanForPickups(client, {
+            ticketId, itemIds: pickupRes.rows.map((r) => r.id),
+        });
         if (!force) {
             for (const row of pickupRes.rows) {
                 if (row.picked_up_at || row.warehouse_received_at || row.customer_otp_verified_at) {

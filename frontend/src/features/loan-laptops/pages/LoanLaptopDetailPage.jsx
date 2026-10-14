@@ -263,7 +263,7 @@ export default function LoanLaptopDetailPage() {
                 onClick={() => run(() => markRepairCompleted(loan.id, {}), 'Repair completed — record the customer decision')}>
                 Mark repair completed
               </Button>
-              {!loan.repair_status?.done && (
+              {!loan.repair_status?.done && loan.repair_status?.original_received && (
                 <Button variant="secondary" disabled={busy} onClick={() => {
                   const reason = promptReason('Override: explain why the repair is complete although the checks above fail');
                   if (reason) run(() => markRepairCompleted(loan.id, { override: true, remarks: reason }), 'Repair completed (override)');
@@ -419,7 +419,22 @@ export default function LoanLaptopDetailPage() {
           title={loan.status === 'converted' ? 'Replaced customer laptop'
             : loan.status === 'returned' ? 'Customer laptop (repaired)' : 'Customer laptop under repair'}
           laptop={loan.original_laptop}
-          extra={loan.original_rent_end_date ? <Field name="Replaced from">{formatDate(loan.conversion_effective_date)}</Field> : null}
+          extra={(
+            <>
+              {loan.original_rent_end_date && <Field name="Replaced from">{formatDate(loan.conversion_effective_date)}</Field>}
+              {loan.original_pickup && (
+                <>
+                  <p className="text-xs font-semibold text-slate-600 mt-3 mb-1">Repair pickup (tracked separately)</p>
+                  <Field name="Pickup status">{loan.original_pickup.status}</Field>
+                  <Field name="Method">{[loan.original_pickup.method, loan.original_pickup.courier_name].filter(Boolean).join(' · ') || null}</Field>
+                  {loan.original_pickup.awb_number && <Field name="AWB">{loan.original_pickup.awb_number}</Field>}
+                  <Field name="Return DC">{loan.original_pickup.return_dc_number}</Field>
+                  <Field name="Collected from customer">{loan.original_pickup.picked_up_at ? formatDate(loan.original_pickup.picked_up_at) : (loan.original_pickup.collected ? 'Yes' : 'Not yet')}</Field>
+                  <Field name="Received at warehouse">{loan.original_pickup.warehouse_received_at ? formatDate(loan.original_pickup.warehouse_received_at) : 'Not yet'}</Field>
+                </>
+              )}
+            </>
+          )}
         />
         <Card className="p-4">
           <div className="flex items-center justify-between gap-2 mb-2">
