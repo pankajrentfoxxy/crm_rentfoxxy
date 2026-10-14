@@ -40,6 +40,14 @@ export default function StageWork({ ticket, stage, onDone }) {
     getTeamMembers('QC1 Team').then(({ data }) => setInspectors(data?.members || data?.users || [])).catch(() => setInspectors([]));
   }, [stage]);
 
+  // Every job ticked → "done" is the obvious outcome; pick it (once) so the
+  // technician doesn't have to. Any other outcome can still be chosen.
+  const allTicked = Boolean(defs) && (defs.stages?.[stage] || []).length > 0
+    && (defs.stages?.[stage] || []).every((it) => ticks[it.key]);
+  useEffect(() => {
+    if (allTicked && !outcome && (defs.stageOutcomes?.[stage] || []).some((o) => o.value === 'done')) setOutcome('done');
+  }, [allTicked]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (error) return <Notice tone="crit" title="Could not load the checklist">{error}</Notice>;
   if (!defs) return <EmptyState title="Loading…" />;
 

@@ -10,7 +10,7 @@ export const errMsg = (e, fallback = 'That did not work.') => {
 
 /** The floor in process order (the board's tabs and the record's flow). */
 export const FLOW = [
-  { key: 'Floor Manager', label: 'Triage' },
+  { key: 'Floor Manager', label: 'Receive' },
   { key: 'Diagnosis', label: 'Diagnosis' },
   { key: 'Repair', label: 'Repair', stages: ['Chip Level Repair', 'Body & Paint', 'Procurement'] },
   { key: 'Assembly & Software', label: 'Assembly' },
@@ -20,13 +20,13 @@ export const FLOW = [
   { key: 'Pending Inventory', label: 'Into stock' },
 ];
 export const stageLabel = (s) => ({
-  'Floor Manager': 'Triage (floor manager)',
+  'Floor Manager': 'Receive & assign (floor manager)',
   'Pending Inventory': 'Waiting to go into stock',
   'Assembly & Software': 'Assembly & software',
 }[s] || s);
 /** One or two words, for pills and table cells where the long label wraps. */
 export const shortStageLabel = (s) => ({
-  'Floor Manager': 'Triage',
+  'Floor Manager': 'Receive & assign',
   'Pending Inventory': 'Into stock',
   'Assembly & Software': 'Assembly',
   'Chip Level Repair': 'Chip repair',

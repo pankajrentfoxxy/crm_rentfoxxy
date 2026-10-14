@@ -6,11 +6,11 @@ import api from '../../../../utils/api';
 import { errText, TtsplInput } from './workShared';
 
 /**
- * Triage (a new laptop at Floor Manager) or reassign (any other stage).
+ * Receive & assign (a new laptop at Floor Manager) or reassign (any other stage).
  * Every assignment, at every stage, asks for the laptop's TTSPL and serial
  * typed or scanned in full (never pre-filled); the server matches both
  * exactly against the ticket.
- * Triage: confirm it powers on or not, scan TTSPL + serial, give it to a
+ * Receive & assign: confirm it powers on or not, scan TTSPL + serial, give it to a
  * technician — it moves to Diagnosis with them. Assign / reassign at any other
  * stage: pick someone on the stage's team or anyone at all; the laptop stays at
  * its stage (keep_stage) and only the person changes, with an optional reason
@@ -80,7 +80,7 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
       if (triage) body.laptop_condition = powers;
       else Object.assign(body, { keep_stage: true, reason: reason.trim() || undefined });
       await assignTicket(ticket.ticket_id, body);
-      toast.success(triage ? 'Triaged and assigned' : (ticket.assigned_user_id ? 'Reassigned' : 'Assigned'));
+      toast.success(triage ? 'Received and assigned' : (ticket.assigned_user_id ? 'Reassigned' : 'Assigned'));
       onDone?.();
     } catch (e) {
       toast.error(errText(e, 'Could not assign'));
@@ -93,7 +93,7 @@ export default function AssignDrawer({ ticket, open, onClose, onDone }) {
     <Drawer
       open={open}
       onClose={onClose}
-      title={triage ? 'Triage and assign' : (ticket.assigned_user_id ? `Reassign — ${ticket.stage_name}` : `Assign — ${ticket.stage_name}`)}
+      title={triage ? 'Receive & assign' : (ticket.assigned_user_id ? `Reassign — ${ticket.stage_name}` : `Assign — ${ticket.stage_name}`)}
       width="32rem"
       footer={(
         <>

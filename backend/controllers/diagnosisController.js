@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { syncWorkLogForTicketState, workNotStartedReason } = require('../services/ticketWorkLogService');
+const { syncWorkLogForTicketState, stageWorkRefusal } = require('../services/ticketWorkLogService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { applyStageMove, StageTransitionRefused } = require('../services/stageTransitionService');
@@ -301,12 +301,8 @@ async function submitDiagnosisV2(client, req, res, ticketBefore) {
     if (ticketBefore.stage_name !== 'Diagnosis') {
         return fail(409, `This laptop is at ${ticketBefore.stage_name || 'another stage'}, not Diagnosis.`);
     }
-    const { isManager } = require('../services/qcGateService');
-    if (Number(ticketBefore.assigned_user_id) !== Number(user.user_id) && !isManager(user)) {
-        return fail(403, 'Only the technician it is assigned to (or a floor manager) submits its diagnosis.');
-    }
-    const notStarted = await workNotStartedReason(client, ticketBefore, user);
-    if (notStarted) return fail(409, notStarted);
+    const refusal = await stageWorkRefusal(client, ticketBefore, user);
+    if (refusal) return fail(refusal.status, refusal.message);
 
     const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
     const { missing, invalid } = floorChecklists.checkAnswers(floorChecklists.DIAGNOSIS_ITEMS, answers);
@@ -439,8 +435,26 @@ exports.submitDiagnosis = async (req, res) => {
               ?? diagnosisData?.serial_number
               ?? diagnosisData?.verify_serial
             );
-            if (effectiveCondition === 'on' && serialOverride) {
-              effectiveSerial = serialOverride;
+            // A laptop that arrived not powering on may have no serial yet; the
+            // one typed now is then captured. But when inventory already knows
+            // its real serial, the typed one must MATCH it — before 15 Oct the
+            // typed serial became the expected one and was checked against
+            // itself, so any serial passed (ticket 2807 on QA).
+            const realSerial = (v) => {
+              const n = normalizeMachineId(v);
+              return n && n !== 'NOT_ON' ? n : null;
+            };
+            let knownSerial = realSerial(ticketBefore.serial_number);
+            if (ticketBefore.vendor_serial_id) {
+              const vs = await client.query(
+                'SELECT serial_number FROM vendor_serial_numbers WHERE serial_id = $1',
+                [ticketBefore.vendor_serial_id]
+              );
+              knownSerial = realSerial(vs.rows[0]?.serial_number) || knownSerial;
+            }
+            if (effectiveCondition === 'on') {
+              if (knownSerial) effectiveSerial = knownSerial;
+              else if (serialOverride) effectiveSerial = serialOverride;
             }
 
             const requireSerial = requiresSerialIdentity(effectiveCondition);
@@ -488,6 +502,12 @@ exports.submitDiagnosis = async (req, res) => {
             }
 
             if (!req.body.outcome) {
+                // The Old view's form: same rule as the new one.
+                const refusal = await stageWorkRefusal(client, ticketBefore, req.user);
+                if (refusal) {
+                    await client.query('ROLLBACK');
+                    return res.status(refusal.status).json({ success: false, message: refusal.message });
+                }
                 try {
                     await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
                 } catch (blockErr) {

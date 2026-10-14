@@ -130,7 +130,7 @@ export default function FloorBoardPage() {
       header: 'Assigned to',
       render: (r) => (r.assigned_name
         ? <span className="whitespace-nowrap">{r.assigned_name}</span>
-        : <span className="text-ink-3">{r.stage_name === 'Floor Manager' ? 'Waiting for triage' : 'Nobody yet'}</span>),
+        : <span className="text-ink-3">{r.stage_name === 'Floor Manager' ? 'Waiting to be received' : 'Nobody yet'}</span>),
     },
     {
       key: 'f',
@@ -176,7 +176,7 @@ export default function FloorBoardPage() {
                 variant={r.assigned_user_id ? 'quiet' : 'primary'}
                 onClick={(e) => { e.stopPropagation(); setAssigning({ ...r, assigned_user_name: r.assigned_name }); }}
               >
-                {r.stage_name === 'Floor Manager' && !r.assigned_user_id ? 'Triage' : r.assigned_user_id ? 'Reassign' : 'Assign'}
+                {r.stage_name === 'Floor Manager' && !r.assigned_user_id ? 'Receive & assign' : r.assigned_user_id ? 'Reassign' : 'Assign'}
               </Button>
             )}
           </div>

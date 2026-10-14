@@ -1915,8 +1915,12 @@ exports.startWork = async (req, res) => {
     if (!ticket.assigned_user_id) {
       return res.status(409).json({ success: false, message: 'Claim this ticket (or have it assigned) before starting work.' });
     }
-    if (Number(ticket.assigned_user_id) !== Number(userId) && !require('../services/qcGateService').isManager(req.user)) {
-      return res.status(403).json({ success: false, message: 'This ticket is assigned to someone else — only they start its timer.' });
+    // PD13 / 15 Oct 2026: only the person it is assigned to runs its timer —
+    // floor managers included (a manager's timer on someone else's laptop
+    // credited no one and logged time against the wrong person). A manager
+    // who does the work assigns it to themselves first.
+    if (Number(ticket.assigned_user_id) !== Number(userId)) {
+      return res.status(403).json({ success: false, message: 'This laptop is assigned to someone else — only they start its timer. Assign it to yourself to work on it.' });
     }
 
     const { assertTtsplAndSerial, normalizeMachineId } = require('../utils/machineIdentityVerify');

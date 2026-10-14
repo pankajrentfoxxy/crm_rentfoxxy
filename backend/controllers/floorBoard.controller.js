@@ -7,7 +7,7 @@ const { applyStageMove, StageTransitionRefused } = require('../services/stageTra
 const { transitionAsset } = require('../services/inventoryStateMachine');
 const { createReturnedPartInstance } = require('../services/partInventoryService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
-const { closeOpenWorkLogs, workNotStartedReason } = require('../services/ticketWorkLogService');
+const { closeOpenWorkLogs, stageWorkRefusal } = require('../services/ticketWorkLogService');
 const { inTransaction } = require('../utils/txHandler');
 
 const fail = (res, status, message) => res.status(status).json({ success: false, message });
@@ -178,7 +178,6 @@ exports.dismantle = (req, res) => inTransaction(res, async (db, out) => {
 // "done" needs every item ticked and no part still waiting to be fitted; any
 // other outcome needs a reason for the next person.
 const floorChecklists = require('../services/floorChecklists');
-const { isManager } = require('../services/qcGateService');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
@@ -212,11 +211,8 @@ exports.completeStageWork = (req, res) => inTransaction(res, async (db, out) => 
   if (!outcomes) return fail(out, 409, `There is no work form to finish at ${t.stage_name || 'this stage'}.`);
   const outcome = outcomes[req.body?.outcome];
   if (!outcome) return fail(out, 400, 'Choose what happens next.');
-  if (Number(t.assigned_user_id) !== Number(req.user.user_id) && !isManager(req.user)) {
-    return fail(out, 403, 'Only the technician it is assigned to (or a floor manager) finishes this stage.');
-  }
-  const notStarted = await workNotStartedReason(db, t, req.user);
-  if (notStarted) return fail(out, 409, notStarted);
+  const refusal = await stageWorkRefusal(db, t, req.user);
+  if (refusal) return fail(out, refusal.status, refusal.message);
 
   const items = await floorChecklists.stageChecklistItems(db, t.stage_name);
   const checklist = req.body?.checklist && typeof req.body.checklist === 'object' ? req.body.checklist : {};

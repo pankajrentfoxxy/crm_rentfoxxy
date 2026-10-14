@@ -57,7 +57,31 @@ async function workNotStartedReason(db, ticket, user) {
   return r.rows.length ? null : 'Start work first — scan the TTSPL and serial to start the timer, then finish the stage.';
 }
 
+/**
+ * 15 Oct 2026 (user): Diagnosis and the repair stages (Chip Level, Body &
+ * Paint, Assembly & Software, Final Testing) are finished only by the person
+ * the laptop is assigned to, after their own Start work — floor managers
+ * included. A floor manager doing the work reassigns it to themselves first.
+ * This replaces the 29 Sep exception that let a floor manager finish a stage
+ * for someone else, which also credited the work to the wrong person.
+ * @returns {{status: number, message: string}|null} why not (403 not theirs,
+ *          409 not started), or null when fine
+ */
+async function stageWorkRefusal(db, ticket, user) {
+  if (!ticket?.ticket_id || !user?.user_id) return { status: 401, message: 'Sign in again.' };
+  if (!ticket.assigned_user_id) {
+    return { status: 409, message: 'Nobody has this laptop yet — claim it (or have it assigned to you), then Start work.' };
+  }
+  if (Number(ticket.assigned_user_id) !== Number(user.user_id)) {
+    const who = (await db.query('SELECT name FROM users WHERE user_id = $1', [ticket.assigned_user_id])).rows[0]?.name;
+    return { status: 403, message: `This laptop is assigned to ${who || 'someone else'}. Reassign it to yourself and Start work to do this stage.` };
+  }
+  const notStarted = await workNotStartedReason(db, ticket, user);
+  return notStarted ? { status: 409, message: notStarted } : null;
+}
+
 module.exports = {
+  stageWorkRefusal,
   workNotStartedReason,
   closeOpenWorkLogs,
   startWorkLog,

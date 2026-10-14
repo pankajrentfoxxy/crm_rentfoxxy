@@ -23,7 +23,7 @@ import {
 /**
  * Production → a laptop on the floor (one ticket).
  *
- * The next step leads, by stage: triage assigns a technician; Diagnosis,
+ * The next step leads, by stage: "Receive & assign" gives it to a technician; Diagnosis,
  * the repair stages, Assembly / Testing and QC each show their own work form
  * (produce/work/*: numbered steps, questions that say which answer is good,
  * checked again on the server); Pending Inventory goes to the receive screen. Around it: claim, the work timer (only the assignee — PD13),
@@ -84,7 +84,7 @@ export default function FloorTicketPage() {
   let next = null;
   if (closed) next = <Notice tone="good" title={t.status === 'completed' ? 'Finished' : 'Closed'}>{t.completed_at ? <>On <DateTime value={t.completed_at} />.</> : null}</Notice>;
   else if (stage === 'Hold') next = <Notice tone="warn" title={`On hold (from ${t.hold_from_stage_name || '—'})`} action={lead && <Button variant="primary" onClick={() => setDrawer('release')}>Release</Button>}>{t.hold_reason}</Notice>;
-  else if (!t.assigned_user_id && stage === 'Floor Manager') next = <Notice tone="info" title="New on the floor — waiting for triage" action={canAssign && <Button variant="primary" onClick={() => setAssignOpen(true)}>Triage and assign</Button>}>Check it powers on, confirm the TTSPL and serial, and give it to a technician.</Notice>;
+  else if (!t.assigned_user_id && stage === 'Floor Manager') next = <Notice tone="info" title="New on the floor — waiting to be received and assigned" action={canAssign && <Button variant="primary" onClick={() => setAssignOpen(true)}>Receive & assign</Button>}>Check it powers on, confirm the TTSPL and serial, and give it to a technician.</Notice>;
   else if (!t.assigned_user_id) next = <Notice tone="info" title="Waiting to be picked up" action={<Button variant="primary" disabled={busy === 'claim'} onClick={() => run('claim', () => claimTicket(t.ticket_id), 'Claimed — it is yours')}>Claim</Button>}>Anyone on the {stageLabel(stage)} team can claim it.</Notice>;
   else if (mine && !work && WORK_STAGES.includes(stage)) next = <Notice tone="info" title="Start work to begin the timer" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>Scan or type the TTSPL and the serial from the laptop, so the right laptop is on the bench.</Notice>;
   else if (stage === 'Pending Inventory') next = <Notice tone="good" title="Passed QC — waiting to go into stock" action={<Button variant="primary" onClick={() => navigate('/carret/produce/into-stock')}>Receive into a slot</Button>}>The warehouse scans the serial into a carret slot; only then is it in stock.</Notice>;
@@ -143,7 +143,7 @@ export default function FloorTicketPage() {
           <span>{t.assigned_user_name || <span className="text-ink-3">Nobody yet</span>}</span>
           {canAssign && !closed && (
             <Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setAssignOpen(true)}>
-              {stage === 'Floor Manager' && !t.assigned_user_id ? 'Triage' : t.assigned_user_id ? 'Reassign' : 'Assign'}
+              {stage === 'Floor Manager' && !t.assigned_user_id ? 'Receive & assign' : t.assigned_user_id ? 'Reassign' : 'Assign'}
             </Button>
           )}
         </span>
@@ -222,8 +222,22 @@ export default function FloorTicketPage() {
                       Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the {stageLabel(stage)} task opens.
                     </Notice>
                   )
-                  : (mine || lead || QC_STAGES.includes(stage)) ? workForm : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
-                : <EmptyState title={stage === 'Floor Manager' ? 'Triage happens from "Triage and assign"' : 'Nothing to fill in at this stage'} />
+                  // Diagnosis and the repair stages: only the person it is
+                  // assigned to, after Start work (15 Oct 2026 — floor managers
+                  // included; the server refuses anyone else). QC is unchanged.
+                  : (mine || QC_STAGES.includes(stage) || (lead && !WORK_STAGES.includes(stage))) ? workForm
+                    : canAssign && t.assigned_user_id
+                      ? (
+                        <Notice
+                          tone="info"
+                          title={`${t.assigned_user_name || 'A technician'} is doing this stage`}
+                          action={<Button variant="primary" onClick={() => setAssignOpen(true)}>Assign to me</Button>}
+                        >
+                          To do it yourself, assign it to yourself, then Start work (scan the TTSPL and serial). The work is credited to whoever finishes it.
+                        </Notice>
+                      )
+                      : <EmptyState title="Assigned to someone else" body="The work form opens for the technician working on it." />)
+                : <EmptyState title={stage === 'Floor Manager' ? 'Done from "Receive & assign" above' : 'Nothing to fill in at this stage'} />
             )}
             {tab === 'parts' && partsTab && (
               <PartsWork ticket={t} partRequests={data.part_requests} parts={data.parts} canWork={!closed && stage !== 'Dispatch QC' && (mine || lead)} onChanged={done} />
