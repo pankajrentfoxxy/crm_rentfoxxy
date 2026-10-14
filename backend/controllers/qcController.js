@@ -394,8 +394,10 @@ exports.submitQC = async (req, res) => {
         // Production safety A (PD2, PD3). A pass needs an inspector who did not
         // repair it, and a QC2 pass needs the configuration check to have
         // matched on the server — unless a manager overrides with a reason.
+        // PD2 covers every QC stage: Dispatch QC was left out, so a technician
+        // could pass a laptop for dispatch (found testing on QA, 15 Oct 2026).
         let qcGate = { kind: 'checklist' };
-        if (result === 'PASS' && ['QC1', 'QC2'].includes(qcStage)) {
+        if (result === 'PASS' && ['QC1', 'QC2', 'Dispatch QC'].includes(qcStage)) {
             try {
                 const override = overrideFrom(req.user, req.body.qc_override_reason);
                 await assertMayPassQc(client, { ticketId: Number(id), user: req.user, stageName: qcStage });
