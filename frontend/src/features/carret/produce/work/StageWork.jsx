@@ -3,7 +3,9 @@ import toast from 'react-hot-toast';
 import { Button, EmptyState, Field, Notice, Select, Textarea } from '../../../../components/carret';
 import api from '../../../../utils/api';
 import { getTeamMembers } from '../../../floor-pipeline/floorPipelineApi';
-import { Choice, StepHead, errText, useFloorChecklists } from './workShared';
+import {
+  Choice, WorkLayout, WorkStep, WorkSummary, errText, useFloorChecklists,
+} from './workShared';
 
 /**
  * Chip-level repair, Body & Paint, Assembly & software, Final testing.
@@ -74,38 +76,67 @@ export default function StageWork({ ticket, stage, onDone }) {
 
   const others = inspectors.filter((m) => Number(m.user_id) !== Number(ticket.assigned_user_id));
 
-  return (
-    <div className="c-stack">
-      <p className="text-ink-2" style={{ margin: 0 }}>{INTRO[stage]}</p>
-      <StepHead n={1} of={2}>Tick each job when it is done</StepHead>
-      <div className="c-qsec">
-        <div className="c-qsec-h">{stage}<small>{items.length - openTicks}/{items.length}</small></div>
-        {items.map((it) => (
-          <label key={it.key} className={`c-tick${ticks[it.key] ? ' is-on' : ''}`}>
-            <input type="checkbox" checked={!!ticks[it.key]} onChange={() => setTicks((t) => ({ ...t, [it.key]: !t[it.key] }))} />
-            {it.label}
-          </label>
-        ))}
-      </div>
-      <Field label="Work notes (optional)"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
+  const ticksDone = items.length > 0 && openTicks === 0;
+  const outcomeDone = Boolean(outcome) && !doneNeedsTicks && !(needReason && reason.trim().length < 5);
+  const checks = [
+    { label: `Tick every job (${items.length - openTicks}/${items.length})`, ok: openTicks === 0 || (Boolean(outcome) && outcome !== 'done') },
+    { label: 'Choose the outcome', ok: Boolean(outcome) },
+    ...(needReason ? [{ label: 'Say what is wrong', ok: reason.trim().length >= 5 }] : []),
+  ];
 
-      <StepHead n={2} of={2}>What happens next</StepHead>
-      <Choice
-        name={`sw-${stage}`}
-        value={outcome}
-        onChange={setOutcome}
-        options={outcomes.map((o) => ({ value: o.value, label: o.label, hint: o.value === 'done' && openTicks ? `${openTicks} job(s) not ticked yet` : undefined }))}
-      />
-      {needReason && <Field label="What is wrong" required><Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
-      {stage === 'Final Testing' && outcome === 'done' && (
-        <Field label="QC1 inspector" hint="Leave empty to put it in the QC1 queue. It can't be you or anyone who worked on it.">
-          <Select value={qc} onChange={(e) => setQc(e.target.value)} placeholder="QC1 queue (anyone on the team)" options={others.map((m) => ({ value: String(m.user_id), label: m.name }))} />
-        </Field>
-      )}
-      <div className="c-actions-bar" style={{ alignItems: 'center' }}>
-        {missing.length > 0 && <span className="text-ink-3" style={{ fontSize: '13px', marginRight: 'auto' }}>To finish: {missing.join(', ')}.</span>}
-        <Button variant="primary" disabled={busy || missing.length > 0} onClick={submit}>{busy ? 'Saving…' : 'Finish this stage'}</Button>
-      </div>
-    </div>
+  const summary = (
+    <WorkSummary
+      stage={stage}
+      goal={INTRO[stage]}
+      after={chosen ? chosen.label : 'Choose the outcome (step 2)'}
+      afterTone={chosen && chosen.value !== 'done' ? 'bad' : undefined}
+      checks={checks}
+      facts={[{ label: 'Jobs done', value: `${items.length - openTicks}/${items.length}`, tone: ticksDone ? 'good' : undefined }]}
+    >
+      <Button variant="primary" disabled={busy || missing.length > 0} onClick={submit}>{busy ? 'Saving…' : 'Finish this stage'}</Button>
+    </WorkSummary>
+  );
+
+  return (
+    <WorkLayout summary={summary}>
+      <WorkStep
+        n={1}
+        title="Tick each job when it is done"
+        state={ticksDone ? 'done' : 'current'}
+        summary={`${items.length - openTicks}/${items.length} done`}
+      >
+        <div className="c-qsec">
+          <div className="c-qsec-h">{stage}<small>{items.length - openTicks}/{items.length}</small></div>
+          <div className="c-prog c-prog-thin" aria-hidden="true"><span style={{ width: `${items.length ? Math.round(((items.length - openTicks) / items.length) * 100) : 0}%` }} /></div>
+          {items.map((it) => (
+            <label key={it.key} className={`c-tick${ticks[it.key] ? ' is-on' : ''}`}>
+              <input type="checkbox" checked={!!ticks[it.key]} onChange={() => setTicks((t) => ({ ...t, [it.key]: !t[it.key] }))} />
+              {it.label}
+            </label>
+          ))}
+        </div>
+        <Field label="Work notes (optional)"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
+      </WorkStep>
+
+      <WorkStep
+        n={2}
+        title="What happens next"
+        state={outcomeDone ? 'done' : ticksDone ? 'current' : 'todo'}
+        summary={chosen ? chosen.label : null}
+      >
+        <Choice
+          name={`sw-${stage}`}
+          value={outcome}
+          onChange={setOutcome}
+          options={outcomes.map((o) => ({ value: o.value, label: o.label, hint: o.value === 'done' && openTicks ? `${openTicks} job(s) not ticked yet` : undefined }))}
+        />
+        {needReason && <Field label="What is wrong" required><Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
+        {stage === 'Final Testing' && outcome === 'done' && (
+          <Field label="QC1 inspector" hint="Leave empty to put it in the QC1 queue. It can't be you or anyone who worked on it.">
+            <Select value={qc} onChange={(e) => setQc(e.target.value)} placeholder="QC1 queue (anyone on the team)" options={others.map((m) => ({ value: String(m.user_id), label: m.name }))} />
+          </Field>
+        )}
+      </WorkStep>
+    </WorkLayout>
   );
 }

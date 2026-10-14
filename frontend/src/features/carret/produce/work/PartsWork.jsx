@@ -44,6 +44,29 @@ const isBattery = (p) => {
   return /battery/i.test(`${p?.category || ''} ${p?.part_type || ''} ${p?.part_name || ''}`);
 };
 
+/**
+ * Fitting a requested part also writes a ticket_parts row, so listing every
+ * row repeated each fitted request. Only parts no fitted request accounts for
+ * (added directly in the old screens) are listed separately — matched by part
+ * and quantity, so a second unit of the same part still shows.
+ */
+function partsWithoutRequest(parts = [], requests = []) {
+  const covered = new Map();
+  (requests || []).filter((r) => r.status === 'attached' && r.part_id != null).forEach((r) => {
+    covered.set(Number(r.part_id), (covered.get(Number(r.part_id)) || 0) + (Number(r.quantity) || 1));
+  });
+  return [...(parts || [])]
+    .sort((a, b) => new Date(a.added_at || 0) - new Date(b.added_at || 0))
+    .map((p) => {
+      const key = Number(p.part_id);
+      const used = Number(p.quantity_used) || 1;
+      const take = Math.min(used, covered.get(key) || 0);
+      covered.set(key, (covered.get(key) || 0) - take);
+      return { ...p, qty: used - take };
+    })
+    .filter((p) => p.qty > 0);
+}
+
 export default function PartsWork({ ticket, partRequests = [], parts = [], canWork, onChanged }) {
   const [drawer, setDrawer] = useState(null); // 'ask' | { fit: request }
   const [f, setF] = useState({});
@@ -53,6 +76,7 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
 
   const live = activePartRequests(partRequests);
   const history = (partRequests || []).filter((r) => !live.includes(r));
+  const directlyFitted = partsWithoutRequest(parts, partRequests);
   const run = async (fn, ok) => {
     setBusy(true);
     try { await fn(); toast.success(ok); setDrawer(null); setF({}); onChanged?.(); } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
@@ -141,14 +165,14 @@ export default function PartsWork({ ticket, partRequests = [], parts = [], canWo
         </Section>
       )}
 
-      {parts.length > 0 && (
-        <Section title="Fitted on this ticket">
+      {directlyFitted.length > 0 && (
+        <Section title={`Also fitted, without a request · ${directlyFitted.length}`}>
           <DataTable
-            rows={parts}
+            rows={directlyFitted}
             rowKey={(p) => p.ticket_part_id || p.id}
             columns={[
               { key: 'n', header: 'Part', render: (p) => <PartName name={p.part_name} category={p.category} /> },
-              { key: 'q', header: 'Qty', numeric: true, render: (p) => p.quantity_used || 1 },
+              { key: 'q', header: 'Qty', numeric: true, render: (p) => p.qty },
               { key: 'd', header: 'When', render: (p) => <DateTime value={p.added_at} /> },
             ]}
           />

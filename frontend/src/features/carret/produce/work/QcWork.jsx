@@ -11,7 +11,9 @@ import DispatchQcChargerPanel from '../../../dispatch-charger/DispatchQcChargerP
 import DispatchQcSpecVerifyPanel from '../../../floor-pipeline/components/DispatchQcSpecVerifyPanel';
 import DispatchQcSubmitScanModal from '../../../dispatch-charger/DispatchQcSubmitScanModal';
 import { fetchTicketCharger } from '../../../dispatch-charger/dispatchChargerApi';
-import { Choice, QuestionSection, StepHead, TtsplInput, errText, useFloorChecklists } from './workShared';
+import {
+  Choice, QuestionSection, firstOpenSection, TtsplInput, WorkLayout, WorkStep, WorkSummary, errText, useFloorChecklists,
+} from './workShared';
 import PramanPanel from './PramanPanel';
 
 /**
@@ -272,105 +274,146 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
     : escalates ? 'Fails for the 3rd time → floor manager decides'
       : { QC1: 'Fails → back to assembly', QC2: 'Fails → back to QC1', 'Dispatch QC': next.mode === 'remove' ? 'Fails → taken off the order, back to Diagnosis' : 'Fails → fixed for the same order (back to assembly)' }[stage];
 
+  const nSteps = verifyHere ? 4 : 3;
+  const step1Title = stage === 'QC1' ? 'Does the laptop match its record' : stage === 'QC2' ? 'Configuration check' : 'Charger and configuration';
+  const answeredAll = gateOpen && openCount === 0;
+  const resultDone = answeredAll && Boolean(grade) && !(bad.length > 0 && !remarks.trim())
+    && !(willPass && stage === 'QC2' && !next.tag) && !(willPass && stage === 'Dispatch QC' && !praman);
+  const checks = [
+    { label: step1Title, ok: gateOpen },
+    { label: `Answer every check (${items.length - openCount}/${items.length})`, ok: answeredAll },
+    { label: 'Choose the grade', ok: Boolean(grade) },
+    ...(bad.length > 0 ? [{ label: 'Write a remark about the problems', ok: Boolean(remarks.trim()) }] : []),
+    ...(willPass && stage === 'QC2' ? [{ label: 'Choose how it is listed', ok: Boolean(next.tag) }] : []),
+    ...(willPass && stage === 'Dispatch QC' ? [{ label: 'Attach the Praman report', ok: Boolean(praman) }] : []),
+    ...(verifyHere ? [{ label: 'Type the TTSPL and serial', ok: !verifyMissing }] : []),
+  ];
+  const gradeLabel = (defs.qc.grades.find((g) => g.value === grade) || {}).label;
+
+  const summary = (
+    <WorkSummary
+      stage={stage}
+      goal={INTRO[stage]}
+      after={openCount || !gateOpen ? 'Shown once every check is answered' : routeText}
+      afterTone={!openCount && gateOpen ? (willPass ? 'good' : 'bad') : undefined}
+      checks={checks}
+      facts={[
+        { label: 'Problems', value: bad.length, tone: bad.length ? 'bad' : 'good' },
+        { label: 'Answered', value: `${items.length - openCount}/${items.length}` },
+        { label: 'Grade', value: gradeLabel || '—' },
+        { label: 'QC failures so far', value: Number(ticket.qc_fail_count || 0), tone: Number(ticket.qc_fail_count || 0) ? 'bad' : undefined },
+      ]}
+    >
+      <Button variant="primary" disabled={busy || missing.length > 0} onClick={submit}>{busy ? 'Submitting…' : `Submit ${stage}`}</Button>
+      {gateOpen && <Button onClick={saveDraft}>Save draft</Button>}
+      {missing.length > 0 && openCount > 0 && gateOpen && <Button variant="quiet" onClick={() => setShowOpen(true)}>Show what's open</Button>}
+      <Button variant="quiet" onClick={() => { setFailWhy(''); setDrawer('fail'); }}>Can't pass — fail now</Button>
+    </WorkSummary>
+  );
+
   return (
-    <div className="c-stack">
-      <p className="text-ink-2" style={{ margin: 0 }}>{INTRO[stage]}</p>
-      {isTech && willPass && <Notice tone="warn" title="Technicians can't pass QC">A QC inspector or floor manager passes it. You can still record a failure.</Notice>}
+    <WorkLayout
+      summary={summary}
+      intro={isTech && willPass ? <Notice tone="warn" title="Technicians can't pass QC">A QC inspector or floor manager passes it. You can still record a failure.</Notice> : null}
+    >
+      <WorkStep n={1} title={step1Title} state={gateOpen ? 'done' : 'current'} summary={gateOpen ? 'Done' : null}>
+        {stage === 'QC1' && <Qc1Match ticket={ticket} onReady={setSpecOk} />}
+        {stage === 'QC2' && (
+          <>
+            <Qc2Check ticket={ticket} onState={setQc2State} onFailMismatch={(why) => { setFailWhy(why); setDrawer('fail'); }} />
+            {lead && qc2State !== 'matched' && (
+              override.trim().length >= 10
+                ? <Notice tone="warn" title="Check overridden" action={<Button variant="quiet" onClick={() => setOverride('')}>Undo</Button>}>{override}</Notice>
+                : <p style={{ margin: 0 }}><Button variant="quiet" onClick={() => { setFailWhy(''); setDrawer('override'); }}>Manager: override the check with a reason</Button></p>
+            )}
+          </>
+        )}
+        {stage === 'Dispatch QC' && (
+          <>
+            <DispatchQcChargerPanel ticket={ticket} onReadyChange={setDispatchReady} />
+            {dispatchReady && <DispatchQcSpecVerifyPanel ticket={ticket} onVerified={(ok) => setDispatchVerified(!!ok)} />}
+          </>
+        )}
+      </WorkStep>
 
-      <StepHead n={1} of={3}>{stage === 'QC1' ? 'Does the laptop match its record' : stage === 'QC2' ? 'Configuration check' : 'Charger and configuration'}</StepHead>
-      {stage === 'QC1' && <Qc1Match ticket={ticket} onReady={setSpecOk} />}
-      {stage === 'QC2' && (
-        <>
-          <Qc2Check ticket={ticket} onState={setQc2State} onFailMismatch={(why) => { setFailWhy(why); setDrawer('fail'); }} />
-          {lead && qc2State !== 'matched' && (
-            override.trim().length >= 10
-              ? <Notice tone="warn" title="Check overridden" action={<Button variant="quiet" onClick={() => setOverride('')}>Undo</Button>}>{override}</Notice>
-              : <p><Button variant="quiet" onClick={() => { setFailWhy(''); setDrawer('override'); }}>Manager: override the check with a reason</Button></p>
-          )}
-        </>
-      )}
-      {stage === 'Dispatch QC' && (
-        <>
-          <DispatchQcChargerPanel ticket={ticket} onReadyChange={setDispatchReady} />
-          {dispatchReady && <DispatchQcSpecVerifyPanel ticket={ticket} onVerified={(ok) => setDispatchVerified(!!ok)} />}
-        </>
-      )}
+      <WorkStep
+        n={2}
+        title="Check the laptop"
+        state={!gateOpen ? 'locked' : answeredAll ? 'done' : 'current'}
+        lockedText="The checklist opens when step 1 is done."
+        summary={gateOpen ? `${items.length - openCount}/${items.length} answered${bad.length ? ` · ${bad.length} problem${bad.length > 1 ? 's' : ''}` : ''}` : null}
+      >
+        {defs.qc.sections.map((sec) => <QuestionSection key={sec.key} section={sec} answers={answers} onChange={setA} showOpen={showOpen} focused={sec.key === firstOpenSection(defs.qc.sections, answers)} />)}
+        {fittedParts.length > 0 && (
+          <Notice tone="info" title={`Parts fitted on this laptop (${fittedParts.length})`}>
+            {fittedParts.map((p) => p.part_name).join(', ')} — from the parts record; nothing to type.
+          </Notice>
+        )}
+      </WorkStep>
 
-      <StepHead n={2} of={3}>Check the laptop</StepHead>
-      {!gateOpen ? <Notice tone="info" title="Finish step 1 first">The checklist opens when step 1 is done.</Notice> : (
-        <>
-          <span className="text-ink-3" style={{ fontSize: '13px' }}>{openCount ? `${openCount} of ${items.length} still to answer` : 'All answered'}</span>
-          {defs.qc.sections.map((s) => <QuestionSection key={s.key} section={s} answers={answers} onChange={setA} showOpen={showOpen} />)}
-          {fittedParts.length > 0 && (
-            <Notice tone="info" title={`Parts fitted on this laptop (${fittedParts.length})`}>
-              {fittedParts.map((p) => p.part_name).join(', ')} — from the parts record; nothing to type.
-            </Notice>
-          )}
-        </>
-      )}
-
-      {gateOpen && (
-        <>
-          <StepHead n={3} of={3}>Grade and result</StepHead>
-          <Field label="Grade" required>
-            <Select value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="Choose the grade" options={defs.qc.grades.map((g) => ({ value: g.value, label: `${g.label} — ${g.hint}` }))} />
+      <WorkStep
+        n={3}
+        title="Grade and result"
+        state={!gateOpen ? 'locked' : resultDone ? 'done' : answeredAll ? 'current' : 'todo'}
+        lockedText="Opens with the checklist."
+        summary={gradeLabel || null}
+      >
+        <Field label="Grade" required>
+          <Select value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="Choose the grade" options={defs.qc.grades.map((g) => ({ value: g.value, label: `${g.label} — ${g.hint}` }))} />
+        </Field>
+        <Field label={bad.length ? 'Remarks — what is wrong' : 'Remarks (optional)'} required={bad.length > 0}>
+          <Textarea rows={3} value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={bad.map((b) => b.q.replace(/\?$/, '')).join('; ')} />
+        </Field>
+        {!openCount && (
+          <Notice tone={willPass ? 'good' : 'crit'} title={routeText}>
+            {willPass ? 'Nothing you marked fails this stage.' : fails.join('; ')}
+          </Notice>
+        )}
+        {!openCount && willPass && stage === 'QC1' && (
+          <Field label="QC2 inspector" hint="Leave empty for the next person in rotation.">
+            <Select value={next.who} onChange={(e) => setNext((n) => ({ ...n, who: e.target.value }))} placeholder="Next in rotation" options={people.map((m) => ({ value: String(m.user_id), label: m.name }))} />
           </Field>
-          <Field label={bad.length ? 'Remarks — what is wrong' : 'Remarks (optional)'} required={bad.length > 0}>
-            <Textarea rows={3} value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={bad.map((b) => b.q.replace(/\?$/, '')).join('; ')} />
+        )}
+        {!openCount && willPass && stage === 'QC2' && (
+          <Field label="How it is listed in stock" required>
+            <Segmented value={next.tag} onChange={(v) => setNext((n) => ({ ...n, tag: v }))} label="Listing" options={[{ value: 'rental', label: 'Rental' }, { value: 'sale', label: 'Sale' }, { value: 'both', label: 'Both' }]} />
           </Field>
-          {!openCount && (
-            <Notice tone={willPass ? 'good' : 'crit'} title={routeText}>
-              {willPass ? 'Nothing you marked fails this stage.' : fails.join('; ')}
-            </Notice>
-          )}
-          {!openCount && willPass && stage === 'QC1' && (
-            <Field label="QC2 inspector" hint="Leave empty for the next person in rotation.">
-              <Select value={next.who} onChange={(e) => setNext((n) => ({ ...n, who: e.target.value }))} placeholder="Next in rotation" options={people.map((m) => ({ value: String(m.user_id), label: m.name }))} />
-            </Field>
-          )}
-          {!openCount && willPass && stage === 'QC2' && (
-            <Field label="How it is listed in stock" required>
-              <Segmented value={next.tag} onChange={(v) => setNext((n) => ({ ...n, tag: v }))} label="Listing" options={[{ value: 'rental', label: 'Rental' }, { value: 'sale', label: 'Sale' }, { value: 'both', label: 'Both' }]} />
-            </Field>
-          )}
-          {stage === 'Dispatch QC' && (
-            <Field label="Praman verification" required={willPass}>
-              <PramanPanel ticketId={ticket.ticket_id} onChange={setPraman} />
-            </Field>
-          )}
-          {!openCount && !willPass && !escalates && stage === 'Dispatch QC' && (
-            <Choice name="dq-mode" value={next.mode} onChange={(v) => setNext((n) => ({ ...n, mode: v }))} options={[
-              { value: 'rework', label: 'Fix it for this order', hint: 'Back to assembly; it stays on the order.' },
-              { value: 'remove', label: 'Take it off the order', hint: 'Back to Diagnosis; the order needs another laptop.' },
-            ]}
-            />
-          )}
-          {!openCount && !willPass && !escalates && stage !== 'Dispatch QC' && (
-            <Field label="Who fixes it" hint="Leave empty to put it in that stage's queue.">
-              <Select value={next.who} onChange={(e) => setNext((n) => ({ ...n, who: e.target.value }))} placeholder="The stage's queue" options={people.map((m) => ({ value: String(m.user_id), label: m.name }))} />
-            </Field>
-          )}
-        </>
-      )}
+        )}
+        {stage === 'Dispatch QC' && (
+          <Field label="Praman verification" required={willPass}>
+            <PramanPanel ticketId={ticket.ticket_id} onChange={setPraman} />
+          </Field>
+        )}
+        {!openCount && !willPass && !escalates && stage === 'Dispatch QC' && (
+          <Choice name="dq-mode" value={next.mode} onChange={(v) => setNext((n) => ({ ...n, mode: v }))} options={[
+            { value: 'rework', label: 'Fix it for this order', hint: 'Back to assembly; it stays on the order.' },
+            { value: 'remove', label: 'Take it off the order', hint: 'Back to Diagnosis; the order needs another laptop.' },
+          ]}
+          />
+        )}
+        {!openCount && !willPass && !escalates && stage !== 'Dispatch QC' && (
+          <Field label="Who fixes it" hint="Leave empty to put it in that stage's queue.">
+            <Select value={next.who} onChange={(e) => setNext((n) => ({ ...n, who: e.target.value }))} placeholder="The stage's queue" options={people.map((m) => ({ value: String(m.user_id), label: m.name }))} />
+          </Field>
+        )}
+      </WorkStep>
 
       {verifyHere && (
-        <Field label="Verify the laptop" hint="Type or scan both from the laptop on your bench. They must match its record exactly.">
+        <WorkStep
+          n={nSteps}
+          title="Scan the laptop on your bench"
+          state={!verifyMissing ? 'done' : resultDone ? 'current' : 'todo'}
+          summary={!verifyMissing ? 'Typed' : 'Needed to pass or fail'}
+        >
+          <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>Type or scan both from the laptop in front of you. They must match its record exactly.</p>
           <FormGrid cols={2}>
             <Field label="TTSPL" required><TtsplInput value={vTtspl} onChange={setVTtspl} expected={ticket.ttspl_id} aria-label="TTSPL" /></Field>
             <Field label="Serial" required={serialNeeded} hint={serialNeeded ? undefined : 'Optional while it will not power on'}>
               <Input value={vSerial} onChange={(e) => setVSerial(e.target.value.toUpperCase())} className="font-mono" autoComplete="off" spellCheck={false} aria-label="Serial" />
             </Field>
           </FormGrid>
-        </Field>
+        </WorkStep>
       )}
-
-      <div className="c-actions-bar" style={{ alignItems: 'center' }}>
-        {missing.length > 0 && <span className="text-ink-3" style={{ fontSize: '13px', marginRight: 'auto' }}>To submit: {missing.join(', ')}.</span>}
-        {missing.length > 0 && openCount > 0 && gateOpen && <Button variant="quiet" onClick={() => setShowOpen(true)}>Show what's open</Button>}
-        <Button variant="quiet" onClick={() => { setFailWhy(''); setDrawer('fail'); }}>Can't pass — fail now</Button>
-        {gateOpen && <Button onClick={saveDraft}>Save draft</Button>}
-        <Button variant="primary" disabled={busy || missing.length > 0} onClick={submit}>{busy ? 'Submitting…' : `Submit ${stage}`}</Button>
-      </div>
 
       <Drawer
         open={drawer === 'fail'}
@@ -401,6 +444,6 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
         <Field label="Reason (a full sentence)" required><Textarea rows={3} value={failWhy} onChange={(e) => setFailWhy(e.target.value)} /></Field>
       </Drawer>
       <DispatchQcSubmitScanModal open={scanOpen} ticket={ticket} charger={charger} onClose={() => setScanOpen(false)} onMatched={() => { setScanOpen(false); submit(); }} />
-    </div>
+    </WorkLayout>
   );
 }

@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Button, EmptyState, Field, FormGrid, Input, Notice, Segmented, Textarea } from '../../../../components/carret';
 import api from '../../../../utils/api';
-import { Choice, QuestionSection, StepHead, errText, useFloorChecklists, TtsplInput } from './workShared';
+import {
+  Choice, QuestionSection, firstOpenSection, WorkLayout, WorkStep, WorkSummary, errText, useFloorChecklists, TtsplInput,
+} from './workShared';
 
 /**
  * Diagnosis — find out what is wrong with the laptop.
@@ -13,6 +15,8 @@ import { Choice, QuestionSection, StepHead, errText, useFloorChecklists, TtsplIn
  *   3. Scan the TTSPL and serial, and submit.
  *
  * Answers save as a draft while you work, so nothing is lost on a refresh.
+ * Layout (14 Oct 2026): numbered step cards, and a pinned panel with what is
+ * still needed and the submit button (workShared WorkLayout).
  */
 const OPEN_PART = ['pending', 'escalated', 'ordered', 'received', 'approved'];
 
@@ -107,8 +111,39 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
     }
   };
 
+  const step1Done = Boolean(powersOn) && openCount === 0;
+  const step2Done = Boolean(outcome) && !(needNote && remarks.trim().length < 5);
+  const step3Done = Boolean(ttspl.trim()) && (!needSerial || Boolean(serial.trim()));
+  const chosen = outcomes.find((o) => o.value === outcome);
+  const checks = [
+    ...(ticket.received_condition === 'not_on' ? [{ label: 'Say whether it powers on now', ok: Boolean(powersOn) }] : []),
+    { label: `Answer every check (${items.length - openCount}/${items.length})`, ok: openCount === 0 },
+    { label: 'Choose what happens next', ok: Boolean(outcome) },
+    ...(needNote ? [{ label: 'Write what is wrong', ok: remarks.trim().length >= 5 }] : []),
+    { label: 'Scan the TTSPL', ok: Boolean(ttspl.trim()) },
+    ...(needSerial ? [{ label: 'Scan the serial', ok: Boolean(serial.trim()) }] : []),
+  ];
+
+  const summary = (
+    <WorkSummary
+      stage="Diagnosis"
+      goal="Find out what is wrong with this laptop and send it to the team that fixes it."
+      after={chosen ? chosen.label : 'Choose what happens next (step 2)'}
+      checks={checks}
+      facts={[
+        { label: 'Faults found', value: faults.length, tone: faults.length ? 'bad' : 'good' },
+        { label: 'Parts asked for', value: openParts },
+        { label: 'Answered', value: `${items.length - openCount}/${items.length}` },
+        { label: 'Draft', value: saved ? `saved ${saved}` : 'not yet' },
+      ]}
+    >
+      <Button variant="primary" disabled={busy || !ready} onClick={submit}>{busy ? 'Submitting…' : 'Submit diagnosis'}</Button>
+      {!ready && openCount > 0 && <Button variant="quiet" onClick={() => setShowOpen(true)}>Show what's open</Button>}
+    </WorkSummary>
+  );
+
   return (
-    <div className="c-stack">
+    <WorkLayout summary={summary}>
       {ticket.received_condition === 'not_on' && (
         <Notice tone="warn" title="It arrived not powering on">
           <span style={{ display: 'inline-flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -118,35 +153,46 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
         </Notice>
       )}
 
-      <StepHead n={1} of={3}>Check each part of the laptop</StepHead>
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <span className="text-ink-3" style={{ fontSize: '13px' }}>
-          {openCount ? `${openCount} of ${items.length} still to answer` : 'All answered'}{faults.length ? ` · ${faults.length} fault(s)` : ''}{saved ? ` · draft saved ${saved}` : ''}
-        </span>
-      </div>
-      {sections.map((s) => <QuestionSection key={s.key} section={s} answers={answers} onChange={setA} showOpen={showOpen} />)}
+      <WorkStep
+        n={1}
+        title="Check each part of the laptop"
+        state={step1Done ? 'done' : 'current'}
+        summary={`${items.length - openCount}/${items.length} answered${faults.length ? ` · ${faults.length} fault${faults.length > 1 ? 's' : ''}` : ''}`}
+      >
+        <p className="text-ink-3" style={{ margin: 0, fontSize: '13px' }}>
+          Answer each check: green is good, red is a fault. A finished group folds away. Your answers save as a draft while you work.
+        </p>
+        {sections.map((s) => <QuestionSection key={s.key} section={s} answers={answers} onChange={setA} showOpen={showOpen} focused={s.key === firstOpenSection(sections, answers)} />)}
+      </WorkStep>
 
-      <StepHead n={2} of={3}>What happens next</StepHead>
-      <Choice name="dx-outcome" value={outcome} onChange={(v) => { setTouchedOutcome(true); setOutcome(v); }} options={outcomes} />
-      {outcome === 'parts' && (
-        <Notice tone="info" title={`${openParts} part request(s) open`} action={onOpenParts && <Button variant="quiet" onClick={onOpenParts}>Parts tab</Button>}>
-          The laptop goes to assembly with you; it can't leave assembly until the parts are fitted.
-        </Notice>
-      )}
-      <Field label={needNote ? 'What is wrong (for the next person)' : 'Note (optional)'} required={needNote}>
-        <Textarea rows={3} value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={faults.length ? faults.map((f) => f.q.replace(/\?$/, '')).join('; ') : ''} />
-      </Field>
+      <WorkStep
+        n={2}
+        title="What happens next"
+        state={step2Done ? 'done' : step1Done ? 'current' : 'todo'}
+        summary={chosen ? chosen.label : (openCount ? 'Suggested once every check is answered' : null)}
+      >
+        <Choice name="dx-outcome" value={outcome} onChange={(v) => { setTouchedOutcome(true); setOutcome(v); }} options={outcomes} />
+        {outcome === 'parts' && (
+          <Notice tone="info" title={`${openParts} part request(s) open`} action={onOpenParts && <Button variant="quiet" onClick={onOpenParts}>Parts tab</Button>}>
+            The laptop goes to assembly with you; it can't leave assembly until the parts are fitted.
+          </Notice>
+        )}
+        <Field label={needNote ? 'What is wrong (for the next person)' : 'Note (optional)'} required={needNote}>
+          <Textarea rows={3} value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={faults.length ? faults.map((f) => f.q.replace(/\?$/, '')).join('; ') : ''} />
+        </Field>
+      </WorkStep>
 
-      <StepHead n={3} of={3}>Scan the laptop and submit</StepHead>
-      <FormGrid cols={2}>
-        <Field label="TTSPL" required><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket.ttspl_id} placeholder="Scan the TTSPL label" /></Field>
-        <Field label="Serial" required={needSerial} hint={needSerial ? undefined : "Optional — it doesn't power on"}><Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" /></Field>
-      </FormGrid>
-      <div className="c-actions-bar" style={{ alignItems: 'center' }}>
-        {!ready && <span className="text-ink-3" style={{ fontSize: '13px', marginRight: 'auto' }}>To submit: {missing.join(', ')}.</span>}
-        {!ready && openCount > 0 && <Button variant="quiet" onClick={() => setShowOpen(true)}>Show what's open</Button>}
-        <Button variant="primary" disabled={busy || !ready} onClick={submit}>{busy ? 'Submitting…' : 'Submit diagnosis'}</Button>
-      </div>
-    </div>
+      <WorkStep
+        n={3}
+        title="Scan the laptop on your bench"
+        state={step3Done ? 'done' : step1Done && step2Done ? 'current' : 'todo'}
+        summary={step3Done ? 'Scanned' : null}
+      >
+        <FormGrid cols={2}>
+          <Field label="TTSPL" required><TtsplInput value={ttspl} onChange={setTtspl} expected={ticket.ttspl_id} placeholder="Scan the TTSPL label" /></Field>
+          <Field label="Serial" required={needSerial} hint={needSerial ? undefined : "Optional — it doesn't power on"}><Input value={serial} onChange={(e) => setSerial(e.target.value)} className="font-mono" /></Field>
+        </FormGrid>
+      </WorkStep>
+    </WorkLayout>
   );
 }

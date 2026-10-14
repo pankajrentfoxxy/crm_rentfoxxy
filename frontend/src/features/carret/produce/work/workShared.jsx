@@ -54,20 +54,117 @@ export function Question({ item, value, onChange, open }) {
   );
 }
 
-/** A titled group of questions with its own "answered / problems" count. */
-export function QuestionSection({ section, answers, onChange, showOpen }) {
+/** The first group with an unanswered question — the one that opens by itself. */
+export function firstOpenSection(sections = [], answers = {}) {
+  const s = sections.find((sec) => sec.items.some((it) => answers[it.key] == null || answers[it.key] === ''));
+  return s ? s.key : null;
+}
+
+/**
+ * A titled group of questions with its own "answered / problems" count. It
+ * folds: only the first unfinished group (focused) opens by itself, and the
+ * next one opens as it is completed; any group opens on a click. "Show what's
+ * open" (showOpen) opens every group with a gap.
+ */
+export function QuestionSection({ section, answers, onChange, showOpen, focused = true }) {
+  const total = section.items.length;
   const answered = section.items.filter((it) => answers[it.key] != null && answers[it.key] !== '').length;
   const bad = section.items.filter((it) => it.options.some((o) => o.tone === 'bad' && o.value === answers[it.key])).length;
+  const complete = answered === total;
+  const [manual, setManual] = useState(null); // null = follow completeness
+  const open = showOpen && !complete ? true : (manual ?? (!complete && focused));
   return (
-    <div className="c-qsec">
-      <div className="c-qsec-h">
-        {section.title}
+    <div className={`c-qsec${complete ? ' is-done' : ''}${bad ? ' has-bad' : ''}`}>
+      <button type="button" className="c-qsec-h c-qsec-toggle" aria-expanded={open} onClick={() => setManual(!open)}>
+        <span className="c-qsec-mark" aria-hidden="true">{complete ? (bad ? '!' : '✓') : ''}</span>
+        <span className="min-w-0">{section.title}</span>
         <small className={bad ? 'is-bad' : ''}>
-          {bad ? `${bad} problem${bad > 1 ? 's' : ''} · ` : ''}{answered}/{section.items.length}
+          {bad ? `${bad} problem${bad > 1 ? 's' : ''} · ` : ''}{answered}/{total}
         </small>
+        <span className="c-qsec-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+      </button>
+      <div className="c-prog c-prog-thin" aria-hidden="true"><span style={{ width: `${total ? Math.round((answered / total) * 100) : 0}%` }} /></div>
+      {open && (
+        <>
+          {section.hint && <div className="c-qsec-hint">{section.hint}</div>}
+          {section.items.map((it) => <Question key={it.key} item={it} value={answers[it.key]} onChange={onChange} open={showOpen} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── The stage work layout ──────────────────────────────────────────────
+ * Every stage form (Diagnosis, the repair stages, QC) is the same shape:
+ * numbered step cards on the left, and a pinned panel on the right saying
+ * what this stage is for, where the laptop goes next, what is still needed,
+ * and the submit button. On a phone the panel drops below as a sticky bar.
+ */
+
+/** One numbered step. state: 'done' | 'current' | 'todo' | 'locked'. */
+export function WorkStep({ n, title, state = 'current', summary, lockedText, children }) {
+  return (
+    <section className={`c-wstep is-${state}`} aria-label={`Step ${n}: ${title}`}>
+      <header className="c-wstep-h">
+        <span className="c-wstep-n" aria-hidden="true">{state === 'done' ? '✓' : n}</span>
+        <span className="c-wstep-t">
+          <span className="c-wstep-k">Step {n}</span>
+          {title}
+        </span>
+        {summary && <span className="c-wstep-s">{summary}</span>}
+      </header>
+      <div className="c-wstep-b">
+        {state === 'locked' ? <p className="text-ink-3" style={{ margin: 0 }}>{lockedText || 'Finish the step above first.'}</p> : children}
       </div>
-      {section.hint && <div className="c-qsec-hint">{section.hint}</div>}
-      {section.items.map((it) => <Question key={it.key} item={it} value={answers[it.key]} onChange={onChange} open={showOpen} />)}
+    </section>
+  );
+}
+
+/**
+ * The pinned "this stage" panel.
+ *   checks: [{ label, ok }] — every requirement, ticked or not (not just the gaps)
+ *   facts:  [{ label, value, tone? }] — short counts (faults, parts, grade…)
+ *   after:  where the laptop goes when this is submitted
+ */
+export function WorkSummary({ stage, goal, after, afterTone, checks = [], facts = [], children }) {
+  const done = checks.filter((c) => c.ok).length;
+  const pct = checks.length ? Math.round((done / checks.length) * 100) : 100;
+  return (
+    <aside className="c-wsum" aria-label={`${stage} summary`}>
+      <div className="c-wsum-k">This stage</div>
+      <div className="c-wsum-t">{stage}</div>
+      {goal && <p className="c-wsum-goal">{goal}</p>}
+      {checks.length > 0 && (
+        <>
+          <div className="c-wsum-row"><span>Ready to submit</span><b>{done}/{checks.length}</b></div>
+          <div className="c-prog" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
+          <ul className="c-wsum-list">
+            {checks.map((c) => <li key={c.label} className={c.ok ? 'is-ok' : ''}><span aria-hidden="true">{c.ok ? '✓' : '○'}</span>{c.label}</li>)}
+          </ul>
+        </>
+      )}
+      {facts.length > 0 && (
+        <dl className="c-wsum-facts">
+          {facts.map((f) => (
+            <div key={f.label}><dt>{f.label}</dt><dd className={f.tone ? `is-${f.tone}` : ''}>{f.value}</dd></div>
+          ))}
+        </dl>
+      )}
+      {after && <div className={`c-wsum-after${afterTone ? ` is-${afterTone}` : ''}`}><span>Next</span>{after}</div>}
+      <div className="c-wsum-act">{children}</div>
+    </aside>
+  );
+}
+
+/** Steps on the left, the summary panel on the right. */
+export function WorkLayout({ intro, summary, children }) {
+  return (
+    <div className="c-work">
+      <div className="c-work-main">
+        {intro}
+        {children}
+      </div>
+      {summary}
     </div>
   );
 }
