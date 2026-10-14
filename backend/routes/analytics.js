@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getDashboardStats,
   getTeamPerformance,
   getManagerDashboard,
   getSalesDashboard,
@@ -10,11 +9,6 @@ const { authMiddleware, checkSectionPermission } = require('../middleware/auth')
 const cp = checkSectionPermission;
 
 router.use(authMiddleware);
-
-// @route   GET /api/analytics/dashboard
-// @desc    Get dashboard statistics
-// @access  Private
-router.get('/dashboard', getDashboardStats);
 
 // @route   GET /api/analytics/team-performance
 // @desc    Get team performance metrics

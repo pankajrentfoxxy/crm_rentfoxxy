@@ -3,7 +3,6 @@ import { Navigate } from 'react-router-dom';
 import PartsRedirect from './PartsRedirect';
 import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
-import Dashboard from '../pages/Dashboard';
 import LeadCrmApp from '../features/lead-crm/LeadCrmApp';
 import SalesPipelineApp from '../features/sales-pipeline/SalesPipelineApp';
 import TicketsList from '../pages/tickets/TicketsList';
@@ -17,14 +16,9 @@ function guard(section, action, element) {
 }
 
 export const salesRoutes = [
-  // The old dashboard is not part of the new UI (15 Oct 2026): with it on,
-  // /dashboard opens the new UI's Today page instead.
-  {
-    path: '/dashboard',
-    element: process.env.REACT_APP_CARRET === '1'
-      ? <Navigate to="/carret/home" replace />
-      : guard('dashboard', 'view', withLayout(<Dashboard />)),
-  },
+  // The old dashboard was removed (15 Oct 2026); old links land on the new
+  // UI's Today page.
+  { path: '/dashboard', element: <Navigate to="/carret/home" replace /> },
   { path: '/tickets', element: guard('tickets', 'view', withLayout(<TicketsList />)) },
   { path: '/tickets/:id', element: guard('tickets', 'view', withLayout(<TicketDetails />)) },
   { path: '/tickets/create', element: guard('tickets', 'create', withLayout(<CreateTicket />)) },
