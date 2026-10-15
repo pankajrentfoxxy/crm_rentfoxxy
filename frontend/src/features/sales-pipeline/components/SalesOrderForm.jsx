@@ -442,8 +442,8 @@ export default function SalesOrderForm({
       };
       let createdSoNumber = null;
       if (isEdit) {
-        await updateSalesOrder(editSoNumber, payload);
-        toast.success('Sales order updated');
+        const res = await updateSalesOrder(editSoNumber, payload);
+        toast.success(res?.data?.message || 'Sales order updated');
       } else {
         const res = await createSalesOrder({
           sales_order_number: meta?.sales_order_number,

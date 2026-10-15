@@ -175,9 +175,10 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const refusalStatus = data?.refusal_status || null;
   const cancelAfterRefusal = Boolean(data?.dc_cancel_eligibility?.all_refused_and_received);
   const canCancelSo = !isCancelled && (data?.can_cancel ?? !hasDcCreated);
+  // After a DC only a super admin may edit; the backend carries the change onto the DCs.
   const canEditSo = (resolvedScope === 'rental' || resolvedScope === 'sale')
     && !isCancelled
-    && !hasDcCreated
+    && (!hasDcCreated || isSuperAdmin)
     && !isInPlaceSale
     && canEdit(scopeConfig?.permissionSection || 'sales_orders_doc');
   const listPath = salesOrderListPath(resolvedScope);

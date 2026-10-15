@@ -1256,7 +1256,130 @@ exports.storeSalesOrder = async (req, res) => {
   }
 };
 
-/** PATCH /sales-orders/:soNumber — Edit rental/sale SO before any DC is created. */
+// Outbound, live DCs of one SO. Static fragment; the SO number is $1.
+const SO_DC_SYNC_SCOPE = `sales_order_number = $1
+  AND COALESCE(movement_type, 'outbound') = 'outbound'
+  AND LOWER(COALESCE(status, '')) <> 'cancelled'`;
+
+/**
+ * Carry a super admin's SO edit onto the SO's existing DCs. DC rows are
+ * denormalised copies taken at DC creation, so a field is updated only where
+ * the DC still holds the SO's old value; anything set on the DC itself (a
+ * different site address, a shipping charge typed on the DC) is left alone.
+ * Rate, lock-in and warranties are not stored on the DC; they are read from
+ * the SO, so the regenerated PDFs pick them up.
+ */
+async function syncDcsAfterSoEdit(client, soNumber, oldLines) {
+  const newLines = (await client.query(
+    `SELECT * FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC`,
+    [soNumber]
+  )).rows;
+  if (!oldLines.length || !newLines.length) return { dc_rows_updated: 0, fields: [] };
+  const oldHead = oldLines[0];
+  const newHead = newLines[0];
+  const changed = [];
+  let rows = 0;
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+  // column: static identifier. cast: static type suffix.
+  const carry = async (column, oldVal, newVal, cast = '') => {
+    if (same(oldVal, newVal)) return;
+    const r = await client.query(
+      `UPDATE delivery_challan_lines
+          SET ${column} = $2${cast}, updated_at = NOW()
+        WHERE ${SO_DC_SYNC_SCOPE}
+          AND ${column} IS NOT DISTINCT FROM $3${cast}`,
+      [soNumber, newVal ?? null, oldVal ?? null]
+    );
+    if (r.rowCount) { rows += r.rowCount; changed.push(column); }
+  };
+
+  await carry('customer_id', oldHead.customer_id, newHead.customer_id, '::int');
+  await carry('email', oldHead.customer_email, newHead.customer_email);
+  await carry('gst_number', oldHead.gst_number, newHead.gst_number);
+  await carry('supply_state', oldHead.supply_state, newHead.supply_state);
+  await carry('shiping_charges',
+    Number(oldHead.shiping_charges || 0), Number(newHead.shiping_charges || 0), '::numeric');
+  for (const col of ['customer_billing_address', 'customer_shipping_address']) {
+    await carry(col,
+      oldHead[col] == null ? null : JSON.stringify(oldHead[col]),
+      newHead[col] == null ? null : JSON.stringify(newHead[col]),
+      '::jsonb');
+  }
+
+  // The DC prints the customer's document name (trade name first), not always
+  // the raw SO name, so match either form of the old name.
+  if (!same(oldHead.customer_name, newHead.customer_name) || !same(oldHead.customer_id, newHead.customer_id)) {
+    const oldDocName = await resolveCustomerDocumentName(client, oldHead.customer_id, oldHead.customer_name);
+    const newDocName = await resolveCustomerDocumentName(client, newHead.customer_id, newHead.customer_name);
+    if (newDocName && !same(oldDocName, newDocName)) {
+      const r = await client.query(
+        `UPDATE delivery_challan_lines SET customer_name = $2, updated_at = NOW()
+          WHERE ${SO_DC_SYNC_SCOPE} AND customer_name = ANY($3::text[])`,
+        [soNumber, newDocName, [oldHead.customer_name, oldDocName].filter(Boolean)]
+      );
+      if (r.rowCount) { rows += r.rowCount; changed.push('customer_name'); }
+    }
+  }
+
+  // Brand/model: the DC line's rate is looked up from the SO by brand + model,
+  // so a renamed SO line must rename its DC lines too.
+  for (const oldLine of oldLines) {
+    const newLine = newLines.find((l) => l.id === oldLine.id);
+    if (!newLine || (same(oldLine.brand, newLine.brand) && same(oldLine.model_name, newLine.model_name))) continue;
+    const r = await client.query(
+      `UPDATE delivery_challan_lines SET brand = $2, model_name = $3, updated_at = NOW()
+        WHERE ${SO_DC_SYNC_SCOPE}
+          AND brand IS NOT DISTINCT FROM $4 AND model_name IS NOT DISTINCT FROM $5`,
+      [soNumber, newLine.brand, newLine.model_name, oldLine.brand, oldLine.model_name]
+    );
+    if (r.rowCount) { rows += r.rowCount; changed.push('brand/model'); }
+  }
+
+  // Security: re-split only when the SO's deposit actually changed, using the
+  // same split as DC creation (one month = each unit's own rate; otherwise
+  // the total shared by attached units).
+  const oldSecurity = sumSoSecurityAmount(oldLines);
+  const newSecurity = sumSoSecurityAmount(newLines);
+  const oldType = String(oldHead.security_type || 'none').toLowerCase();
+  const newType = String(newHead.security_type || 'none').toLowerCase();
+  if (oldSecurity !== newSecurity || oldType !== newType) {
+    const attachedTotal = Number((await client.query(
+      `SELECT COUNT(*)::int AS n FROM sales_order_serials
+        WHERE sales_order_number = $1 AND status <> 'removed'`,
+      [soNumber]
+    )).rows[0]?.n || 0);
+    const dcs = (await client.query(
+      `SELECT DISTINCT dc_number FROM delivery_challan_lines WHERE ${SO_DC_SYNC_SCOPE}`,
+      [soNumber]
+    )).rows;
+    for (const { dc_number: dcNumber } of dcs) {
+      const serials = (await client.query(
+        `SELECT line_id FROM sales_order_serials
+          WHERE sales_order_number = $1 AND dc_number = $2 AND status <> 'removed'`,
+        [soNumber, dcNumber]
+      )).rows;
+      let security = null;
+      if (newSecurity <= 0) security = 0;
+      else if (serials.length && newType === 'one_month_rental') {
+        security = computeDcSecurityFromSerials(serials, newLines);
+      } else if (serials.length && attachedTotal > 0) {
+        security = Math.round((newSecurity / attachedTotal) * serials.length * 100) / 100;
+      }
+      if (security == null) continue;
+      const r = await client.query(
+        `UPDATE delivery_challan_lines SET security_amount = $2, updated_at = NOW()
+          WHERE dc_number = $1 AND security_amount IS DISTINCT FROM $2::numeric`,
+        [dcNumber, security]
+      );
+      if (r.rowCount) { rows += r.rowCount; if (!changed.includes('security_amount')) changed.push('security_amount'); }
+    }
+  }
+
+  return { dc_rows_updated: rows, fields: [...new Set(changed)] };
+}
+
+/** PATCH /sales-orders/:soNumber — Edit rental/sale SO (after a DC: super admin only). */
 exports.updateSalesOrder = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1307,11 +1430,14 @@ exports.updateSalesOrder = async (req, res) => {
       `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
       [soNumber]
     );
-    if (Number(dcRes.rows[0]?.c || 0) > 0) {
+    // Once a DC exists only a super admin may edit, and the change is carried
+    // onto the DCs below (syncDcsAfterSoEdit).
+    const hasDc = Number(dcRes.rows[0]?.c || 0) > 0;
+    if (hasDc && req.user?.role !== 'super_admin') {
       await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
-        message: 'Cannot edit: a delivery challan has already been created for this sales order.',
+        message: 'A delivery challan has already been created for this sales order. Only a super admin can edit it now.',
       });
     }
 
@@ -1324,6 +1450,15 @@ exports.updateSalesOrder = async (req, res) => {
         message: 'Replacement sales orders cannot be edited from this screen.',
       });
     }
+
+    // Snapshot before the edit: DC fields still holding the old value were
+    // copied from the SO and follow the change; ones set on the DC itself stay.
+    const oldSoLines = hasDc
+      ? (await client.query(
+        `SELECT * FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC`,
+        [soNumber]
+      )).rows
+      : [];
 
     const shipping = parseJsonField(body.customer_shipping_address);
     let billing = parseJsonField(body.customer_billing_address);
@@ -1389,11 +1524,25 @@ exports.updateSalesOrder = async (req, res) => {
             message: `Quantity cannot be less than attached units (${attachedCount}).`,
           });
         }
+        // DC creation lowers `quantity` to what is left to dispatch; main_qty
+        // stays the ordered count. Keep the dispatched part out of `quantity`,
+        // or an edit would reopen units that have already gone out.
+        const oldLine = oldSoLines.find((r) => r.id === lineId);
+        const dispatched = oldLine
+          ? Math.max(0, Number(oldLine.main_qty ?? oldLine.quantity ?? 0) - Number(oldLine.quantity ?? 0))
+          : 0;
+        if (qty < dispatched) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: `Quantity cannot be less than units already on a delivery challan (${dispatched}).`,
+          });
+        }
         await client.query(
           `UPDATE sales_order_lines SET
              brand = $1, model_name = $2, processor = $3, generation = $4,
              ram = $5, storage = $6, gpu = $7, screen_size = $8,
-             quantity = $9, main_qty = $9, rate = $10,
+             quantity = $17, main_qty = $9, rate = $10,
              locking_period = $11, technical_warranty = $12,
              battery_charger_warranty = $13, remark = $14,
              updated_at = NOW()
@@ -1403,7 +1552,7 @@ exports.updateSalesOrder = async (req, res) => {
             item.ram, item.storage, item.gpu || null, item.screen_size || null,
             qty, +rate.toFixed(2),
             item.locking_period, item.technical_warranty, item.battery_charger_warranty,
-            item.remark, lineId, soNumber,
+            item.remark, lineId, soNumber, qty - dispatched,
           ]
         );
         keptLineIds.add(lineId);
@@ -1551,6 +1700,8 @@ exports.updateSalesOrder = async (req, res) => {
       );
     }
 
+    const dcSync = hasDc ? await syncDcsAfterSoEdit(client, soNumber, oldSoLines) : null;
+
     await client.query('COMMIT');
 
     let pdfPath = null;
@@ -1563,16 +1714,18 @@ exports.updateSalesOrder = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Sales order updated',
+      message: dcSync ? 'Sales order updated and its delivery challans refreshed' : 'Sales order updated',
       sales_order_number: soNumber,
       pdf_path: pdfPath,
+      dc_sync: dcSync,
     });
 
     await safeLogSalesOrderActivity({
       salesOrderNumber: soNumber,
       activityType: ACTIVITY_TYPES.SALES_ORDER,
       action: 'updated',
-      description: `${req.user?.name || 'User'} updated Sales Order ${soNumber}.`,
+      description: `${req.user?.name || 'User'} updated Sales Order ${soNumber}`
+        + (dcSync ? ` after DC creation; ${dcSync.dc_rows_updated} DC row update(s) carried over.` : '.'),
       user: req.user,
     });
   } catch (error) {
@@ -7656,3 +7809,6 @@ exports.updateSoShipping = async (req, res) => {
     client.release();
   }
 };
+
+// Exposed for scripts: run against a rolled-back transaction to preview a DC sync.
+exports._syncDcsAfterSoEdit = syncDcsAfterSoEdit;
