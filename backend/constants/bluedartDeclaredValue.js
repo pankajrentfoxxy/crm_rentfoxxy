@@ -186,8 +186,24 @@ function lookupInMatrix(matrix, processor, generation, model) {
   const row = rows.find(
     (r) => String(r.category).toLowerCase() === category.toLowerCase()
       && String(r.grade).toLowerCase() === grade.toLowerCase()
-  );
+  ) || (isUltraGrade(grade) ? rows.find(
+    (r) => isUltraCategory(r.category) && String(r.grade).toLowerCase() === grade.toLowerCase()
+  ) : null);
   return row ? Number(row.amount) : null;
+}
+
+function isUltraGrade(grade) {
+  return /^u[579]$/i.test(String(grade || ''));
+}
+
+/**
+ * The matrix category is free text, so an Ultra row may be filed as "ultra7",
+ * "Ultra 7" or "Core Ultra" rather than i7. On 2026-10-15 the u7 row was saved
+ * as "ultra7"; nothing matched it, DC/26-27/1547 fell back to the Rs 4,200 rent
+ * and went out with no e-way lock.
+ */
+function isUltraCategory(category) {
+  return /^(core)?ultra/.test(String(category || '').toLowerCase().replace(/[^a-z0-9]/g, ''));
 }
 
 async function lookupDeclaredValueForUnit(processor, generation, model) {

@@ -92,10 +92,28 @@ export async function ensureDeclaredValueMatrixLoaded({ force = false } = {}) {
   return inflight;
 }
 
+/** Intel Core Ultra tier ("Ultra 7", "Core Ultra 7 165U"), or null. Mirrors the backend. */
+function ultraTier(text) {
+  const m = String(text || '').match(/\b(?:core\s*)?ultra\s*([579])\b/i);
+  return m ? m[1] : null;
+}
+
+function isUltraGrade(grade) {
+  return /^u[579]$/i.test(String(grade || ''));
+}
+
+/** Matrix category is free text: an Ultra row may be filed as i7, "ultra7", "Core Ultra"… */
+function isUltraCategory(category) {
+  return /^(core)?ultra/.test(String(category || '').toLowerCase().replace(/[^a-z0-9]/g, ''));
+}
+
 export function normalizeCategory(processor) {
   const raw = String(processor || '').trim();
   if (!raw) return null;
   const p = raw.toLowerCase().replace(/\s+/g, '');
+
+  const ultra = ultraTier(raw);
+  if (ultra) return ultra === '5' ? 'i5' : 'i7';
 
   if (/\bm\s*[1-5]\b/i.test(raw) || /\bm[1-5]\b/i.test(raw) || /apple\s*m[1-5]/i.test(raw)) {
     return 'APPLE';
@@ -112,10 +130,15 @@ export function normalizeCategory(processor) {
   return null;
 }
 
-export function normalizeGrade(generation) {
+export function normalizeGrade(generation, processor) {
   const raw = String(generation || '').trim().toLowerCase();
-  if (!raw) return null;
-  if (/^u7$|ultra\s*7|u-?series\s*7/.test(raw) || raw === 'u7') return 'u7';
+  // Generation is often blank or a "-" placeholder on Ultra units; the tier is in the processor.
+  if (!/[a-z0-9]/.test(raw)) {
+    const tier = ultraTier(processor);
+    return tier ? `u${tier}` : null;
+  }
+  const ultraFromGen = ultraTier(raw) || (/^u-?(?:series\s*)?([579])$/.exec(raw) || [])[1];
+  if (ultraFromGen) return `u${ultraFromGen}`;
   const m = raw.match(/(\d{1,2})\s*(st|nd|rd|th)?/i);
   if (m) {
     return `${m[1]}th`;
@@ -168,13 +191,15 @@ function lookupInMatrix(matrix, processor, generation, model) {
     return row ? Number(row.amount) : 60000;
   }
 
-  const grade = normalizeGrade(generation);
+  const grade = normalizeGrade(generation, processor);
   if (!grade) return null;
 
   const row = rows.find(
     (r) => String(r.category).toLowerCase() === category.toLowerCase()
       && String(r.grade).toLowerCase() === grade.toLowerCase()
-  );
+  ) || (isUltraGrade(grade) ? rows.find(
+    (r) => isUltraCategory(r.category) && String(r.grade).toLowerCase() === grade.toLowerCase()
+  ) : null);
   return row ? Number(row.amount) : null;
 }
 
