@@ -2675,8 +2675,9 @@ function supplyStateFromGstin(gstin) {
 // 510 already-issued DCs would otherwise re-render with a different GST head.
 const GSTIN_PLACE_OF_SUPPLY_FROM = new Date('2026-09-30T00:00:00+05:30');
 
-// Older orders moved onto the GSTIN rule on request (corrected 2026-09-30).
-const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416']);
+// Older orders moved onto the GSTIN rule on request (corrected 2026-09-30;
+// SO/26-27/1184 on 2026-10-15: Data Duck GSTIN 27, shipped to Indore).
+const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416', 'SO/26-27/1184']);
 
 /** The buyer GSTIN to use for a stored document's place of supply ('' for older documents). */
 function gstinForDocument(row) {

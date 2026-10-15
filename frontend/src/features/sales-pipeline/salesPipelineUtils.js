@@ -329,7 +329,7 @@ export function supplyStateFromGstin(gstin) {
 // Mirrors backend gstinForDocument: documents created before this keep the
 // shipping-first head they were issued with; listed older orders were corrected.
 const GSTIN_PLACE_OF_SUPPLY_FROM = new Date('2026-09-30T00:00:00+05:30');
-const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416']);
+const GSTIN_PLACE_OF_SUPPLY_ORDERS = new Set(['SO/26-27/1416', 'SO/26-27/1184']);
 
 /** GSTIN to use for a stored document's place of supply ('' for older documents). */
 export function gstinForDocument(row) {
