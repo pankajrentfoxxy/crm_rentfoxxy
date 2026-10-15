@@ -183,6 +183,15 @@ router.get('/deliveries/:id', authorize, deliveries.getOne);
 router.post('/deliveries/:id/complete', authorizeEdit, deliveries.completeValidators, deliveries.complete);
 router.patch('/deliveries/:id/invoice', authorizeEdit, deliveries.invoiceValidators, deliveries.setInvoice);
 router.post('/serials/:serialId/approve-waiver', authorizeEdit, deliveries.approveWaiver);
+// 428: laptops received without a serial (Not On, no readable sticker).
+router.get('/serials/pending-serial', authMiddleware, checkSectionPermission('grn_pending_serial', 'view'), deliveries.listPendingSerials);
+router.post(
+  '/serials/:serialId(\\d+)/serial-number',
+  authMiddleware,
+  checkSectionPermission('grn_pending_serial', 'edit'),
+  deliveries.addSerialValidators,
+  deliveries.addPendingSerial
+);
 
 // Procure → To buy: laptop shortfalls from sales orders + floor part requests.
 const toBuy = require('../controllers/vendorManagement/toBuy.controller');

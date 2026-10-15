@@ -286,6 +286,14 @@ async function transitionAsset(db, {
   // It used to stay in_stock/returned while on a draft return challan, so
   // sales could take it — and then the return's gate confirm failed.
   if (!allowOverride && (toStatus === STATUS.RESERVED || toStatus === STATUS.DISPATCH_READY)) {
+    // 428: received without a serial (would not power on). It does not go to
+    // a customer under the NOSERIAL- placeholder — add the real serial first.
+    if (String(serial.serial_number || '').toUpperCase().startsWith('NOSERIAL-')) {
+      throw new TransitionRefused({
+        serialId, ttsplId: serial.ttspl_id, from, to: toStatus, caller,
+        message: `${serial.ttspl_id || `Serial ${serialId}`} was received without its serial number — add the serial (Procurement → Serials to add) before it can be allocated.`,
+      });
+    }
     const onReturn = (await client.query(
       `SELECT d.dc_number AS ref FROM vendor_return_dc_items i
          JOIN vendor_return_delivery_challans d ON d.dc_number = i.dc_number

@@ -15,6 +15,7 @@ import PartLabelPrintDrawer from '../stock/setup/PartLabelPrintDrawer';
 import { errMsg } from './procureShared';
 import { lineConfig } from './poShared';
 import AccessNumbersDrawer from './AccessNumbersDrawer';
+import AddSerialDrawer from './AddSerialDrawer';
 
 /**
  * Procure → Vendor arrivals → receive a delivery (GRN).
@@ -26,6 +27,8 @@ import AccessNumbersDrawer from './AccessNumbersDrawer';
  *      laptop that powers on (D5); one that won't power on is received with a
  *      reason, and a manager approves that waiver;
  *   3. receive → TTSPL assigned → label printed (D14).
+ * A laptop that won't power on and has no readable serial can be received
+ * with no serial (428, grn_pending_serial:create); its serial is added later.
  * A wrong or dead laptop is rejected at the door (D6): it still gets a TTSPL
  * so it can be traced, goes back to the vendor, and is never billed.
  */
@@ -45,7 +48,7 @@ const lineOptionLabel = (l) => (l.gate_qty == null
   ? `${lineConfig(l)} — ${l.receivedQty || 0} of ${l.quantity} in`
   : `${lineConfig(l)} — ${l.on_delivery || 0} of ${l.gate_qty} on this delivery · ${l.receivedQty || 0} of ${l.quantity} on the PO`);
 const blankUnit = (line) => ({
-  line_index: line ?? 0, condition: 'on', missing_parts: [], serial: '', damage: '', waiver: '', rental_start_date: today(),
+  line_index: line ?? 0, condition: 'on', missing_parts: [], serial: '', noSerial: false, damage: '', waiver: '', rental_start_date: today(),
 });
 
 export default function DeliveryReceivePage() {
@@ -55,6 +58,8 @@ export default function DeliveryReceivePage() {
   const { hasPermission } = usePermission();
   const canEdit = hasPermission('vendor_management', 'edit');
   const manager = isManagerUser(user);
+  const canReceiveNoSerial = hasPermission('grn_pending_serial', 'create');
+  const canAddSerial = hasPermission('grn_pending_serial', 'edit');
 
   const [d, setD] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -68,6 +73,7 @@ export default function DeliveryReceivePage() {
   const [labels, setLabels] = useState([]);
   const [labelOpen, setLabelOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
+  const [addSerialFor, setAddSerialFor] = useState(null);
 
   const load = useCallback(() => {
     api.get(`/vendor-management/deliveries/${deliveryId}`)
@@ -96,6 +102,16 @@ export default function DeliveryReceivePage() {
   }, [line]);
   const rental = ['rental_purchase', 'rent_to_own'].includes(String(d?.purchase_order_type));
 
+  // A line bought as "Not On" (or "Part Missing") only does not offer "On":
+  // the condition must follow the line, or the screen asks for the
+  // configuration check a dead laptop cannot run.
+  useEffect(() => {
+    if (allowed.length && !allowed.some((c) => c.value === unit.condition)) {
+      setCapture(null);
+      setUnit((u) => ({ ...u, condition: allowed[0].value, serial: '', noSerial: false }));
+    }
+  }, [allowed, unit.condition]);
+
   // Poll the configuration check while it runs on the laptop.
   useEffect(() => {
     if (!capture?.token || ['captured', 'used', 'expired'].includes(capture.status)) return undefined;
@@ -111,7 +127,7 @@ export default function DeliveryReceivePage() {
   }, [capture?.token, capture?.status]);
 
   const setU = (k, v) => setUnit((u) => ({ ...u, [k]: v }));
-  const changeLineOrCondition = (k, v) => { setCapture(null); setUnit((u) => ({ ...u, [k]: v, serial: k === 'condition' && NEEDS_CHECK.has(v) ? '' : u.serial })); };
+  const changeLineOrCondition = (k, v) => { setCapture(null); setUnit((u) => ({ ...u, [k]: v, serial: k === 'condition' && NEEDS_CHECK.has(v) ? '' : u.serial, noSerial: k === 'condition' ? false : u.noSerial })); };
 
   const startCheck = async () => {
     setBusy('check');
@@ -135,7 +151,8 @@ export default function DeliveryReceivePage() {
   const mismatched = capture && ['captured', 'used'].includes(capture.status) && !capture.config_verified;
   const checks = capture?.config_check?.checks || [];
 
-  const ready = open && !full && line && unit.serial.trim() && (
+  const noSerial = !needsCheck && unit.noSerial && canReceiveNoSerial;
+  const ready = open && !full && line && (noSerial || unit.serial.trim()) && (
     needsCheck ? verified : unit.waiver.trim().length >= 5
   ) && (unit.condition !== 'part_missing' || unit.missing_parts.length);
 
@@ -146,7 +163,7 @@ export default function DeliveryReceivePage() {
         delivery_id: Number(deliveryId),
         line_index: unit.line_index,
         rental_start_date: unit.rental_start_date,
-        serial_number: unit.serial.trim(),
+        ...(noSerial && !rejectReason ? { serial_pending: true } : { serial_number: unit.serial.trim() }),
         received_condition: unit.condition,
         missing_parts: unit.condition === 'part_missing' ? unit.missing_parts : [],
         physical_damage_remark: unit.damage || null,
@@ -158,7 +175,8 @@ export default function DeliveryReceivePage() {
       const c = data.data.created;
       toast.success(data.message);
       if (!rejectReason) {
-        setLabels((ls) => [...ls, { code: c.inventory_asset_code, title: lineConfig(line), subtitle: c.serial_number, serialNumber: c.serial_number, poNumber: d.purchase_order_number }]);
+        const sn = c.serial_pending ? 'Serial pending' : c.serial_number;
+        setLabels((ls) => [...ls, { code: c.inventory_asset_code, title: lineConfig(line), subtitle: sn, serialNumber: c.serial_pending ? '' : c.serial_number, poNumber: d.purchase_order_number }]);
       }
       setUnit((u) => ({ ...blankUnit(u.line_index), condition: u.condition, rental_start_date: u.rental_start_date }));
       setCapture(null);
@@ -202,7 +220,17 @@ export default function DeliveryReceivePage() {
 
   const units = d.units || [];
   const unitCols = [
-    { key: 't', header: 'Asset', render: (u) => <DocNumber value={u.ttspl_id} />, sub: (u) => u.serial_number },
+    {
+      key: 't',
+      header: 'Asset',
+      render: (u) => <DocNumber value={u.ttspl_id} />,
+      sub: (u) => (u.serial_pending ? (
+        <span style={{ color: 'var(--alert-warn)' }}>
+          Serial pending
+          {canAddSerial && <> <Button variant="quiet" onClick={() => setAddSerialFor(u)}>Add serial</Button></>}
+        </span>
+      ) : u.serial_number),
+    },
     { key: 'c', header: 'Laptop', render: (u) => [u.brand, u.model].filter(Boolean).join(' ') || lineConfig(lines[u.line_index] || {}) || '—', sub: (u) => [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' · ') || null },
     {
       key: 'cond',
@@ -232,7 +260,7 @@ export default function DeliveryReceivePage() {
         return '—';
       },
     },
-    { key: 'l', header: '', render: (u) => !u.rejected_at_receipt && <Button variant="quiet" onClick={() => { setLabels([{ code: u.ttspl_id, title: [u.brand, u.model].filter(Boolean).join(' '), subtitle: u.serial_number, serialNumber: u.serial_number, poNumber: d.purchase_order_number }]); setLabelOpen(true); }}>Label</Button> },
+    { key: 'l', header: '', render: (u) => !u.rejected_at_receipt && <Button variant="quiet" onClick={() => { setLabels([{ code: u.ttspl_id, title: [u.brand, u.model].filter(Boolean).join(' '), subtitle: u.serial_pending ? 'Serial pending' : u.serial_number, serialNumber: u.serial_pending ? '' : u.serial_number, poNumber: d.purchase_order_number }]); setLabelOpen(true); }}>Label</Button> },
   ];
 
   const flow = [
@@ -362,10 +390,26 @@ export default function DeliveryReceivePage() {
                   )}
                 </div>
               ) : (
-                <FormGrid cols={2}>
-                  <Field label="Serial number" required hint="From the sticker under the laptop"><Input value={unit.serial} onChange={(e) => setU('serial', e.target.value.toUpperCase())} className="font-mono" /></Field>
-                  <Field label="Why it can't be checked" required hint="A manager approves this later"><Input value={unit.waiver} onChange={(e) => setU('waiver', e.target.value)} placeholder="No power, no display…" /></Field>
-                </FormGrid>
+                <div className="c-stack">
+                  <FormGrid cols={2}>
+                    {noSerial
+                      ? <Field label="Serial number" hint="Added later, once the laptop powers on"><Input value="Serial pending — TTSPL only" disabled /></Field>
+                      : <Field label="Serial number" required hint="From the sticker under the laptop"><Input value={unit.serial} onChange={(e) => setU('serial', e.target.value.toUpperCase())} className="font-mono" /></Field>}
+                    <Field label="Why it can't be checked" required hint="A manager approves this later"><Input value={unit.waiver} onChange={(e) => setU('waiver', e.target.value)} placeholder="No power, no display…" /></Field>
+                  </FormGrid>
+                  {canReceiveNoSerial && (
+                    <Checkbox
+                      label="Serial number can't be read — receive with a TTSPL only and add the serial when the laptop powers on"
+                      checked={unit.noSerial}
+                      onChange={(e) => setUnit((u) => ({ ...u, noSerial: e.target.checked, serial: '' }))}
+                    />
+                  )}
+                  {noSerial && (
+                    <Notice tone="info" title="Received without a serial">
+                      It goes to the floor under its TTSPL. Add the serial from Procurement → Serials to add (or this delivery) once it powers on — until then it can't be put on an order.
+                    </Notice>
+                  )}
+                </div>
               )}
 
               <Field label="Physical damage"><Input value={unit.damage} onChange={(e) => setU('damage', e.target.value)} placeholder="Leave empty if none" /></Field>
@@ -411,6 +455,8 @@ export default function DeliveryReceivePage() {
           <Field label="Note" required={handled !== Number(d.laptop_count)}><Textarea rows={3} value={closeNote} onChange={(e) => setCloseNote(e.target.value)} /></Field>
         </div>
       </Drawer>
+
+      <AddSerialDrawer unit={addSerialFor} onClose={() => setAddSerialFor(null)} onSaved={load} />
 
       <AccessNumbersDrawer open={accessOpen} onClose={() => setAccessOpen(false)} poId={d.po_id} />
 

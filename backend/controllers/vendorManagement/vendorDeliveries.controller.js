@@ -13,6 +13,7 @@ const pool = require('../../config/db');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const po = require('./purchaseOrders.controller');
 const gateInward = require('../../services/poGateInwardService');
+const pendingSerial = require('../../services/grnPendingSerialService');
 
 const RECEIVABLE = ['approved', 'sent', 'vendor_accepted', 'processing'];
 const isManager = (u) => u?.is_superadmin === true || ['manager', 'admin', 'super_admin'].includes(String(u?.role || '').toLowerCase());
@@ -145,7 +146,7 @@ async function getOne(req, res) {
   const maps = await po.buildReceivedQtyMapsForPoIds([d.po_id]);
   const lines = po.enrichLineItemsWithReceived(po.parseLineItemsJson(p?.line_items), maps.get(Number(d.po_id)));
   const units = d.grn_id ? (await pool.query(
-    `SELECT s.serial_id, s.serial_number, s.inventory_asset_code AS ttspl_id, s.inventory_status, s.received_condition,
+    `SELECT s.serial_id, s.serial_number, s.serial_pending, s.inventory_asset_code AS ttspl_id, s.inventory_status, s.received_condition,
             s.missing_parts, s.capture_token_id, s.config_capture_waived, s.config_capture_waiver_reason,
             s.waiver_approved_at, au.name AS waiver_approved_by_name,
             s.rejected_at_receipt, s.receipt_rejection_reason, s.created_at,
@@ -263,6 +264,36 @@ async function approveWaiver(req, res) {
   res.json({ success: true, data: u.rows[0] });
 }
 
+const addSerialValidators = [
+  param('serialId').isInt().toInt(),
+  body('serial_number').isString().trim().isLength({ min: 3, max: 100 }).withMessage('Enter the serial number from the laptop'),
+];
+/** GET /serials/pending-serial — 428: laptops received without their serial number. */
+async function listPendingSerials(_req, res) {
+  res.json({ success: true, data: await pendingSerial.listPendingSerials() });
+}
+/** POST /serials/:serialId/serial-number — 428: the laptop powers on; record its real serial. */
+async function addPendingSerial(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return bad(res, errors);
+  try {
+    const out = await pendingSerial.addPendingSerial({
+      serialId: Number(req.params.serialId),
+      serialNumber: req.body.serial_number,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    });
+    await logVendorAudit({
+      actorUserId: req.user?.user_id, vendorId: null, entityType: 'serial_number', entityId: String(out.serial_id),
+      action: 'pending_serial_added', payload: out,
+    });
+    res.json({ success: true, message: `${out.ttspl_id}: serial ${out.serial_number} added`, data: out });
+  } catch (e) {
+    if (e instanceof pendingSerial.PendingSerialError) return res.status(e.status).json({ success: false, message: e.message });
+    throw e;
+  }
+}
+
 const wrap = (name, fn) => async (req, res) => {
   try { await fn(req, res); } catch (e) {
     console.error(`vendorDeliveries.${name}:`, e);
@@ -283,4 +314,7 @@ module.exports = {
   complete: wrap('complete', complete),
   setInvoice: wrap('setInvoice', setInvoice),
   approveWaiver: wrap('approveWaiver', approveWaiver),
+  addSerialValidators,
+  listPendingSerials: wrap('listPendingSerials', listPendingSerials),
+  addPendingSerial: wrap('addPendingSerial', addPendingSerial),
 };

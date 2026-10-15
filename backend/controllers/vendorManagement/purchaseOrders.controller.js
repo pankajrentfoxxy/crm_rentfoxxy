@@ -49,6 +49,9 @@ const {
   loadVerificationsForSerials,
 } = require('../../services/grnCaptureGateService');
 const { transitionAsset, STATUS } = require('../../services/inventoryStateMachine');
+const { hasPermission } = require('../../services/permissionService');
+const { recordAssetEvent } = require('../../services/eventService');
+const { pendingSerialPlaceholder } = require('../../services/grnPendingSerialService');
 const {
   claimInwardForReceive,
   refreshInwardStatus,
@@ -69,6 +72,7 @@ const {
   normalizeMissingParts,
   conditionLabel,
   partCategoryLabels,
+  missingPartsBlockCheck,
 } = require('../../constants/laptopConditions');
 
 /**
@@ -1139,7 +1143,12 @@ const receivePoLineUnitValidators = [
     .notEmpty()
     .matches(/^\d{4}-\d{2}-\d{2}$/)
     .withMessage('rental_start_date must be YYYY-MM-DD'),
-  body('serial_number').trim().notEmpty(),
+  // 428: a laptop that will not power on may be received with no serial
+  // (serial_pending) — it gets a TTSPL now and its serial once it boots.
+  body('serial_pending').optional().isBoolean().toBoolean(),
+  body('serial_number')
+    .if((_v, { req }) => req.body.serial_pending !== true && req.body.serial_pending !== 'true')
+    .trim().notEmpty().withMessage('Serial number is required'),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
   body('gate_inward_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
   body('bill_status').optional().isIn(['pending', 'received']),
@@ -1168,9 +1177,10 @@ async function receivePoLineUnit(req, res) {
   const poId = Number(req.params.poId);
   const lineIndex = Number(req.body.line_index);
   const rental_start_date = String(req.body.rental_start_date).trim();
-  const serial_number = String(req.body.serial_number || '').trim().toUpperCase();
+  const serialPending = req.body.serial_pending === true;
+  let serial_number = serialPending ? '' : String(req.body.serial_number || '').trim().toUpperCase();
   const applyBill = req.body.apply_bill_settings === true || req.body.apply_bill_settings === 'true';
-  const captureToken = req.body.capture_token || null;
+  const captureToken = serialPending ? null : (req.body.capture_token || null);
   const physicalDamageRemark = String(req.body.physical_damage_remark || '').trim();
   const receivedCondition = normalizeCondition(req.body.received_condition);
   const missingParts = receivedCondition === 'part_missing'
@@ -1181,6 +1191,21 @@ async function receivePoLineUnit(req, res) {
   const rejectionReason = String(req.body.rejection_reason || '').trim();
   if (rejectAtReceipt && rejectionReason.length < 5) {
     return res.status(400).json({ success: false, message: 'Say why this laptop is rejected at the door (at least 5 characters).' });
+  }
+  if (serialPending) {
+    if (rejectAtReceipt) {
+      return res.status(400).json({ success: false, message: 'A laptop rejected at the door goes back to the vendor — type its serial number.' });
+    }
+    // Only a laptop that cannot boot cannot show its serial; one that powers
+    // on runs the configuration check, which reads it.
+    const cannotBoot = receivedCondition === 'not_on'
+      || (receivedCondition === 'part_missing' && missingPartsBlockCheck(missingParts));
+    if (!cannotBoot) {
+      return res.status(400).json({ success: false, message: 'Only a laptop that will not power on can be received without its serial number.' });
+    }
+    if (!(await hasPermission(req.user?.user_id, req.user?.role, 'grn_pending_serial', 'create', req.permissionCache))) {
+      return res.status(403).json({ success: false, message: 'You do not have access to receive a laptop without its serial number. Ask an admin for "GRN without serial".' });
+    }
   }
 
   // Carret sends delivery_id, the old Receive goods screen gate_inward_id:
@@ -1245,9 +1270,9 @@ async function receivePoLineUnit(req, res) {
     gate = await assertUnitMayBeReceived(pool, {
       poId,
       lineIndex,
-      serialNumber: serial_number,
+      serialNumber: serialPending ? '(serial pending)' : serial_number,
       receivedCondition,
-      captureToken,
+      captureToken: serialPending ? null : captureToken,
       waiverReason: req.body.config_capture_waiver_reason,
       missingParts,
     });
@@ -1294,7 +1319,7 @@ async function receivePoLineUnit(req, res) {
     finalGrnId = claim.grnId;
     grnWasNew = claim.grnWasNew;
 
-    const reintake = await resolveSerialForGrnIntake(client, serial_number, {
+    const reintake = serialPending ? { ok: true } : await resolveSerialForGrnIntake(client, serial_number, {
       reason: 'grn_receive_po_line_unit',
       actorUserId: req.user?.user_id,
       actorName: req.user?.name,
@@ -1329,6 +1354,7 @@ async function receivePoLineUnit(req, res) {
 
     const assetCodes = await allocateTtsplCodes(client, 1);
     const inventory_asset_code = assetCodes[0];
+    if (serialPending) serial_number = pendingSerialPlaceholder(inventory_asset_code);
     receiveConfig =
       (await resolveReceiveConfig(client, {
         poId,
@@ -1352,8 +1378,8 @@ async function receivePoLineUnit(req, res) {
     const insS = await client.query(
       `INSERT INTO vendor_serial_numbers (
          po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra,
-         received_condition, missing_parts
-       ) VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb,$7,$8::jsonb) RETURNING serial_id`,
+         received_condition, missing_parts${serialPending ? ', serial_pending' : ''}
+       ) VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb,$7,$8::jsonb${serialPending ? ', TRUE' : ''}) RETURNING serial_id`,
       [
         poId,
         finalGrnId,
@@ -1404,6 +1430,18 @@ async function receivePoLineUnit(req, res) {
       });
     }
 
+    if (serialPending) {
+      await recordAssetEvent(client, {
+        serialId: createdRow.serial_id,
+        ttsplId: inventory_asset_code,
+        eventType: 'grn_serial_pending',
+        payload: { po_id: poId, line_index: lineIndex, received_condition: receivedCondition, placeholder: serial_number },
+        correlationId: req.correlationId || null,
+        source: 'purchaseOrders.receivePoLineUnit',
+        actor: req.user,
+      });
+    }
+
     if (rejectAtReceipt) {
       // D6: rejected at the door. Not on the floor (no ticket), not in stock:
       // qc_failed is the state a vendor return picks up.
@@ -1444,10 +1482,11 @@ async function receivePoLineUnit(req, res) {
       const conditionParts = [
         `GRN receive — PO ${poLabel}`,
         conditionNote,
+        serialPending ? 'Serial number not readable — add it once the laptop powers on' : '',
         physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
       ].filter(Boolean);
       const initialCondition =
-        conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
+        conditionNote || serialPending || physicalDamageRemark ? conditionParts.join('. ') : undefined;
       ticketResult = await createTicketFromGrnReceive(client, {
         serialId: createdRow.serial_id,
         serialNumber: createdRow.serial_number,
@@ -1541,12 +1580,12 @@ async function receivePoLineUnit(req, res) {
     message: rejectAtReceipt
       ? `${createdRow.inventory_asset_code} recorded as rejected at the door — it goes back to the vendor and is not billed.`
       : ticketResult?.ok
-        ? `Unit received as ${createdRow.inventory_asset_code}. Repair ticket created for Floor Manager.`
-        : `Unit received as ${createdRow.inventory_asset_code}.`,
+        ? `Unit received as ${createdRow.inventory_asset_code}${serialPending ? ' (serial to be added when it powers on)' : ''}. Repair ticket created for Floor Manager.`
+        : `Unit received as ${createdRow.inventory_asset_code}${serialPending ? ' (serial to be added when it powers on)' : ''}.`,
     data: {
       grn_id: finalGrnId,
       rental_start_date,
-      created: { ...createdRow, received_condition: receivedCondition, missing_parts: missingParts, rejected_at_receipt: rejectAtReceipt, waiver_pending: gate.waived },
+      created: { ...createdRow, received_condition: receivedCondition, missing_parts: missingParts, rejected_at_receipt: rejectAtReceipt, waiver_pending: gate.waived, serial_pending: serialPending },
       delivery_id: deliveryId,
       lines: linesAfter,
       ticket: ticketResult

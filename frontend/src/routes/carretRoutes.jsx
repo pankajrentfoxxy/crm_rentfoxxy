@@ -55,6 +55,7 @@ const ReturnChallanRecordPage = React.lazy(() => import('../features/carret/proc
 const ReturnRequestFormPage = React.lazy(() => import('../features/carret/procure/ReturnRequestFormPage'));
 const ReturnRequestRecordPage = React.lazy(() => import('../features/carret/procure/ReturnRequestRecordPage'));
 const ReplacementApprovalsPage = React.lazy(() => import('../features/carret/procure/ReplacementApprovalsPage'));
+const PendingSerialsPage = React.lazy(() => import('../features/carret/procure/PendingSerialsPage'));
 const ServeMyWorkPage = React.lazy(() => import('../features/carret/serve/MyWorkPage'));
 const ServeJobPage = React.lazy(() => import('../features/carret/serve/JobPage'));
 const ServeMyPartsPage = React.lazy(() => import('../features/carret/serve/MyPartsPage'));
@@ -200,6 +201,7 @@ export const carretRoutes = CARRET_ENABLED
       // The guard logs vendor arrivals; the warehouse receives against them (D4).
       { path: '/carret/procure/arrivals', element: guardAny(['guard_gate_checking', 'vendor_management'], 'view', <VendorArrivalsPage />) },
       { path: '/carret/procure/arrivals/:deliveryId', element: guard('vendor_management', 'view', <DeliveryReceivePage />) },
+      { path: '/carret/procure/pending-serials', element: guard('grn_pending_serial', 'view', <PendingSerialsPage />) },
       { path: '/carret/procure/vendors', element: guard('vendor_management', 'view', <VendorsListPage />) },
       { path: '/carret/procure/vendors/new', element: guard('vendor_management', 'create', <VendorFormPage />) },
       { path: '/carret/procure/vendors/:vendorId', element: guard('vendor_management', 'view', <VendorRecordPage />) },
