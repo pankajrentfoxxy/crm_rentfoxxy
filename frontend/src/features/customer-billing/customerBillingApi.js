@@ -39,6 +39,7 @@ export const listCreditNotes = (p) => api.get(`${base}/credit-notes`, { params: 
 export const getCreditNote = (id) => api.get(`${base}/credit-notes/${id}`);
 export const listCreditNoteLaptops = (p) => api.get(`${base}/credit-notes/laptops`, { params: p });
 export const listCreditNoteReviewGroups = (p) => api.get(`${base}/credit-notes/review-groups`, { params: p });
+export const listCreditNoteEligibleCustomers = (p) => api.get(`${base}/credit-notes/eligible-customers`, { params: p });
 export const generateCreditNotesBulk = (d) => api.post(`${base}/credit-notes/generate-bulk`, d);
 export const generateCreditNote = (d) => api.post(`${base}/credit-notes/generate`, d);
 export const createCreditNote = (d) => api.post(`${base}/credit-notes`, d);

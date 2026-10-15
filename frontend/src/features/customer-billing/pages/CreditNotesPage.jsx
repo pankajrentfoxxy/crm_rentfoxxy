@@ -15,7 +15,7 @@ import {
   downloadCreditNotesZip,
   generateCreditNotesBulk,
   listCreditNotes,
-  listInvoiceCoverage,
+  listCreditNoteEligibleCustomers,
 } from '../customerBillingApi';
 import api from '../../../utils/api';
 
@@ -220,7 +220,7 @@ export default function CreditNotesPage() {
   useEffect(() => {
     if (!genOpen) return undefined;
     let cancelled = false;
-    listInvoiceCoverage({ month: genForm.month, year: genForm.year })
+    listCreditNoteEligibleCustomers({ month: genForm.month, year: genForm.year })
       .then((res) => {
         if (cancelled) return;
         const list = res.data?.customers || [];

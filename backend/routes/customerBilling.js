@@ -31,6 +31,7 @@ router.get('/delivery-charges/statement.pdf', cp('customer_billing', 'view'), de
 router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
 router.get('/credit-notes/laptops', cp('credit_notes', 'view'), ctrl.listCreditNoteLaptops);
 router.get('/credit-notes/review-groups', cp('credit_notes', 'view'), ctrl.listCreditNoteReviewGroups);
+router.get('/credit-notes/eligible-customers', cp('credit_notes', 'view'), ctrl.listCreditNoteEligibleCustomers);
 router.post('/credit-notes/generate', cp('credit_notes', 'create'), ctrl.generateCreditNote);
 router.post('/credit-notes/generate-bulk', cp('credit_notes', 'create'), ctrl.generateCreditNotesBulk);
 router.post('/credit-notes', cp('credit_notes', 'create'), ctrl.createCreditNote);

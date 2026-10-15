@@ -24,6 +24,7 @@ const {
   approveSelectedCreditNoteLines,
   generateReturnCreditNotesForCustomer,
   generateReturnCreditNotesForCustomers,
+  listCreditNoteEligibleCustomerIds,
 } = require('../services/billingSchedulerService');
 const {
   listZohoCandidates,
@@ -1383,6 +1384,32 @@ exports.generateCreditNote = async (req, res) => {
       req.user?.user_id || req.user?.id || null,
     );
     res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Customers the Generate dialog may pick: the same set "All" uses, so a
+// customer whose returned laptops have since gone to someone else still shows.
+exports.listCreditNoteEligibleCustomers = async (req, res) => {
+  try {
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    if (!month || month < 1 || month > 12 || !year || year < 2000) {
+      return res.status(400).json({ success: false, message: 'month and year required' });
+    }
+    const ids = await listCreditNoteEligibleCustomerIds(month, year);
+    const result = ids.length
+      ? await pool.query(
+        `SELECT customer_id,
+                COALESCE(NULLIF(company_name, ''), NULLIF(name, ''), 'Customer #' || customer_id) AS customer_name
+           FROM customers
+          WHERE customer_id = ANY($1::int[])
+          ORDER BY 2 ASC`,
+        [ids]
+      )
+      : { rows: [] };
+    res.json({ success: true, customers: result.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
