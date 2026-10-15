@@ -2637,8 +2637,13 @@ async function createMissingReturnCreditNotes(client, {
     const { prevStart } = previousMonthRange(month, year);
     const windowEnd = new Date(year, month, 0);
     params.push(toLocalYmd(prevStart), toLocalYmd(windowEnd));
-    returnWindowSql = `AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
-                         BETWEEN $2::date AND $3::date`;
+    // A return belongs to this run when it reached the warehouse by the window
+    // end and was billed into the window, not only when it arrived inside it.
+    // TTSPL5391 (customer 183) came back on 29 Sep while its repair ticket was
+    // open, so October still billed it in full; the November run, keyed on the
+    // receipt date alone, would never have credited 30 Sep - 31 Oct.
+    returnWindowSql = `AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date <= $3::date
+                       AND last_line.rent_end >= $2::date`;
   }
 
   const { rows } = await client.query(
@@ -2871,6 +2876,22 @@ async function listCreditNoteEligibleCustomerIds(month, year) {
             AND COALESCE(rl.status, '') NOT IN ('cancelled')
             AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date
                 BETWEEN $2::date AND $3::date
+         UNION
+         -- Returned earlier but billed into the window (see createMissingReturnCreditNotes).
+         SELECT ci.customer_id
+           FROM customer_invoice_lines cil
+           JOIN customer_invoices ci ON ci.invoice_id = cil.invoice_id
+           JOIN vendor_serial_numbers vsn ON vsn.serial_id = cil.serial_id
+           JOIN support_ticket_items sti
+             ON sti.item_type = 'pickup'
+            AND sti.warehouse_received_at IS NOT NULL
+            AND NOT ${repairHoldPickupSql()}
+            AND (sti.ttspl_id = vsn.inventory_asset_code OR sti.serial_number = vsn.serial_number)
+          WHERE LOWER(COALESCE(ci.status, '')) <> 'cancelled'
+            AND COALESCE(cil.line_type, 'rental') <> 'security'
+            AND cil.rent_end >= $2::date
+            AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date
+            AND (sti.warehouse_received_at AT TIME ZONE 'Asia/Kolkata')::date < cil.rent_end
        ) x
       WHERE customer_id IS NOT NULL`,
     [toLocalYmd(monthEnd), toLocalYmd(prevStart), toLocalYmd(new Date(year, month - 1, 0))]
