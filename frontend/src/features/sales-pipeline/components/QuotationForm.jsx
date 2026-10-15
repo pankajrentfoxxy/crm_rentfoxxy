@@ -314,7 +314,9 @@ export default function QuotationForm({
         customer_mobile: head.customer_mobile || '',
         GST_number: head.gst_number || '',
         // One month's rent was stored as an amount; keep that choice when it still matches.
-        security_type: security > 0 && Math.abs(security - total) < 0.01 ? 'one_month_rental' : 'none',
+        // Any other amount is kept as its own 'custom' option, so "No Security" can mean 0.
+        security_type: security > 0 && Math.abs(security - total) < 0.01 ? 'one_month_rental'
+          : (security > 0 ? 'custom' : 'none'),
         security_amount: security > 0 && Math.abs(security - total) >= 0.01 ? String(security) : '',
         shiping_charges: Number(head.shiping_charges) ? String(head.shiping_charges) : '',
         source_lead_id: '',
@@ -373,8 +375,10 @@ export default function QuotationForm({
   const totalValue = sumLines(lines);
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
   // A sale takes no deposit; ignore a choice made before switching to Sale.
+  const customSecurity = Number(form.security_amount) || 0;
   const security = isSaleType ? 0
-    : form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
+    : form.security_type === 'one_month_rental' ? totalValue
+      : form.security_type === 'custom' ? customSecurity : 0;
 
   const submit = async (andSend) => {
     const contactName = (form.contact_name || form.customer_name || '').trim();
@@ -513,6 +517,14 @@ export default function QuotationForm({
                   <span className="ml-auto font-semibold text-blue-700">{formatCurrency(security)}</span>
                 )}
               </label>
+              {customSecurity > 0 && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="radio" name="qsec" checked={form.security_type === 'custom'}
+                    onChange={() => setForm((f) => ({ ...f, security_type: 'custom' }))} />
+                  Keep existing security
+                  <span className="ml-auto font-semibold text-blue-700">{formatCurrency(customSecurity)}</span>
+                </label>
+              )}
               <p className="text-[11px] text-gray-400">Auto-calculated from each laptop&apos;s monthly rate × quantity.</p>
             </div>
           )}

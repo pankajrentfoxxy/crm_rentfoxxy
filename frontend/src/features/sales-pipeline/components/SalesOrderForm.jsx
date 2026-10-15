@@ -108,6 +108,16 @@ function linesFromSo(soLines) {
   }));
 }
 
+
+/**
+ * Radio state for a loaded order. A deposit stored without the one-month type
+ * (typed in by hand, or imported) is 'custom': shown as its own option so that
+ * "No Security" can mean 0 without an untouched edit wiping a real deposit.
+ */
+function loadedSecurityType(head) {
+  if (String(head?.security_type || '').toLowerCase() === 'one_month_rental') return 'one_month_rental';
+  return Number(head?.security_amount) > 0 ? 'custom' : 'none';
+}
 export default function SalesOrderForm({
   open, onClose, onSaved, prefillQuotation, scope, editSoNumber, copyFromSoNumber,
 }) {
@@ -197,7 +207,7 @@ export default function SalesOrderForm({
         quotation_number: isEdit ? (head.quotation_number || '') : '',
         quotation_type: head.quotation_type || defaultType,
         branch: head.branch || defaultBranch,
-        security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
+        security_type: loadedSecurityType(head),
         fulfillment_mode: head.fulfillment_mode || 'dispatch',
         security_amount: head.security_amount ?? '',
         shiping_charges: head.shiping_charges ?? '',
@@ -320,7 +330,7 @@ export default function SalesOrderForm({
         customer_name: head.customer_name || f.customer_name,
         quotation_type: head.quotation_type || 'rental',
         branch: head.branch || branchForQuotationType(head.quotation_type),
-        security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
+        security_type: loadedSecurityType(head),
         fulfillment_mode: head.fulfillment_mode || 'dispatch',
         security_amount: head.security_amount || '',
         shiping_charges: head.shiping_charges || '',
@@ -354,10 +364,12 @@ export default function SalesOrderForm({
   const totalValue = useMemo(() => sumLines(lines), [lines]);
   const shippingCharges = Number(form.shiping_charges) || 0;
   // '1 month rental' security = sum of each line's monthly rate x qty. A sale takes none.
+  // "No Security" is 0, not whatever amount was loaded from the order being edited or copied.
+  const customSecurity = Number(form.security_amount) || 0;
   const security = (form.quotation_type === 'sale' || form.quotation_type === 'sales') ? 0
     : form.security_type === 'one_month_rental'
       ? totalValue
-      : (Number(form.security_amount) || 0);
+      : form.security_type === 'custom' ? customSecurity : 0;
   const supplyState = useMemo(
     () => resolveSupplyStateFromShipping(
       selectedShippingAddress, '',
@@ -597,6 +609,14 @@ export default function SalesOrderForm({
                   <span className="ml-auto font-semibold text-blue-700">{formatCurrency(security)}</span>
                 )}
               </label>
+              {customSecurity > 0 && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="radio" name="sec" checked={form.security_type === 'custom'}
+                    onChange={() => setForm((f) => ({ ...f, security_type: 'custom' }))} />
+                  Keep existing security
+                  <span className="ml-auto font-semibold text-blue-700">{formatCurrency(customSecurity)}</span>
+                </label>
+              )}
               <p className="text-[11px] text-gray-400">Auto-calculated from each laptop&apos;s monthly rate × quantity.</p>
             </div>
           )}

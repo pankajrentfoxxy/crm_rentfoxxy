@@ -635,9 +635,16 @@ exports.storeQuotation = async (req, res) => {
         `UPDATE sales_quotations SET security_amount = $1, security_type = 'one_month_rental' WHERE quotation_number = $2`,
         [oneMonth, quotationNumber]
       );
-    } else {
+    } else if (qSecurityType === 'custom') {
+      // A hand-entered deposit carried over from a copied quotation: stored as
+      // 'none' + amount, which is how such deposits have always been kept.
       await client.query(
         `UPDATE sales_quotations SET security_type = 'none' WHERE quotation_number = $1`,
+        [quotationNumber]
+      );
+    } else {
+      await client.query(
+        `UPDATE sales_quotations SET security_amount = 0, security_type = 'none' WHERE quotation_number = $1`,
         [quotationNumber]
       );
     }
@@ -1172,9 +1179,15 @@ exports.storeSalesOrder = async (req, res) => {
           WHERE sales_order_number = $1`,
         [salesOrderNumber]
       );
-    } else {
+    } else if (securityType === 'custom') {
+      // A hand-entered deposit kept from the copied order ('none' + amount, as stored).
       await client.query(
         `UPDATE sales_order_lines SET security_type = 'none' WHERE sales_order_number = $1`,
+        [salesOrderNumber]
+      );
+    } else {
+      await client.query(
+        `UPDATE sales_order_lines SET security_amount = 0, security_type = 'none' WHERE sales_order_number = $1`,
         [salesOrderNumber]
       );
     }
@@ -1511,13 +1524,30 @@ exports.updateSalesOrder = async (req, res) => {
           WHERE sales_order_number = $1`,
         [soNumber]
       );
-    } else if (body.security_amount != null || body.security_type != null) {
+    } else if (securityType === 'custom' && body.security_amount != null) {
+      // "Keep existing security": a hand-entered deposit, stored as 'none' + amount.
       await client.query(
         `UPDATE sales_order_lines
-            SET security_amount = COALESCE($1, security_amount),
+            SET security_amount = $1,
                 security_type = 'none'
           WHERE sales_order_number = $2`,
-        [body.security_amount != null ? Number(body.security_amount) || 0 : null, soNumber]
+        [Number(body.security_amount) || 0, soNumber]
+      );
+    } else if (body.security_type != null) {
+      // "No Security" means no deposit. The form used to send the amount it had
+      // loaded from the order alongside it, and this kept that amount, so the
+      // deposit could never be removed.
+      await client.query(
+        `UPDATE sales_order_lines SET security_amount = 0, security_type = 'none' WHERE sales_order_number = $1`,
+        [soNumber]
+      );
+    } else if (body.security_amount != null) {
+      await client.query(
+        `UPDATE sales_order_lines
+            SET security_amount = $1,
+                security_type = 'none'
+          WHERE sales_order_number = $2`,
+        [Number(body.security_amount) || 0, soNumber]
       );
     }
 
