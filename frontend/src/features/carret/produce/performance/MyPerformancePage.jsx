@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import DeskShell from '../../../../shells/DeskShell';
-import {
-  EmptyState, Notice, Section, Tabs,
-} from '../../../../components/carret';
+import { EmptyState, Notice } from '../../../../components/carret';
 import api from '../../../../utils/api';
 import PeriodBar, { usePeriodParams } from './PeriodBar';
-import { Standing, TargetMeter } from './perfShared';
+import { TargetMeter } from './perfShared';
+import { StandingPills } from './perfUi';
 import { TechnicianJobs } from './TechnicianDrawer';
 import { QcChecks } from './QcInspectorDrawer';
 
@@ -16,31 +15,25 @@ import { QcChecks } from './QcInspectorDrawer';
  * takes a user id). The list behind each number shows why a laptop failed QC,
  * so the page is also where to learn from it.
  */
-function Headline({ title, unit, d }) {
+function Headline({ unit, d }) {
   const t = d.totals;
   const target = t.target;
   const failed = unit === 'jobs' ? t.failed : t.missed;
   const pending = unit === 'jobs' ? t.awaiting : t.open;
   return (
-    <Section title={title}>
-      <div className="c-my-head">
-        <div>
-          <div className="c-my-big"><b>{t.correct}</b>{target ? <span> / {target}</span> : null}</div>
-          <div className="text-ink-3" style={{ fontSize: '13px' }}>
-            correct {unit} {target ? 'against your target' : '— no target set for you'}
-          </div>
-        </div>
-        <div style={{ flex: '1 1 16rem', minWidth: 0 }}>
-          <TargetMeter correct={t.correct} failed={failed} awaiting={pending} target={target} />
-          <Standing s={d.standing} eligible={d.eligible} provisional={pending > 0} />
-          <p className="text-ink-3" style={{ margin: '6px 0 0', fontSize: '13px' }}>
-            {unit === 'jobs'
-              ? `Correct = laptops you finished (${t.completed}) − those that failed QC (${t.failed}).${t.awaiting ? ` ${t.awaiting} still waiting for QC — this can still change.` : ''}${t.reworks ? ` Reworks (${t.reworks}) don't count.` : ''}`
-              : `Correct = your QC checks (${t.checks}) − passes that were missed (${t.missed}).${t.open ? ` ${t.open} passes are still in their window — this can still change.` : ''}`}
-          </p>
+    <section className="c-pf-card c-my-hero">
+      <div className="c-my-big"><b>{t.correct}</b>{target ? <span> / {target}</span> : null}</div>
+      <div className="c-my-hero-m">
+        <div className="c-my-hero-l">Correct {unit} {target ? 'vs target' : '· no target set'}</div>
+        {target > 0 && <TargetMeter correct={t.correct} failed={failed} awaiting={pending} target={target} />}
+        <div className="flex flex-wrap items-center" style={{ gap: '6px 12px' }}>
+          <StandingPills standing={d.standing} eligible={d.eligible} provisional={pending > 0} />
+          <span className="text-ink-3" style={{ fontSize: '12.5px' }}>
+            {unit === 'jobs' ? 'Correct = jobs − QC failed' : 'Correct = checks − missed'}
+          </span>
         </div>
       </div>
-    </Section>
+    </section>
   );
 }
 
@@ -69,25 +62,33 @@ export default function MyPerformancePage() {
     <DeskShell
       title="My performance"
       breadcrumb="Production"
-      subtitle="What you finished, how it did at QC, and where you stand against your target — the basis for your incentive."
+      subtitle="Your work, QC result and incentive against target."
     >
       <div className="c-stack">
-        {tabs.length > 1 && <Tabs tabs={tabs} value={view} onChange={(v) => set({ view: v === 'qc' ? 'qc' : '' })} />}
-        <PeriodBar period={period} />
+        <div className="c-pf-toolbar">
+          {tabs.length > 1 ? (
+            <div className="c-pf-switch" role="tablist" aria-label="Show">
+              {tabs.map((t) => (
+                <button key={t.key} type="button" role="tab" aria-selected={view === t.key} className={view === t.key ? 'is-on' : ''} onClick={() => set({ view: t.key === 'qc' ? 'qc' : '' })}>{t.label}</button>
+              ))}
+            </div>
+          ) : <span />}
+          <PeriodBar period={period} />
+        </div>
         {isFuture && <Notice tone="info" title="This period has not started">Nothing to count yet.</Notice>}
         {error && <Notice tone="crit" title="Could not load">{error}</Notice>}
         {!data && !error && <EmptyState title="Loading…" />}
-        {data && !tabs.length && <EmptyState title="Nothing to show yet" body="Your numbers appear here once you finish laptops on the floor or make QC checks." />}
+        {data && !tabs.length && <EmptyState title="Nothing to show yet" />}
         {data && view === 'tech' && data.technician && (
           <>
-            <Headline title="My jobs" unit="jobs" d={data.technician} />
-            <TechnicianJobs data={data.technician} from={from} to={to} />
+            <Headline unit="jobs" d={data.technician} />
+            <TechnicianJobs data={data.technician} from={from} to={to} page />
           </>
         )}
         {data && view === 'qc' && data.qc && (
           <>
-            <Headline title="My QC checks" unit="checks" d={data.qc} />
-            <QcChecks data={data.qc} from={from} to={to} />
+            <Headline unit="checks" d={data.qc} />
+            <QcChecks data={data.qc} from={from} to={to} page />
           </>
         )}
       </div>
