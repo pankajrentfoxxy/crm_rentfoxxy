@@ -1256,6 +1256,78 @@ exports.storeSalesOrder = async (req, res) => {
   }
 };
 
+/**
+ * A changed SO rental rate becomes the rent of the laptops already sent on it.
+ * Billing reads vendor_serial_numbers.rent_monthly_rate once a laptop has been
+ * billed, so an SO-only correction never reached the invoice. Only laptops
+ * still out on this SO's DC for this customer are touched. Returns the changes
+ * for logCustomerAssetRateChanges, which must run after COMMIT.
+ */
+async function applySoLineRatesToLaptops(client, lineIds) {
+  const ids = [...new Set((lineIds || []).map(Number).filter((n) => n > 0))];
+  if (!ids.length) return [];
+  const { rows } = await client.query(
+    `SELECT vsn.serial_id, vsn.inventory_asset_code, vsn.serial_number,
+            vsn.rent_monthly_rate AS old_rate, sol.rate AS new_rate, sol.customer_id
+       FROM sales_order_serials sos
+       JOIN sales_order_lines sol ON sol.id = sos.line_id
+       JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+      WHERE sos.line_id = ANY($1::int[])
+        AND sos.status <> 'removed'
+        AND LOWER(COALESCE(sol.quotation_type, 'rental')) = 'rental'
+        AND COALESCE(sol.rate, 0) > 0
+        AND vsn.deleted_at IS NULL
+        AND vsn.current_customer_id = sol.customer_id
+        AND vsn.current_dc_number = sos.dc_number
+        AND vsn.rent_monthly_rate IS DISTINCT FROM sol.rate
+      FOR UPDATE OF vsn`,
+    [ids]
+  );
+  for (const row of rows) {
+    await client.query(
+      `UPDATE vendor_serial_numbers SET rent_monthly_rate = $1, updated_at = NOW() WHERE serial_id = $2`,
+      [row.new_rate, row.serial_id]
+    );
+  }
+  return rows.map((row) => ({
+    customerId: row.customer_id,
+    serialId: row.serial_id,
+    ttsplId: row.inventory_asset_code,
+    serialNumber: row.serial_number,
+    oldRate: row.old_rate == null ? null : Number(row.old_rate),
+    newRate: Number(row.new_rate),
+  }));
+}
+
+/**
+ * Asset activity for each laptop rate carried from the SO. Billing treats a
+ * rent_monthly_rate change logged here after dispatch as deliberate, so the
+ * first bill keeps it instead of re-reading the SO line.
+ */
+async function logCustomerAssetRateChanges(changes, user, soNumber) {
+  const { logCustomerAssetEdit } = require('../services/customerAssetActivityService');
+  for (const ch of changes || []) {
+    try {
+      await logCustomerAssetEdit({
+        customerId: ch.customerId,
+        serialId: ch.serialId,
+        ttsplId: ch.ttsplId,
+        serialNumber: ch.serialNumber,
+        changes: [{
+          field: 'rent_monthly_rate',
+          label: `Monthly rent (from ${soNumber})`,
+          oldValue: ch.oldRate,
+          newValue: ch.newRate,
+        }],
+        actorUserId: user?.user_id || user?.id || null,
+        actorName: user?.name || null,
+      });
+    } catch (err) {
+      console.warn('logCustomerAssetRateChanges:', err.message);
+    }
+  }
+}
+
 // Outbound, live DCs of one SO. Static fragment; the SO number is $1.
 const SO_DC_SYNC_SCOPE = `sales_order_number = $1
   AND COALESCE(movement_type, 'outbound') = 'outbound'
@@ -1376,7 +1448,15 @@ async function syncDcsAfterSoEdit(client, soNumber, oldLines) {
     }
   }
 
-  return { dc_rows_updated: rows, fields: [...new Set(changed)] };
+  const rateChangedLineIds = oldLines
+    .filter((o) => {
+      const n = newLines.find((l) => l.id === o.id);
+      return n && Number(n.rate || 0) !== Number(o.rate || 0);
+    })
+    .map((o) => o.id);
+  const laptopRates = await applySoLineRatesToLaptops(client, rateChangedLineIds);
+
+  return { dc_rows_updated: rows, fields: [...new Set(changed)], laptop_rates: laptopRates };
 }
 
 /** PATCH /sales-orders/:soNumber — Edit rental/sale SO (after a DC: super admin only). */
@@ -1712,9 +1792,14 @@ exports.updateSalesOrder = async (req, res) => {
       console.warn('SO PDF regeneration after update:', pdfErr.message);
     }
 
+    const laptopRates = dcSync?.laptop_rates || [];
+    await logCustomerAssetRateChanges(laptopRates, req.user, soNumber);
+
     res.json({
       success: true,
-      message: dcSync ? 'Sales order updated and its delivery challans refreshed' : 'Sales order updated',
+      message: dcSync
+        ? `Sales order updated and its delivery challans refreshed${laptopRates.length ? `; rent updated on ${laptopRates.length} laptop(s)` : ''}`
+        : 'Sales order updated',
       sales_order_number: soNumber,
       pdf_path: pdfPath,
       dc_sync: dcSync,
@@ -7001,6 +7086,20 @@ exports.updateSoLineRate = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
     }
 
+    // Same rule as the SO editor: once a DC exists only a super admin changes
+    // the order, and the rate now also becomes the laptops' rent.
+    const lineDcRes = await client.query(
+      `SELECT 1 FROM delivery_challan_lines WHERE sales_order_number = $1 LIMIT 1`,
+      [line.sales_order_number]
+    );
+    if (lineDcRes.rows.length && req.user?.role !== 'super_admin') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'A delivery challan has already been created for this sales order. Only a super admin can change its rate now.',
+      });
+    }
+
     // A replacement bills at the returned laptop's rate, so its SO line is not
     // priced by hand: SO/26-27/1342 was edited from 1300 to 1999 and the
     // replacement would have billed 1999. Only a super admin may correct it, and
@@ -7041,8 +7140,10 @@ exports.updateSoLineRate = async (req, res) => {
     if (newSecurity != null) {
       await syncDcSecurityForSo(client, soNumber);
     }
+    const laptopRates = await applySoLineRatesToLaptops(client, [lineId]);
 
     await client.query('COMMIT');
+    await logCustomerAssetRateChanges(laptopRates, req.user, soNumber);
 
     let regen = { so_pdf_path: null, dc_pdfs: [] };
     try {
@@ -7054,9 +7155,10 @@ exports.updateSoLineRate = async (req, res) => {
     const dcCount = regen.dc_pdfs.length;
     res.json({
       success: true,
-      message: dcCount
+      message: (dcCount
         ? `Rate updated — SO and ${dcCount} DC PDF(s) regenerated`
-        : 'Rate updated — SO PDF regenerated',
+        : 'Rate updated — SO PDF regenerated')
+        + (laptopRates.length ? `; rent updated on ${laptopRates.length} laptop(s)` : ''),
       line: upd.rows[0],
       pdf_path: regen.so_pdf_path,
       dc_pdfs: regen.dc_pdfs,

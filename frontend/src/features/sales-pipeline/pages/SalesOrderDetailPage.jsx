@@ -462,7 +462,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                             Edit HSN
                           </button>
                         ) : null}
-                        {canEditLineRateConfig ? (
+                        {canEditLineRateConfig && (!hasDcCreated || isSuperAdmin) ? (
                           <button
                             type="button"
                             onClick={() => setEditRateLine(l)}
