@@ -161,3 +161,5 @@ export const fetchUpgradeContext = (id) => api.get(item(id, '/upgrade-context'))
 export const createPartsUpgrade = (id, body) => api.post(item(id, '/upgrades'), body);
 export const applyUpgrade = (upgradeId) => api.post(`/support/upgrades/${upgradeId}/apply`, {});
 export const cancelUpgrade = (upgradeId, reason) => api.post(`/support/upgrades/${upgradeId}/cancel`, { reason });
+// The technician signs the Return DC at the customer (before the customer OTP).
+export const signReturnDc = (id, esignData, signerName) => api.post(item(id, '/technician-esign'), { esign_data: esignData, signer_name: signerName });

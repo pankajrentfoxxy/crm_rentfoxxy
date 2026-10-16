@@ -10,6 +10,7 @@ import api from '../../../utils/api';
 import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import DamageReportDrawer from '../serve/DamageReportDrawer';
 import { fetchDamageCases } from '../serve/serveApi';
+import { fileUrl } from '../procure/procureShared';
 import { ChargerTag, WarehouseChargerCheck, chargerCheckGap, unitsToCheck, useChallanChargers } from './challanCharger';
 
 /**
@@ -18,6 +19,16 @@ import { ChargerTag, WarehouseChargerCheck, chargerCheckGap, unitsToCheck, useCh
  * check, warehouse receive. The warehouse receives with a signature — that day
  * is when rent stops (RT1) — and records any damage for the damage-charges flow.
  */
+/** A stored signature, small, with who and when. */
+function SignShot({ url, name, at }) {
+  return (
+    <span className="c-signshot">
+      <a href={fileUrl(url)} target="_blank" rel="noopener noreferrer"><img src={fileUrl(url)} alt={`Signature of ${name || 'signer'}`} /></a>
+      <small>{name || '—'}{at ? ` · ${new Date(at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}</small>
+    </span>
+  );
+}
+
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'That did not work.';
 const tick = (v, label) => (v ? <span style={{ color: 'var(--ok, #15803d)' }}>✓ {label}</span> : <span className="text-ink-3">— {label}</span>);
 
@@ -87,6 +98,21 @@ export default function ReturnChallanRecordPage() {
     fetchDamageCases({ return_dc_number: rdc }).then(({ data }) => setDamage(data.data || [])).catch(() => setDamage([]));
   }, [rdc]);
   useEffect(() => { load(); }, [load]);
+  // While a laptop at the gate waits for its configuration check, refresh so the
+  // result shows as soon as the laptop reports (16 Oct 2026).
+  const waitingCheck = (d?.pickup_items || []).some((i) => i.gate_inward_at && !i.return_config_verified_at && !i.warehouse_received_at && i.status !== 'cancelled');
+  useEffect(() => {
+    if (!waitingCheck) return undefined;
+    const t = setInterval(() => { if (!document.hidden) load(); }, 6000);
+    return () => clearInterval(t);
+  }, [waitingCheck, load]);
+  const newNumber = async (itemId) => {
+    try {
+      await api.post(`/sales-management/return-dc/${encodeURIComponent(rdc)}/config-tokens`, { item_id: itemId });
+      toast.success('New access number');
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
 
   const confirmReceive = async () => {
     setBusy(true);
@@ -125,11 +151,15 @@ export default function ReturnChallanRecordPage() {
 
   const items = d.pickup_items || [];
   const toCheck = unitsToCheck(chargers.data);
+  const unitOf = (i) => (d.units || []).find((u) => [u.ttspl, u.serial].filter(Boolean).map((x) => String(x).toUpperCase()).includes(String(i.ttspl_id || i.serial_number || '').toUpperCase())) || {};
+  const live = items.filter((i) => i.status !== 'cancelled');
+  const atGate = live.filter((i) => i.gate_inward_at && !i.warehouse_received_at);
+  const toRunCheck = atGate.filter((i) => !i.return_config_verified_at);
   const chgOpen = toCheck.filter((u) => chargerCheckGap(u, chgCheck[u.asset_code])).length;
   const received = items.length > 0 && items.every((i) => i.warehouse_received_at);
   const cols = [
-    { key: 't', header: 'Laptop', render: (i) => <Link to={`/carret/stock/assets/${encodeURIComponent(i.ttspl_id || i.serial_number)}`}><DocNumber value={i.ttspl_id || i.serial_number} /></Link>, sub: (i) => [i.brand, i.model, i.ram, i.storage].filter(Boolean).join(' · ') },
-    { key: 'p', header: 'Collected', render: (i) => tick(i.customer_otp_verified_at || d.customer_otp_verified_at, 'customer OTP'), sub: (i) => (i.tech_name ? `by ${i.tech_name}` : null) },
+    { key: 't', header: 'Laptop', render: (i) => <Link to={`/carret/stock/assets/${encodeURIComponent(i.ttspl_id || i.serial_number)}`}><DocNumber value={i.ttspl_id || i.serial_number} /></Link>, sub: (i) => { const u = unitOf(i); return [i.brand || u.brand, i.model || u.model, i.processor || u.processor, i.generation || u.generation, i.ram || u.ram, i.storage || u.storage].filter(Boolean).join(' · '); } },
+    { key: 'p', header: 'Collected', render: (i) => tick(i.customer_otp_verified_at || d.customer_otp_verified_at, 'customer OTP'), sub: (i) => [i.tech_name ? `by ${i.tech_name}` : null, i.technician_esign_at ? 'signed' : (i.customer_otp_verified_at ? 'not signed' : null)].filter(Boolean).join(' · ') || null },
     { key: 'g', header: 'Gate', render: (i) => tick(i.gate_inward_at || d.gate_inward_at, 'inward') },
     { key: 'c', header: 'Config check', render: configCheck, sub: configCheckNote },
     {
@@ -181,10 +211,35 @@ export default function ReturnChallanRecordPage() {
     >
       <div className="c-stack">
         <div className="flex flex-wrap items-center" style={{ gap: '8px' }}>
-          <StatusChip status={d.status === 'in_transit' ? 'dispatched' : d.status} label={({ pending: 'To collect', in_transit: 'On the way', shipped: 'On the way', reached: 'Reached', delivered: 'Received', cancelled: 'Cancelled' })[d.status]} />
+          {atGate.length > 0 && !received
+            ? <StatusChip status="pending" label="At the gate — warehouse to receive" />
+            : <StatusChip status={d.status === 'in_transit' ? 'dispatched' : d.status} label={({ pending: 'To collect', in_transit: 'On the way', shipped: 'On the way', reached: 'Reached', delivered: 'Received', cancelled: 'Cancelled' })[d.status]} />}
           {d.ticket_id && <Link to={`/carret/serve/tickets/${d.ticket_id}`}>Ticket #{d.ticket_id}</Link>}
         </div>
-        {!received && d.warehouse_block_reason && <Notice tone="warn" title="Not ready for warehouse receive">{d.warehouse_block_reason}</Notice>}
+        {/* Warehouse to-do (16 Oct 2026): what is waiting at the gate and how to check it. */}
+        {toRunCheck.length > 0 && d.status !== 'cancelled' && (
+          <Panel title={`Warehouse — ${toRunCheck.length} laptop${toRunCheck.length > 1 ? 's' : ''} at the gate to check`}>
+            <div className="c-card-b c-stack">
+              <ol className="c-howto">
+                <li>Collect the laptop from the gate.</li>
+                <li>On that laptop, open <a href={`${window.location.origin}/rdc-config-match`} target="_blank" rel="noopener noreferrer" className="font-mono">{window.location.host}/rdc-config-match</a> and type its access number.</li>
+                <li>Download and run the checker. It reports the configuration and serial; this page updates by itself. A laptop that won’t power on: choose “Not ON” there and type the serial.</li>
+                <li>Then <b>Receive at warehouse</b> (charger check + signature).</li>
+              </ol>
+              {toRunCheck.map((i) => (
+                <div key={i.id} className="c-access">
+                  <div className="min-w-0">
+                    <DocNumber value={i.ttspl_id || i.serial_number} />
+                    <small>{i.return_capture?.status === 'expired' || !i.return_capture ? 'No live number — get a new one' : 'Access number'}</small>
+                  </div>
+                  {i.return_capture?.access_number && i.return_capture.status === 'pending' && <span className="c-access-n">{i.return_capture.access_number}</span>}
+                  {canReceive && <Button variant="quiet" onClick={() => newNumber(i.id)}>New number</Button>}
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+        {!received && d.warehouse_block_reason && !toRunCheck.length && <Notice tone="warn" title="Not ready for warehouse receive">{d.warehouse_block_reason}</Notice>}
         {!received && <Notice tone="info">Rent keeps running until the warehouse receives the laptops.</Notice>}
         <Panel title="Customer and pickup">
           <div className="c-card-b">
@@ -198,7 +253,8 @@ export default function ReturnChallanRecordPage() {
                 { label: 'Raised', value: <DateTime value={d.created_at} /> },
                 { label: 'Original challan', value: d.original_dc_number ? <DocNumber value={d.original_dc_number} /> : '—' },
                 d.can_view_otp && d.customer_otp_code && { label: 'Customer OTP', value: d.customer_otp_code },
-                d.esign?.warehouse_at && { label: 'Received by', value: <>{d.esign.warehouse_name || '—'} · <DateTime value={d.esign.warehouse_at} /></> },
+                { label: 'Technician signature', value: d.esign?.technician_url ? <SignShot url={d.esign.technician_url} name={d.esign.technician_name} at={d.esign.technician_at} /> : <span className="text-ink-3">not signed yet</span> },
+                { label: 'Warehouse signature', value: d.esign?.warehouse_url ? <SignShot url={d.esign.warehouse_url} name={d.esign.warehouse_name} at={d.esign.warehouse_at} /> : <span className="text-ink-3">signed at receive</span> },
               ]}
             />
           </div>

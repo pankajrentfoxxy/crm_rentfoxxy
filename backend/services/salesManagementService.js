@@ -1683,7 +1683,9 @@ function returnDcListCteSql(baseWhere, statusSql) {
               (ARRAY_AGG(warehouse_esign_at ORDER BY id DESC))[1] AS warehouse_esign_at,
               (ARRAY_AGG(warehouse_esign_url ORDER BY id DESC))[1] AS warehouse_esign_url,
               (ARRAY_AGG(pickup_assigned_to ORDER BY id DESC))[1] AS pickup_assigned_to,
-              (ARRAY_AGG(assigned_to ORDER BY id DESC))[1] AS assigned_to
+              (ARRAY_AGG(assigned_to ORDER BY id DESC))[1] AS assigned_to,
+              -- Through the gate, waiting for the warehouse (16 Oct 2026).
+              MAX(gate_inward_at) FILTER (WHERE COALESCE(status, '') <> 'cancelled') AS gate_inward_at
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
         GROUP BY return_dc_number
@@ -1739,6 +1741,7 @@ function returnDcListCteSql(baseWhere, statusSql) {
        COALESCE(sti_rdc.customer_otp_code, sti_tkt.customer_otp_code) AS customer_otp_code,
        COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
+       sti_rdc.gate_inward_at,
        (
          LOWER(COALESCE(rl.status, '')) <> 'cancelled'
          AND (

@@ -3737,6 +3737,24 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
         if (have < PHOTO_SLOTS.length) {
             return res.status(400).json({ success: false, message: `Take all ${PHOTO_SLOTS.length} photos of the laptop first (${have}/${PHOTO_SLOTS.length})` });
         }
+        // The technician signs the Return DC at the customer (16 Oct 2026). One
+        // signature covers the other laptops they collect on the same Return DC.
+        if (!it.technician_esign_url) {
+            const sib = it.return_dc_number ? (await pool.query(
+                `SELECT technician_esign_url, technician_esign_at, technician_esign_by, technician_esign_name
+                   FROM support_ticket_items
+                  WHERE return_dc_number = $1 AND item_type = 'pickup' AND technician_esign_url IS NOT NULL
+                    AND technician_esign_by = $2
+                  ORDER BY technician_esign_at DESC LIMIT 1`,
+                [it.return_dc_number, req.user.user_id]
+            )).rows[0] : null;
+            if (!sib) return res.status(400).json({ success: false, message: 'Sign the Return DC before taking the customer OTP' });
+            await pool.query(
+                `UPDATE support_ticket_items SET technician_esign_url = $2, technician_esign_at = $3, technician_esign_by = $4,
+                        technician_esign_name = $5, updated_at = NOW() WHERE id = $1`,
+                [itemId, sib.technician_esign_url, sib.technician_esign_at, sib.technician_esign_by, sib.technician_esign_name]
+            );
+        }
     }
     try {
         const chargerSvc = require('../services/dispatchChargerService');

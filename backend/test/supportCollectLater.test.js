@@ -63,7 +63,8 @@ describe('support pickup: collect later', () => {
   /** The technician's side of one laptop: arrived + the 6 photos (migration 433) + customer OTP. */
   async function collect(itemId, user) {
     await C.query(
-      `UPDATE support_ticket_items SET visited_at = NOW(), pod_image_path = 'test/pod.jpg' WHERE id = $1`,
+      `UPDATE support_ticket_items SET visited_at = NOW(), pod_image_path = 'test/pod.jpg',
+              technician_esign_url = 'test/sign.png', technician_esign_at = NOW() WHERE id = $1`,
       [itemId]
     );
     await C.query(

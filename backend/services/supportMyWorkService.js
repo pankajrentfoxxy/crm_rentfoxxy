@@ -45,7 +45,13 @@ async function loadJobs(userId) {
               WHERE i.return_dc_number IS NOT NULL
                 AND s2.return_dc_number = i.return_dc_number
                 AND s2.item_type = 'pickup'
-                AND COALESCE(s2.status, '') NOT IN ('cancelled', 'removed')) AS rdc_laptops
+                AND COALESCE(s2.status, '') NOT IN ('cancelled', 'removed')) AS rdc_laptops,
+            -- Signed: this laptop, or another on its Return DC signed by the same technician.
+            (i.technician_esign_url IS NOT NULL OR EXISTS (
+              SELECT 1 FROM support_ticket_items s3
+               WHERE i.return_dc_number IS NOT NULL AND s3.return_dc_number = i.return_dc_number
+                 AND s3.item_type = 'pickup' AND s3.technician_esign_url IS NOT NULL
+                 AND s3.technician_esign_by = COALESCE(i.pickup_assigned_to, i.assigned_to))) AS rdc_signed
        FROM support_ticket_items i
        JOIN support_tickets t ON t.id = i.ticket_id
        LEFT JOIN users ua ON ua.user_id = i.assigned_to
@@ -105,6 +111,7 @@ async function loadJobs(userId) {
       visited_at: r.visited_at,
       outcome: r.outcome,
       has_photo: Boolean(r.pod_image_path || r.proof_of_completion_path),
+      signed: Boolean(r.rdc_signed),
       // Pickup: six photos (migration 433); a technician collection needs all of them.
       photos: r.photos || [],
       needs_photos: r.item_type === 'pickup' && !['courier', 'porter'].includes(String(r.pickup_method || '').toLowerCase()),

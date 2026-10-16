@@ -218,7 +218,9 @@ export default function TicketJourneys({
                         tech={techOf(i)}
                         wfh={wfh[i.id]}
                         locked={locked}
-                        note={extra?.note}
+                        note={extra?.note || (i.item_type === 'pickup' && i.gate_inward_at && !i.warehouse_received_at
+                          ? `At the gate — the warehouse runs the configuration check and receives it on ${i.return_dc_number || 'its Return DC'}.`
+                          : null)}
                         actions={(
                           <>
                             {extra?.buttons}

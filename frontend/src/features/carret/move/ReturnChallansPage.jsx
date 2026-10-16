@@ -16,7 +16,7 @@ import api from '../../../utils/api';
  */
 const TABS = [
   { value: 'open', label: 'Open', params: { status: 'pending,in_transit' } },
-  { value: 'warehouse', label: 'Awaiting warehouse', params: { warehouse_receive: 'pending' } },
+  { value: 'warehouse', label: 'At the gate / to receive', params: { warehouse_receive: 'pending' } },
   { value: 'received', label: 'Received', params: { status: 'delivered' } },
   { value: 'cancelled', label: 'Cancelled', params: { status: 'cancelled' } },
   { value: 'all', label: 'All', params: {} },
@@ -49,7 +49,15 @@ export default function ReturnChallansPage() {
     { key: 'n', header: 'Return challan', render: (r) => <DocNumber value={r.return_dc_number} />, sub: (r) => ({ return: 'Return', repair: 'Repair' }[r.pickup_type] || r.reason || null) },
     { key: 'c', header: 'Customer', render: (r) => r.customer_name || (r.customer_id ? `#${r.customer_id}` : '—'), sub: (r) => r.city },
     { key: 'u', header: 'Laptops', numeric: true, render: (r) => r.unit_count || r.quantity || '—', sub: (r) => r.ttspl_id },
-    { key: 's', header: 'Status', render: (r) => <StatusChip status={r.status === 'in_transit' ? 'dispatched' : r.status} label={({ pending: 'To collect', in_transit: 'On the way', shipped: 'On the way', reached: 'Reached', delivered: 'Received', cancelled: 'Cancelled' })[r.status]} />, sub: (r) => (r.warehouse_receive_pending && r.status !== 'cancelled' ? 'warehouse not received' : null) },
+    {
+      key: 's',
+      header: 'Status',
+      // Through the gate but not received: the warehouse's turn (16 Oct 2026).
+      render: (r) => (r.gate_inward_at && r.warehouse_receive_pending && r.status !== 'cancelled'
+        ? <StatusChip status="pending" label="At the gate" />
+        : <StatusChip status={r.status === 'in_transit' ? 'dispatched' : r.status} label={({ pending: 'To collect', in_transit: 'On the way', shipped: 'On the way', reached: 'Reached', delivered: 'Received', cancelled: 'Cancelled' })[r.status]} />),
+      sub: (r) => (r.warehouse_receive_pending && r.status !== 'cancelled' ? (r.gate_inward_at ? 'warehouse to check and receive' : 'warehouse not received') : null),
+    },
     { key: 't', header: 'Collected by', render: (r) => r.technician_name || r.dispatch_mode || '—', sub: (r) => (r.customer_otp_verified_at ? 'OTP verified' : null) },
     { key: 'd', header: 'Raised', render: (r) => <DateTime value={r.created_at} />, sub: (r) => r.original_dc_number },
   ];

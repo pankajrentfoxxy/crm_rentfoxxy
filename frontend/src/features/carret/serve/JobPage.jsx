@@ -3,14 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import FieldShell from '../../../shells/FieldShell';
 import {
-  Button, EmptyState, Field, FlowSteps, Input, Notice, Textarea,
+  Button, EmptyState, Field, FlowSteps, Input, Notice, SignaturePad, Textarea,
 } from '../../../components/carret';
 import RaisePartRequestForm from '../../support/components/RaisePartRequestForm';
 import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
 import { CollectChargerPanel } from '../move/challanCharger';
 import PickupPhotos from './PickupPhotos';
 import {
-  fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, uploadPhoto, verifyLaptop, verifyPickupOtp,
+  fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, signReturnDc, uploadPhoto, verifyLaptop, verifyPickupOtp,
   verifyVisitOtp, workDone,
 } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
@@ -244,8 +244,21 @@ export default function JobPage() {
                 {job.return_dc_number
                   ? <CollectChargerPanel itemId={job.item_id} rdc={job.return_dc_number} code={job.laptop.ttspl || job.laptop.serial} onReady={setChargerOk} />
                   : <PickupChargerScanPanel pickupItemId={job.item_id} onScanned={() => setChargerOk(true)} />}
-                <Button variant="primary" disabled={busy || (Boolean(job.return_dc_number) && !chargerOk)} onClick={askOtp} style={{ width: '100%', minHeight: '56px' }}>
-                  {chargerOk || !job.return_dc_number ? 'Send the customer an OTP' : 'Record the charger first'}
+                {/* The technician signs the Return DC (16 Oct 2026) — once per Return DC. */}
+                {job.return_dc_number && (job.signed ? (
+                  <Notice tone="good" title={`Return DC ${job.return_dc_number} signed`} />
+                ) : (
+                  <div className="c-qsec" style={{ padding: '12px 14px' }}>
+                    <strong style={{ display: 'block', marginBottom: '6px' }}>Sign the Return DC</strong>
+                    <SignaturePad
+                      prompt="Sign as the technician collecting the laptop"
+                      saveLabel={busy ? 'Saving…' : 'Sign'}
+                      onSave={(dataUrl) => run(() => signReturnDc(job.item_id, dataUrl), 'Signed')}
+                    />
+                  </div>
+                ))}
+                <Button variant="primary" disabled={busy || (Boolean(job.return_dc_number) && (!chargerOk || !job.signed))} onClick={askOtp} style={{ width: '100%', minHeight: '56px' }}>
+                  {!job.return_dc_number || (chargerOk && job.signed) ? 'Send the customer an OTP' : (!chargerOk ? 'Record the charger first' : 'Sign the Return DC first')}
                 </Button>
               </div>
             )}
