@@ -1177,6 +1177,11 @@ async function listDeliveryChallansGrouped({
   const { where, params } = buildDeliveryChallanListWhere({
     search, status, dcPurpose, orderType, assignedUserId, dateFrom, dateTo, deliveredFrom, deliveredTo, hidePendingEway,
   });
+  // The tab counts ignore the status filter: clicking "On the way" must not
+  // turn every other tab's count into 0 or the On-the-way number.
+  const { where: tabWhere, params: tabParams } = buildDeliveryChallanListWhere({
+    search, status: '', dcPurpose, orderType, assignedUserId, dateFrom, dateTo, deliveredFrom, deliveredTo, hidePendingEway,
+  });
   const fromSql = `FROM delivery_challan_lines d ${DC_SO_TYPE_JOIN}`;
   // A DC can have several line items; list/count one row per DC (not per line)
   // so multi-laptop challans don't appear duplicated.
@@ -1202,7 +1207,7 @@ async function listDeliveryChallansGrouped({
                 d.dc_number,
                 COALESCE(NULLIF(TRIM(d.status), ''), 'pending') AS dc_status
            ${fromSql}
-           ${where}
+           ${tabWhere}
           ORDER BY d.dc_number, d.id DESC
        )
        SELECT
@@ -1213,7 +1218,7 @@ async function listDeliveryChallansGrouped({
          COUNT(*) FILTER (WHERE dc_status = 'delivered')::int AS delivered,
          COUNT(*) FILTER (WHERE dc_status = 'rejected')::int AS rejected
        FROM dc_heads`,
-      params
+      tabParams
     ),
   ]);
   const statusRow = statusResult.rows[0] || {};
@@ -1254,9 +1259,9 @@ async function listDeliveryChallansGrouped({
       qc_status: qcSummaries[row.dc_number] || emptyQc,
     })),
     stats: {
-      total_delivery_challans: countResult.rows[0]?.total || 0,
+      total_delivery_challans: statusRow.total || 0,
       total_laptops: laptopResult.rows[0]?.total_laptops || 0,
-      total: statusRow.total || countResult.rows[0]?.total || 0,
+      total: statusRow.total || 0,
       pending: statusRow.pending || 0,
       dispatch_ready: statusRow.dispatch_ready || 0,
       in_transit: statusRow.in_transit || 0,
