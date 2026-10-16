@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button, Drawer } from '../../../components/carret';
+import { Button, Drawer, Field, Textarea } from '../../../components/carret';
 import {
   FindingFields, IssuePicker, emptyFinding, emptyIssue, findingBody, findingError, issueComplete, issueLabel, useIssueCatalog,
 } from './IssueFields';
@@ -60,10 +60,11 @@ export default function LaptopDetails({ complaint, hasRepairPickup, otpItem, dam
   const catalog = useIssueCatalog();
   const [edit, setEdit] = useState(null);
   const [find, setFind] = useState(null);
+  const [cancelFor, setCancelFor] = useState(null); // { upgrade, reason }
   const [busy, setBusy] = useState(false);
   const run = async (fn, ok) => {
     setBusy(true);
-    try { const r = await fn(); toast.success(r?.data?.message || ok); setEdit(null); setFind(null); reload?.(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+    try { const r = await fn(); toast.success(r?.data?.message || ok); setEdit(null); setFind(null); setCancelFor(null); reload?.(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
   const causeName = (id) => catalog?.root_causes.find((c) => c.id === id)?.name;
   const fixName = (id) => catalog?.resolutions.find((r) => r.id === id)?.name;
@@ -127,7 +128,7 @@ export default function LaptopDetails({ complaint, hasRepairPickup, otpItem, dam
           action={canLead && !locked && u.status === 'pending' ? (
             <>
               <Button variant="primary" disabled={busy} onClick={() => run(() => applyUpgrade(u.upgrade_id), 'Upgraded')}>Apply — part fitted</Button>
-              <Button variant="quiet" disabled={busy} onClick={() => { const why = window.prompt('Why cancel this upgrade?'); if (why && why.trim().length >= 3) run(() => cancelUpgrade(u.upgrade_id, why.trim()), 'Cancelled'); }}>Cancel</Button>
+              <Button variant="quiet" disabled={busy} onClick={() => setCancelFor({ upgrade: u, reason: '' })}>Cancel</Button>
             </>
           ) : null}
         >
@@ -153,6 +154,19 @@ export default function LaptopDetails({ complaint, hasRepairPickup, otpItem, dam
         </Row>
       )}
 
+      <Drawer
+        open={Boolean(cancelFor)}
+        onClose={() => setCancelFor(null)}
+        title="Cancel the upgrade"
+        footer={<Button variant="primary" disabled={busy || String(cancelFor?.reason || '').trim().length < 3} onClick={() => run(() => cancelUpgrade(cancelFor.upgrade.upgrade_id, cancelFor.reason.trim()), 'Upgrade cancelled')}>Cancel the upgrade</Button>}
+      >
+        {cancelFor && (
+          <div className="c-stack">
+            <p style={{ margin: 0 }}>The laptop keeps its configuration and rent. A part already requested is cancelled separately in Parts.</p>
+            <Field label="Why" required><Textarea rows={3} value={cancelFor.reason} onChange={(e) => setCancelFor({ ...cancelFor, reason: e.target.value })} /></Field>
+          </div>
+        )}
+      </Drawer>
       <Drawer
         open={Boolean(edit)}
         onClose={() => setEdit(null)}
