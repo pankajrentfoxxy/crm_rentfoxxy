@@ -10,6 +10,7 @@ import api from '../../../utils/api';
 import { SignaturePad as SignaturePadComponent } from '../../../components/carret';
 import DamageReportDrawer from '../serve/DamageReportDrawer';
 import { fetchDamageCases } from '../serve/serveApi';
+import { ChargerTag, WarehouseChargerCheck, chargerCheckGap, unitsToCheck, useChallanChargers } from './challanCharger';
 
 /**
  * Movement → Return challans → one RDC (claude/carret-customers-returns-control.md).
@@ -77,6 +78,9 @@ export default function ReturnChallanRecordPage() {
   const [damageFor, setDamageFor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [editFor, setEditFor] = useState(null); // { item, form }
+  // Charger we sent (PRT IDs), how it was collected, and the check at receive (migration 430).
+  const chargers = useChallanChargers(rdc);
+  const [chgCheck, setChgCheck] = useState({});
 
   const load = useCallback(() => {
     api.get(`/sales-management/return-dc/${encodeURIComponent(rdc)}/detail`).then(({ data }) => setD(data)).catch((e) => setD({ error: errMsg(e) }));
@@ -87,10 +91,13 @@ export default function ReturnChallanRecordPage() {
   const confirmReceive = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post(`/sales-management/return-dc/${encodeURIComponent(rdc)}/warehouse-confirm`, { esign_data: receive.esign, signer_name: receive.name });
+      const list = unitsToCheck(chargers.data).map((u) => ({ asset_code: u.asset_code, ...(chgCheck[u.asset_code] || {}) }));
+      const { data } = await api.post(`/sales-management/return-dc/${encodeURIComponent(rdc)}/warehouse-confirm`, { esign_data: receive.esign, signer_name: receive.name, chargers: list });
       toast.success(data.message || 'Received at the warehouse');
       setReceive(null);
+      setChgCheck({});
       load();
+      chargers.reload();
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
   const saveConfig = async () => {
@@ -117,12 +124,29 @@ export default function ReturnChallanRecordPage() {
   if (d.error) return <DeskShell title={rdc} breadcrumb="Movement / Return challans"><EmptyState title="Not available" body={d.error} /></DeskShell>;
 
   const items = d.pickup_items || [];
+  const toCheck = unitsToCheck(chargers.data);
+  const chgOpen = toCheck.filter((u) => chargerCheckGap(u, chgCheck[u.asset_code])).length;
   const received = items.length > 0 && items.every((i) => i.warehouse_received_at);
   const cols = [
     { key: 't', header: 'Laptop', render: (i) => <Link to={`/carret/stock/assets/${encodeURIComponent(i.ttspl_id || i.serial_number)}`}><DocNumber value={i.ttspl_id || i.serial_number} /></Link>, sub: (i) => [i.brand, i.model, i.ram, i.storage].filter(Boolean).join(' · ') },
     { key: 'p', header: 'Collected', render: (i) => tick(i.customer_otp_verified_at || d.customer_otp_verified_at, 'customer OTP'), sub: (i) => (i.tech_name ? `by ${i.tech_name}` : null) },
     { key: 'g', header: 'Gate', render: (i) => tick(i.gate_inward_at || d.gate_inward_at, 'inward') },
     { key: 'c', header: 'Config check', render: configCheck, sub: configCheckNote },
+    {
+      key: 'chg',
+      header: 'Charger',
+      render: (i) => {
+        const cu = chargers.unitFor(i.ttspl_id || i.unique_serial_number || i.serial_number, i.serial_number);
+        const got = cu?.warehouse || cu?.collected;
+        return got ? <ChargerTag mark={got} /> : <ChargerTag mark={cu?.sent?.charger === 'with' ? cu.sent : null} empty="No charger sent" />;
+      },
+      sub: (i) => {
+        const cu = chargers.unitFor(i.ttspl_id || i.unique_serial_number || i.serial_number, i.serial_number);
+        if (cu?.warehouse) return cu.warehouse.charger === 'with' ? 'Scanned in at warehouse' : `Not received${cu.warehouse.note ? ` — ${cu.warehouse.note}` : ''}`;
+        if (cu?.collected) return cu.collected.charger === 'with' ? 'Collected with the laptop' : `Not collected${cu.collected.note ? ` — ${cu.collected.note}` : ''}`;
+        return cu?.sent?.charger === 'with' ? 'Sent — to collect' : null;
+      },
+    },
     { key: 'w', header: 'Warehouse', render: (i) => (i.warehouse_received_at ? <span><DateTime value={i.warehouse_received_at} /></span> : <span className="text-ink-3">not received</span>), sub: (i) => i.warehouse_receiver_name },
     {
       key: 'x',
@@ -204,10 +228,15 @@ export default function ReturnChallanRecordPage() {
         )}
       </div>
 
-      <Drawer open={Boolean(receive)} onClose={() => setReceive(null)} title={`Receive ${rdc} at the warehouse`} footer={<Button variant="primary" disabled={busy || !receive?.esign || !receive?.name?.trim()} onClick={confirmReceive}>Confirm receipt</Button>}>
+      <Drawer open={Boolean(receive)} onClose={() => setReceive(null)} title={`Receive ${rdc} at the warehouse`} width="36rem" footer={<Button variant="primary" disabled={busy || !receive?.esign || !receive?.name?.trim() || chgOpen > 0} onClick={confirmReceive}>Confirm receipt</Button>}>
         {receive && (
           <div className="c-stack">
             <p>Check each laptop against the challan. Record any damage before or after receiving — it goes to the warehouse for pricing. Rent stops today.</p>
+            {toCheck.length > 0 && (
+              <Panel title={`Chargers · ${toCheck.length - chgOpen}/${toCheck.length}`}>
+                <div className="c-card-b"><WarehouseChargerCheck units={toCheck} value={chgCheck} onChange={setChgCheck} /></div>
+              </Panel>
+            )}
             <Field label="Received by" required><Input value={receive.name} onChange={(e) => setReceive({ ...receive, name: e.target.value })} /></Field>
             {receive.esign
               ? <div className="c-stack"><img src={receive.esign} alt="Signature" style={{ height: 80, border: '1px solid var(--rule)', borderRadius: 'var(--d-radius)' }} /><Button variant="quiet" onClick={() => setReceive({ ...receive, esign: null })}>Sign again</Button></div>

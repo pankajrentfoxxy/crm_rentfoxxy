@@ -418,7 +418,7 @@ function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
 
   (items || []).forEach((item) => {
     const p = parseItemProduct(item);
-    const pLines = [p.l1, p.l2, p.l3, p.l5].filter(Boolean);
+    const pLines = [p.l1, p.l2, p.l3, p.l5, item.charger_text].filter(Boolean);
     const rowH = Math.max(46, 12 + pLines.length * 11);
     if (y + rowH > 760) {
       doc.addPage();
@@ -442,6 +442,10 @@ function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
     if (p.l3) { doc.text(p.l3, L + 4, py, { width: cols[0].w - 8 }); py += 10; }
     if (p.l5) {
       doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, L + 4, py, { width: cols[0].w - 8 });
+      py += 10;
+    }
+    if (item.charger_text) {
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.ink).text(item.charger_text, L + 4, py, { width: cols[0].w - 8 });
     }
 
     const hsnX = L + cols[0].w;
@@ -504,6 +508,9 @@ function drawDispatchTags(doc, y, tags) {
 async function generateVendorRepairPdf(dcNumber) {
   const dc = await loadDc(dcNumber);
   if (!dc) return null;
+  // With / without charger per laptop (migration 430).
+  const chg = await require('./challanChargerService').chargerTextsForPdf(pool, dcNumber);
+  for (const it of dc.items || []) it.charger_text = chg.get(String(it.ttspl_id || it.serial_number || '').toUpperCase()) || null;
 
   const company = await loadCompany();
   const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';

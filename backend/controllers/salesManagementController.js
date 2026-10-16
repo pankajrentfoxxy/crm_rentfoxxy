@@ -6130,6 +6130,8 @@ exports.updateDcDispatch = async (req, res) => {
 
       try {
         await require('../services/dispatchChargerService').markDispatchedForDc(client, dcNumber, req.user);
+        // Keep "with / without charger" per laptop as it left (migration 430).
+        await require('../services/challanChargerService').freezeDispatchMarks(client, dcNumber, req.user);
       } catch (chargerErr) {
         console.error('[dispatch] charger mark dispatched:', chargerErr.message);
       }
@@ -8174,3 +8176,6 @@ exports.updateSoShipping = async (req, res) => {
     client.release();
   }
 };
+
+// Charger marks (migration 430) refresh the stored DC PDF.
+exports.regenerateDcPdfForNumber = regenerateDcPdfForNumber;

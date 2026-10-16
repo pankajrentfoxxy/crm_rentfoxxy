@@ -657,6 +657,7 @@ async function createOutForRepairDc(client, {
   warehouseName,
   warehouseAddress,
   itemRemarks = {},
+  itemChargers = {},
   itemIssueTypes = {},
   itemPrices = {},
   itemHsnCodes = {},
@@ -893,6 +894,14 @@ async function createOutForRepairDc(client, {
         WHERE ticket_id = $1`,
       [ticket.ticket_id, dcNumber]
     );
+    // With / without charger to the vendor (migration 430).
+    const chg = itemChargers[ticket.ticket_id] ?? itemChargers[String(ticket.ticket_id)];
+    if (chg === 'with' || chg === 'without') {
+      await require('./challanChargerService').setMark(client, {
+        dcNumber, assetCode: ticket.ttspl_id || ticket.serial_number, stage: 'dispatch', charger: chg,
+        user: { user_id: actorUserId }, source: 'vrdc_create',
+      });
+    }
     await logTtsplEvent({
       ttsplId: ticket.ttspl_id,
       vendorSerialId: ticket.vendor_serial_id,

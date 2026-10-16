@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, DataTable, DocNumber, EmptyState, Field, FormGrid, Input, Money, Notice, SearchSelect, Section, Select, Textarea,
+  Button, DataTable, DocNumber, EmptyState, Field, FormGrid, Input, Money, Notice, SearchSelect, Section, Segmented, Select, Textarea,
 } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { createOutForRepairDc, fetchDiagnosisFailedTickets, fetchVendorRepairCompanyDefaults } from '../../floor-pipeline/vendorRepairApi';
@@ -114,6 +114,7 @@ export default function RepairChallanCreatePage() {
       const p = per[r.ticket_id] || {};
       const label = r.ttspl_id || `#${r.ticket_id}`;
       if (!p.issue) { toast.error(`Choose the issue for ${label}`); return; }
+      if (!p.charger) { toast.error(`Say whether the charger goes with ${label}`); return; }
       if (String(p.remarks || '').trim().length < 3) { toast.error(`Write the remarks for ${label}`); return; }
       if (canHsn && p.hsn && !/^\d{4,8}$/.test(String(p.hsn).trim())) { toast.error(`HSN for ${label} must be 4–8 digits`); return; }
       const check = checkTtsplAndSerial({ expectedTtspl: r.ttspl_id, expectedSerial: r.serial_number, verifiedTtspl: p.ttspl, verifiedSerial: p.serial, label });
@@ -138,6 +139,7 @@ export default function RepairChallanCreatePage() {
         remarks: form.remarks.trim() || undefined,
         warehouse_address: DEFAULT_BILLING_ADDRESS,
         item_remarks: Object.fromEntries(list.map((r) => [r.ticket_id, per[r.ticket_id]?.remarks || ''])),
+        item_chargers: Object.fromEntries(list.map((r) => [r.ticket_id, per[r.ticket_id]?.charger || ''])),
         item_issue_types: Object.fromEntries(list.map((r) => [r.ticket_id, per[r.ticket_id]?.issue || ''])),
         item_prices: Object.fromEntries(list.map((r) => [r.ticket_id, per[r.ticket_id]?.price ?? ''])),
         item_hsn_codes: canHsn ? Object.fromEntries(list.map((r) => [r.ticket_id, per[r.ticket_id]?.hsn || defaults.hsn])) : undefined,
@@ -177,6 +179,19 @@ export default function RepairChallanCreatePage() {
           <Input placeholder="TTSPL" className="font-mono" value={per[r.ticket_id]?.ttspl || ''} onChange={(e) => setItem(r.ticket_id, 'ttspl', e.target.value)} aria-label={`Check TTSPL of ${r.ttspl_id}`} autoComplete="off" />
           <Input placeholder="Serial" className="font-mono" value={per[r.ticket_id]?.serial || ''} onChange={(e) => setItem(r.ticket_id, 'serial', e.target.value)} aria-label={`Check serial of ${r.ttspl_id}`} autoComplete="off" />
         </div>
+      ),
+    },
+    {
+      // Shown on the Repair DC and its PDF (migration 430).
+      key: 'chg',
+      header: 'Charger',
+      render: (r) => (
+        <Segmented
+          value={per[r.ticket_id]?.charger || ''}
+          onChange={(v) => setItem(r.ticket_id, 'charger', v)}
+          label={`Charger with ${r.ttspl_id}`}
+          options={[{ value: 'with', label: 'With' }, { value: 'without', label: 'Without' }]}
+        />
       ),
     },
     {

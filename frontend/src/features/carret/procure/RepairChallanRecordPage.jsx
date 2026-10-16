@@ -17,6 +17,7 @@ import VrtdcTransportFields, { validateVrtdcTransport } from './VrtdcTransportFi
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import api from '../../../utils/api';
 import { errMsg } from './procureShared';
+import { ChargerSetDrawer, ChargerTag, useChallanChargers } from '../move/challanCharger';
 import {
   REPAIR_WAREHOUSE_ROLES, SHIP_LABEL, VRDC_STATUS_LABEL, itemStatusLabel, prettyYmd, readImage, shipByOf, transportFieldsOf,
   transportLine, uploadUrl, vrdcChip, ymdOf,
@@ -98,6 +99,9 @@ export default function RepairChallanRecordPage() {
   const [fields, setFields] = useState({});
   const [techs, setTechs] = useState([]);
   const [sign, setSign] = useState({ whName: '', vendorName: '', wh: null, vendor: null, pod: null });
+  // With / without charger to the vendor (migration 430).
+  const chargers = useChallanChargers(dcNumber);
+  const [chgFor, setChgFor] = useState(null);
   const [padFor, setPadFor] = useState(null); // 'wh' | 'vendor'
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [keptFor, setKeptFor] = useState(null);
@@ -240,6 +244,20 @@ export default function RepairChallanRecordPage() {
         return <span>{p.title || '—'}<br /><span className="text-ink-3">{p.specs.join(' · ')}</span></span>;
       },
       sub: (i) => [i.ttspl_id, i.serial_number].filter(Boolean).join(' · '),
+    },
+    {
+      key: 'chg',
+      header: 'Charger',
+      render: (i) => {
+        const cu = chargers.unitFor(i.ttspl_id || i.serial_number, i.serial_number);
+        const editable = canDispatch && !['dispatched', 'partially_returned', 'returned', 'cancelled'].includes(st);
+        return (
+          <span className="flex items-center flex-wrap" style={{ gap: '4px 10px' }}>
+            <ChargerTag mark={cu?.dispatch} empty="Not set" />
+            {editable && cu && <Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setChgFor(cu)}>{cu.dispatch ? 'Change' : 'Set'}</Button>}
+          </span>
+        );
+      },
     },
     {
       key: 'h',
@@ -469,6 +487,7 @@ export default function RepairChallanRecordPage() {
         confirmLabel={confirm?.label}
         tone={confirm?.tone}
       />
+      <ChargerSetDrawer dc={dcNumber} unit={chgFor} onClose={() => setChgFor(null)} onDone={() => { setChgFor(null); chargers.reload(); }} />
     </DeskShell>
   );
 }

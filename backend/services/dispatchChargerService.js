@@ -1236,6 +1236,19 @@ async function recordReturnScan(db, pickupItemId, user, body = {}) {
   await auditCharger(db, row, user, 'dispatch_charger_return_scanned',
     `Return pickup scanned TTSPL + adapter + cable`,
     { request_number: row.request_number, pickup_item_id: item.id, return_dc_number: item.return_dc_number });
+  // The Return DC shows it was collected with the charger (migration 430).
+  if (item.return_dc_number) {
+    await require('./challanChargerService').setMark(db, {
+      dcNumber: item.return_dc_number,
+      assetCode: item.ttspl_id || item.unique_serial_number || item.serial_number,
+      stage: 'collected',
+      charger: 'with',
+      adapterScan: body.adapter_scan || charger_scan || body.scan_code,
+      cableScan: body.cable_scan,
+      user,
+      source: 'pickup_scan',
+    }).catch((e) => console.error('[charger] collected mark:', e.message));
+  }
   return { scan: scan.rows[0], charger: publicRequest(row) };
 }
 
@@ -1329,9 +1342,16 @@ async function restockReturnedForPickup(db, pickupItem, user) {
       LIMIT 1`,
     [row.request_id]
   );
+  // The warehouse's own check at receive (migration 430) decides when it was made.
+  const wh = pickupItem.return_dc_number ? (await db.query(
+    `SELECT charger, matched FROM challan_charger_marks
+      WHERE dc_number = $1 AND stage = 'warehouse' AND asset_code = UPPER($2)`,
+    [pickupItem.return_dc_number, pickupItem.ttspl_id || pickupItem.unique_serial_number || pickupItem.serial_number || '']
+  )).rows[0] : null;
+  if (wh?.charger === 'without') return null;
   // Courier / porter: no tech scan; restock when warehouse receives.
   const courier = !isTechnicianPickup(pickupItem);
-  if (!courier && !scanned.rows[0]) return null;
+  if (!courier && !scanned.rows[0] && !wh?.matched) return null;
 
   await db.query(
     `UPDATE dispatch_charger_requests

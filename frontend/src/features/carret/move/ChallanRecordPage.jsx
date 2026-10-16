@@ -18,6 +18,7 @@ import { openPdf, parseJson } from '../sell/sellShared';
 import ChallanPaperwork, { paperworkState } from './ChallanPaperwork';
 import { DispatchEditDrawer, DispatchSummary, modeOf } from './ChallanDispatch';
 import ChallanDelivery, { partialRefusalOf } from './ChallanDelivery';
+import { ChargerSetDrawer, ChargerTag, useChallanChargers } from './challanCharger';
 
 /**
  * Move → Delivery challan record.
@@ -48,6 +49,9 @@ export default function ChallanRecordPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [busy, setBusy] = useState('');
+  // Charger with / without per laptop (migration 430).
+  const chargers = useChallanChargers(dc);
+  const [chgFor, setChgFor] = useState(null);
 
   const load = useCallback(() => {
     getDC(dc)
@@ -196,6 +200,21 @@ export default function ChallanRecordPage() {
                           return <StatusChip status={t.status === 'qc_passed' ? 'approved' : t.status === 'qc_failed' ? 'rejected' : 'pending'} title={t.stage_name} />;
                         },
                       },
+                      {
+                        // DC / Replacement: from Dispatch QC (PRT IDs). Service DC: as it
+                        // came back, changeable before it leaves.
+                        key: 'chg', header: 'Charger',
+                        render: (u) => {
+                          const cu = chargers.unitFor(u.ttspl || u.serial_number, u.serial_number);
+                          const editable = canEdit && !out && cu && (chargers.data?.kind === 'sdc' || !cu.dispatch);
+                          return (
+                            <span className="flex items-center flex-wrap" style={{ gap: '4px 10px' }}>
+                              <ChargerTag mark={cu?.dispatch} />
+                              {editable && <Button variant="quiet" style={{ height: '28px', padding: '0 8px' }} onClick={() => setChgFor(cu)}>{cu.dispatch ? 'Change' : 'Set'}</Button>}
+                            </span>
+                          );
+                        },
+                      },
                     ].filter(Boolean)}
                     empty={<EmptyState title="No laptops listed" />}
                   />
@@ -252,6 +271,7 @@ export default function ChallanRecordPage() {
           <Field label="Reason"><Textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} /></Field>
         </div>
       </Drawer>
+      <ChargerSetDrawer dc={dc} unit={chgFor} onClose={() => setChgFor(null)} onDone={() => { setChgFor(null); chargers.reload(); }} />
     </DeskShell>
   );
 }

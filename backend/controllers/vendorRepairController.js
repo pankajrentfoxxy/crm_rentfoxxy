@@ -121,6 +121,7 @@ exports.createOutForRepair = async (req, res) => {
       warehouseName: req.body.warehouse_name || req.body.warehouseName,
       warehouseAddress: req.body.warehouse_address || req.body.warehouseAddress,
       itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
+      itemChargers: req.body.item_chargers || req.body.itemChargers || {},
       itemIssueTypes: req.body.item_issue_types || req.body.itemIssueTypes || {},
       rentStopDate: req.body.rent_stop_date || req.body.rentStopDate,
       porter_person_name: req.body.porter_person_name,

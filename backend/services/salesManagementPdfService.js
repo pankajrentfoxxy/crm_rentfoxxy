@@ -334,6 +334,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       qty: l.quantity || 1,
       hsn_code: l.hsn_code,
     }));
+  // Charger with / without per laptop (migration 430).
+  if (docType === 'delivery_challan') {
+    const chg = await require('./challanChargerService').chargerTextsForPdf(pool, docNumber);
+    for (const r of rows) r.charger_text = chg.get(String(r.ttspl || r.serial || '').toUpperCase()) || null;
+  }
 
   // Totals
   const goods = rows.reduce((s, r) => s + (Number(r.rate || 0) * Number(r.qty || 1)), 0);
@@ -541,14 +546,14 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       const l3 = joinSpecParts([r.ram, r.storage], ' | ');
       const l4 = cleanSpecValue(r.gpu);
       const l5 = [r.serial, r.ttspl].filter(Boolean).join('  ');
-      return { l1, l2, l3, l4, l5 };
+      return { l1, l2, l3, l4, l5, l6: r.charger_text || null };
     };
 
     doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
     for (const r of rows) {
       const p = productText(r);
       // estimate row height from product lines
-      const pLines = [p.l1, p.l2, p.l3, p.l4, p.l5].filter(Boolean);
+      const pLines = [p.l1, p.l2, p.l3, p.l4, p.l5, p.l6].filter(Boolean);
       const rowH = Math.max(46, 12 + pLines.length * 11);
       if (y + rowH > 760) { doc.addPage(); y = 40; y = drawTableHeader(y); }
       // cell borders
@@ -560,7 +565,8 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(p.l1, cx + 6, py, { width: cols[0].w - 12 }); py += 11;
       doc.font('Helvetica').fontSize(8).fillColor(C.sub);
       for (const ln of [p.l2, p.l3, p.l4]) { if (ln) { doc.text(ln, cx + 6, py, { width: cols[0].w - 12 }); py += 10; } }
-      if (p.l5) { doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, cx + 6, py, { width: cols[0].w - 12 }); }
+      if (p.l5) { doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, cx + 6, py, { width: cols[0].w - 12 }); py += 10; }
+      if (p.l6) { doc.font('Helvetica').fontSize(7.5).fillColor(C.ink).text(p.l6, cx + 6, py, { width: cols[0].w - 12 }); }
       // other cells
       cx = L + cols[0].w;
       const cellText = (key) => {
@@ -738,6 +744,8 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
 // signature blocks: the technician signs at the customer site (sign-out) and the
 // warehouse signs on receipt.
 async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], esign = {} }) {
+  // Charger we sent (PRT IDs) and how it came back (migration 430).
+  const rdcChargers = await require('./challanChargerService').chargerTextsForPdf(pool, returnDcNumber);
   ensureUploadDir();
   const fileName = `${String(returnDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
   const filePath = path.join(UPLOAD_DIR, fileName);
@@ -886,7 +894,8 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     units.forEach((u, i) => {
       const l1 = `${dash(u.brand)} ${dash(u.model || u.model_name)}`.trim();
       const l2 = [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' | ');
-      const rowH = Math.max(34, 14 + (l2 ? 11 : 0));
+      const l3 = rdcChargers.get(String(u.ttspl || u.serial || '').toUpperCase()) || null;
+      const rowH = Math.max(34, 14 + (l2 ? 11 : 0) + (l3 ? 10 : 0));
       if (y + rowH > 720) { doc.addPage(); y = 40; y = drawHeader(y); }
       let cx = L;
       for (const c of cols) { doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke(); cx += c.w; }
@@ -894,6 +903,7 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
       let px = L + cols[0].w + 6; let py = y + 6;
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(l1, px, py, { width: cols[1].w - 12 });
       if (l2) { doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(l2, px, py + 11, { width: cols[1].w - 12 }); }
+      if (l3) { doc.font('Helvetica').fontSize(7.5).fillColor(C.ink).text(l3, px, py + (l2 ? 22 : 11), { width: cols[1].w - 12 }); }
       const unitHsn = resolveHsnForDisplay(u.hsn_code || header.hsn_code, {
         quotationType: header.quotation_type,
         transactionType: header.transaction_type || txnTypeFromQuotation(header.quotation_type || 'rental'),
@@ -968,6 +978,8 @@ function titleCaseState(value) {
 // variant re-labels the same layout for other no-SO challans (Loan DC). Omitted,
 // the Service DC prints exactly as before.
 async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [], variant = {} }) {
+  // Charger with / without per laptop (migration 430).
+  const sdcChargers = await require('./challanChargerService').chargerTextsForPdf(pool, serviceDcNumber);
   ensureUploadDir();
   const v = {
     numberLabel: 'Service DC Number',
@@ -1155,7 +1167,7 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [], 
       const l2 = joinSpecParts([u.processor, u.generation], ' | ');
       const l3 = joinSpecParts([u.ram, u.storage], ' | ');
       const l4 = cleanSpecValue(u.gpu);
-      const sub = [l2, l3, l4].filter(Boolean);
+      const sub = [l2, l3, l4, sdcChargers.get(String(u.ttspl || u.serial || '').toUpperCase())].filter(Boolean);
       const rowH = Math.max(40, 16 + sub.length * 10);
       if (y + rowH > 760) { doc.addPage(); y = 40; y = drawTableHeader(y); }
       let cx = L;

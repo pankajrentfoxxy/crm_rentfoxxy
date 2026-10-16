@@ -952,6 +952,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
       `SELECT movement_type FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]
     );
+    let chargerNotCollected = null; // { units, why } — recorded on the Return DC once delivered (migration 430)
     if (String(moveRes.rows[0]?.movement_type || '') === 'return') {
       const chargerSvc = require('../services/dispatchChargerService');
       const state = await chargerSvc.getReturnDcChargerState(pool, dcNumber);
@@ -968,6 +969,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
           });
         }
         notes = [notes, `Charger not collected (${list}): ${why}`].filter(Boolean).join(' — ');
+        chargerNotCollected = { units: unscanned.map((u) => u.ttspl_id).filter(Boolean), why };
       }
     }
     // Part 3.4: hashed compare, 15-minute expiry, 5 attempts. Committed on its
@@ -1034,6 +1036,14 @@ exports.submitDeliveryWithPod = async (req, res) => {
 
     await client.query('COMMIT');
     if (refusal) logPartialRefusal(dcNumber, refusal, req.user);
+    if (chargerNotCollected) {
+      const { setMark } = require('../services/challanChargerService');
+      for (const code of chargerNotCollected.units) {
+        await setMark(pool, {
+          dcNumber, assetCode: code, stage: 'collected', charger: 'without', note: chargerNotCollected.why, user: req.user, source: 'pickup',
+        }).catch((e) => console.error('[delivery] charger mark:', e.message));
+      }
+    }
 
     try {
       const { notifySoDeliveredAsync } = require('../services/salesOrderWhatsApp');

@@ -290,10 +290,14 @@ describe('support pickup: collect later', () => {
     assert.match(newCtx.inactive_reason, /not completed customer pickup/);
   });
 
+  // The warehouse records each laptop's charger at receive (migration 430); none were sent here.
+  const noChargers = async (dc) => (await require('../services/challanChargerService').getChallanChargers(C, dc)).units
+    .map((u) => ({ asset_code: u.asset_code, charger: 'without' }));
+
   it('warehouse receive of the old Return DC stops rent for the two; the kept laptop keeps billing', async () => {
     await gateIn([items[0], items[1]]);
     const r = await hx.call(support.confirmReturnDcWarehouseReceipt, {
-      params: { rdcNumber: rdc }, body: { esign_data: SIGN, signer_name: 'WH' }, user: WAREHOUSE,
+      params: { rdcNumber: rdc }, body: { esign_data: SIGN, signer_name: 'WH', chargers: await noChargers(rdc) }, user: WAREHOUSE,
     });
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.equal(r.body.units_received, 2);
@@ -324,7 +328,7 @@ describe('support pickup: collect later', () => {
     assert.equal((await guard.loadReturnDc(C, newRdc)).active, true);
     await gateIn([items[2]]);
     const r = await hx.call(support.confirmReturnDcWarehouseReceipt, {
-      params: { rdcNumber: newRdc }, body: { esign_data: SIGN, signer_name: 'WH' }, user: WAREHOUSE,
+      params: { rdcNumber: newRdc }, body: { esign_data: SIGN, signer_name: 'WH', chargers: await noChargers(newRdc) }, user: WAREHOUSE,
     });
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.equal(r.body.units_received, 1);

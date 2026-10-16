@@ -7,6 +7,7 @@ import {
 } from '../../../components/carret';
 import RaisePartRequestForm from '../../support/components/RaisePartRequestForm';
 import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
+import { CollectChargerPanel } from '../move/challanCharger';
 import {
   fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, uploadPhoto, verifyLaptop, verifyPickupOtp,
   verifyVisitOtp, workDone,
@@ -230,9 +231,12 @@ export default function JobPage() {
               </div>
             ) : (
               <div className="c-stack">
-                <PickupChargerScanPanel pickupItemId={job.item_id} rdcNumber={job.return_dc_number} onScanned={() => setChargerOk(true)} />
-                <Button variant="primary" disabled={busy} onClick={askOtp} style={{ width: '100%', minHeight: '56px' }}>
-                  {chargerOk ? 'Send the customer an OTP' : 'Send the customer an OTP (after scanning)'}
+                {/* With / without charger, saved on the Return DC (migration 430). */}
+                {job.return_dc_number
+                  ? <CollectChargerPanel itemId={job.item_id} rdc={job.return_dc_number} code={job.laptop.ttspl || job.laptop.serial} onReady={setChargerOk} />
+                  : <PickupChargerScanPanel pickupItemId={job.item_id} onScanned={() => setChargerOk(true)} />}
+                <Button variant="primary" disabled={busy || (Boolean(job.return_dc_number) && !chargerOk)} onClick={askOtp} style={{ width: '100%', minHeight: '56px' }}>
+                  {chargerOk || !job.return_dc_number ? 'Send the customer an OTP' : 'Record the charger first'}
                 </Button>
               </div>
             )}

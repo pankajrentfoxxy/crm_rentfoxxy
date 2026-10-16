@@ -4336,6 +4336,10 @@ exports.confirmWarehouseReceipt = async (req, res) => {
             it.warehouse_received_at = null;
         }
 
+        // Charger check at inward (migration 430), same as the Return DC receive.
+        if (it.return_dc_number) {
+            await require('../services/challanChargerService').applyWarehouseChargerCheck(client, it.return_dc_number, req.body?.chargers, req.user);
+        }
         const esignUrl = saveWarehouseEsignPng(it.id, esign_data);
         const signerLabel = String(signer_name || req.user?.name || req.user?.email || '').trim() || null;
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
@@ -4403,6 +4407,10 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
         await client.query('BEGIN');
         await ensureSupportTicketItemV3Columns(client);
         await ensureReturnDcPickupItems(client, dcl);
+
+        // Charger check at inward (migration 430): every laptop that came through
+        // the gate is scanned with its charger, or marked "no charger".
+        await require('../services/challanChargerService').applyWarehouseChargerCheck(client, rdcNumber, req.body?.chargers, req.user);
 
         // Include incomplete receives: timestamp set but still rented / no floor ticket.
         const pendingRes = await client.query(

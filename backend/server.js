@@ -162,6 +162,7 @@ app.use('/api/vendor-return-capture', publicCaptureLimiter, verifyOnly, require(
 app.use('/api/rdc-capture', publicCaptureLimiter, verifyOnly, require('./routes/rdcCapturePublic'));
 app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/dispatch-chargers', require('./routes/dispatchCharger'));
+app.use('/api/challan-chargers', require('./routes/challanCharger'));
 app.use('/api/grn-access-public', publicCaptureLimiter, require('./routes/grnAccessPublic'));
 app.use('/api/support-public', require('./routes/supportRequestPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));
