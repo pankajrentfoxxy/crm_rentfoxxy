@@ -283,6 +283,11 @@ async function transitionAsset(db, {
       // returns to its customer at the same rate (supportServiceDcService's
       // preservedRate). A re-rental overwrites it at dispatch_ready instead.
       add('returned_at', null);
+      // The previous trip's dispatch/delivery dates would otherwise show on the
+      // next customer's asset list (and count as "delivered" in SO reports)
+      // until the new DC overwrites them.
+      add('dispatched_at', null);
+      add('delivered_at', null);
       break;
     default:
       break;
