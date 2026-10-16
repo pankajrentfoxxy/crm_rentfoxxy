@@ -60,10 +60,16 @@ describe('support pickup: collect later', () => {
   };
   let filesBefore;
 
-  /** The technician's side of one laptop: arrived + photo + customer OTP. */
+  /** The technician's side of one laptop: arrived + the 6 photos (migration 433) + customer OTP. */
   async function collect(itemId, user) {
     await C.query(
       `UPDATE support_ticket_items SET visited_at = NOW(), pod_image_path = 'test/pod.jpg' WHERE id = $1`,
+      [itemId]
+    );
+    await C.query(
+      `INSERT INTO support_item_photos (item_id, slot, path)
+       SELECT $1, s, 'test/' || s || '.jpg' FROM unnest(ARRAY['front','back','screen','keyboard','left','right']) s
+       ON CONFLICT (item_id, slot) DO NOTHING`,
       [itemId]
     );
     const it = await item(itemId);

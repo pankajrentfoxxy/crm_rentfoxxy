@@ -56,10 +56,21 @@ async function loadJobs(userId) {
     [userId || null]
   )).rows;
   const sla = await slaForTickets(rows.map((r) => r.ticket_id));
+  const photoRows = rows.length ? (await pool.query(
+    'SELECT item_id, slot, path FROM support_item_photos WHERE item_id = ANY($1::int[])', [rows.map((r) => r.id)]
+  )).rows : [];
+  for (const r of rows) r.photos = photoRows.filter((p) => p.item_id === r.id);
   const jobs = [];
   for (const r of rows) {
     const step = deriveItemCurrentStep(r);
-    const next = (r.item_type === 'pickup' ? PICKUP_NEXT[step] : NEXT[step]) || null;
+    let next = (r.item_type === 'pickup' ? PICKUP_NEXT[step] : NEXT[step]) || null;
+    // A pickup stays on "photos + charger" until all 6 photos are in (migration 433)
+    // and the customer's OTP has been sent — the first photo alone used to jump
+    // straight to the OTP step, skipping the other photos and the charger.
+    if (r.item_type === 'pickup' && step === 'pod_uploaded') {
+      const techCollects = !['courier', 'porter'].includes(String(r.pickup_method || '').toLowerCase());
+      if (!r.customer_otp_sent_at || (techCollects && new Set(r.photos.map((p) => p.slot)).size < 6)) next = PICKUP_NEXT.reached;
+    }
     if (!next) continue; // lead's turn (replacement, repair at the warehouse…) — not the technician's job
     const s = sla.get(r.ticket_id);
     jobs.push({
@@ -94,6 +105,9 @@ async function loadJobs(userId) {
       visited_at: r.visited_at,
       outcome: r.outcome,
       has_photo: Boolean(r.pod_image_path || r.proof_of_completion_path),
+      // Pickup: six photos (migration 433); a technician collection needs all of them.
+      photos: r.photos || [],
+      needs_photos: r.item_type === 'pickup' && !['courier', 'porter'].includes(String(r.pickup_method || '').toLowerCase()),
       otp_sent_at: r.customer_otp_sent_at || null,
       sla: s ? { state: s.resolve.state, due_at: s.resolve.due_at, visit_state: s.visit.state, visit_due_at: s.visit.due_at, paused: s.paused } : null,
     });

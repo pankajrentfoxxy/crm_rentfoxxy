@@ -1,5 +1,6 @@
 /** Carret Serve — technician and lead calls over the existing support APIs (claude/carret-support.md). */
 import api from '../../../utils/api';
+import { compressImageFile } from '../../../components/support/utils';
 
 const item = (id, suffix) => `/support/items/${id}${suffix}`;
 
@@ -9,9 +10,10 @@ export const fetchTicket = (ticketId) => api.get(`/support/tickets/${ticketId}`)
 export const markArrived = (id, body) => api.post(item(id, '/visit'), body);
 export const verifyLaptop = (id, code) => api.post(item(id, '/verify-ttspl'), { ttspl_input: code });
 export const setOutcome = (id, body) => api.post(item(id, '/set-outcome'), body);
-export const uploadPhoto = (id, file) => {
+export const uploadPhoto = async (id, file) => {
   const fd = new FormData();
-  fd.append('pod', file);
+  const small = await compressImageFile(file);
+  fd.append('pod', small, small.name || 'photo.jpg');
   return api.post(item(id, '/pod'), fd, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 export const workDone = (id) => api.post(item(id, '/work-done'), {});
@@ -21,7 +23,7 @@ export const verifyPickupOtp = (id, otp) => api.post(item(id, '/verify-pickup-ot
 /** The customer keeps this laptop: it moves to a new Return DC with its own OTP. */
 export const collectLater = (id, body) => api.post(item(id, '/collect-later'), body);
 export const fetchMyParts = (params) => api.get('/support-parts/bucket', { params });
-export const addItemComment = (id, body) => api.post(item(id, '/comments'), { body });
+export const addItemComment = (id, body, share = false) => api.post(item(id, '/comments'), { body, share_with_customer: share });
 export const markPartFitted = (reqId, body) => api.patch(`/support-parts/requests/${reqId}/mark-used`, body);
 
 /* ---- Lead desk ---- */
@@ -137,9 +139,11 @@ export const serviceOrderInvoiceUrl = (id) => `/service-billing/orders/${id}/inv
 
 /* ---- Damage charges (claude/carret-customers-returns-control.md, DM1) ---- */
 export const fetchDamageCatalog = () => api.get('/damage-charges/catalog');
-export const uploadDamagePhotos = (files) => {
+// Damage photos are compressed in the browser first (phone photos are 5–15 MB).
+export const uploadDamagePhotos = async (files) => {
   const fd = new FormData();
-  [...files].forEach((f) => fd.append('photos', f));
+  const small = await Promise.all([...files].map((f) => compressImageFile(f)));
+  small.forEach((f) => fd.append('photos', f, f.name || 'damage.jpg'));
   return api.post('/damage-charges/photos', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 export const damagePhotoBlob = (p) => api.get('/damage-charges/photo', { params: { path: p }, responseType: 'blob' });
@@ -149,3 +153,11 @@ export const priceDamageCase = (id, lines) => api.post(`/damage-charges/${id}/pr
 export const proposeDamageCase = (id, body) => api.post(`/damage-charges/${id}/propose`, body);
 export const decideDamageCase = (id, body) => api.post(`/damage-charges/${id}/decide`, body);
 export const cancelDamageCase = (id, note) => api.post(`/damage-charges/${id}/cancel`, { note });
+// Visit → repair / return pickup (16 Oct 2026).
+export const convertToPickup = (id, body) => api.post(item(id, '/convert-to-pickup'), body);
+export const decideRepairPickup = (id, body) => api.post(item(id, '/repair-pickup-decision'), body);
+// Customer upgrades (migration 434).
+export const fetchUpgradeContext = (id) => api.get(item(id, '/upgrade-context'));
+export const createPartsUpgrade = (id, body) => api.post(item(id, '/upgrades'), body);
+export const applyUpgrade = (upgradeId) => api.post(`/support/upgrades/${upgradeId}/apply`, {});
+export const cancelUpgrade = (upgradeId, reason) => api.post(`/support/upgrades/${upgradeId}/cancel`, { reason });

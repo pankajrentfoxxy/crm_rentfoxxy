@@ -1,6 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button, DocNumber, Drawer, FlowSteps, StatusChip } from '../../../components/carret';
 import ItemComments from './ItemComments';
+import LaptopDetails from './LaptopDetails';
+import CollectLaterDrawer from './CollectLaterDrawer';
+import PickupPhotos from './PickupPhotos';
 import { STEP_LABEL, when } from './serveShared';
 
 /**
@@ -25,7 +29,20 @@ export const TYPE_LABEL = (i) => ({
   replacement: 'Replacement',
 }[i.item_type] || i.item_type);
 
-const stepText = (i) => STEP_LABEL[i.effective_current_step] || STEP_LABEL[i.current_step] || STEP_LABEL[i.status] || String(i.status || '').replace(/_/g, ' ');
+const byCourier = (i) => ['courier', 'porter'].includes(String(i.pickup_method || '').toLowerCase());
+const collected = (p) => Boolean(p.picked_up_at || p.customer_otp_verified_at || p.gate_inward_at || p.warehouse_received_at);
+const stepText = (i) => {
+  // A courier / porter pickup has no technician "on the way".
+  if (i.item_type === 'pickup' && byCourier(i) && !collected(i)) return i.pickup_method === 'porter' ? 'Porter booked' : 'Courier booked';
+  if (i.item_type === 'complaint' && i.outcome === 'repair_pickup_requested') return 'Repair pickup asked — your approval';
+  return STEP_LABEL[i.effective_current_step] || STEP_LABEL[i.current_step] || STEP_LABEL[i.status] || String(i.status || '').replace(/_/g, ' ');
+};
+/** "Dell Latitude 3410" — not "Dell Dell Latitude 3410" when the model already starts with the brand. */
+const modelText = (i) => {
+  const b = String(i.brand || '').trim();
+  const m = String(i.model || '').trim();
+  return m && b && m.toLowerCase().startsWith(b.toLowerCase()) ? m : [b, m].filter(Boolean).join(' ');
+};
 
 /** Group the ticket's items into one journey per laptop. */
 export function buildJourneys(items) {
@@ -56,7 +73,7 @@ export function buildJourneys(items) {
       root: g.root,
       items: list,
       code: codeOf(g.root) || list.map(codeOf).find(Boolean) || `#${g.root.id}`,
-      model: [g.root.brand, g.root.model].filter(Boolean).join(' '),
+      model: modelText(g.root),
       cancelled: live.length === 0,
       complaint: live.find((i) => i.item_type === 'complaint') || (live.length ? null : list.find((i) => i.item_type === 'complaint')) || null,
       repair: live.find((i) => i.item_type === 'pickup' && isRepair(i)) || null,
@@ -72,7 +89,16 @@ function stepsOf(j) {
   const s = [];
   const add = (key, label, done, sub) => s.push({ key, label, done: Boolean(done), sub });
   const c = j.complaint;
-  if (c) {
+  const visitOnly = c && !j.repair && !j.rep && !j.ret;
+  if (visitOnly) {
+    // A visit on its own: Reported → Technician → Visited → Resolved → Closed (customer OTP).
+    const closed = ['resolved', 'closed'].includes(c.status) || c.otp_verified_at;
+    add('rep', 'Reported', true, when(c.created_at));
+    add('asg', 'Technician', c.assigned_to || c.visited_at || closed, c.visit_scheduled_at ? `slot ${when(c.visit_scheduled_at)}` : null);
+    add('vis', 'Visited', c.visited_at || c.outcome || closed, c.visited_at ? when(c.visited_at) : null);
+    add('res', 'Resolved', c.work_done_at || c.pod_uploaded_at || ['fixed', 'working'].includes(c.outcome) || closed, c.outcome === 'replacement_required' ? 'could not fix' : null);
+    add('done', 'Closed', closed, c.otp_verified_at ? 'customer OTP' : null);
+  } else if (c) {
     add('visit', 'Visit', c.visited_at || c.outcome || ITEM_DONE.includes(c.status) || j.repair || j.rep || j.ret,
       c.visited_at ? when(c.visited_at) : (c.visit_scheduled_at ? `slot ${when(c.visit_scheduled_at)}` : null));
   }
@@ -91,7 +117,7 @@ function stepsOf(j) {
     add('col', 'Collected', p.picked_up_at || p.customer_otp_verified_at || p.gate_inward_at || p.warehouse_received_at || ITEM_DONE.includes(p.status), p.return_dc_number);
     add('wh', 'At the warehouse', p.warehouse_received_at || ITEM_DONE.includes(p.status));
   }
-  add('done', 'Done', openTasks(j).length === 0);
+  if (!visitOnly) add('done', 'Done', openTasks(j).length === 0);
   let seenCurrent = false;
   return s.map((x) => {
     if (j.cancelled) return { ...x, state: 'blocked' };
@@ -111,18 +137,22 @@ function openTasks(j) {
 }
 
 function Task({ i, tech, wfh, locked, actions, note }) {
+  const who = byCourier(i)
+    ? [i.pickup_method === 'porter' ? 'Porter' : (i.pickup_courier_name || 'Courier'), i.pickup_awb || i.porter_tracking_id].filter(Boolean).join(' ')
+    : (tech ? tech.name : (i.item_type === 'replacement' ? null : 'No technician yet'));
+  const bits = [
+    who,
+    i.visit_scheduled_at ? `🗓 ${when(i.visit_scheduled_at)}` : null,
+    wfh?.is_wfh ? (wfh.charged ? `WFH charged ₹${Number(wfh.amount).toLocaleString('en-IN')}` : 'Work from home') : null,
+  ].filter(Boolean);
   return (
     <div className="c-jtask" id={`task-${i.id}`}>
       <div className="min-w-0">
         <div className="c-jtask-t">{TYPE_LABEL(i)}<span>{stepText(i)}</span></div>
         <div className="c-jtask-s">
-          {[
-            tech ? tech.name : (i.item_type === 'replacement' ? null : 'No technician yet'),
-            i.visit_scheduled_at ? `🗓 ${when(i.visit_scheduled_at)}` : null,
-            i.return_dc_number || null,
-            i.service_dc_number || null,
-            wfh?.is_wfh ? (wfh.charged ? `WFH charged ₹${Number(wfh.amount).toLocaleString('en-IN')}` : 'Work from home') : null,
-          ].filter(Boolean).join(' · ')}
+          {bits.join(' · ')}
+          {i.return_dc_number && <>{bits.length ? ' · ' : ''}<Link to={`/carret/move/return-challans/${encodeURIComponent(i.return_dc_number)}`}>{i.return_dc_number}</Link></>}
+          {i.service_dc_number && <> · <Link to={`/carret/move/challans/${encodeURIComponent(i.service_dc_number)}`}>{i.service_dc_number}</Link></>}
         </div>
         {note && <div className="c-jtask-n">{note}</div>}
       </div>
@@ -131,9 +161,14 @@ function Task({ i, tech, wfh, locked, actions, note }) {
   );
 }
 
-export default function TicketJourneys({ items, techs, wfh, locked, canDamage, onAssign, onSlot, onWfh, onDamage, onCommented, taskActions }) {
+export default function TicketJourneys({
+  items, techs, wfh, locked, canDamage, canLead, damage = [], upgrades = [], onAssign, onSlot, onWfh, onDamage, onCommented, taskActions,
+}) {
   const journeys = useMemo(() => buildJourneys(items), [items]);
   const [threadFor, setThreadFor] = useState(null);
+  const [laterFor, setLaterFor] = useState(null);
+  // Laptops on each Return DC — "Collect later" only when there is another one to go.
+  const perRdc = items.reduce((m, i) => (i.item_type === 'pickup' && i.return_dc_number && i.status !== 'cancelled' ? { ...m, [i.return_dc_number]: (m[i.return_dc_number] || 0) + 1 } : m), {});
   const thread = journeys.find((j) => j.key === threadFor) || null;
   const techOf = (i) => techs.find((x) => x.user_id === (i.assigned_to || i.pickup_assigned_to));
 
@@ -150,18 +185,17 @@ export default function TicketJourneys({ items, techs, wfh, locked, canDamage, o
               <header className="c-journey-h">
                 <div className="min-w-0">
                   <div className="c-journey-code"><DocNumber value={j.code} /></div>
-                  <div className="c-journey-m">{[j.model, WARRANTY_NOTE[c.warranty_status], c.issue_category_label].filter(Boolean).join(' · ')}</div>
+                  <div className="c-journey-m">{[j.model, WARRANTY_NOTE[c.warranty_status]].filter(Boolean).join(' · ')}</div>
                 </div>
                 <div className="c-journey-r">
                   {j.cancelled ? <StatusChip status="cancelled" />
                     : now ? <StatusChip status="processing" label={stepText(now)} />
                       : <StatusChip status="delivered" label="Done" />}
                   <button type="button" className="c-cmt-btn" onClick={() => setThreadFor(j.key)} aria-label={`Comments on ${j.code}`}>
-                    <span aria-hidden="true">💬</span>{j.comments.length > 0 && <b>{j.comments.length}</b>}
+                    <span aria-hidden="true">💬</span>Comments{j.comments.length > 0 && <b>{j.comments.length}</b>}
                   </button>
                 </div>
               </header>
-              {c.remarks && <p className="c-journey-note">“{c.remarks}”</p>}
               <FlowSteps steps={steps} className="c-flow-sm" />
               {tasks.length > 0 && (
                 <div className="c-journey-tasks">
@@ -193,6 +227,9 @@ export default function TicketJourneys({ items, techs, wfh, locked, canDamage, o
                             {wfh[i.id]?.is_wfh && !wfh[i.id]?.charged && (i.item_type === 'replacement' || (i.item_type === 'pickup' && i.return_dc_number)) && (
                               <Button variant="quiet" onClick={() => onWfh(i)}>Charge WFH ₹799</Button>
                             )}
+                            {canLead && i.item_type === 'pickup' && i.return_dc_number && !collected(i) && (perRdc[i.return_dc_number] || 0) > 1 && (
+                              <Button variant="quiet" onClick={() => setLaterFor({ id: i.id, code: codeOf(i), rdc: i.return_dc_number })}>Collect later</Button>
+                            )}
                           </>
                         )}
                       />
@@ -200,6 +237,28 @@ export default function TicketJourneys({ items, techs, wfh, locked, canDamage, o
                   })}
                 </div>
               )}
+              {/* Pickup photos (migration 433): the technician's six; a courier / porter
+                  pickup can have them added at the warehouse. */}
+              {[j.ret, j.repair].filter(Boolean).map((p) => ((p.photos || []).length > 0 || (byCourier(p) && canLead && !locked)) && (
+                <PickupPhotos
+                  key={`ph-${p.id}`}
+                  itemId={p.id}
+                  photos={p.photos}
+                  readOnly={!(byCourier(p) && canLead && !locked)}
+                  onChange={() => onCommented?.()}
+                />
+              ))}
+              <LaptopDetails
+                complaint={j.complaint}
+                hasRepairPickup={Boolean(j.repair)}
+                otpItem={tasks.find((i) => (i.item_type === 'pickup' && i.customer_otp_code && !collected(i))
+                  || (i.item_type === 'complaint' && i.otp_code && i.customer_otp_sent_at && !i.otp_verified_at)) || null}
+                damage={damage.filter((d) => String(d.asset_code || '').toUpperCase() === String(j.code).toUpperCase())}
+                upgrades={upgrades.filter((u) => j.items.some((i) => Number(i.id) === Number(u.item_id)))}
+                canLead={canLead}
+                locked={locked}
+                reload={onCommented}
+              />
               {!locked && !j.cancelled && canDamage && j.code && !j.code.startsWith('#') && (
                 <div className="c-journey-f">
                   <Button variant="quiet" onClick={() => onDamage(now || j.ret || j.repair || c)}>Record damage</Button>
@@ -210,6 +269,14 @@ export default function TicketJourneys({ items, techs, wfh, locked, canDamage, o
         })}
       </div>
 
+      <CollectLaterDrawer
+        open={Boolean(laterFor)}
+        onClose={() => setLaterFor(null)}
+        onDone={() => { setLaterFor(null); onCommented?.(); }}
+        item={laterFor}
+        asLead
+        techs={techs}
+      />
       <Drawer open={Boolean(thread)} onClose={() => setThreadFor(null)} title={`Comments · ${thread?.code || ''}`}>
         {thread && (() => {
           // One thread per laptop; a new comment goes on the task open now.

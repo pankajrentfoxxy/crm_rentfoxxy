@@ -26,6 +26,8 @@ const REPLACEMENT_JOURNEY = [
   { key: 'resolved', label: 'Resolved' },
 ];
 
+const ITEM_TYPE = { complaint: 'Technician visit', pickup: 'Pickup', replacement: 'Replacement' };
+
 function Progress({ stage, ticketType }) {
   const steps = ticketType === 'replacement' ? REPLACEMENT_JOURNEY : JOURNEY;
   if (stage === 'cancelled') {
@@ -150,33 +152,49 @@ export default function TicketDetailPage() {
         )}
       </div>
 
-      <section className="bg-white border rounded-xl overflow-hidden">
-        <h2 className="font-semibold p-4 border-b">Laptops on this ticket</h2>
+      {/* One card per laptop: where it is, how the visit ended, and the updates
+          our support team shared with you (16 Oct 2026). */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">Laptops on this ticket</h2>
         {ticket.items.length === 0 ? (
-          <p className="p-6 text-sm text-slate-500 text-center">No laptop was attached to this ticket.</p>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 text-left">
-              <tr>
-                {['TTSPL', 'Serial Number', 'Laptop', 'Configuration', 'Type', 'Stage'].map((h) => (
-                  <th key={h} className="px-4 py-3 font-medium">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ticket.items.map((it) => (
-                <tr key={it.item_id} className="border-t border-slate-100">
-                  <td className="px-4 py-3 font-mono text-xs">{it.ttspl_id || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{it.serial_number || '—'}</td>
-                  <td className="px-4 py-3">{[it.brand, it.model].filter(Boolean).join(' ') || '—'}</td>
-                  <td className="px-4 py-3 text-slate-600">{it.config || '—'}</td>
-                  <td className="px-4 py-3 capitalize">{it.item_type}</td>
-                  <td className="px-4 py-3"><StatusBadge status={it.stage} label={it.stage_label} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+          <p className="bg-white border rounded-xl p-6 text-sm text-slate-500 text-center">No laptop was attached to this ticket.</p>
+        ) : ticket.items.map((it) => (
+          <article key={it.item_id} className="bg-white border rounded-xl p-5 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-sm font-semibold">{it.ttspl_id || it.serial_number || '—'}</p>
+                <p className="text-sm text-slate-600">{[it.brand, it.model].filter(Boolean).join(' ') || 'Laptop'}</p>
+                {it.config && <p className="text-xs text-slate-500 mt-0.5">{it.config}</p>}
+              </div>
+              <div className="text-right">
+                <StatusBadge status={it.stage} label={it.stage_label} />
+                <p className="text-xs text-slate-500 mt-1 capitalize">{ITEM_TYPE[it.item_type] || it.item_type}</p>
+              </div>
+            </div>
+            {it.result && (
+              <p className="text-sm rounded-lg bg-emerald-50 text-emerald-800 px-3 py-2">
+                {it.result}{it.closed_at ? ` · ${fmtDate(it.closed_at)}` : ''}
+              </p>
+            )}
+            {(it.updates || []).length > 0 && (
+              <div className="pt-3 border-t border-slate-100">
+                <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Updates from our team</p>
+                <ol className="space-y-2">
+                  {it.updates.map((u, n) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    <li key={n} className="flex gap-3 text-sm">
+                      <span className="mt-1.5 w-2 h-2 rounded-full bg-brand shrink-0" aria-hidden="true" />
+                      <div>
+                        <p className="text-slate-800 whitespace-pre-wrap">{u.text}</p>
+                        <p className="text-xs text-slate-400">{fmtDateTime(u.at)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </article>
+        ))}
       </section>
     </div>
   );

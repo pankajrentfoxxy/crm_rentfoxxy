@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button, DateTime, Textarea } from '../../../components/carret';
+import { Button, Checkbox, DateTime, Textarea } from '../../../components/carret';
 import { addItemComment } from './serveApi';
 import { errMsg } from './serveShared';
 
@@ -9,8 +9,10 @@ import { errMsg } from './serveShared';
  * writes them on the ticket record, the technician on the job — both see the
  * same thread.
  */
-export default function ItemComments({ item, canWrite = true, onAdded }) {
+export default function ItemComments({ item, canWrite = true, canShare = true, onAdded }) {
   const [text, setText] = useState('');
+  // Internal by default; ticked = shown on the customer portal (migration 435).
+  const [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false);
   const comments = item?.comments || [];
 
@@ -19,8 +21,9 @@ export default function ItemComments({ item, canWrite = true, onAdded }) {
     if (!body) return;
     setBusy(true);
     try {
-      await addItemComment(item.id, body);
+      await addItemComment(item.id, body, share);
       setText('');
+      setShare(false);
       toast.success('Comment added');
       onAdded?.();
     } catch (e) {
@@ -37,6 +40,7 @@ export default function ItemComments({ item, canWrite = true, onAdded }) {
           <div className="text-ink-3" style={{ fontSize: '12px' }}>
             <strong style={{ color: 'var(--ink-1, inherit)' }}>{c.author_name || 'Someone'}</strong>
             {c.author_role ? ` · ${String(c.author_role).replace(/_/g, ' ')}` : ''} · <DateTime value={c.created_at} />
+            {c.shared_with_customer && <span className="c-shared">Customer can see</span>}
           </div>
           <div style={{ whiteSpace: 'pre-wrap', marginTop: '2px' }}>{c.body}</div>
         </div>
@@ -44,8 +48,9 @@ export default function ItemComments({ item, canWrite = true, onAdded }) {
       {canWrite && (
         <div className="c-stack" style={{ gap: '6px' }}>
           <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a comment — the lead and the technician both see it" maxLength={2000} />
-          <div className="flex justify-end">
-            <Button variant="primary" disabled={busy || !text.trim()} onClick={post}>{busy ? 'Posting…' : 'Add comment'}</Button>
+          <div className="flex items-center justify-between flex-wrap" style={{ gap: '8px' }}>
+            {canShare ? <Checkbox label="Share with customer" checked={share} onChange={(e) => setShare(e.target.checked)} /> : <span />}
+            <Button variant="primary" disabled={busy || !text.trim()} onClick={post}>{busy ? 'Posting…' : (share ? 'Add and share' : 'Add comment')}</Button>
           </div>
         </div>
       )}

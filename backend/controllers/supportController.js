@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
-const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant, canManageAsTicketLead, isTicketAssignedToUser, isAssignedTicketsOnly } = require('../middleware/supportAccess');
+const { canViewSupportOtp, isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant, canManageAsTicketLead, isTicketAssignedToUser, isAssignedTicketsOnly } = require('../middleware/supportAccess');
 
 async function canLeadThisTicket(user, ticketId) {
     if (isSupportLead(user)) return true;
@@ -1030,6 +1030,8 @@ async function returnDcsForTicketView(ticket, items) {
 const getTicketWithItems = async (ticketId, user) => {
     const leadView = isSupportLead(user);
     const warehouseLeadView = !leadView && hasSupportTicketAssigneeGrant(user);
+    // Customer OTP: Super Admin, Support Lead, or granted support_ticket_otp (migration 431).
+    const otpView = await canViewSupportOtp(user);
     const techView = isSupportTechnician(user) && !leadView && !warehouseLeadView;
 
     const ticketRes = await pool.query(
@@ -1188,11 +1190,13 @@ const getTicketWithItems = async (ticketId, user) => {
             merged.customer_otp_code = merged.otp_code;
         }
         return mapItemRow(merged, {
-            showOtp: leadView || warehouseLeadView,
+            showOtp: otpView,
             showWarehouseOtp: leadView || warehouseLeadView
         });
     });
 
+    // Pickup photos, six per laptop (migration 433).
+    const photosByItem = await loadItemPhotos(pool, items.map((i) => Number(i.id)));
     const commentsByItem = {};
     if (items.length > 0) {
         const commentsRes = await pool.query(
@@ -1241,7 +1245,9 @@ const getTicketWithItems = async (ticketId, user) => {
             ...ticket,
             display_phone: ticket.ticket_phone_override || ticket.customer_phone
         },
-        items: items.map((i) => ({ ...i, comments: commentsByItem[i.id] || [] })),
+        items: items.map((i) => ({ ...i, comments: commentsByItem[i.id] || [], photos: photosByItem[i.id] || [] })),
+        // Customer upgrades (migration 434).
+        upgrades: await require('../services/supportUpgradeService').listForTicket(pool, ticketId).catch(() => []),
         // Every Return DC of the ticket (a "Collect later" split adds one per
         // kept laptop); ticket.return_dc_number stays the first.
         return_dcs: returnDcs,
@@ -2061,9 +2067,10 @@ exports.addComment = async (req, res) => {
         await client.query('BEGIN');
         const text = String(body).trim();
         const ins = await client.query(
-            `INSERT INTO support_ticket_item_comments (item_id, user_id, author_role, body)
-             VALUES ($1, $2, $3, $4) RETURNING *`,
-            [itemId, req.user.user_id, req.user.role, text]
+            `INSERT INTO support_ticket_item_comments (item_id, user_id, author_role, body, shared_with_customer)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            // "Share with customer" (migration 435): shown on the customer portal.
+            [itemId, req.user.user_id, req.user.role, text, req.body?.share_with_customer === true]
         );
         if (text.toLowerCase().startsWith('replacement needed')) {
             await client.query(
@@ -3474,7 +3481,7 @@ exports.createPickupWithReturnDc = async (req, res) => {
             dispatch_mode: body.dispatch_mode,
             unit_count: result.machines.length,
             message: `Pickup scheduled for ${result.machines.length} laptop(s). Return DC: ${result.rdc}.`,
-            customer_otp_visible: result.customerOtp,
+            customer_otp_visible: (await canViewSupportOtp(req.user)) ? result.customerOtp : undefined,
             ...data,
         });
     } catch (e) {
@@ -3591,7 +3598,7 @@ exports.createPickupTicket = async (req, res) => {
             pickup_item_id: result.pickupItemId,
             pickup_item_ids: result.pickupItemIds,
             return_dc_number: result.rdc,
-            customer_otp_visible: result.customerOtp,
+            customer_otp_visible: (await canViewSupportOtp(req.user)) ? result.customerOtp : undefined,
             unit_count: result.machines.length,
             message: `Pickup ticket created with ${result.machines.length} laptop(s). Return DC: ${result.rdc}.`,
             ...data,
@@ -3723,6 +3730,13 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     }
     if (!it.pod_image_path && !it.proof_of_completion_path) {
         return res.status(400).json({ success: false, message: 'Upload the pickup photo before verifying the OTP' });
+    }
+    // A technician collecting it takes all 6 photos first (migration 433).
+    if (!['courier', 'porter'].includes(String(it.pickup_method || '').toLowerCase())) {
+        const have = (await pool.query('SELECT COUNT(DISTINCT slot)::int AS n FROM support_item_photos WHERE item_id = $1', [itemId])).rows[0].n;
+        if (have < PHOTO_SLOTS.length) {
+            return res.status(400).json({ success: false, message: `Take all ${PHOTO_SLOTS.length} photos of the laptop first (${have}/${PHOTO_SLOTS.length})` });
+        }
     }
     try {
         const chargerSvc = require('../services/dispatchChargerService');
@@ -3885,7 +3899,7 @@ exports.collectLaterPickup = async (req, res) => {
         message: `${result.ttspl_id || 'The laptop'} moved to ${result.return_dc_number} for ${result.pickup_date}. `
             + `${result.from_return_dc_number} now has ${result.staying_count} laptop(s) and can go through the gate.`,
         ...rest,
-        customer_otp_visible: isSupportLead(req.user) ? otp : undefined,
+        customer_otp_visible: (await canViewSupportOtp(req.user)) ? otp : undefined,
         ...data,
     });
 };
@@ -3929,7 +3943,7 @@ exports.sendSupportOtp = async (req, res) => {
     }
 
     fireSupportWa(() => supportWa.notifySupportOtpAsync({ itemId, otp }));
-    const includeOtp = isSupportLead(req.user);
+    const includeOtp = await canViewSupportOtp(req.user);
     res.json({
         success: true,
         message: 'OTP sent to the customer on WhatsApp. Ask the customer for the 6-digit code.',
@@ -4549,7 +4563,9 @@ exports.getTechnicianLaptopBucket = async (req, res) => {
 exports.setOutcome = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { outcome, comment } = req.body || {};
-    const allowed = new Set(['fixed', 'working', 'replacement_required']);
+    // repair_pickup_requested (16 Oct 2026): the technician asks for a repair
+    // pickup; the Support Lead approves it (decideRepairPickup).
+    const allowed = new Set(['fixed', 'working', 'replacement_required', 'repair_pickup_requested']);
     if (!allowed.has(outcome)) {
         return res.status(400).json({ success: false, message: 'Invalid outcome' });
     }
@@ -4579,19 +4595,24 @@ exports.setOutcome = async (req, res) => {
         await ensureSupportTicketItemV3Columns(client);
         // Issue process (migration 348): a laptop raised with a reported issue
         // finishes with what was wrong, why, and what fixed it.
-        if (item.reported_issue_id) {
+        // A repair pickup's finding is recorded in the workshop, after the repair.
+        if (item.reported_issue_id && outcome !== 'repair_pickup_requested') {
             await supportIssues.recordFinding(client, item, req.body || {}, { finish: outcome, userId });
         }
-        const reason = outcome === 'replacement_required' ? (String(comment || '').trim() || item.replacement_flag_reason || 'Replacement required') : null;
+        const flagged = ['replacement_required', 'repair_pickup_requested'].includes(outcome);
+        if (outcome === 'repair_pickup_requested' && String(comment || '').trim().length < 3) {
+            throw Object.assign(new Error('Say why it needs to go to the workshop'), { status: 400 });
+        }
+        const reason = flagged ? (String(comment || '').trim() || item.replacement_flag_reason || 'Replacement required') : null;
         await client.query(
             `UPDATE support_ticket_items SET
                 outcome = $2::varchar(30),
                 outcome_set_by = $3::int,
                 outcome_set_at = CURRENT_TIMESTAMP,
-                replacement_flagged_by = CASE WHEN ($2::text) = 'replacement_required' THEN $3::int ELSE NULL END,
-                replacement_flag_reason = CASE WHEN ($2::text) = 'replacement_required' THEN $4::text ELSE NULL END,
+                replacement_flagged_by = CASE WHEN ($2::text) IN ('replacement_required', 'repair_pickup_requested') THEN $3::int ELSE NULL END,
+                replacement_flag_reason = CASE WHEN ($2::text) IN ('replacement_required', 'repair_pickup_requested') THEN $4::text ELSE NULL END,
                 status = CASE
-                    WHEN ($2::text) = 'replacement_required' THEN 'repair_failed'::varchar(40)
+                    WHEN ($2::text) IN ('replacement_required', 'repair_pickup_requested') THEN 'repair_failed'::varchar(40)
                     WHEN ($2::text) = 'fixed' THEN 'visited'::varchar(40)
                     WHEN ($2::text) = 'working' THEN 'visited'::varchar(40)
                     ELSE status
@@ -5040,9 +5061,19 @@ exports.initiateReplacement = async (req, res) => {
             gst_number: cust.gst_no || null,
         };
 
+        // Laptop upgrade (migration 434): the customer takes a better laptop at a
+        // new rent — its config and rent override the old laptop's.
+        const upgrades = body.upgrades && typeof body.upgrades === 'object' ? body.upgrades : {};
+        const upgradeSvc = require('../services/supportUpgradeService');
         const lineConfigs = [];
+        const oldConfigs = [];
         for (const src of sourceItems) {
-            lineConfigs.push(await replacementFlow.resolveConfigFromComplaint(client, src, ticket.customer_id));
+            const base = await replacementFlow.resolveConfigFromComplaint(client, src, ticket.customer_id);
+            oldConfigs.push(base);
+            const up = upgrades[src.id] || upgrades[String(src.id)] || null;
+            if (up && base.sale_line) throw Object.assign(new Error('A sold laptop cannot be upgraded on rent'), { status: 400 });
+            if (up && !(Number(up.monthly_rate) > 0)) throw Object.assign(new Error('Enter the new monthly rent for the upgrade'), { status: 400 });
+            lineConfigs.push(upgradeSvc.applyLaptopOverride(base, up));
         }
 
         // A sold laptop's replacement goes back on its sale line; a rented one's on a
@@ -5117,6 +5148,19 @@ exports.initiateReplacement = async (req, res) => {
                 ]
             );
             replacementOrderIds.push(orderIns.rows[0].id);
+            const up = upgrades[src.id] || upgrades[String(src.id)] || null;
+            if (up) {
+                const keys = upgradeSvc.CONFIG_KEYS;
+                await client.query(
+                    `INSERT INTO support_upgrades (ticket_id, item_id, serial_id, customer_id, kind, old_config, new_config, old_rate, new_rate,
+                                                   status, replacement_order_id, notes, created_by)
+                     VALUES ($1, $2, $3, $4, 'laptop', $5::jsonb, $6::jsonb, $7, $8, 'ordered', $9, $10, $11)`,
+                    [ticketId, src.id, oldConfigs[i].old_serial_id, ticket.customer_id,
+                        JSON.stringify(Object.fromEntries(keys.map((k) => [k, oldConfigs[i][k] || '']))),
+                        JSON.stringify(Object.fromEntries(keys.map((k) => [k, cfg[k] || '']))),
+                        oldConfigs[i].monthly_rate || null, cfg.monthly_rate, orderIns.rows[0].id, reason || 'Laptop upgrade', req.user.user_id]
+                );
+            }
 
             await client.query(
                 `UPDATE support_ticket_items SET
@@ -5248,7 +5292,7 @@ exports.initiateReplacement = async (req, res) => {
             unit_count: sourceItems.length,
             appended: isAppend,
             reused_return_dc: !!pickupResult.reused,
-            customer_otp_visible: pickupResult.customerOtp,
+            customer_otp_visible: (await canViewSupportOtp(req.user)) ? pickupResult.customerOtp : undefined,
             next_steps: isAppend
                 ? 'New SO lines added — attach laptops on the sales order and extend the same return pickup.'
                 : 'Attach laptops to the sales order, complete Dispatch QC, then create delivery DC.',
@@ -5558,7 +5602,7 @@ exports.editReturnPickupMachines = async (req, res) => {
             return_dc_number: rdc,
             kept_count: keeping.length,
             removed_count: removing.length,
-            customer_otp_visible: sharedOtp,
+            customer_otp_visible: (await canViewSupportOtp(req.user)) ? sharedOtp : undefined,
             ...data,
         });
     } catch (e) {
@@ -6908,3 +6952,263 @@ exports.updateIssueCatalogEntry = async (req, res) => {
         res.status(e.status || 500).json({ success: false, message: e.message });
     }
 };
+
+// ── Complaint → pickup (16 Oct 2026) ───────────────────────────────────────
+//
+// A visit can become a repair pickup or a return pickup:
+//   • the technician asks for a repair pickup from the visit
+//     (set-outcome repair_pickup_requested); the Support Lead approves it and
+//     the same technician collects it on the spot, or rejects it (back to the visit);
+//   • the Support Lead converts any open visit directly (repair or return).
+// The visit is then closed — superseded by its pickup, which carries the job —
+// with outcome repair_required / return_required ("Converted to … pickup").
+// The pickup goes on the ticket's open Return DC when there is one, else a new one.
+async function convertComplaintToPickup(client, { item, pickupType, dispatch, userId, reason }) {
+    const ticket = (await client.query('SELECT * FROM support_tickets WHERE id = $1 FOR UPDATE', [item.ticket_id])).rows[0];
+    if (!ticket) throw Object.assign(new Error('Ticket not found'), { status: 404 });
+    if (['closed', 'cancelled'].includes(ticket.status)) throw Object.assign(new Error(`This ticket is ${ticket.status}.`), { status: 409 });
+    const live = await client.query(
+        `SELECT 1 FROM support_ticket_items WHERE source_item_id = $1 AND item_type = 'pickup'
+            AND COALESCE(status, '') NOT IN ('cancelled', 'removed') LIMIT 1`,
+        [item.id]
+    );
+    if (live.rows.length) throw Object.assign(new Error('This laptop already has a pickup.'), { status: 409 });
+
+    let openRdc = null;
+    if (ticket.return_dc_number) {
+        openRdc = await loadOpenReturnDcForReplacement(client, item.ticket_id, ticket.return_dc_number);
+        if (!openRdc) ticket.return_dc_number = null; // stale pointer to a closed / voided Return DC
+    }
+    const machine = {
+        source_item_id: item.id,
+        serial_number: item.serial_number,
+        unique_serial_number: item.unique_serial_number || item.ttspl_id,
+        ttspl_id: item.ttspl_id || item.unique_serial_number,
+        brand: item.brand, model: item.model, ram: item.ram, storage: item.storage, generation: item.generation,
+        customer_inventory_id: item.customer_inventory_id,
+    };
+    const opts = { ...dispatch, pickup_type: pickupType, machines: [machine], source_item_id: item.id, remarks: reason || undefined };
+    const result = openRdc
+        ? await appendMachinesToReturnDc(client, ticket, item.ticket_id, userId, { ...opts, return_dc_number: openRdc.dc_number })
+        : await executePickupWithReturnDc(client, ticket, item.ticket_id, userId, opts);
+
+    await client.query(
+        `UPDATE support_ticket_items
+            SET outcome = $2, outcome_set_by = $3, outcome_set_at = NOW(), status = 'closed',
+                resolution_notes = COALESCE(resolution_notes, $4), updated_at = NOW()
+          WHERE id = $1`,
+        [item.id, pickupType === 'repair' ? 'repair_required' : 'return_required', userId,
+            `Converted to ${pickupType} pickup ${result.rdc || ''}`.trim()]
+    );
+    await logAudit(client, {
+        itemId: item.id, ticketId: item.ticket_id, userId,
+        action: pickupType === 'repair' ? 'converted_to_repair_pickup' : 'converted_to_return_pickup',
+        detail: { return_dc_number: result.rdc, reason: reason || null, dispatch_mode: dispatch.dispatch_mode },
+    });
+    await bumpTicketActivity(client, item.ticket_id);
+    return result;
+}
+
+const pickupDispatchFrom = (body = {}) => ({
+    dispatch_mode: body.dispatch_mode,
+    technician_user_id: body.technician_user_id ? Number(body.technician_user_id) : undefined,
+    courier_name: body.courier_name, awb_number: body.awb_number,
+    porter_tracking_id: body.porter_tracking_id, porter_order_id: body.porter_order_id,
+    pickup_address: body.pickup_address && typeof body.pickup_address === 'object' ? body.pickup_address : undefined,
+});
+
+async function afterPickupCreated(ticketId, rdc) {
+    try { await regenerateReturnDcPdfByRdc(pool, rdc); } catch (pdfErr) { console.error('[support] return DC pdf (convert):', pdfErr.message); }
+    fireSupportWa(() => supportWa.notifySupportPickupScheduledAsync({ ticketId, rdcNumber: rdc }));
+}
+
+/** POST /support/items/:itemId/convert-to-pickup { pickup_type, dispatch_mode, technician_user_id, …, reason } — Support Lead. */
+exports.convertToPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const body = req.body || {};
+    if (!['repair', 'return'].includes(body.pickup_type)) return res.status(400).json({ success: false, message: 'Repair or return?' });
+    if (!['technician', 'courier', 'porter'].includes(body.dispatch_mode)) return res.status(400).json({ success: false, message: 'Choose who collects it' });
+    if (body.dispatch_mode === 'technician' && !body.technician_user_id) return res.status(400).json({ success: false, message: 'Choose the technician' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const item = (await client.query('SELECT * FROM support_ticket_items WHERE id = $1 FOR UPDATE', [itemId])).rows[0];
+        if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
+        if (item.item_type !== 'complaint') throw Object.assign(new Error('Only a visit can be converted'), { status: 400 });
+        if (['resolved', 'closed', 'cancelled', 'removed'].includes(item.status)) throw Object.assign(new Error(`This visit is ${item.status}.`), { status: 409 });
+        const result = await convertComplaintToPickup(client, {
+            item, pickupType: body.pickup_type, dispatch: pickupDispatchFrom(body), userId: req.user.user_id, reason: String(body.reason || '').trim(),
+        });
+        await client.query('COMMIT');
+        await afterPickupCreated(item.ticket_id, result.rdc);
+        res.json({ success: true, message: `Converted to a ${body.pickup_type} pickup on ${result.rdc}`, return_dc_number: result.rdc, ...(await getTicketWithItems(item.ticket_id, req.user)) });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('convertToPickup:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Could not convert' });
+    } finally {
+        client.release();
+    }
+};
+
+/**
+ * POST /support/items/:itemId/repair-pickup-decision { approve, reason } — Support Lead.
+ * Approve: a repair pickup for the same technician, who collects it now
+ * (photos + customer OTP on their job). Reject: back to the visit, with the reason.
+ */
+exports.decideRepairPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const approve = req.body?.approve === true;
+    const reason = String(req.body?.reason || '').trim();
+    if (!approve && reason.length < 3) return res.status(400).json({ success: false, message: 'Say why it is rejected' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const item = (await client.query('SELECT * FROM support_ticket_items WHERE id = $1 FOR UPDATE', [itemId])).rows[0];
+        if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
+        if (item.outcome !== 'repair_pickup_requested') throw Object.assign(new Error('No repair pickup is waiting for approval on this visit'), { status: 409 });
+        let message;
+        if (approve) {
+            if (!item.assigned_to) throw Object.assign(new Error('The visit has no technician to collect it'), { status: 409 });
+            const result = await convertComplaintToPickup(client, {
+                item, pickupType: 'repair', userId: req.user.user_id, reason: reason || item.replacement_flag_reason || null,
+                dispatch: { dispatch_mode: 'technician', technician_user_id: Number(item.assigned_to) },
+            });
+            await client.query('COMMIT');
+            await afterPickupCreated(item.ticket_id, result.rdc);
+            message = `Approved — the technician collects it now on ${result.rdc}`;
+        } else {
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET outcome = NULL, outcome_set_by = NULL, outcome_set_at = NULL,
+                        replacement_flag_reason = NULL, replacement_flagged_by = NULL, status = 'visited', updated_at = NOW()
+                  WHERE id = $1`,
+                [itemId]
+            );
+            await client.query(
+                `INSERT INTO support_ticket_item_comments (item_id, user_id, author_role, body) VALUES ($1, $2, $3, $4)`,
+                [itemId, req.user.user_id, req.user.role, `Repair pickup not approved: ${reason}`]
+            );
+            await logAudit(client, { itemId, ticketId: item.ticket_id, userId: req.user.user_id, action: 'repair_pickup_rejected', detail: { reason } });
+            await bumpTicketActivity(client, item.ticket_id);
+            await client.query('COMMIT');
+            message = 'Rejected — the technician records the visit result';
+        }
+        res.json({ success: true, message, ...(await getTicketWithItems(item.ticket_id, req.user)) });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('decideRepairPickup:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Could not save the decision' });
+    } finally {
+        client.release();
+    }
+};
+
+// ── Pickup photos (migration 433) ──────────────────────────────────────────
+const PHOTO_SLOTS = ['front', 'back', 'screen', 'keyboard', 'left', 'right'];
+exports.PHOTO_SLOTS = PHOTO_SLOTS;
+
+async function loadItemPhotos(db, itemIds) {
+    if (!itemIds.length) return {};
+    const r = await db.query(
+        `SELECT p.item_id, p.slot, p.path, p.uploaded_at, u.name AS uploaded_by_name
+           FROM support_item_photos p LEFT JOIN users u ON u.user_id = p.uploaded_by
+          WHERE p.item_id = ANY($1::int[]) ORDER BY p.item_id, p.photo_id`,
+        [itemIds]
+    );
+    return r.rows.reduce((m, row) => ({ ...m, [row.item_id]: [...(m[row.item_id] || []), row] }), {});
+}
+exports.loadItemPhotos = loadItemPhotos;
+
+/** POST /support/items/:itemId/photos (multipart: one file per slot name). */
+exports.uploadItemPhotos = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const files = Object.entries(req.files || {}).flatMap(([slot, list]) => (list || []).map((f) => ({ slot, f })));
+    const drop = () => files.forEach(({ f }) => fs.promises.unlink(f.path).catch(() => {}));
+    try {
+        const it = (await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId])).rows[0];
+        if (!it) { drop(); return res.status(404).json({ success: false, message: 'Item not found' }); }
+        if (it.item_type !== 'pickup') { drop(); return res.status(400).json({ success: false, message: 'Photos are for a pickup' }); }
+        if (it.assigned_to !== req.user.user_id && it.pickup_assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, it.ticket_id))) {
+            drop(); return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
+        }
+        if (!files.length) return res.status(400).json({ success: false, message: 'Choose a photo' });
+        for (const { slot, f } of files) {
+            if (!PHOTO_SLOTS.includes(slot) || !String(f.mimetype || '').startsWith('image/')) { drop(); return res.status(400).json({ success: false, message: 'Photos only, one per side of the laptop' }); }
+        }
+        for (const { slot, f } of files) {
+            const rel = `support/${path.basename(f.path)}`;
+            const prev = (await pool.query('SELECT path FROM support_item_photos WHERE item_id = $1 AND slot = $2', [itemId, slot])).rows[0];
+            await pool.query(
+                `INSERT INTO support_item_photos (item_id, slot, path, uploaded_by) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (item_id, slot) DO UPDATE SET path = EXCLUDED.path, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW()`,
+                [itemId, slot, rel, req.user.user_id]
+            );
+            if (prev?.path && prev.path !== rel) fs.promises.unlink(path.join(__dirname, '..', 'uploads', prev.path)).catch(() => {});
+        }
+        // The pickup's photo (POD) the older checks look for: the front photo.
+        if (!it.pod_image_path && !it.proof_of_completion_path) {
+            const front = (await pool.query(`SELECT path FROM support_item_photos WHERE item_id = $1 ORDER BY CASE slot WHEN 'front' THEN 0 ELSE 1 END, photo_id LIMIT 1`, [itemId])).rows[0];
+            if (front) {
+                await pool.query(
+                    `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, pod_uploaded_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                    [itemId, front.path]
+                );
+            }
+        }
+        const photos = (await loadItemPhotos(pool, [itemId]))[itemId] || [];
+        res.json({ success: true, photos, complete: PHOTO_SLOTS.every((s) => photos.some((p) => p.slot === s)) });
+    } catch (e) {
+        drop();
+        console.error('uploadItemPhotos:', e);
+        res.status(500).json({ success: false, message: 'Could not save the photos' });
+    }
+};
+
+// ── Upgrades (migration 434) ───────────────────────────────────────────────
+const upgradeService = require('../services/supportUpgradeService');
+
+/** GET /support/items/:itemId/upgrade-context — the laptop's config and rent today. */
+exports.getUpgradeContext = async (req, res) => {
+    try {
+        res.json({ success: true, ...(await upgradeService.upgradeContext(pool, parseInt(req.params.itemId, 10))) });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Could not load the laptop' });
+    }
+};
+
+const upgradeTx = (fn, ok) => async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const out = await fn(client, req);
+        await client.query('COMMIT');
+        const ticketId = out?.ticket_id || req.ticketIdForReload;
+        res.json({ success: true, message: typeof ok === 'function' ? ok(out) : ok, ...(ticketId ? await getTicketWithItems(ticketId, req.user) : {}) });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        if (!e.status) console.error('upgrade:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Could not save the upgrade' });
+    } finally {
+        client.release();
+    }
+};
+
+/** POST /support/items/:itemId/upgrades { ram, storage, new_rate, notes } — RAM / SSD upgrade. */
+exports.createPartsUpgrade = upgradeTx(async (db, req) => upgradeService.createPartsUpgrade(db, {
+    itemId: parseInt(req.params.itemId, 10), ram: req.body?.ram, storage: req.body?.storage, newRate: req.body?.new_rate, notes: req.body?.notes, user: req.user,
+}), 'Upgrade recorded — send the part, then apply it once fitted');
+
+/** POST /support/upgrades/:upgradeId/apply — part fitted: config + rent change. */
+exports.applyPartsUpgrade = upgradeTx(async (db, req) => {
+    const u = (await db.query('SELECT ticket_id FROM support_upgrades WHERE upgrade_id = $1', [parseInt(req.params.upgradeId, 10)])).rows[0];
+    const r = await upgradeService.applyPartsUpgrade(db, { upgradeId: parseInt(req.params.upgradeId, 10), user: req.user });
+    return { ...r, ticket_id: u?.ticket_id };
+}, (r) => `Upgraded — the new rent applies from ${r.effective_from}`);
+
+/** POST /support/upgrades/:upgradeId/cancel { reason } */
+exports.cancelUpgrade = upgradeTx(async (db, req) => {
+    const u = (await db.query('SELECT ticket_id FROM support_upgrades WHERE upgrade_id = $1', [parseInt(req.params.upgradeId, 10)])).rows[0];
+    await upgradeService.cancelUpgrade(db, { upgradeId: parseInt(req.params.upgradeId, 10), reason: String(req.body?.reason || '').trim() });
+    return { ticket_id: u?.ticket_id };
+}, 'Upgrade cancelled');

@@ -22,6 +22,9 @@ export function nextStepOf(data) {
   const pickups = items.filter((i) => i.item_type === 'pickup' && !DONE.includes(i.status));
   const hasPickupFor = (c) => items.some((p) => p.item_type === 'pickup' && Number(p.source_item_id) === Number(c.id) && p.status !== 'cancelled');
 
+  const askPickup = complaints.find((i) => i.outcome === 'repair_pickup_requested');
+  if (askPickup) return { tone: 'warn', text: `The technician wants to take ${code(askPickup)} to the workshop${askPickup.replacement_flag_reason ? ` — “${askPickup.replacement_flag_reason}”` : ''}. Approve and they collect it now.`, action: 'replacement', item: askPickup };
+
   const replace = complaints.find((i) => i.outcome === 'replacement_required' && !orders.some((o) => [o.item_id, o.complaint_item_id, o.source_item_id].map(Number).includes(Number(i.id))));
   if (replace) return { tone: 'warn', text: `The technician says ${code(replace)} needs a pickup or a replacement. Decide: schedule a repair pickup, or start the replacement.`, action: 'replacement', item: replace };
 

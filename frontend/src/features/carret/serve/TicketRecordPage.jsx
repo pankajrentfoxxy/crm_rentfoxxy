@@ -7,17 +7,15 @@ import {
   Textarea,
 } from '../../../components/carret';
 import {
-  assignItem, cancelTicket, chargeWfh, closeTicket, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
+  assignItem, cancelTicket, chargeWfh, closeTicket, fetchDamageCases, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
   setAppointment,
 } from './serveApi';
 import { usePermission } from '../../../hooks/usePermission';
 import TicketActions from './TicketActions';
-import IssuePanel from './IssuePanel';
 import TicketPartsPanel from './TicketPartsPanel';
 import ServiceChargesPanel from './ServiceChargesPanel';
 import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
-import TicketReturnDcsPanel from './TicketReturnDcsPanel';
 import TicketLoanPanel from './loan/TicketLoanPanel';
 import TicketJourneys from './TicketJourneys';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
@@ -66,10 +64,13 @@ export default function TicketRecordPage() {
   const [wfhFor, setWfhFor] = useState(null);
   const [error, setError] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [damage, setDamage] = useState([]);
 
   const load = useCallback(() => {
     fetchTicket(ticketId).then(({ data }) => setT(data)).catch((e) => setError(errMsg(e, 'Could not load the ticket')));
     fetchTicketSla(ticketId).then(({ data }) => setSla(data)).catch(() => {});
+    // Damage reported on this ticket's laptops, shown on each laptop's card.
+    fetchDamageCases({ ticket_id: ticketId }).then(({ data }) => setDamage(data.data || [])).catch(() => setDamage([]));
     fetchTicketWfh(ticketId).then(({ data }) => setWfh(Object.fromEntries((data.items || []).map((i) => [i.item_id, i])))).catch(() => {});
   }, [ticketId]);
   useEffect(() => { load(); }, [load]);
@@ -143,13 +144,20 @@ export default function TicketRecordPage() {
               reload={load}
               enabled={hasPermission('support_tickets', 'edit')}
               renderLaptops={({ taskActions, headerActions }) => (
-                <Section title={`Laptops · ${new Set(items.map((i) => i.ttspl_id || i.unique_serial_number || i.serial_number || i.id)).size}`} actions={headerActions}>
+                <div className="c-stack">
+                  <div className="c-sec-h">
+                    <h3>Laptops · {new Set(items.map((i) => i.ttspl_id || i.unique_serial_number || i.serial_number || i.id)).size}</h3>
+                    {headerActions}
+                  </div>
                   <TicketJourneys
                     items={items}
                     techs={techs}
                     wfh={wfh}
                     locked={closed}
                     canDamage={canDamage}
+                    canLead={canLead}
+                    damage={damage}
+                    upgrades={t.upgrades || []}
                     taskActions={taskActions}
                     onAssign={(i) => setAssignFor(i)}
                     onSlot={openAppt}
@@ -157,11 +165,9 @@ export default function TicketRecordPage() {
                     onDamage={(i) => setDamageFor(i)}
                     onCommented={load}
                   />
-                </Section>
+                </div>
               )}
             />
-            <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
-            <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
             <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
             <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
             <TicketLoanPanel ticketId={tk.id} refreshKey={items.map((i) => `${i.id}:${i.status}`).join(',')} />
@@ -275,7 +281,7 @@ export default function TicketRecordPage() {
       <DamageReportDrawer
         open={Boolean(damageFor)}
         onClose={() => setDamageFor(null)}
-        onDone={() => setDamageFor(null)}
+        onDone={() => { setDamageFor(null); load(); }}
         laptop={damageFor ? { asset_code: damageFor.ttspl_id || damageFor.unique_serial_number || damageFor.serial_number } : null}
         source={damageFor?.item_type === 'pickup' ? ((damageFor.pickup_type || (damageFor.source_item_id ? 'repair' : 'return')) === 'repair' ? 'repair_pickup' : 'return_pickup') : 'technician_visit'}
         ticketId={tk.id}

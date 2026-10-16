@@ -227,6 +227,14 @@ router.patch('/tickets/:ticketId/return-pickup-assignment', requireTicketLead, c
 router.patch('/items/:itemId/courier-details', requireTicketLead, updatePickupCourierDetails);
 router.get('/tickets/:ticketId/replacement-context', requireTicketLead, getReplacementContext);
 router.post('/items/:itemId/move-to-replacement', requireTicketLead, moveComplaintToReplacement);
+// Visit → repair / return pickup (16 Oct 2026).
+router.post('/items/:itemId/convert-to-pickup', requireTicketLead, require('../controllers/supportController').convertToPickup);
+router.post('/items/:itemId/repair-pickup-decision', requireTicketLead, require('../controllers/supportController').decideRepairPickup);
+// Customer upgrades (migration 434): laptop (via replacement) or RAM / SSD.
+router.get('/items/:itemId/upgrade-context', requireTicketLead, require('../controllers/supportController').getUpgradeContext);
+router.post('/items/:itemId/upgrades', requireTicketLead, require('../controllers/supportController').createPartsUpgrade);
+router.post('/upgrades/:upgradeId/apply', requireSupportLead, require('../controllers/supportController').applyPartsUpgrade);
+router.post('/upgrades/:upgradeId/cancel', requireSupportLead, require('../controllers/supportController').cancelUpgrade);
 router.get('/customers/:customerId/available-assets', getAvailableAssets);
 router.post('/items/:itemId/comments', addComment);
 router.post('/items/:itemId/work-done', markWorkDone);
@@ -241,6 +249,11 @@ router.patch('/items/:itemId/finding', recordIssueFinding);
 router.post('/items/:itemId/picked-up', markPickedUp);
 router.delete('/items/:itemId', requireTicketLead, removeTicketItem);
 router.post('/items/:itemId/pod', uploadPodFile, uploadPod);
+// Six laptop photos on a pickup, one field per side (migration 433).
+router.post('/items/:itemId/photos', (req, res, next) => upload.fields(
+    ['front', 'back', 'screen', 'keyboard', 'left', 'right'].map((name) => ({ name, maxCount: 1 }))
+)(req, res, (err) => (err ? res.status(400).json({ success: false, message: multerErrorMessage(err) }) : next())),
+require('../controllers/supportController').uploadItemPhotos);
 router.delete('/items/:itemId/pod', removePod);
 router.post('/items/:itemId/verify-otp', verifyOtp);
 router.post('/items/:itemId/verify-customer-otp', verifyOtp);

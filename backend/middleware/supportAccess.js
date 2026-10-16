@@ -195,7 +195,24 @@ async function resolveSupportAssigneeId(userId) {
     return rows[0]?.user_id || null;
 }
 
+/**
+ * Customer OTP on a support visit / pickup (migration 431): Super Admin and
+ * Support Lead, or anyone granted support_ticket_otp (view). Async — it reads
+ * the permission matrix.
+ */
+async function canViewSupportOtp(user) {
+    if (!user) return false;
+    if (['super_admin', 'support_lead'].includes(user.role)) return true;
+    try {
+        const { hasPermission } = require('../services/permissionService');
+        return await hasPermission(user.user_id, user.role, 'support_ticket_otp', 'view');
+    } catch (_) {
+        return false;
+    }
+}
+
 module.exports = {
+    canViewSupportOtp,
     SUPPORT_ROLES,
     SUPPORT_PARTS_CATALOG_SECTIONS,
     isSupportUser,

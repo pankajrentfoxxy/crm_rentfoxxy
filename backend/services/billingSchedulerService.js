@@ -1227,6 +1227,17 @@ async function buildPostpaidInvoiceLines(client, { customerId, month, year, mont
             -- watermark it is deliberately leaving alone.
             vsn.rent_billed_until,
             COALESCE(
+              -- A dated rent change (support upgrade, migration 434) in force by
+              -- this month wins over the last invoiced rate.
+              (
+                SELECT rrc.new_rate
+                  FROM rent_rate_changes rrc
+                 WHERE rrc.serial_id = vsn.serial_id
+                   AND rrc.customer_id = $1
+                   AND rrc.effective_from <= date_trunc('month', $2::date)::date
+                 ORDER BY rrc.effective_from DESC, rrc.change_id DESC
+                 LIMIT 1
+              ),
               (
                 SELECT cil.monthly_rate
                   FROM customer_invoice_lines cil

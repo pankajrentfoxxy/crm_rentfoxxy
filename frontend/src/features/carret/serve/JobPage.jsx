@@ -8,6 +8,7 @@ import {
 import RaisePartRequestForm from '../../support/components/RaisePartRequestForm';
 import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
 import { CollectChargerPanel } from '../move/challanCharger';
+import PickupPhotos from './PickupPhotos';
 import {
   fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, uploadPhoto, verifyLaptop, verifyPickupOtp,
   verifyVisitOtp, workDone,
@@ -32,7 +33,8 @@ const RESULTS = [
   { key: 'fixed', label: 'Fixed', hint: 'Repaired on site' },
   { key: 'working', label: 'No fault found', hint: 'Working as it should' },
   { key: 'parts', label: 'Needs a part', hint: 'Request it from the warehouse' },
-  { key: 'replacement_required', label: 'Needs pickup / replacement', hint: 'Your lead decides next' },
+  { key: 'repair_pickup_requested', label: 'Needs workshop repair', hint: 'Ask your lead to approve — then you collect it now' },
+  { key: 'replacement_required', label: 'Needs a replacement', hint: 'Your lead decides next' },
 ];
 
 function PhotoInput({ file, onFile }) {
@@ -66,6 +68,7 @@ export default function JobPage() {
   const [otp, setOtp] = useState('');
   const [ticket, setTicket] = useState(null);
   const [chargerOk, setChargerOk] = useState(false);
+  const [photos, setPhotos] = useState(null); // pickup photos taken on this screen
   const catalog = useIssueCatalog();
   const [finding, setFinding] = useState(null);
   const [damageOpen, setDamageOpen] = useState(false);
@@ -123,9 +126,9 @@ export default function JobPage() {
   };
   const finishResult = () => run(async () => {
     if (!result) throw new Error('Choose the result');
-    if (result === 'replacement_required') {
+    if (result === 'replacement_required' || result === 'repair_pickup_requested') {
       if (note.trim().length < 3) throw new Error('Write what is wrong, for your lead');
-      await setOutcome(job.item_id, { outcome: 'replacement_required', comment: note.trim(), ...withFinding() });
+      await setOutcome(job.item_id, { outcome: result, comment: note.trim(), ...(result === 'replacement_required' ? withFinding() : {}) });
       return;
     }
     if (!photo) throw new Error('Take a photo of the laptop');
@@ -133,7 +136,9 @@ export default function JobPage() {
     await uploadPhoto(job.item_id, photo);
     await workDone(job.item_id);
     await sendOtp(job.item_id);
-  }, result === 'replacement_required' ? 'Sent to your lead' : 'Done — the customer has an OTP');
+  }, ['replacement_required', 'repair_pickup_requested'].includes(result)
+    ? (result === 'repair_pickup_requested' ? 'Asked — once your lead approves, the pickup opens in My work' : 'Sent to your lead')
+    : 'Done — the customer has an OTP');
   const pickupPhoto = () => run(async () => {
     if (!photo) throw new Error('Take a photo of the laptop');
     await uploadPhoto(job.item_id, photo);
@@ -205,10 +210,10 @@ export default function JobPage() {
                 <Button variant="primary" disabled={busy} onClick={finishResult} style={{ width: '100%', minHeight: '56px' }}>Done — send the customer an OTP</Button>
               </div>
             )}
-            {result === 'replacement_required' && (
+            {(result === 'replacement_required' || result === 'repair_pickup_requested') && (
               <div className="c-stack" style={{ marginTop: '12px' }}>
-                <Field label="What is wrong" required><Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-                <Button variant="primary" disabled={busy} onClick={finishResult} style={{ width: '100%', minHeight: '56px' }}>Send to my lead</Button>
+                <Field label={result === 'repair_pickup_requested' ? 'Why it must go to the workshop' : 'What is wrong'} required><Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+                <Button variant="primary" disabled={busy} onClick={finishResult} style={{ width: '100%', minHeight: '56px' }}>{result === 'repair_pickup_requested' ? 'Ask my lead to approve' : 'Send to my lead'}</Button>
               </div>
             )}
             {result === 'parts' && (
@@ -224,13 +229,17 @@ export default function JobPage() {
 
         {k === 'pickup_photo' && (
           <div className="c-card" style={{ padding: '16px' }}>
-            {!job.has_photo ? (
+            {job.needs_photos && (photos || job.photos || []).length < 6 ? (
+              // Six photos of the laptop (migration 433), each compressed and uploaded as it is taken.
+              <PickupPhotos itemId={job.item_id} photos={photos || job.photos} onChange={setPhotos} />
+            ) : !job.needs_photos && !job.has_photo ? (
               <div className="c-stack">
                 <PhotoInput file={photo} onFile={setPhoto} />
                 <Button variant="primary" disabled={busy} onClick={pickupPhoto} style={{ width: '100%', minHeight: '56px' }}>Save the photo</Button>
               </div>
             ) : (
               <div className="c-stack">
+                {job.needs_photos && <PickupPhotos itemId={job.item_id} photos={photos || job.photos} onChange={setPhotos} />}
                 {/* With / without charger, saved on the Return DC (migration 430). */}
                 {job.return_dc_number
                   ? <CollectChargerPanel itemId={job.item_id} rdc={job.return_dc_number} code={job.laptop.ttspl || job.laptop.serial} onReady={setChargerOk} />
@@ -275,7 +284,7 @@ export default function JobPage() {
 
         <div className="c-card" style={{ padding: '16px' }}>
           <strong style={{ display: 'block', marginBottom: '8px' }}>Comments with your lead</strong>
-          {ticketItem ? <ItemComments item={ticketItem} onAdded={() => loadTicket(job.ticket_id)} /> : <div className="text-ink-3">Loading…</div>}
+          {ticketItem ? <ItemComments item={ticketItem} canShare={false} onAdded={() => loadTicket(job.ticket_id)} /> : <div className="text-ink-3">Loading…</div>}
         </div>
 
         {/* DM1: damage found at the visit / pickup — part, issue and photo; the warehouse prices it. */}

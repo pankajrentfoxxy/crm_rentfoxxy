@@ -6,6 +6,9 @@
 const CLOSED = new Set(['resolved', 'closed', 'inventory_updated']);
 
 const deriveComplaintStep = (item) => {
+  // Converted to a pickup (16 Oct 2026): the visit is closed; its pickup carries on.
+  if (item.status === 'closed' && item.outcome === 'repair_required') return 'converted_to_repair';
+  if (item.status === 'closed' && item.outcome === 'return_required') return 'converted_to_return';
   if (CLOSED.has(item.status)) return 'otp_verified';
   // Phase 18: laptop carried away for warehouse repair supersedes the complaint.
   if (item.status === 'picked_up' || item.outcome === 'repair_required') {
@@ -14,6 +17,8 @@ const deriveComplaintStep = (item) => {
   if (item.outcome === 'replacement_required') {
     return 'replacement_required';
   }
+  // The technician asked for a repair pickup; the Support Lead decides.
+  if (item.outcome === 'repair_pickup_requested') return 'repair_pickup_requested';
   if (!item.assigned_to) return 'unassigned';
   // Step order: the technician first marks "reached" (capturing GPS), then
   // verifies the laptop TTSPL/serial before recording an outcome.

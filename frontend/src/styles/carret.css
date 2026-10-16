@@ -739,3 +739,46 @@
 .c-collapse-h span{ font-size:13px; color:var(--accent) }
 @media (max-width:760px){ .c-journey-h{ flex-direction:column } }
 .c-jtask-n{ font-size:12.5px; color:var(--ink-2); margin-top:4px }
+
+/* Laptop card details (16 Oct 2026): reported, visit result, OTP, damage */
+.c-sec-h{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
+.c-sec-h h3{ margin:0; font-size:15px; font-weight:600; color:var(--ink) }
+.c-ldet{ display:flex; flex-direction:column; border-top:1px solid var(--rule); padding-top:4px }
+.c-ldet-row{ display:grid; grid-template-columns:8.5rem minmax(0,1fr) auto; gap:4px 14px; padding:8px 0; align-items:start }
+.c-ldet-row + .c-ldet-row{ border-top:1px dashed var(--rule) }
+.c-ldet-k{ font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-3); padding-top:2px }
+.c-ldet-v{ font-size:13.5px; color:var(--ink); min-width:0 }
+.c-ldet-v small{ display:block; font-size:12.5px; color:var(--ink-3); margin-top:2px }
+.c-ldet-a{ display:flex; gap:6px }
+.c-ldet-dmg + .c-ldet-dmg{ margin-top:8px }
+.c-ldet-photos{ display:flex; flex-wrap:wrap; gap:6px; margin-top:4px }
+.c-photo-chip{ font:inherit; font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--rule-2); background:var(--surface); color:var(--accent); cursor:pointer }
+.c-photo-chip:hover{ border-color:var(--accent) }
+.c-otp{ font-family:var(--font-mono, ui-monospace, monospace); font-size:18px; font-weight:700; letter-spacing:.2em; color:var(--ink); background:var(--accent-soft); padding:2px 10px; border-radius:var(--d-radius) }
+.c-cmt-btn{ gap:6px; font-size:13px; font-weight:500 }
+@media (max-width:760px){ .c-ldet-row{ grid-template-columns:minmax(0,1fr) } }
+
+/* Pickup photos — six per laptop (migration 433) */
+.c-photos{ display:flex; flex-direction:column; gap:8px }
+.c-photos-h{ display:flex; justify-content:space-between; align-items:baseline }
+.c-photos-h b{ font-size:14px }
+.c-photos-h span{ font-size:13px; font-weight:600; color:var(--alert-warn) }
+.c-photos-h span.is-ok{ color:var(--alert-good) }
+.c-photos-grid{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px }
+.c-photo{ position:relative; aspect-ratio:4/3; border:1.5px dashed var(--rule-2); border-radius:var(--d-radius); background:var(--surface-2); display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer }
+.c-photo.is-on{ border-style:solid; border-color:var(--alert-good) }
+.c-photo.is-ro{ cursor:default }
+.c-photo img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover }
+.c-photo-plus{ font-size:22px; color:var(--ink-3); margin-bottom:14px }
+.c-photo-l{ position:absolute; left:0; right:0; bottom:0; padding:3px 6px; font-size:11.5px; font-weight:600; background:rgba(0,0,0,.55); color:#fff; text-align:center }
+.c-photo input{ position:absolute; inset:0; opacity:0; cursor:pointer }
+.c-photo-open{ position:absolute; inset:0 }
+@media (min-width:900px){ .c-photos-grid{ grid-template-columns:repeat(6, minmax(0,1fr)) } }
+
+/* Upgrades (migration 434) */
+.c-upg{ border:1px solid var(--rule); border-radius:var(--d-radius); background:var(--surface-2); padding:10px 12px; display:flex; flex-direction:column; gap:8px }
+.c-upg-h{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; align-items:baseline }
+.c-upg-h b{ font-size:14px }
+.c-upg-h span{ font-size:12.5px; color:var(--ink-3) }
+.c-upg-now{ display:flex; gap:16px; font-size:13.5px; color:var(--ink-2) }
+.c-shared{ margin-left:8px; padding:1px 7px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:11px; font-weight:600 }

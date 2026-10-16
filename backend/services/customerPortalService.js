@@ -842,8 +842,23 @@ async function getCustomerTicket(customerId, ticketId) {
   const t = rows[0];
   if (!t) return null;
 
-  const items = (await loadTicketItems([t.id])).get(t.id) || [];
+  // A visit converted to a pickup is superseded by that pickup — show the pickup only.
+  const items = ((await loadTicketItems([t.id])).get(t.id) || [])
+    .filter((i) => !(i.item_type === 'complaint' && ['repair_required', 'return_required'].includes(i.outcome) && String(i.status) === 'closed'));
   const publicItems = items.map(publicItem);
+  // Updates the support team shared with the customer (migration 435), and how each visit ended.
+  const shared = (await pool.query(
+    `SELECT c.item_id, c.body, c.created_at FROM support_ticket_item_comments c
+      WHERE c.item_id = ANY($1::int[]) AND c.shared_with_customer = TRUE ORDER BY c.created_at`,
+    [items.map((i) => i.id)]
+  ).catch(() => ({ rows: [] }))).rows;
+  const RESULT = { fixed: 'Fixed at your site', working: 'Checked — no fault found', replacement_required: 'A replacement is being arranged' };
+  publicItems.forEach((p, n) => {
+    const src = items[n];
+    p.updates = shared.filter((c) => c.item_id === src.id).map((c) => ({ text: c.body, at: c.created_at }));
+    p.result = src.item_type === 'complaint' && RESULT[src.outcome] ? RESULT[src.outcome] : null;
+    p.closed_at = src.otp_verified_at || null;
+  });
   const openStages = publicItems.filter((i) => i.is_open).map((i) => i.stage);
   const stage = customerStageForTicket(
     t.status,

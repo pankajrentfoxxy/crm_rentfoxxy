@@ -10,7 +10,9 @@ import {
   fetchCustomerLaptops, fetchPickupContext, fetchRedeliveryContext, fetchReplacementContext, fetchResendContext,
   fetchServiceDcEligibility, fetchSwapContext, moveToReplacement, regenerateServiceDcPdf, resendLaptop, setCourierDetails,
   startRedelivery, startReplacement, startSwap, createEarlyReturn, fetchEarlyReturns, cancelEarlyReturn,
+  convertToPickup, decideRepairPickup, fetchUpgradeContext, createPartsUpgrade,
 } from './serveApi';
+import RaisePartRequestForm from '../../support/components/RaisePartRequestForm';
 import { errMsg } from './serveShared';
 import TermsBadge, { fmtDay, termsText } from './TermsBadge';
 
@@ -184,13 +186,24 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
 
   /* ---------------- replacement ---------------- */
   const [rep, setRep] = useState(null);
-  const openReplacement = async (onlyId = null) => {
+  const openReplacement = async (onlyId = null, asUpgrade = false) => {
     try {
       const { data: c } = await fetchReplacementContext(tk.id);
+      // Laptop upgrade: the laptop today, to change into the better one at a new rent.
+      let upgrade = null;
+      if (asUpgrade && onlyId) {
+        const { data: u } = await fetchUpgradeContext(onlyId);
+        if (u.is_sale) { toast.error('This laptop was sold — there is no rent to upgrade'); return; }
+        upgrade = { item_id: onlyId, current: u.config, current_rate: u.monthly_rate, ...u.config, monthly_rate: '' };
+        if (!(c.eligible_items || []).some((i) => Number(i.id) === Number(onlyId))) {
+          const it = items.find((x) => Number(x.id) === Number(onlyId));
+          c.eligible_items = [...(c.eligible_items || []), { id: onlyId, ttspl_id: code(it), brand: it?.brand, model: it?.model }];
+        }
+      }
       const elig = c.eligible_items || [];
       const pick = onlyId && elig.some((i) => Number(i.id) === Number(onlyId)) ? elig.filter((i) => Number(i.id) === Number(onlyId)) : elig;
       const ids = Object.fromEntries(pick.map((i) => [i.id, true]));
-      setRep({ ctx: c, ids, reason: '', rdc_action: c.open_return_dc ? 'reuse' : '', dispatch: { ...emptyDispatch(addrFrom(c.delivery_defaults)) } });
+      setRep({ ctx: c, ids, upgrade, reason: upgrade ? 'Customer upgrade' : '', rdc_action: c.open_return_dc ? 'reuse' : '', dispatch: { ...emptyDispatch(addrFrom(c.delivery_defaults)) } });
       setOpen('replacement');
     } catch (e) { toast.error(errMsg(e)); }
   };
@@ -200,8 +213,10 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
     const err = dispatchError(rep.dispatch, { optional: true });
     if (err) { toast.error(err); return; }
     if (rep.ctx.open_return_dc && !rep.rdc_action) { toast.error('Use the existing pickup, or cancel it and make a new one?'); return; }
+    if (rep.upgrade && !(Number(rep.upgrade.monthly_rate) > 0)) { toast.error('Enter the new monthly rent'); return; }
     await run(() => startReplacement(tk.id, {
       source_item_ids: chosen,
+      upgrades: rep.upgrade ? { [rep.upgrade.item_id]: { ...Object.fromEntries(['brand', 'model', 'processor', 'generation', 'ram', 'storage'].map((k) => [k, rep.upgrade[k]])), monthly_rate: Number(rep.upgrade.monthly_rate) } } : undefined,
       reason: rep.reason.trim() || undefined,
       existing_rdc_action: rep.ctx.open_return_dc ? rep.rdc_action : undefined,
       contact_name: rep.dispatch.address.name, contact_phone: rep.dispatch.address.phone,
@@ -211,6 +226,47 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
   };
   // Complaint being moved to replacement, with the optional reason: { item, reason }.
   const [moveRep, setMoveRep] = useState(null);
+
+  /* ---------------- visit → repair / return pickup (16 Oct 2026) ---------------- */
+  const [cv, setCv] = useState(null); // { item, type, reason, dispatch }
+  const openConvert = async (i, type = 'repair') => {
+    let dispatch = emptyDispatch({ name: tk.ticket_contact_name || tk.customer_name || '', phone: tk.display_phone || '', address: tk.ticket_address || '' });
+    try {
+      const { data: c } = await fetchPickupContext(tk.customer_id, code(i));
+      if (c.found && c.pickup_address) dispatch = { ...dispatch, address: { ...dispatch.address, ...addrFrom(c.pickup_address) } };
+    } catch { /* the address can be typed */ }
+    if (i.assigned_to) dispatch = { ...dispatch, dispatch_mode: 'technician', technician_user_id: String(i.assigned_to) };
+    setCv({ item: i, type, reason: '', dispatch });
+    setOpen('convert');
+  };
+  const submitConvert = () => {
+    const err = dispatchError(cv.dispatch);
+    if (err) { toast.error(err); return; }
+    run(() => convertToPickup(cv.item.id, { pickup_type: cv.type, ...dispatchBody(cv.dispatch), pickup_address: cv.dispatch.address, reason: cv.reason.trim() || undefined }), 'Converted to a pickup');
+  };
+  const [rejectFor, setRejectFor] = useState(null); // { item, reason }
+
+  /* ---------------- RAM / SSD upgrade (migration 434) ---------------- */
+  const [pu, setPu] = useState(null); // { item, ctx, ram, storage, new_rate, notes, saved }
+  const openPartsUpgrade = async (i) => {
+    try {
+      const { data: c } = await fetchUpgradeContext(i.id);
+      if (c.is_sale) { toast.error('This laptop was sold — there is no rent to upgrade'); return; }
+      setPu({ item: i, ctx: c, ram: '', storage: '', new_rate: '', notes: '', saved: false });
+      setOpen('partsUpgrade');
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const submitPartsUpgrade = async () => {
+    if (!pu.ram.trim() && !pu.storage.trim()) { toast.error('Enter the new RAM and/or SSD'); return; }
+    if (!(Number(pu.new_rate) > 0)) { toast.error('Enter the new monthly rent'); return; }
+    setBusy(true);
+    try {
+      await createPartsUpgrade(pu.item.id, { ram: pu.ram.trim() || undefined, storage: pu.storage.trim() || undefined, new_rate: Number(pu.new_rate), notes: pu.notes.trim() || undefined });
+      toast.success('Upgrade recorded — now request the part');
+      setPu({ ...pu, saved: true });
+      reload();
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
 
   /* ---------------- swap from repair / another laptop / resend ---------------- */
   const [swap, setSwap] = useState(null); // {kind, ctx, ids, reason, address}
@@ -288,13 +344,24 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
     let note = null;
     if (i.item_type === 'complaint') {
       const ordered = orders.some((o) => forItem(o, i) && o.status !== 'cancelled');
-      if (i.outcome === 'replacement_required' && !ordered) {
+      if (i.outcome === 'repair_pickup_requested') {
+        // The technician asked to take it to the workshop: approve → they collect it now.
+        replaceDefault = true;
+        out.push(<Button key="ap" variant="primary" disabled={busy} onClick={() => run(() => decideRepairPickup(i.id, { approve: true }), 'Approved — the technician collects it now')}>Approve repair pickup</Button>);
+        out.push(<Button key="rj" variant="quiet" onClick={() => setRejectFor({ item: i, reason: '' })}>Reject</Button>);
+        note = `Technician: ${i.replacement_flag_reason || 'needs workshop repair'}`;
+      } else if (i.outcome === 'replacement_required' && !ordered) {
         replaceDefault = true;
         out.push(<Button key="rep" variant="primary" onClick={() => openReplacement(i.id)}>{activeOrder && tk.return_dc_number ? 'Add to replacement' : 'Start replacement'}</Button>);
-        if (canSchedulePickup) out.push(<Button key="rp" onClick={() => openPickup(i)}>Repair pickup</Button>);
-        note = i.replacement_flag_reason ? `Technician: ${i.replacement_flag_reason}` : 'The technician could not fix it on site — choose replacement or repair pickup.';
+        out.push(<Button key="cv" onClick={() => openConvert(i, 'repair')}>Convert to pickup</Button>);
+        note = i.replacement_flag_reason ? `Technician: ${i.replacement_flag_reason}` : 'The technician could not fix it on site — choose replacement or a pickup.';
       } else if (!CLOSED.includes(i.status)) {
-        if (canSchedulePickup) out.push(<Button key="rp" variant="quiet" onClick={() => openPickup(i)}>Repair pickup</Button>);
+        out.push(<Button key="cv" variant="quiet" onClick={() => openConvert(i, 'repair')}>Convert to pickup</Button>);
+        // Customer upgrade: a better laptop (replacement at a new rent) or more RAM / SSD.
+        if (!(data.upgrades || []).some((u) => Number(u.item_id) === Number(i.id) && ['pending', 'ordered'].includes(u.status))) {
+          out.push(<Button key="ul" variant="quiet" onClick={() => openReplacement(i.id, true)}>Upgrade laptop</Button>);
+          out.push(<Button key="up" variant="quiet" onClick={() => openPartsUpgrade(i)}>Upgrade RAM / SSD</Button>);
+        }
         if (!i.replacement_flag_reason && i.outcome !== 'replacement_required') {
           out.push(<Button key="mv" variant="quiet" onClick={() => { setMoveRep({ item: i, reason: '' }); setOpen('moveReplacement'); }}>Replace instead</Button>);
         }
@@ -446,7 +513,7 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
         <Field label="Reason" required><Textarea rows={3} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} /></Field>
       </Drawer>
 
-      <Drawer open={open === 'replacement'} onClose={() => setOpen(null)} title="Replacement" width="40rem" footer={<Button variant="primary" disabled={busy} onClick={submitReplacement}>Order the replacement</Button>}>
+      <Drawer open={open === 'replacement'} onClose={() => setOpen(null)} title={rep?.upgrade ? 'Upgrade to a better laptop' : 'Replacement'} width="40rem" footer={<Button variant="primary" disabled={busy} onClick={submitReplacement}>{rep?.upgrade ? 'Order the upgrade' : 'Order the replacement'}</Button>}>
         {rep && (
           <div className="c-stack">
             <div>
@@ -461,8 +528,19 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
                 <Select value={rep.rdc_action} onChange={(e) => setRep({ ...rep, rdc_action: e.target.value })} options={[{ value: 'reuse', label: 'Use it to collect the faulty laptop' }, ...(rep.ctx.open_return_dc.pickup_started ? [] : [{ value: 'cancel', label: 'Cancel it and make a new pickup' }])]} />
               </Field>
             )}
+            {rep.upgrade && (
+              <div className="c-upg">
+                <div className="c-upg-h"><b>Upgrade to</b><span>Now: {[rep.upgrade.current.processor, rep.upgrade.current.generation, rep.upgrade.current.ram, rep.upgrade.current.storage].filter(Boolean).join(' · ')} · ₹{Number(rep.upgrade.current_rate || 0).toLocaleString('en-IN')}/month</span></div>
+                <div className="c-form-grid" style={{ '--c-cols': 2 }}>
+                  {[['brand', 'Brand'], ['model', 'Model'], ['processor', 'Processor'], ['generation', 'Generation'], ['ram', 'RAM'], ['storage', 'SSD']].map(([k, l]) => (
+                    <Field key={k} label={l}><Input value={rep.upgrade[k] || ''} onChange={(e) => setRep({ ...rep, upgrade: { ...rep.upgrade, [k]: e.target.value } })} /></Field>
+                  ))}
+                  <Field label="New monthly rent (₹)" required><Input type="number" min={1} value={rep.upgrade.monthly_rate} onChange={(e) => setRep({ ...rep, upgrade: { ...rep.upgrade, monthly_rate: e.target.value } })} /></Field>
+                </div>
+              </div>
+            )}
             <Field label="Reason (optional)"><Textarea rows={2} value={rep.reason} onChange={(e) => setRep({ ...rep, reason: e.target.value })} /></Field>
-            <Notice tone="info">The replacement goes to this address, and the faulty laptop is collected from it on a return pickup.</Notice>
+            <Notice tone="info">{rep.upgrade ? 'The better laptop goes to this address at the new rent; the old one is collected from it on a return pickup.' : 'The replacement goes to this address, and the faulty laptop is collected from it on a return pickup.'}</Notice>
             <DispatchFields value={rep.dispatch} onChange={(d) => setRep({ ...rep, dispatch: d })} technicians={techs} optional addressLabel="Delivery / pickup address" />
           </div>
         )}
@@ -509,6 +587,62 @@ export default function TicketActions({ data, techs, reload, enabled = true, ren
               <Select value={sdcTech.tech} onChange={(e) => setSdcTech({ ...sdcTech, tech: e.target.value })} placeholder="Choose…" options={techs.filter((x) => x.assignee_kind === 'technician').map((x) => ({ value: String(x.user_id), label: `${x.name} — ${x.open_item_count} open` }))} />
             </Field>
             <Field label="Reason"><Textarea rows={2} value={sdcTech.reason} onChange={(e) => setSdcTech({ ...sdcTech, reason: e.target.value })} /></Field>
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer open={open === 'convert'} onClose={() => setOpen(null)} title={`Convert ${cv ? code(cv.item) : ''} to a pickup`} width="40rem" footer={<Button variant="primary" disabled={busy} onClick={submitConvert}>Convert</Button>}>
+        {cv && (
+          <div className="c-stack">
+            <Field label="Pickup for" required>
+              <Select value={cv.type} onChange={(e) => setCv({ ...cv, type: e.target.value })} options={[{ value: 'repair', label: 'Repair — fixed in the workshop, then sent back' }, { value: 'return', label: 'Return — the customer gives it back' }]} />
+            </Field>
+            <p className="text-ink-3" style={{ margin: 0 }}>The visit closes; the pickup carries on{tk.return_dc_number ? ` on Return DC ${tk.return_dc_number}` : ' on a new Return DC'}.</p>
+            <DispatchFields value={cv.dispatch} onChange={(d) => setCv({ ...cv, dispatch: d })} technicians={techs} addressLabel="Pickup address" />
+            <Field label="Reason (optional)"><Textarea rows={2} value={cv.reason} onChange={(e) => setCv({ ...cv, reason: e.target.value })} /></Field>
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer open={Boolean(rejectFor)} onClose={() => setRejectFor(null)} title="Reject the repair pickup" footer={<Button variant="primary" disabled={busy || String(rejectFor?.reason || '').trim().length < 3} onClick={async () => { const r = await run(() => decideRepairPickup(rejectFor.item.id, { approve: false, reason: rejectFor.reason.trim() }), 'Rejected'); if (r) setRejectFor(null); }}>Reject</Button>}>
+        {rejectFor && (
+          <div className="c-stack">
+            <p style={{ margin: 0 }}>The visit goes back to the technician to record the result. They see your reason as a comment.</p>
+            <Field label="Why" required><Textarea rows={3} value={rejectFor.reason} onChange={(e) => setRejectFor({ ...rejectFor, reason: e.target.value })} /></Field>
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer
+        open={open === 'partsUpgrade'}
+        onClose={() => setOpen(null)}
+        title={`Upgrade RAM / SSD · ${pu ? code(pu.item) : ''}`}
+        width="40rem"
+        footer={pu && !pu.saved ? <Button variant="primary" disabled={busy} onClick={submitPartsUpgrade}>Save the upgrade</Button> : <Button onClick={() => setOpen(null)}>Done</Button>}
+      >
+        {pu && (
+          <div className="c-stack">
+            <div className="c-upg">
+              <div className="c-upg-h"><b>Today</b><span>₹{Number(pu.ctx.monthly_rate || 0).toLocaleString('en-IN')}/month</span></div>
+              <div className="text-ink-2" style={{ fontSize: '13.5px' }}>{[pu.ctx.config.brand, pu.ctx.config.model, pu.ctx.config.processor, pu.ctx.config.generation].filter(Boolean).join(' · ')}</div>
+              <div className="c-upg-now"><span>RAM <b>{pu.ctx.config.ram || '—'}</b></span><span>SSD <b>{pu.ctx.config.storage || '—'}</b></span></div>
+            </div>
+            {!pu.saved ? (
+              <>
+                <div className="c-form-grid" style={{ '--c-cols': 3 }}>
+                  <Field label="New RAM" hint="Total after fitting, e.g. 16GB"><Input value={pu.ram} onChange={(e) => setPu({ ...pu, ram: e.target.value })} placeholder={pu.ctx.config.ram} /></Field>
+                  <Field label="New SSD" hint="e.g. 1TB SSD"><Input value={pu.storage} onChange={(e) => setPu({ ...pu, storage: e.target.value })} placeholder={pu.ctx.config.storage} /></Field>
+                  <Field label="New rent (₹/month)" required><Input type="number" min={1} value={pu.new_rate} onChange={(e) => setPu({ ...pu, new_rate: e.target.value })} /></Field>
+                </div>
+                <Field label="Note (optional)"><Textarea rows={2} value={pu.notes} onChange={(e) => setPu({ ...pu, notes: e.target.value })} /></Field>
+                <Notice tone="info">Nothing comes back — the part is added to the laptop. Once it is fitted, “Apply” on the laptop’s card updates its configuration, and the new rent starts from the next billing period ({pu.ctx.effective_from || 'next invoice'}).</Notice>
+              </>
+            ) : (
+              <>
+                <Notice tone="good" title="Upgrade saved">Now request the part (set “collect old part” to No — nothing comes back).</Notice>
+                <RaisePartRequestForm ticket={tk} item={pu.item} />
+              </>
+            )}
           </div>
         )}
       </Drawer>
