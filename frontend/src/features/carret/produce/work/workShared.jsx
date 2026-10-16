@@ -27,9 +27,10 @@ const GLYPH = { good: '✓', bad: '✕', info: '●', na: '–' };
 /** One question and its answers (single choice). */
 export function Question({ item, value, onChange, open }) {
   return (
-    <div className={`c-q${open && !value ? ' is-open' : ''}`}>
+    <div className={`c-q${open && !value && !item.optional ? ' is-open' : ''}`}>
       <div className="c-q-t">
         {item.q}
+        {item.optional && <span className="c-q-opt">Optional</span>}
         {item.hint && <small>{item.hint}</small>}
       </div>
       <div className="c-ans" role="radiogroup" aria-label={item.q}>
@@ -56,7 +57,7 @@ export function Question({ item, value, onChange, open }) {
 
 /** The first group with an unanswered question — the one that opens by itself. */
 export function firstOpenSection(sections = [], answers = {}) {
-  const s = sections.find((sec) => sec.items.some((it) => answers[it.key] == null || answers[it.key] === ''));
+  const s = sections.find((sec) => sec.items.some((it) => !it.optional && (answers[it.key] == null || answers[it.key] === '')));
   return s ? s.key : null;
 }
 
@@ -67,8 +68,10 @@ export function firstOpenSection(sections = [], answers = {}) {
  * open" (showOpen) opens every group with a gap.
  */
 export function QuestionSection({ section, answers, onChange, showOpen, focused = true }) {
-  const total = section.items.length;
-  const answered = section.items.filter((it) => answers[it.key] != null && answers[it.key] !== '').length;
+  // Optional questions (item.optional) don't count towards "answered".
+  const required = section.items.filter((it) => !it.optional);
+  const total = required.length;
+  const answered = required.filter((it) => answers[it.key] != null && answers[it.key] !== '').length;
   const bad = section.items.filter((it) => it.options.some((o) => o.tone === 'bad' && o.value === answers[it.key])).length;
   const complete = answered === total;
   const [manual, setManual] = useState(null); // null = follow completeness
@@ -183,6 +186,41 @@ export function Choice({ options, value, onChange, name }) {
         </label>
       ))}
     </div>
+  );
+}
+
+/**
+ * Why the laptop is at this repair stage: who sent it, their reason, and the
+ * faults Diagnosis marked (GET /tickets/:id → repair_brief, 16 Oct 2026).
+ */
+export function RepairBrief({ brief }) {
+  if (!brief) return null;
+  const dx = brief.diagnosis;
+  const faults = dx?.faults || [];
+  const when = brief.sent_at ? new Date(brief.sent_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+  return (
+    <section className="c-brief" aria-label="Why it is here">
+      <div className="c-brief-h">
+        <b>Why it's here</b>
+        <span>{[brief.from_stage && `From ${brief.from_stage}`, brief.sent_by, when].filter(Boolean).join(' · ')}</span>
+      </div>
+      <div className={`c-brief-why${brief.reason ? '' : ' is-empty'}`}>{brief.reason || 'No reason was written.'}</div>
+      {dx && (
+        <>
+          <div className="c-brief-k">Diagnosis found{faults.length ? ` · ${faults.length}` : ''}</div>
+          {faults.length ? (
+            <ul className="c-brief-faults">
+              {faults.map((f) => (
+                <li key={f.key}>
+                  <span>{f.q.replace(/\?$/, '')}{f.section && <small>{f.section}</small>}</span>
+                  <em>{f.answer}</em>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="c-brief-none">No faults marked.</p>}
+        </>
+      )}
+    </section>
   );
 }
 

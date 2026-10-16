@@ -28,7 +28,7 @@ const QC_SECTIONS = [
     key: 'body', title: 'Body',
     items: [
       { key: 'body_scratches', q: 'Scratches on the body?', hint: 'Scratches lower the grade; they do not fail QC.',
-        options: [{ value: 'NO', label: 'No scratches', tone: 'good' }, { value: 'YES', label: 'Has scratches', tone: 'info' }] },
+        options: [{ value: 'NO', label: 'No scratches', tone: 'good' }, { value: 'MINOR', label: 'Minor scratches', tone: 'info' }, { value: 'YES', label: 'Has scratches', tone: 'info' }] },
       { key: 'physical_damage', q: 'Any crack or broken plastic?',
         options: [{ value: 'NO', label: 'None', tone: 'good' }, { value: 'YES', label: 'Cracked / broken', tone: 'bad' }] },
       { key: 'body_screws', q: 'All screws fitted?', options: [Y(), N('Screws missing')] },
@@ -40,7 +40,7 @@ const QC_SECTIONS = [
     key: 'inside', title: 'Inside and heat',
     items: [
       { key: 'motherboard_cleaning', q: 'Inside cleaned and CPU paste renewed?', options: [Y('Done'), N('Not done')] },
-      { key: 'heating_test', q: 'Stays cool under load (no overheating)?', options: [Y('Stays cool'), N('Overheats')] },
+      { key: 'heating_test', q: 'Stays cool under load (no overheating)?', options: [Y('Stays cool'), { value: 'MINOR', label: 'Minor heat', tone: 'info' }, N('Overheats')] },
     ],
   },
   {
@@ -54,7 +54,7 @@ const QC_SECTIONS = [
         options: [{ value: 'INSTALLED', label: 'Installed', tone: 'good' }, { value: 'NOT INSTALLED', label: 'Not installed', tone: 'bad' }] },
       { key: 'ultra_viewer', q: 'UltraViewer installed?',
         options: [{ value: 'INSTALLED', label: 'Installed', tone: 'good' }, { value: 'NOT INSTALLED', label: 'Not installed', tone: 'bad' }] },
-      { key: 'virtual_memory', q: 'Virtual memory set to match the RAM?', options: [Y(), N()] },
+      { key: 'virtual_memory', q: 'Virtual memory set to match the RAM?', options: [Y(), N()], optionalIn: ['QC1'] },
       { key: 'bitlocker_off', q: 'BitLocker turned off?', hint: 'A laptop with BitLocker on locks the customer out.', options: [Y('Off'), N('Still on')], since: '2026-09-26' },
     ],
   },
@@ -85,8 +85,15 @@ const QC_SECTIONS = [
   {
     key: 'screen', title: 'Screen, camera and sound',
     items: [
-      { key: 'screen_resolution', q: 'Screen at full resolution, no lines, spots or dead pixels?',
-        options: [{ value: 'PASS', label: 'Clean', tone: 'good' }, { value: 'FAIL', label: 'Has a fault', tone: 'bad' }] },
+      // 16 Oct 2026: minor spot / minor scratch are recorded, never a fault;
+      // only lines or dead pixels (FAIL, as before) fail QC.
+      { key: 'screen_resolution', q: 'Screen at full resolution — any spots, scratches or dead pixels?',
+        options: [
+          { value: 'PASS', label: 'Clean', tone: 'good' },
+          { value: 'MINOR SPOT', label: 'Minor spot', tone: 'info' },
+          { value: 'MINOR SCRATCH', label: 'Minor scratch', tone: 'info' },
+          { value: 'FAIL', label: 'Lines / dead pixels', tone: 'bad' },
+        ] },
       { key: 'refresh_rate', q: 'Refresh rate set to the highest?', options: [Y(), N()] },
       { key: 'touch_screen', q: 'Touch screen responds?', options: [Y('Works'), N("Doesn't work"), NA('Not a touch screen')] },
       { key: 'camera_recording', q: 'Camera records video with sound?', options: [Y('Works'), N("Doesn't work")] },
@@ -160,14 +167,20 @@ const QC_GRADES = [
   { value: 'D', label: 'D', hint: 'Poor cosmetics, working with limits' },
 ];
 
-/** Every question answered with one of its own answers. Returns the problems. */
-function checkAnswers(items, answers) {
+/** Optional at this stage (may be left unanswered) — e.g. virtual memory at QC1. */
+const isOptionalAt = (item, stage) => Boolean(stage) && Array.isArray(item.optionalIn) && item.optionalIn.includes(String(stage));
+
+/**
+ * Every question answered with one of its own answers. Returns the problems.
+ * With a stage, questions optional at that stage may be left empty.
+ */
+function checkAnswers(items, answers, stage = null) {
   const a = answers || {};
   const missing = [];
   const invalid = [];
   for (const it of items) {
     const v = a[it.key];
-    if (v == null || v === '') missing.push(it.key);
+    if (v == null || v === '') { if (!isOptionalAt(it, stage)) missing.push(it.key); }
     else if (!it.options.some((o) => o.value === v)) invalid.push(it.key);
   }
   return { missing, invalid };
@@ -353,5 +366,5 @@ async function stageChecklistItems(db, stageName) {
 module.exports = {
   QC_SECTIONS, QC_ITEMS, QC_GRADES, QC_BASE_CRITERIA, QC2_ADDITIONAL_CRITERIA, qcCriteria, qcResult,
   DIAGNOSIS_SECTIONS, DIAGNOSIS_ITEMS, DIAGNOSIS_OUTCOMES, suggestDiagnosisOutcome,
-  STAGE_CHECKLISTS, stageChecklistItems, checkAnswers, badAnswers,
+  STAGE_CHECKLISTS, stageChecklistItems, checkAnswers, badAnswers, isOptionalAt,
 };

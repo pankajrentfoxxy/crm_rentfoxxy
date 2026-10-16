@@ -1,6 +1,10 @@
 const { validationResult, body, param } = require('express-validator');
 const dispatchQcCapture = require('../services/dispatchQcCaptureService');
 const { buildSessionExe } = require('../services/hwCaptureExeService');
+const fs = require('fs');
+const path = require('path');
+const pool = require('../config/db');
+const { PRAMAN_DIR, saveReportFromDevice } = require('../services/dispatchQcPramanService');
 
 function clientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
@@ -194,7 +198,39 @@ async function submitSerial(req, res) {
   }
 }
 
+/** POST /:token/praman-report — the Praman PDF from the tested laptop (migration 429). */
+async function uploadPramanReport(req, res) {
+  const file = req.file;
+  const drop = () => { if (file?.path) fs.promises.unlink(file.path).catch(() => {}); };
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) { drop(); return res.status(400).json({ success: false, message: 'Invalid link' }); }
+  if (!file) return res.status(400).json({ success: false, message: 'Choose the Praman report PDF.' });
+  try {
+    // A real PDF starts with "%PDF-".
+    const fh = await fs.promises.open(file.path, 'r');
+    const head = Buffer.alloc(5);
+    await fh.read(head, 0, 5, 0);
+    await fh.close();
+    if (head.toString('latin1') !== '%PDF-') { drop(); return res.status(400).json({ success: false, message: 'That file is not a PDF.' }); }
+
+    const tokenRow = await dispatchQcCapture.getTokenRow(req.params.token);
+    const result = await saveReportFromDevice(pool, {
+      tokenRow,
+      relPath: path.relative(PRAMAN_DIR, file.path),
+      originalName: file.originalname,
+    });
+    if (!result.ok) { drop(); return res.status(result.code || 400).json({ success: false, message: result.message }); }
+    if (result.previousPath) fs.promises.unlink(path.join(PRAMAN_DIR, result.previousPath)).catch(() => {});
+    res.json({ success: true, praman_report: { name: file.originalname || 'praman-report.pdf', uploaded_at: new Date().toISOString() } });
+  } catch (e) {
+    drop();
+    console.error('uploadPramanReport dispatch-qc:', e);
+    res.status(500).json({ success: false, message: 'Upload failed' });
+  }
+}
+
 module.exports = {
+  uploadPramanReport,
   createTicketCaptureToken,
   getTicketCaptureStatus,
   resolveValidators,

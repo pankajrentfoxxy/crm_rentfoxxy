@@ -75,3 +75,5 @@ export const activeWork = (id) => api.get(`${T}/${id}/work/active`);
  */
 export const ACTIVE_PART_STATUSES = ['pending', 'escalated', 'ordered', 'received', 'approved', 'attached'];
 export const activePartRequests = (list) => (list || []).filter((r) => ACTIVE_PART_STATUSES.includes(r.status));
+/** Requests that hold a laptop at its stage until fitted or cancelled (ticketPartBlockService). */
+export const BLOCKING_PART_STATUSES = ['pending', 'escalated', 'ordered', 'received', 'approved'];

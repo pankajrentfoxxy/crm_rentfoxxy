@@ -318,8 +318,22 @@ async function submitDiagnosisV2(client, req, res, ticketBefore) {
     if (outcome.value === 'assembly' && faults.length) {
         return fail(400, `You marked ${faults.length} fault(s) — choose what the laptop needs instead of "No faults".`);
     }
-    if ((faults.length || outcome.value === 'floor_manager') && note.length < 5) {
-        return fail(400, 'Write a short note on what is wrong, for the next person.');
+    // Chip / body repair: the next technician needs the reason (16 Oct 2026 —
+    // ticket 1330 reached chip repair with no faults marked and no note).
+    const repairRoute = ['chip', 'body'].includes(outcome.value);
+    if ((faults.length || repairRoute || outcome.value === 'floor_manager') && note.length < 5) {
+        return fail(400, repairRoute
+            ? `Write why it needs ${outcome.value === 'chip' ? 'chip-level' : 'body / paint'} repair, for the repair technician.`
+            : 'Write a short note on what is wrong, for the next person.');
+    }
+    // A part asked for at Diagnosis must be fitted (or the request cancelled)
+    // before the laptop goes to chip / body repair (16 Oct 2026).
+    if (repairRoute) {
+        try { await assertTicketNotPartBlocked(client, id); } catch (blockErr) {
+            const names = [...(blockErr.partBlock?.awaitingApproval || []), ...(blockErr.partBlock?.awaitingAttach || [])]
+                .map((r) => r.part_name || r.request_number).join(', ');
+            return fail(409, `Part request still open (${names}). Fit the part or cancel the request first.`);
+        }
     }
     if (outcome.value === 'parts') {
         const open = await client.query(

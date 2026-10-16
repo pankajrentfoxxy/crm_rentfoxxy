@@ -365,7 +365,7 @@ exports.submitQC = async (req, res) => {
         // Every question answered with one of its own answers, and a grade —
         // checked here, not only in the browser.
         if (!forceFailReason) {
-            const { missing, invalid } = floorChecklists.checkAnswers(requiredQcItems(req.body.checklist_version), checklist);
+            const { missing, invalid } = floorChecklists.checkAnswers(requiredQcItems(req.body.checklist_version), checklist, qcStage);
             if (missing.length || invalid.length) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({

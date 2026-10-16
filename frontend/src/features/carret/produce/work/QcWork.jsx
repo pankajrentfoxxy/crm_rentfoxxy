@@ -184,11 +184,16 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
     }).catch(() => {});
   }, [ticket.ticket_id, stage]);
 
-  const items = useMemo(() => (defs?.qc?.sections || []).flatMap((s) => s.items), [defs]);
+  // Questions optional at this stage (optionalIn — e.g. virtual memory at QC1) may stay unanswered.
+  const sections = useMemo(() => (defs?.qc?.sections || []).map((sec) => ({
+    ...sec, items: sec.items.map((it) => ({ ...it, optional: (it.optionalIn || []).includes(stage) })),
+  })), [defs, stage]);
+  const items = useMemo(() => sections.flatMap((s) => s.items).filter((it) => !it.optional), [sections]);
+  const allItems = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   const criteria = defs?.qc?.criteria?.[stage] || [];
   const fails = criteria.filter((c) => c.values.includes(answers[c.key])).map((c) => c.reason);
   const openCount = items.filter((it) => !answers[it.key]).length;
-  const bad = items.filter((it) => it.options.some((o) => o.tone === 'bad' && o.value === answers[it.key]));
+  const bad = allItems.filter((it) => it.options.some((o) => o.tone === 'bad' && o.value === answers[it.key]));
   const willPass = !fails.length;
   const escalates = !willPass && Number(ticket.qc_fail_count || 0) >= 2;
 
@@ -343,7 +348,7 @@ export default function QcWork({ ticket, stage, user, lead, fittedParts = [], on
         lockedText="The checklist opens when step 1 is done."
         summary={gateOpen ? `${items.length - openCount}/${items.length} answered${bad.length ? ` · ${bad.length} problem${bad.length > 1 ? 's' : ''}` : ''}` : null}
       >
-        {defs.qc.sections.map((sec) => <QuestionSection key={sec.key} section={sec} answers={answers} onChange={setA} showOpen={showOpen} focused={sec.key === firstOpenSection(defs.qc.sections, answers)} />)}
+        {sections.map((sec) => <QuestionSection key={sec.key} section={sec} answers={answers} onChange={setA} showOpen={showOpen} focused={sec.key === firstOpenSection(sections, answers)} />)}
         {fittedParts.length > 0 && (
           <Notice tone="info" title={`Parts fitted on this laptop (${fittedParts.length})`}>
             {fittedParts.map((p) => p.part_name).join(', ')} — from the parts record; nothing to type.

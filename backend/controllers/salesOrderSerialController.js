@@ -138,7 +138,7 @@ exports.listSerials = async (req, res) => {
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
          LEFT JOIN users au ON au.user_id = t.assigned_user_id
          -- Praman proof from Dispatch QC (migration 410)
-         LEFT JOIN dispatch_qc_praman pr ON pr.ticket_id = sos.qc_ticket_id
+         LEFT JOIN dispatch_qc_praman pr ON pr.ticket_id = sos.qc_ticket_id AND pr.device_id IS NOT NULL
          LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
          LEFT JOIN vendor_product_details vpd
            ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int

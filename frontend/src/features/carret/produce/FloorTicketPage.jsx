@@ -14,7 +14,7 @@ import QcWork from './work/QcWork';
 import PartsWork from './work/PartsWork';
 import AssignDrawer from './work/AssignDrawer';
 import { usePermission } from '../../../hooks/usePermission';
-import { TtsplInput } from './work/workShared';
+import { RepairBrief, TtsplInput } from './work/workShared';
 import {
   FLOW, activeWork, claimTicket, configText, dismantleTicket, endWork, errMsg, fetchTicket, holdTicket, isFloorLead, moveStage,
   releaseTicket, stageLabel, startWork, activePartRequests,
@@ -96,7 +96,7 @@ export default function FloorTicketPage() {
   const workForm = (() => {
     if (closed || stage === 'Hold') return null;
     if (stage === 'Diagnosis') return <DiagnosisWork ticket={t} partRequests={data.part_requests} onDone={done} onOpenParts={() => setTab('parts')} />;
-    if (['Chip Level Repair', 'Body & Paint', 'Assembly & Software', 'Final Testing'].includes(stage)) return <StageWork ticket={t} stage={stage} onDone={done} />;
+    if (['Chip Level Repair', 'Body & Paint', 'Assembly & Software', 'Final Testing'].includes(stage)) return <StageWork ticket={t} stage={stage} brief={data.repair_brief} partRequests={data.part_requests} onDone={done} onOpenParts={() => setTab('parts')} />;
     if (QC_STAGES.includes(stage)) return <QcWork ticket={t} stage={stage} user={user} lead={lead} fittedParts={fitted} onDone={done} />;
     if (stage === 'Dismantle') {
       return (
@@ -221,11 +221,15 @@ export default function FloorTicketPage() {
                 // (TTSPL + serial scanned, timer running) — the server insists too.
                 ? (mine && WORK_STAGES.includes(stage) && !work
                   ? (
-                    <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
-                      {t.received_condition === 'not_on'
-                        ? `Scan or type the TTSPL ID from the laptop (the serial is optional — it arrived not powering on). The timer starts and the ${stageLabel(stage)} task opens.`
-                        : `Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the ${stageLabel(stage)} task opens.`}
-                    </Notice>
+                    <>
+                      {/* Chip / Body & Paint: the reason shows before the timer starts. */}
+                      <RepairBrief brief={data.repair_brief} />
+                      <Notice tone="info" title="Start work to see the task" action={<Button variant="primary" onClick={() => setDrawer('start')}>Start work</Button>}>
+                        {t.received_condition === 'not_on'
+                          ? `Scan or type the TTSPL ID from the laptop (the serial is optional — it arrived not powering on). The timer starts and the ${stageLabel(stage)} task opens.`
+                          : `Scan or type the TTSPL ID and the serial number from the laptop. The timer starts and the ${stageLabel(stage)} task opens.`}
+                      </Notice>
+                    </>
                   )
                   // Diagnosis and the repair stages: only the person it is
                   // assigned to, after Start work (15 Oct 2026 — floor managers

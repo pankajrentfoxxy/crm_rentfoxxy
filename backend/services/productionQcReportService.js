@@ -60,7 +60,8 @@ const REPORT_COMPONENTS = [
   { key: 'other_components', label: 'Other Components', sources: ['motherboard_cleaning', 'heating_test', 'bios_check', 'required_drivers', 'ms_office', 'chrome', 'ultra_viewer', 'virtual_memory', 'parts_replaced'] },
 ];
 
-const WORKING_VALUES = new Set(['WORKING', 'YES', 'PASS', 'GOOD', 'INSTALLED', 'AVERAGE']);
+// MINOR / MINOR SPOT / MINOR SCRATCH (QC, 16 Oct 2026): cosmetic, never a fault.
+const WORKING_VALUES = new Set(['WORKING', 'YES', 'PASS', 'GOOD', 'INSTALLED', 'AVERAGE', 'MINOR', 'MINOR SPOT', 'MINOR SCRATCH']);
 const NOT_WORKING_VALUES = new Set(['NOT WORKING', 'NO', 'FAIL', 'BAD', 'NOT INSTALLED']);
 
 function normalizeCheckResult(raw) {

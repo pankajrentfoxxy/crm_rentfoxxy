@@ -4,8 +4,9 @@ import { Button, EmptyState, Field, Notice, Select, Textarea } from '../../../..
 import api from '../../../../utils/api';
 import { getTeamMembers } from '../../../floor-pipeline/floorPipelineApi';
 import {
-  Choice, WorkLayout, WorkStep, WorkSummary, errText, useFloorChecklists,
+  Choice, RepairBrief, WorkLayout, WorkStep, WorkSummary, errText, useFloorChecklists,
 } from './workShared';
+import { BLOCKING_PART_STATUSES } from '../produceShared';
 
 /**
  * Chip-level repair, Body & Paint, Assembly & software, Final testing.
@@ -25,7 +26,7 @@ const INTRO = {
   'Final Testing': 'Test everything before QC. Someone else inspects it at QC1.',
 };
 
-export default function StageWork({ ticket, stage, onDone }) {
+export default function StageWork({ ticket, stage, brief, partRequests = [], onDone, onOpenParts }) {
   const { data: defs, error } = useFloorChecklists();
   const [ticks, setTicks] = useState({});
   const [outcome, setOutcome] = useState('');
@@ -57,9 +58,13 @@ export default function StageWork({ ticket, stage, onDone }) {
   const chosen = outcomes.find((o) => o.value === outcome);
   const doneNeedsTicks = outcome === 'done' && openTicks > 0;
   const needReason = chosen?.needsReason;
+  // "Done" waits for every part asked for to be fitted or cancelled (the server checks too).
+  const openParts = (partRequests || []).filter((r) => BLOCKING_PART_STATUSES.includes(r.status) && r.blocks_stage !== false);
+  const doneNeedsParts = outcome === 'done' && openParts.length > 0;
   const missing = [
     !outcome && 'choose the outcome',
     doneNeedsTicks && `tick ${openTicks} more job${openTicks > 1 ? 's' : ''}`,
+    doneNeedsParts && 'fit or cancel the open part requests',
     needReason && reason.trim().length < 5 && 'say what is wrong',
   ].filter(Boolean);
 
@@ -85,10 +90,11 @@ export default function StageWork({ ticket, stage, onDone }) {
   const others = inspectors.filter((m) => Number(m.user_id) !== Number(ticket.assigned_user_id));
 
   const ticksDone = items.length > 0 && openTicks === 0;
-  const outcomeDone = Boolean(outcome) && !doneNeedsTicks && !(needReason && reason.trim().length < 5);
+  const outcomeDone = Boolean(outcome) && !doneNeedsTicks && !doneNeedsParts && !(needReason && reason.trim().length < 5);
   const checks = [
     { label: `Tick every job (${items.length - openTicks}/${items.length})`, ok: openTicks === 0 || (Boolean(outcome) && outcome !== 'done') },
     { label: 'Choose the outcome', ok: Boolean(outcome) },
+    ...(openParts.length && (!outcome || outcome === 'done') ? [{ label: `Parts fitted or cancelled (${openParts.length} open)`, ok: false }] : []),
     ...(needReason ? [{ label: 'Say what is wrong', ok: reason.trim().length >= 5 }] : []),
   ];
 
@@ -99,14 +105,17 @@ export default function StageWork({ ticket, stage, onDone }) {
       after={chosen ? chosen.label : 'Choose the outcome (step 2)'}
       afterTone={chosen && chosen.value !== 'done' ? 'bad' : undefined}
       checks={checks}
-      facts={[{ label: 'Jobs done', value: `${items.length - openTicks}/${items.length}`, tone: ticksDone ? 'good' : undefined }]}
+      facts={[
+        { label: 'Jobs done', value: `${items.length - openTicks}/${items.length}`, tone: ticksDone ? 'good' : undefined },
+        ...(openParts.length ? [{ label: 'Parts open', value: openParts.length, tone: 'bad' }] : []),
+      ]}
     >
       <Button variant="primary" disabled={busy || missing.length > 0} onClick={submit}>{busy ? 'Saving…' : 'Finish this stage'}</Button>
     </WorkSummary>
   );
 
   return (
-    <WorkLayout summary={summary}>
+    <WorkLayout summary={summary} intro={<RepairBrief brief={brief} />}>
       <WorkStep
         n={1}
         title="Tick each job when it is done"
@@ -138,6 +147,11 @@ export default function StageWork({ ticket, stage, onDone }) {
           onChange={setOutcome}
           options={outcomes.map((o) => ({ value: o.value, label: o.label, hint: o.value === 'done' && openTicks ? `${openTicks} job(s) not ticked yet` : undefined }))}
         />
+        {doneNeedsParts && (
+          <Notice tone="warn" title={`Part request open: ${openParts.map((r) => r.part_name || r.request_number).join(', ')}`} action={onOpenParts && <Button variant="quiet" onClick={onOpenParts}>Parts tab</Button>}>
+            Fit it, or cancel the request, before finishing.
+          </Notice>
+        )}
         {needReason && <Field label="What is wrong" required><Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
         {stage === 'Final Testing' && outcome === 'done' && (
           <Field label="QC1 inspector" hint="Leave empty to put it in the QC1 queue. It can't be you or anyone who worked on it.">

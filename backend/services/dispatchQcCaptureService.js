@@ -716,6 +716,12 @@ async function getPublicSession(tokenId) {
       gpu: expected.gpu,
     },
     ttspl_id: pa?.ttspl_id || null,
+    // Praman report already on file (migration 429) — the page shows it as sent.
+    praman_report: await pool.query(
+      `SELECT report_name AS name, COALESCE(report_uploaded_at, uploaded_at) AS uploaded_at, (device_id IS NOT NULL) AS complete
+         FROM dispatch_qc_praman WHERE ticket_id = $1`,
+      [row.ticket_id]
+    ).then((r) => r.rows[0] || null).catch(() => null),
   };
 }
 

@@ -65,8 +65,16 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
   const openCount = items.filter((it) => !answers[it.key]).length;
   const faults = items.filter((it) => it.options.some((o) => o.tone === 'bad' && o.value === answers[it.key]));
   const openParts = (partRequests || []).filter((r) => OPEN_PART.includes(r.status)).length;
+  // Chip / body repair waits until every part asked for is fitted or its
+  // request cancelled (16 Oct 2026; the server checks too).
+  const blockingParts = (partRequests || []).filter((r) => OPEN_PART.includes(r.status) && r.blocks_stage !== false);
+  const repairBlocked = blockingParts.length > 0;
   const suggested = useMemo(() => suggest(sections, answers), [sections, answers]);
-  useEffect(() => { if (!touchedOutcome) setOutcome(openCount ? '' : suggested); }, [suggested, openCount, touchedOutcome]);
+  useEffect(() => {
+    if (touchedOutcome) return;
+    setOutcome(openCount || (repairBlocked && ['chip', 'body'].includes(suggested)) ? '' : suggested);
+  }, [suggested, openCount, touchedOutcome, repairBlocked]);
+  useEffect(() => { if (repairBlocked && ['chip', 'body'].includes(outcome)) setOutcome(''); }, [repairBlocked, outcome]);
 
   if (error) return <Notice tone="crit" title="Could not load the diagnosis checklist">{error}</Notice>;
   if (!defs) return <EmptyState title="Loading…" />;
@@ -75,10 +83,18 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
   const outcomes = (defs.diagnosis.outcomes || []).map((o) => ({
     ...o,
     hint: o.value === suggested && faults.length ? 'Suggested from your answers' : undefined,
-    disabled: (o.value === 'assembly' && faults.length > 0) || (o.value === 'parts' && !openParts),
-    why: o.value === 'assembly' ? `You marked ${faults.length} fault(s).` : o.value === 'parts' ? 'Ask for the parts in the Parts tab first.' : undefined,
+    disabled: (o.value === 'assembly' && faults.length > 0) || (o.value === 'parts' && !openParts)
+      || (['chip', 'body'].includes(o.value) && repairBlocked),
+    why: o.value === 'assembly' ? `You marked ${faults.length} fault(s).`
+      : o.value === 'parts' ? 'Ask for the parts in the Parts tab first.'
+        : ['chip', 'body'].includes(o.value) ? `Part request open (${blockingParts.map((r) => r.part_name || r.request_number).join(', ')}) — fit it or cancel it first.`
+          : undefined,
   }));
-  const needNote = faults.length > 0 || outcome === 'floor_manager';
+  const repairRoute = ['chip', 'body'].includes(outcome);
+  const needNote = faults.length > 0 || repairRoute || outcome === 'floor_manager';
+  const noteLabel = outcome === 'chip' ? 'Why it needs chip-level repair'
+    : outcome === 'body' ? 'Why it needs body / paint work'
+      : needNote ? 'What is wrong (for the next person)' : 'Note (optional)';
   const needSerial = powersOn === 'on';
   const missing = [
     !powersOn && 'say whether it powers on',
@@ -177,7 +193,7 @@ export default function DiagnosisWork({ ticket, partRequests = [], onDone, onOpe
             The laptop goes to assembly with you; it can't leave assembly until the parts are fitted.
           </Notice>
         )}
-        <Field label={needNote ? 'What is wrong (for the next person)' : 'Note (optional)'} required={needNote}>
+        <Field label={noteLabel} required={needNote} hint={repairRoute ? 'The repair technician sees this first.' : undefined}>
           <Textarea rows={3} value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={faults.length ? faults.map((f) => f.q.replace(/\?$/, '')).join('; ') : ''} />
         </Field>
       </WorkStep>

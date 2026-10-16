@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
-  CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu, KeyRound,
+  CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu, KeyRound, FileUp, FileCheck2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getApiUrl, getCaptureApiBase } from '../utils/api';
@@ -50,6 +50,7 @@ const CAPTURE_UI = {
     exeFile: 'rentfoxxy-dispatch-qc-verify.exe',
     laptopHint: 'laptop under Dispatch QC',
     ps1Title: 'Dispatch QC',
+    pramanUpload: true,
   },
   'vendor-return': {
     apiPrefix: 'vendor-return-capture',
@@ -75,6 +76,82 @@ const CAPTURE_UI = {
     allowNotOn: true,
   },
 };
+
+/**
+ * Dispatch QC: once the specs match, the Praman report PDF is uploaded from
+ * this (tested) laptop, so nobody copies it to another machine. The inspector
+ * then enters only the Device ID on Dispatch QC (migration 429).
+ */
+function PramanDeviceUpload({ apiPrefix, token, report, onUploaded }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+
+  const upload = async () => {
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast.error('The report must be a PDF'); return; }
+    const fd = new FormData();
+    fd.append('praman_report', file);
+    setBusy(true);
+    try {
+      const { data } = await axios.post(`${getPublicApiBase()}/${apiPrefix}/${token}/praman-report`, fd);
+      if (!data.success) { toast.error(data.message || 'Upload failed'); return; }
+      toast.success('Praman report sent');
+      setFile(null);
+      setReplacing(false);
+      onUploaded(data.praman_report);
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Upload failed');
+    } finally { setBusy(false); }
+  };
+
+  if (report?.complete) {
+    return (
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-center gap-3 text-left">
+        <FileCheck2 className="w-6 h-6 text-emerald-600 shrink-0" />
+        <p className="m-0 text-sm font-semibold text-emerald-800">Praman report attached on Dispatch QC</p>
+      </div>
+    );
+  }
+  if (report && !replacing) {
+    return (
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-center gap-3 text-left">
+        <FileCheck2 className="w-6 h-6 text-emerald-600 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-sm font-semibold text-emerald-800">Praman report sent</p>
+          <p className="m-0 text-xs text-emerald-700 truncate">{report.name || 'praman-report.pdf'} · enter the Device ID on Dispatch QC</p>
+        </div>
+        <button type="button" onClick={() => setReplacing(true)} className="text-xs font-semibold text-emerald-800 underline shrink-0">Replace</button>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 space-y-3 text-left">
+      <div className="flex items-center gap-2">
+        <FileUp className="w-5 h-5 text-indigo-600" />
+        <p className="m-0 text-sm font-semibold text-slate-900">Upload the Praman report</p>
+      </div>
+      <label className="flex items-center gap-3 rounded-lg border border-dashed border-indigo-300 bg-white px-3 py-3 cursor-pointer hover:border-indigo-500">
+        <input type="file" accept="application/pdf,.pdf" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+        <span className="px-3 py-1.5 rounded-md bg-indigo-100 text-indigo-700 text-xs font-semibold shrink-0">Choose PDF</span>
+        <span className={`text-sm truncate ${file ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>{file ? file.name : 'No file chosen'}</span>
+      </label>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={upload}
+          disabled={!file || busy}
+          className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {busy ? 'Uploading…' : 'Upload'}
+        </button>
+        {replacing && (
+          <button type="button" onClick={() => { setReplacing(false); setFile(null); }} className="px-4 py-2.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-700">Cancel</button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
   const ui = CAPTURE_UI[captureKind] || CAPTURE_UI.qc2;
@@ -352,11 +429,22 @@ export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
               <h2 className="text-lg font-semibold text-slate-900">
                 {session?.laptop_condition === 'not_on' ? 'Marked Not ON' : 'Specs verified'}
               </h2>
-              <p className="text-sm text-slate-500 mt-3">
-                {session?.laptop_condition === 'not_on'
-                  ? `Serial ${session?.serial_number || ''} recorded. Return to the ${ui.successHint}. You can close this tab.`
-                  : `Return to the ${ui.successHint}. You can close this tab.`}
-              </p>
+              {ui.pramanUpload && session?.laptop_condition !== 'not_on' ? (
+                <div className="mt-5">
+                  <PramanDeviceUpload
+                    apiPrefix={ui.apiPrefix}
+                    token={token}
+                    report={session?.praman_report || null}
+                    onUploaded={(r) => setSession((prev) => ({ ...(prev || {}), praman_report: r }))}
+                  />
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500 mt-3">
+                  {session?.laptop_condition === 'not_on'
+                    ? `Serial ${session?.serial_number || ''} recorded. Return to the ${ui.successHint}. You can close this tab.`
+                    : `Return to the ${ui.successHint}. You can close this tab.`}
+                </p>
+              )}
             </div>
           ) : (
             <>

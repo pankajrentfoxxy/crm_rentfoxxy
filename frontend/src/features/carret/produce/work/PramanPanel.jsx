@@ -33,40 +33,49 @@ export default function PramanPanel({ ticketId, onChange }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
+  const doneRef = useRef(false);
+
+  // A pass needs both: a report sent from the tested laptop (migration 429)
+  // has no Device ID yet, so it does not count until one is entered.
+  const apply = (p) => { doneRef.current = Boolean(p?.device_id); setPraman(p); onChange?.(p?.device_id ? p : null); };
 
   useEffect(() => {
     let off = false;
-    fetchPraman(ticketId)
-      .then(({ data }) => { if (!off) { setPraman(data?.praman || null); onChange?.(data?.praman || null); } })
+    const load = () => fetchPraman(ticketId)
+      .then(({ data }) => { if (!off) apply(data?.praman || null); })
       .catch(() => {})
       .finally(() => { if (!off) setLoading(false); });
-    return () => { off = true; };
+    load();
+    // Picks up the report the moment the tested laptop sends it.
+    const t = setInterval(() => { if (!document.hidden && !doneRef.current) load(); }, 6000);
+    return () => { off = true; clearInterval(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticketId]);
 
+  const fromDevice = Boolean(praman && !praman.device_id);
+
   const upload = async () => {
     if (!deviceId.trim()) { toast.error('Enter the Praman Device ID'); return; }
-    if (!file) { toast.error('Choose the Praman report PDF'); return; }
-    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast.error('The report must be a PDF'); return; }
+    if (!file && !praman) { toast.error('Choose the Praman report PDF'); return; }
+    if (file && !/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast.error('The report must be a PDF'); return; }
     const fd = new FormData();
     fd.append('device_id', deviceId.trim());
-    fd.append('praman_report', file);
+    if (file) fd.append('praman_report', file);
     setBusy(true);
     try {
       const { data } = await api.post(`/tickets/${ticketId}/dispatch-qc/praman`, fd);
-      setPraman(data.praman);
-      onChange?.(data.praman);
+      apply(data.praman);
       setEditing(false);
       setFile(null);
-      toast.success('Praman report attached');
+      toast.success('Praman saved');
     } catch (e) {
-      toast.error(e?.response?.data?.message || 'Could not attach the Praman report');
+      toast.error(e?.response?.data?.message || 'Could not save the Praman details');
     } finally { setBusy(false); }
   };
 
   if (loading) return <span className="text-ink-3">Loading Praman…</span>;
 
-  if (praman && !editing) {
+  if (praman?.device_id && !editing) {
     return (
       <Notice
         tone="good"
@@ -78,27 +87,41 @@ export default function PramanPanel({ ticketId, onChange }) {
           </div>
         )}
       >
-        {praman.report_name || 'Praman report'} — attached by {praman.uploaded_by_name || 'someone'} on {new Date(praman.uploaded_at).toLocaleString('en-IN')}.
+        {praman.report_source === 'device' ? 'Report from the tested laptop' : (praman.report_name || 'Praman report')} · {praman.uploaded_by_name || 'someone'} · {new Date(praman.uploaded_at).toLocaleString('en-IN')}
       </Notice>
     );
   }
 
+  const when = (v) => new Date(v).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
   return (
     <div className="c-stack" style={{ gap: '10px' }}>
-      <Notice tone="warn" title="Praman verification — required to pass">
-        Run Praman on the laptop, then enter its Device ID and attach the Praman report (PDF). The sales order keeps it as proof the laptop was verified and tested before dispatch.
-      </Notice>
-      <FormGrid cols={2}>
+      {fromDevice ? (
+        <Notice
+          tone="good"
+          title="Report received from the tested laptop"
+          action={<Button onClick={() => openPramanPdf(praman.praman_id)}>Open</Button>}
+        >
+          {praman.report_name || 'Praman report'} · {when(praman.report_uploaded_at || praman.uploaded_at)}
+        </Notice>
+      ) : (
+        <Notice tone="warn" title="Praman — required to pass">
+          Upload the PDF from the tested laptop (verification page), or attach it here.
+        </Notice>
+      )}
+      <FormGrid cols={fromDevice ? 1 : 2}>
         <Field label="Praman Device ID" required>
-          <Input value={deviceId} onChange={(e) => setDeviceId(e.target.value)} maxLength={100} className="font-mono" />
+          <Input value={deviceId} onChange={(e) => setDeviceId(e.target.value)} maxLength={100} className="font-mono" autoFocus={fromDevice} />
         </Field>
-        <Field label="Praman report (PDF)" required hint={file ? file.name : 'PDF only'}>
-          <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-        </Field>
+        {!fromDevice && (
+          <Field label="Praman report (PDF)" required={!praman} hint={file ? file.name : praman ? 'Optional — keeps the current report' : 'PDF only'}>
+            <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </Field>
+        )}
       </FormGrid>
       <div className="flex" style={{ gap: '8px' }}>
-        <Button onClick={upload} disabled={busy}>{busy ? 'Attaching…' : 'Attach Praman report'}</Button>
-        {praman && <Button variant="quiet" onClick={() => setEditing(false)}>Cancel</Button>}
+        <Button variant={fromDevice ? 'primary' : undefined} onClick={upload} disabled={busy || !deviceId.trim()}>{busy ? 'Saving…' : fromDevice ? 'Save Device ID' : 'Attach Praman report'}</Button>
+        {praman?.device_id && <Button variant="quiet" onClick={() => setEditing(false)}>Cancel</Button>}
       </div>
     </div>
   );

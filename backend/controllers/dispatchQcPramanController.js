@@ -20,32 +20,42 @@ exports.uploadPraman = async (req, res) => {
       removeFile(file?.path);
       return res.status(400).json({ success: false, message: 'Enter the Praman Device ID (3–100 letters, digits, - _ . : /).' });
     }
-    if (!file) return res.status(400).json({ success: false, message: 'Attach the Praman report PDF.' });
+    const prev = (await pool.query('SELECT report_path, report_name FROM dispatch_qc_praman WHERE ticket_id = $1', [ticketId])).rows[0];
+    // The report may already be here from the tested laptop (migration 429):
+    // then only the Device ID is entered.
+    if (!file && !prev?.report_path) return res.status(400).json({ success: false, message: 'Attach the Praman report PDF.' });
 
     const t = (await pool.query(
       `SELECT t.ticket_id, s.stage_name FROM tickets t JOIN stages s ON s.stage_id = t.current_stage_id WHERE t.ticket_id = $1`,
       [ticketId]
     )).rows[0];
-    if (!t) { removeFile(file.path); return res.status(404).json({ success: false, message: 'Ticket not found' }); }
+    if (!t) { removeFile(file?.path); return res.status(404).json({ success: false, message: 'Ticket not found' }); }
     if (t.stage_name !== 'Dispatch QC') {
-      removeFile(file.path);
+      removeFile(file?.path);
       return res.status(409).json({ success: false, message: `This laptop is at ${t.stage_name}, not Dispatch QC.` });
     }
 
-    const rel = path.relative(PRAMAN_DIR, file.path);
-    const prev = (await pool.query('SELECT report_path FROM dispatch_qc_praman WHERE ticket_id = $1', [ticketId])).rows[0];
-    await pool.query(
-      `INSERT INTO dispatch_qc_praman (ticket_id, device_id, report_path, report_name, uploaded_by, uploaded_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (ticket_id) DO UPDATE
-         SET device_id = EXCLUDED.device_id, report_path = EXCLUDED.report_path, report_name = EXCLUDED.report_name,
-             uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW()`,
-      [ticketId, deviceId, rel, String(file.originalname || '').slice(0, 200) || null, req.user?.user_id || null]
-    );
-    if (prev?.report_path && prev.report_path !== rel) removeFile(path.join(PRAMAN_DIR, prev.report_path));
+    if (file) {
+      const rel = path.relative(PRAMAN_DIR, file.path);
+      await pool.query(
+        `INSERT INTO dispatch_qc_praman (ticket_id, device_id, report_path, report_name, uploaded_by, uploaded_at, report_source, report_uploaded_at)
+         VALUES ($1, $2, $3, $4, $5, NOW(), 'crm', NOW())
+         ON CONFLICT (ticket_id) DO UPDATE
+           SET device_id = EXCLUDED.device_id, report_path = EXCLUDED.report_path, report_name = EXCLUDED.report_name,
+               uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW(), report_source = 'crm', report_uploaded_at = NOW()`,
+        [ticketId, deviceId, rel, String(file.originalname || '').slice(0, 200) || null, req.user?.user_id || null]
+      );
+      if (prev?.report_path && prev.report_path !== rel) removeFile(path.join(PRAMAN_DIR, prev.report_path));
+    } else {
+      // Keep the laptop's report; add the Device ID.
+      await pool.query(
+        `UPDATE dispatch_qc_praman SET device_id = $2, uploaded_by = $3, uploaded_at = NOW() WHERE ticket_id = $1`,
+        [ticketId, deviceId, req.user?.user_id || null]
+      );
+    }
     await pool.query(
       `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'praman_attached', $3)`,
-      [ticketId, req.user?.user_id || null, `Praman report attached · Device ID ${deviceId}`]
+      [ticketId, req.user?.user_id || null, `Praman report attached · Device ID ${deviceId}${file ? '' : ' (report from the tested laptop)'}`]
     );
     res.json({ success: true, praman: await getPraman(pool, ticketId) });
   } catch (e) {

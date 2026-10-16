@@ -807,9 +807,18 @@ exports.getTicketById = async (req, res) => {
       console.error('config check:', cfgErr.message);
     }
 
+    // Chip / Body & Paint: why it was sent here and what Diagnosis found.
+    let repairBrief = null;
+    try {
+      repairBrief = await require('../services/repairBriefService').getRepairBrief(pool, ticket);
+    } catch (briefErr) {
+      console.error('repair brief:', briefErr.message);
+    }
+
     res.json({
       laptop_cost: laptopCost,
       config_check: configCheck,
+      repair_brief: repairBrief,
       success: true,
       ticket: {
         ...displayTicket,
