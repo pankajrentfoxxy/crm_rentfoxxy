@@ -170,6 +170,18 @@ router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch(...dcRoute('/reached', tbEdit, flowCtrl.markTechReached));
 router.post(...dcRoute('/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp));
 router.post(...dcRoute('/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod));
+// Return DC from My deliveries: 6 photos per laptop + technician signature (migration 436).
+const rdcPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => { const d = path.join(__dirname, '../uploads/support'); fs.mkdirSync(d, { recursive: true }); cb(null, d); },
+    filename: (_req, file, cb) => cb(null, `pod-${Date.now()}-${Math.round(Math.random() * 1e9)}${(path.extname(file.originalname || '') || '.jpg').toLowerCase()}`),
+  }),
+  limits: multerLimits({ files: 6 }),
+  fileFilter: (_req, file, cb) => (String(file.mimetype || '').startsWith('image/') ? cb(null, true) : cb(new Error('Photos only'))),
+});
+router.get(...dcRoute('/pickup-evidence', tbView, flowCtrl.getPickupEvidence));
+router.post(...dcRoute('/pickup-photos', tbEdit, wrapMulter(rdcPhotoUpload.fields(['front', 'back', 'screen', 'keyboard', 'left', 'right'].map((name) => ({ name, maxCount: 1 })))), flowCtrl.uploadPickupEvidencePhotos));
+router.post(...dcRoute('/technician-sign', tbEdit, flowCtrl.signPickupReturnDc));
 router.patch(...dcRoute('/admin-deliver', checkAdminDeliverAccess, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);

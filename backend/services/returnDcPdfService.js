@@ -182,15 +182,16 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
         hsn_code: hsnCode,
       }],
       esign: {
-        technician_url: techItem.technician_esign_url || null,
+        // My deliveries signs the challan itself (migration 436).
+        technician_url: techItem.technician_esign_url || dcl.technician_esign_url || null,
         technician_name: await resolveSignerLabel(
           db,
-          techItem.technician_esign_name,
+          techItem.technician_esign_name || dcl.technician_esign_name,
           techItem.technician_esign_by,
           techItem.pickup_assigned_to,
           techItem.assigned_to
         ),
-        technician_at: techItem.technician_esign_at || null,
+        technician_at: techItem.technician_esign_at || dcl.technician_esign_at || null,
         warehouse_url: whItem.warehouse_esign_url || null,
         warehouse_name: await resolveSignerLabel(
           db,

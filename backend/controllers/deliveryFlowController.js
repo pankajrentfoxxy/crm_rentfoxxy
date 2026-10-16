@@ -971,6 +971,14 @@ exports.submitDeliveryWithPod = async (req, res) => {
         notes = [notes, `Charger not collected (${list}): ${why}`].filter(Boolean).join(' — ');
         chargerNotCollected = { units: unscanned.map((u) => u.ttspl_id).filter(Boolean), why };
       }
+      // Six photos of every laptop and the technician's signature (migration 436),
+      // checked before the OTP so a refusal does not use up the customer's code.
+      try {
+        await require('../services/rdcPickupEvidenceService').assertComplete(pool, dcNumber);
+      } catch (evErr) {
+        if (evErr.status) return res.status(evErr.status).json({ success: false, code: 'PICKUP_EVIDENCE', message: evErr.message });
+        throw evErr;
+      }
     }
     // Part 3.4: hashed compare, 15-minute expiry, 5 attempts. Committed on its
     // own so a wrong attempt is counted even if the delivery below fails.
@@ -1503,3 +1511,61 @@ exports.markCourierRejected = async (req, res) => {
 };
 
 exports.podUploadDir = podDir;
+
+// ── Return DC from My deliveries: 6 photos per laptop + technician signature (migration 436) ──
+const rdcEvidence = require('../services/rdcPickupEvidenceService');
+
+/** The technician on this Return DC (or a supervisor); a return challan; not a support pickup. */
+async function evidenceRefusal(req, dcNumber) {
+  const refusal = await fieldAssignmentRefusal(req, dcNumber, 'dc');
+  if (refusal) return refusal;
+  const r = await pool.query(`SELECT movement_type FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`, [dcNumber]);
+  if (String(r.rows[0]?.movement_type || '') !== 'return') return { status: 400, message: 'Photos and the technician signature are for a Return DC' };
+  return supportRdcRefusal(dcNumber);
+}
+
+exports.getPickupEvidence = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const refusal = await evidenceRefusal(req, dcNumber);
+    if (refusal) return refuse(res, refusal);
+    res.json({ success: true, ...(await rdcEvidence.getEvidence(pool, dcNumber)) });
+  } catch (e) {
+    console.error('getPickupEvidence:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message || 'Could not load the photos' });
+  }
+};
+
+exports.uploadPickupEvidencePhotos = async (req, res) => {
+  const files = Object.entries(req.files || {}).flatMap(([slot, list]) => (list || []).map((f) => ({ slot, f })));
+  const drop = () => files.forEach(({ f }) => fs.promises.unlink(f.path).catch(() => {}));
+  try {
+    const dcNumber = req.params.dcNumber;
+    const refusal = await evidenceRefusal(req, dcNumber);
+    if (refusal) { drop(); return refuse(res, refusal); }
+    if (!files.length) return res.status(400).json({ success: false, message: 'Choose a photo' });
+    if (files.some(({ f }) => !String(f.mimetype || '').startsWith('image/'))) { drop(); return res.status(400).json({ success: false, message: 'Photos only' }); }
+    const laptop = await rdcEvidence.savePhotos(pool, { dcNumber, code: req.body?.asset_code, files, userId: req.user.user_id });
+    res.json({ success: true, laptop });
+  } catch (e) {
+    drop();
+    if (!e.status) console.error('uploadPickupEvidencePhotos:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message || 'Could not save the photos' });
+  }
+};
+
+exports.signPickupReturnDc = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const refusal = await evidenceRefusal(req, dcNumber);
+    if (refusal) return refuse(res, refusal);
+    await rdcEvidence.sign(pool, { dcNumber, esignData: req.body?.esign_data, signerName: req.body?.signer_name, user: req.user });
+    try { await require('../services/returnDcPdfService').regenerateReturnDcPdfByRdc(pool, dcNumber); } catch (pdfErr) {
+      console.error('[delivery] return DC pdf (tech sign):', pdfErr.message);
+    }
+    res.json({ success: true, message: 'Return DC signed' });
+  } catch (e) {
+    if (!e.status) console.error('signPickupReturnDc:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message || 'Could not save the signature' });
+  }
+};

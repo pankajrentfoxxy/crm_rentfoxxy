@@ -32,6 +32,10 @@ const DC_ACTION_SUFFIXES = [
   '/warehouse-return-units',
   '/warehouse-receive-back',
   '/verify-serial',
+  // Return DC from My deliveries: photos + technician signature (migration 436).
+  '/pickup-evidence',
+  '/pickup-photos',
+  '/technician-sign',
   '/deliver',
   '/notify',
   '/preview',

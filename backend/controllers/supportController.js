@@ -7138,6 +7138,37 @@ async function loadItemPhotos(db, itemIds) {
 }
 exports.loadItemPhotos = loadItemPhotos;
 
+/**
+ * Save uploaded laptop photos on a pickup item (one per slot; a re-take
+ * replaces it). Shared by the support job screen and My deliveries.
+ * files: [{ slot, f }] (multer files under backend/uploads/support).
+ */
+async function savePickupPhotos(it, files, userId) {
+    const itemId = Number(it.id);
+    for (const { slot, f } of files) {
+        const rel = `support/${path.basename(f.path)}`;
+        const prev = (await pool.query('SELECT path FROM support_item_photos WHERE item_id = $1 AND slot = $2', [itemId, slot])).rows[0];
+        await pool.query(
+            `INSERT INTO support_item_photos (item_id, slot, path, uploaded_by) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (item_id, slot) DO UPDATE SET path = EXCLUDED.path, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW()`,
+            [itemId, slot, rel, userId]
+        );
+        if (prev?.path && prev.path !== rel) fs.promises.unlink(path.join(__dirname, '..', 'uploads', prev.path)).catch(() => {});
+    }
+    // The pickup's photo (POD) the older checks look for: the front photo.
+    if (!it.pod_image_path && !it.proof_of_completion_path) {
+        const front = (await pool.query(`SELECT path FROM support_item_photos WHERE item_id = $1 ORDER BY CASE slot WHEN 'front' THEN 0 ELSE 1 END, photo_id LIMIT 1`, [itemId])).rows[0];
+        if (front) {
+            await pool.query(
+                `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, pod_uploaded_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [itemId, front.path]
+            );
+        }
+    }
+    return (await loadItemPhotos(pool, [itemId]))[itemId] || [];
+}
+exports.savePickupPhotos = savePickupPhotos;
+
 /** POST /support/items/:itemId/photos (multipart: one file per slot name). */
 exports.uploadItemPhotos = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
@@ -7154,27 +7185,7 @@ exports.uploadItemPhotos = async (req, res) => {
         for (const { slot, f } of files) {
             if (!PHOTO_SLOTS.includes(slot) || !String(f.mimetype || '').startsWith('image/')) { drop(); return res.status(400).json({ success: false, message: 'Photos only, one per side of the laptop' }); }
         }
-        for (const { slot, f } of files) {
-            const rel = `support/${path.basename(f.path)}`;
-            const prev = (await pool.query('SELECT path FROM support_item_photos WHERE item_id = $1 AND slot = $2', [itemId, slot])).rows[0];
-            await pool.query(
-                `INSERT INTO support_item_photos (item_id, slot, path, uploaded_by) VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (item_id, slot) DO UPDATE SET path = EXCLUDED.path, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW()`,
-                [itemId, slot, rel, req.user.user_id]
-            );
-            if (prev?.path && prev.path !== rel) fs.promises.unlink(path.join(__dirname, '..', 'uploads', prev.path)).catch(() => {});
-        }
-        // The pickup's photo (POD) the older checks look for: the front photo.
-        if (!it.pod_image_path && !it.proof_of_completion_path) {
-            const front = (await pool.query(`SELECT path FROM support_item_photos WHERE item_id = $1 ORDER BY CASE slot WHEN 'front' THEN 0 ELSE 1 END, photo_id LIMIT 1`, [itemId])).rows[0];
-            if (front) {
-                await pool.query(
-                    `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, pod_uploaded_at = NOW(), updated_at = NOW() WHERE id = $1`,
-                    [itemId, front.path]
-                );
-            }
-        }
-        const photos = (await loadItemPhotos(pool, [itemId]))[itemId] || [];
+        const photos = await savePickupPhotos(it, files, req.user.user_id);
         res.json({ success: true, photos, complete: PHOTO_SLOTS.every((s) => photos.some((p) => p.slot === s)) });
     } catch (e) {
         drop();

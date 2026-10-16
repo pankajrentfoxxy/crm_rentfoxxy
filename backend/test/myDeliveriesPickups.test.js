@@ -148,9 +148,22 @@ describe('My Deliveries handlers (rolled back)', () => {
     assert.deepEqual(st.map((x) => x.status), ['reached']);
   });
 
+  it('six photos of every laptop and the technician signature are needed before the OTP is spent (migration 436)', async () => {
+    const before = (await h.db().query('SELECT MAX(otp_attempts) AS n FROM delivery_challan_lines WHERE dc_number = $1', [RDC])).rows[0].n;
+    const r = await h.call(ctrl.submitDeliveryWithPod, { params: { dcNumber: RDC }, body: { otp: '000000', esign_data: SIGN }, user: OWNER });
+    assert.equal(r.code, 409);
+    assert.equal(r.body.code, 'PICKUP_EVIDENCE');
+    const afterN = (await h.db().query('SELECT MAX(otp_attempts) AS n FROM delivery_challan_lines WHERE dc_number = $1', [RDC])).rows[0].n;
+    assert.equal(afterN, before, 'the OTP attempt was not used up');
+  });
+
   it('the charger we sent must be scanned (or declared missing) before the OTP is spent', async () => {
     const real = chargerSvc.getReturnDcChargerState;
     chargerSvc.getReturnDcChargerState = async () => ({ units: [{ required: true, scanned: false, ttspl_id: 'TTSPL9001', pickup_item_id: 1 }] });
+    // Photos + signature are covered by the test above.
+    const evidence = require('../services/rdcPickupEvidenceService');
+    const realEvidence = evidence.assertComplete;
+    evidence.assertComplete = async () => {};
     try {
       const before = (await h.db().query('SELECT MAX(otp_attempts) AS n FROM delivery_challan_lines WHERE dc_number = $1', [RDC])).rows[0].n;
       const r = await h.call(ctrl.submitDeliveryWithPod, { params: { dcNumber: RDC }, body: { otp: '000000', esign_data: SIGN }, user: OWNER });
@@ -164,6 +177,7 @@ describe('My Deliveries handlers (rolled back)', () => {
       assert.match(String(withReason.body.code || ''), /^OTP_/);
     } finally {
       chargerSvc.getReturnDcChargerState = real;
+      evidence.assertComplete = realEvidence;
     }
   });
 

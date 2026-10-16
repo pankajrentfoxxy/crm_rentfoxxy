@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
 import {
-  Button, DateTime, DocNumber, Field, FlowSteps, Input, Notice, Textarea,
+  Button, DateTime, DocNumber, Field, FlowSteps, Input, Notice, SignaturePad, Textarea,
 } from '../../../components/carret';
+import api from '../../../utils/api';
+import PickupPhotos from '../serve/PickupPhotos';
 import ScanField from '../../../components/ScanField';
 import { usePermission } from '../../../hooks/usePermission';
 import {
@@ -97,6 +100,58 @@ function ReturnChargerScans({ rdcNumber, canScan, missingReason, onMissingReason
   );
 }
 
+/**
+ * Six photos of every laptop and the technician's signature on the Return DC
+ * (migration 436) — the pickup cannot be confirmed without them.
+ * onReady(true) once everything is in.
+ */
+const evidencePath = (dc, suffix) => `/sales-management/delivery-challans/${encodeURIComponent(dc)}${suffix}`;
+function PickupEvidence({ dcNumber, onReady }) {
+  const [ev, setEv] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api.get(evidencePath(dcNumber, '/pickup-evidence')).then(({ data }) => setEv(data)).catch(() => setEv({ laptops: [], signature: null, error: true }));
+  }, [dcNumber]);
+  useEffect(() => { load(); }, [load]);
+  const photosDone = (l) => new Set((l.photos || []).map((p) => p.slot)).size >= 6;
+  const ready = Boolean(ev && !ev.error && ev.signature && (ev.laptops || []).every(photosDone));
+  useEffect(() => { onReady(ready); }, [ready, onReady]);
+  if (!ev) return <div className="text-ink-3 font-ui" style={{ fontSize: 'var(--d-sm)' }}>Loading photos…</div>;
+  if (ev.error) return <Notice tone="warn">Could not load the photos — refresh the page.</Notice>;
+  const upload = (code) => async (slot, file) => {
+    const fd = new FormData();
+    fd.append('asset_code', code);
+    fd.append(slot, file, file.name || `${slot}.jpg`);
+    const { data } = await api.post(evidencePath(dcNumber, '/pickup-photos'), fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    load();
+    return data.laptop?.photos || [];
+  };
+  const sign = async (dataUrl) => {
+    setBusy(true);
+    try {
+      await api.post(evidencePath(dcNumber, '/technician-sign'), { esign_data: dataUrl });
+      load();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="c-stack" style={{ gap: '12px' }}>
+      {ev.laptops.map((l) => (
+        <PickupPhotos key={l.code} photos={l.photos} uploader={upload(l.code)} title={`Photos · ${l.ttspl_id || l.code}`} onChange={() => {}} />
+      ))}
+      {ev.signature ? (
+        <Notice tone="good" title={`Return DC signed${ev.signature.name ? ` by ${ev.signature.name}` : ''}`} />
+      ) : (
+        <div className="c-qsec" style={{ padding: '12px 14px' }}>
+          <strong style={{ display: 'block', marginBottom: '6px' }}>Sign the Return DC</strong>
+          <SignaturePad prompt="Sign as the technician collecting these laptops" saveLabel={busy ? 'Saving…' : 'Sign'} onSave={sign} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PickupCard({ dc, onChanged }) {
   const { hasPermission } = usePermission();
   const canAct = hasPermission('technician_bucket', 'edit');
@@ -110,6 +165,7 @@ export function PickupCard({ dc, onChanged }) {
   const [notes, setNotes] = useState('');
   const [rescan, setRescan] = useState(false);
   const [damageFor, setDamageFor] = useState(null);
+  const [evidenceOk, setEvidenceOk] = useState(false);
   const { busy, run } = useRunner(onChanged);
 
   const status = String(dc.status || '').toLowerCase();
@@ -134,6 +190,7 @@ export function PickupCard({ dc, onChanged }) {
   const collect = () => run(async () => {
     if (!/^\d{4,8}$/.test(otp.trim())) throw new Error('Enter the OTP from the customer');
     if (!chargerOk) throw new Error('Scan the charger we sent, or say why it is not coming back');
+    if (!evidenceOk) throw new Error('Take the 6 photos of every laptop and sign the Return DC');
     if (proof.type === 'photo' && !proof.file) throw new Error('Take a photo of the laptops you collected');
     if (proof.type === 'esign' && !proof.esign) throw new Error('Take the customer’s signature');
     await submitDeliveryWithPod(dc.dc_number, proofForm(proof, {
@@ -181,9 +238,10 @@ export function PickupCard({ dc, onChanged }) {
             <Field label="OTP the customer received" required>
               <Input value={otp} inputMode="numeric" maxLength={8} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="font-mono" style={{ fontSize: '24px', letterSpacing: '6px', textAlign: 'center' }} />
             </Field>
+            <PickupEvidence dcNumber={dc.dc_number} onReady={setEvidenceOk} />
             <ProofCapture value={proof} onChange={setProof} />
             <Field label="Notes (condition, accessories)"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-            <Button variant="primary" onClick={collect} disabled={busy || !chargerOk} style={BIG}>{busy ? 'Saving…' : 'Collected — confirm pickup'}</Button>
+            <Button variant="primary" onClick={collect} disabled={busy || !chargerOk || !evidenceOk} style={BIG}>{busy ? 'Saving…' : (evidenceOk ? 'Collected — confirm pickup' : 'Photos and signature first')}</Button>
             <Button variant="quiet" onClick={() => { setScanned({}); setRescan(true); }} disabled={busy}>Send the OTP again (scan the laptops again)</Button>
           </>
         )}

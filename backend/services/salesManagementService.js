@@ -2361,9 +2361,10 @@ async function getReturnDcDetail(rdcNumber, { role } = {}) {
     })),
     floor_ticket_ids: pickupItems.map((i) => i.floor_ticket_id).filter(Boolean),
     esign: {
-      technician_url: techItem?.technician_esign_url || null,
-      technician_name: techItem?.tech_name || null,
-      technician_at: techItem?.technician_esign_at || null,
+      // A Return DC collected from My deliveries is signed on the challan (migration 436).
+      technician_url: techItem?.technician_esign_url || dcl.technician_esign_url || null,
+      technician_name: techItem?.technician_esign_url ? (techItem?.tech_name || null) : (dcl.technician_esign_name || techItem?.tech_name || null),
+      technician_at: techItem?.technician_esign_at || dcl.technician_esign_at || null,
       warehouse_url: whItem?.warehouse_esign_url || null,
       warehouse_name: whItem?.warehouse_receiver_name || null,
       warehouse_at: whItem?.warehouse_esign_at || null,

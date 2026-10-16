@@ -268,4 +268,4 @@ async function chargerTextsForPdf(db, dcNumber) {
   }
 }
 
-module.exports = { applyWarehouseChargerCheck, challanKind, challanUnits, getChallanChargers, setMark, freezeDispatchMarks, chargerText, chargerTextsForPdf, sentKit };
+module.exports = { parseDcSerials, applyWarehouseChargerCheck, challanKind, challanUnits, getChallanChargers, setMark, freezeDispatchMarks, chargerText, chargerTextsForPdf, sentKit };

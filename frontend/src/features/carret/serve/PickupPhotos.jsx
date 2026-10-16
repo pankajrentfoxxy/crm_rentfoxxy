@@ -26,7 +26,11 @@ export const uploadPickupPhoto = async (itemId, slot, file) => {
   return api.post(`/support/items/${itemId}/photos`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 
-export default function PickupPhotos({ itemId, photos = [], onChange, readOnly = false }) {
+/**
+ * uploader(slot, file) → Promise<photos[]> replaces the support-item upload
+ * (My deliveries keys photos by Return DC + laptop, migration 436).
+ */
+export default function PickupPhotos({ itemId, photos = [], onChange, readOnly = false, uploader = null, title = 'Laptop photos' }) {
   const [busy, setBusy] = useState('');
   const bySlot = Object.fromEntries((photos || []).map((p) => [p.slot, p]));
   const done = PHOTO_SLOTS.filter((s) => bySlot[s.key]).length;
@@ -36,8 +40,12 @@ export default function PickupPhotos({ itemId, photos = [], onChange, readOnly =
     if (!String(file.type || '').startsWith('image/')) { toast.error('Take a photo'); return; }
     setBusy(slot);
     try {
-      const { data } = await uploadPickupPhoto(itemId, slot, file);
-      onChange?.(data.photos || []);
+      if (uploader) {
+        onChange?.(await uploader(slot, await compressImageFile(file)));
+      } else {
+        const { data } = await uploadPickupPhoto(itemId, slot, file);
+        onChange?.(data.photos || []);
+      }
     } catch (e) {
       toast.error(errMsg(e, 'Could not upload the photo'));
     } finally { setBusy(''); }
@@ -46,7 +54,7 @@ export default function PickupPhotos({ itemId, photos = [], onChange, readOnly =
   return (
     <div className="c-photos">
       <div className="c-photos-h">
-        <b>Laptop photos</b>
+        <b>{title}</b>
         <span className={done === PHOTO_SLOTS.length ? 'is-ok' : ''}>{done}/{PHOTO_SLOTS.length}</span>
       </div>
       <div className="c-photos-grid">
