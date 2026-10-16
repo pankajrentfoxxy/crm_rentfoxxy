@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
-  Button, ConfirmDialog, DataTable, DateTime, DocNumber, DocumentHeader, Drawer, EmptyState, Field, Input, KeyValue, Notice, Section,
+  Button, ConfirmDialog, DataTable, DateTime, DocumentHeader, Drawer, EmptyState, Field, Input, KeyValue, Notice, Section,
   Textarea,
 } from '../../../components/carret';
 import {
@@ -19,7 +19,7 @@ import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
 import TicketReturnDcsPanel from './TicketReturnDcsPanel';
 import TicketLoanPanel from './loan/TicketLoanPanel';
-import ItemComments from './ItemComments';
+import TicketJourneys from './TicketJourneys';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -44,8 +44,6 @@ function Clock({ label, c }) {
   );
 }
 
-// Sold laptops: warranty as it was when the ticket was raised (claude/carret-lockin-warranty.md).
-const WARRANTY_NOTE = { in: 'sold, in warranty', battery_only: 'sold, battery warranty only', out: 'sold, OUT of warranty — chargeable' };
 
 export default function TicketRecordPage() {
   const { ticketId } = useParams();
@@ -67,6 +65,7 @@ export default function TicketRecordPage() {
   const [busy, setBusy] = useState(false);
   const [wfhFor, setWfhFor] = useState(null);
   const [error, setError] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const load = useCallback(() => {
     fetchTicket(ticketId).then(({ data }) => setT(data)).catch((e) => setError(errMsg(e, 'Could not load the ticket')));
@@ -93,55 +92,8 @@ export default function TicketRecordPage() {
   const byLoad = [...techs].filter((x) => x.assignee_kind === 'technician').sort((a, b) => (a.open_item_count - b.open_item_count) || String(a.name).localeCompare(b.name));
   const suggested = byLoad[0]?.user_id;
 
-  const itemCols = [
-    {
-      key: 't',
-      header: 'Laptop',
-      render: (i) => <DocNumber value={i.ttspl_id || i.unique_serial_number || i.serial_number || '—'} />,
-      sub: (i) => [[i.brand, i.model].filter(Boolean).join(' '), WARRANTY_NOTE[i.warranty_status]].filter(Boolean).join(' · '),
-    },
-    { key: 'k', header: 'Type', render: (i) => ({ complaint: 'Visit', pickup: i.pickup_type === 'repair' ? 'Repair pickup' : 'Return pickup', replacement: 'Replacement' }[i.item_type] || i.item_type), sub: (i) => i.issue_category_label || null },
-    { key: 's', header: 'Where it is', render: (i) => STEP_LABEL[i.effective_current_step] || STEP_LABEL[i.current_step] || STEP_LABEL[i.status] || String(i.status).replace(/_/g, ' '), sub: (i) => (i.repair_ready_at ? 'Repaired — ready to send back' : (i.remarks || null)) },
-    {
-      key: 'a',
-      header: 'Technician',
-      render: (i) => {
-        const tech = techs.find((x) => x.user_id === (i.assigned_to || i.pickup_assigned_to));
-        return tech ? tech.name : <span className="text-ink-3">not assigned</span>;
-      },
-      sub: (i) => (i.visit_scheduled_at ? `🗓 ${when(i.visit_scheduled_at)}` : null),
-    },
-    {
-      key: 'w',
-      header: 'WFH',
-      render: (i) => {
-        const w = wfh[i.id];
-        if (!w?.is_wfh) return '—';
-        if (w.charged) return <span>Charged ₹{Number(w.amount).toLocaleString('en-IN')} on <span className="font-mono">{w.dc_number}</span></span>;
-        return <span style={{ color: 'var(--alert-warn)', fontWeight: 600 }}>Work from home</span>;
-      },
-    },
-    {
-      key: 'x',
-      header: '',
-      render: (i) => !closed && !['resolved', 'inventory_updated', 'cancelled', 'delivered'].includes(i.status) && (
-        <div className="flex flex-wrap" style={{ gap: '6px' }}>
-          {i.item_type !== 'replacement' && <Button onClick={(e) => { e.stopPropagation(); setAssignFor(i); }}>{i.assigned_to || i.pickup_assigned_to ? 'Reassign' : 'Assign'}</Button>}
-          <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setApptFor(i); setAppt(i.visit_scheduled_at ? new Date(new Date(i.visit_scheduled_at).getTime() + 330 * 60000).toISOString().slice(0, 16) : ''); }}>Visit slot</Button>
-          {wfh[i.id]?.is_wfh && !wfh[i.id]?.charged && (i.item_type === 'replacement' || (i.item_type === 'pickup' && i.return_dc_number)) && (
-            <Button variant="quiet" disabled={busy} onClick={(e) => { e.stopPropagation(); setWfhFor(i); }}>Charge WFH ₹799</Button>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'dmg',
-      header: '',
-      render: (i) => (canDamage && (i.ttspl_id || i.serial_number) ? <Button variant="quiet" onClick={(e) => { e.stopPropagation(); setDamageFor(i); }}>Record damage</Button> : null),
-    },
-  ];
-
-  const history = (t.audit || []).slice(0, 25);
+  const history = t.audit || [];
+  const openAppt = (i) => { setApptFor(i); setAppt(i.visit_scheduled_at ? new Date(new Date(i.visit_scheduled_at).getTime() + 330 * 60000).toISOString().slice(0, 16) : ''); };
 
   return (
     <DeskShell title={`Ticket #${tk.id}`} breadcrumb="Support / Queue" subtitle={tk.customer_name}>
@@ -169,74 +121,87 @@ export default function TicketRecordPage() {
             { label: (t.return_dcs || []).length > 1 ? 'Return DCs' : 'Return DC', value: (t.return_dcs || []).length ? t.return_dcs.map((d) => d.return_dc_number).join(', ') : (tk.return_dc_number || '—') },
           ]}
         />
-        <TicketNextStep data={t} canLead={canLead} onAssign={(i) => setAssignFor(i)} onClose={() => setCloseOpen(true)} />
-        {onHold && <Notice tone="warn" title="On hold — waiting on the customer">{onHold.note} (since <DateTime value={onHold.from_at} />). The SLA clock is paused.</Notice>}
-        {items.some((i) => i.repair_ready_at && !i.service_dc_number) && (
-          <Notice tone="good" title="Repaired — ready to go back">
-            The floor has finished the repair. Raise the Service DC below to send it back to the customer.
+        {tk.status === 'cancelled' && (
+          <Notice tone="crit" title={`Cancelled${tk.cancelled_by_name ? ` by ${tk.cancelled_by_name}` : ''}${tk.cancelled_at ? ` · ${when(tk.cancelled_at)}` : ''}`}>
+            {tk.cancellation_remark || 'No reason was recorded.'}
           </Notice>
         )}
-        {sla?.sla && (
-          <Section title="SLA">
-            <div className="flex flex-wrap" style={{ gap: '32px' }}>
-              <Clock label="Technician visit" c={sla.sla.visit} />
-              <Clock label="Resolved" c={sla.sla.resolve} />
-              <div><div className="text-ink-3">Targets ({sla.sla.priority})</div><div className="text-ink-3" style={{ fontSize: '12px' }}>visit {Math.round((sla.targets?.[sla.sla.priority]?.visit || 0) / 60)} business h · resolve {Math.round((sla.targets?.[sla.sla.priority]?.resolve || 0) / 600)} business day(s)</div></div>
-            </div>
-          </Section>
+        {tk.status === 'closed' && <Notice tone="good" title={`Closed${tk.closed_at ? ` · ${when(tk.closed_at)}` : ''}`}>{tk.resolution_notes || 'Every laptop is done.'}</Notice>}
+        <TicketNextStep data={t} canLead={canLead} onAssign={(i) => setAssignFor(i)} onClose={() => setCloseOpen(true)} />
+        {onHold && <Notice tone="warn" title="On hold — waiting on the customer">{onHold.note} (since <DateTime value={onHold.from_at} />). The SLA clock is paused.</Notice>}
+        {!closed && items.some((i) => i.repair_ready_at && !i.service_dc_number) && (
+          <Notice tone="good" title="Repaired — ready to go back">Raise the Service DC below to send it back to the customer.</Notice>
         )}
-        <Section title={`Laptops · ${items.length}`}>
-          <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
-        </Section>
-        <Section title={`Comments · ${items.reduce((n, i) => n + (i.comments || []).length, 0)}`}>
-          <div className="c-stack">
-            {items.map((i) => (
-              <div key={i.id} className="c-stack" style={{ gap: '6px' }}>
-                {items.length > 1 && <strong className="font-mono">{i.ttspl_id || i.unique_serial_number || i.serial_number}</strong>}
-                <ItemComments item={i} canWrite={!closed && !['cancelled'].includes(i.status)} onAdded={load} />
+
+        <div className="c-split">
+          <div className="c-stack min-w-0">
+            <Section title={`Laptops · ${new Set(items.map((i) => i.ttspl_id || i.unique_serial_number || i.serial_number || i.id)).size}`}>
+              <TicketJourneys
+                items={items}
+                techs={techs}
+                wfh={wfh}
+                locked={closed}
+                canDamage={canDamage}
+                onAssign={(i) => setAssignFor(i)}
+                onSlot={openAppt}
+                onWfh={(i) => setWfhFor(i)}
+                onDamage={(i) => setDamageFor(i)}
+                onCommented={load}
+              />
+            </Section>
+            {hasPermission('support_tickets', 'edit') && tk.status !== 'cancelled' && <TicketActions data={t} techs={techs} reload={load} />}
+            <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
+            <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
+            <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
+            <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
+            <TicketLoanPanel ticketId={tk.id} refreshKey={items.map((i) => `${i.id}:${i.status}`).join(',')} />
+            <section className="c-card">
+              <div className="c-card-h">
+                <button type="button" className="c-collapse-h" aria-expanded={showHistory} onClick={() => setShowHistory((v) => !v)}>
+                  <h3>History · {history.length}</h3>
+                  <span>{showHistory ? 'Hide' : 'Show'}</span>
+                </button>
               </div>
-            ))}
+              {showHistory && (
+                <div className="c-card-b">
+                  {history.length === 0 ? <EmptyState title="Nothing yet" /> : (
+                    <DataTable
+                      columns={[
+                        { key: 'w', header: 'When', render: (h) => <DateTime value={h.created_at} /> },
+                        { key: 'a', header: 'What', render: (h) => (h.action === 'status_changed' && h.detail ? `${STEP_LABEL[h.detail.from] || h.detail.from} → ${STEP_LABEL[h.detail.to] || h.detail.to}` : String(h.action).replace(/_/g, ' ')), sub: (h) => h.detail?.remark || h.detail?.reason || null },
+                        { key: 'u', header: 'Who', render: (h) => h.user_name || h.actor_name || '—' },
+                      ]}
+                      rows={history}
+                      rowKey={(h, idx) => h.id || idx}
+                    />
+                  )}
+                </div>
+              )}
+            </section>
           </div>
-        </Section>
-        <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
-        <TicketLoanPanel ticketId={tk.id} refreshKey={items.map((i) => `${i.id}:${i.status}`).join(',')} />
-        <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
-        <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />
-        <ServiceChargesPanel ticketId={tk.id} items={items} canLead={canLead && !closed} />
-        <DamageReportDrawer
-          open={Boolean(damageFor)}
-          onClose={() => setDamageFor(null)}
-          onDone={() => setDamageFor(null)}
-          laptop={damageFor ? { asset_code: damageFor.ttspl_id || damageFor.unique_serial_number || damageFor.serial_number } : null}
-          source={damageFor?.item_type === 'pickup' ? ((damageFor.pickup_type || (damageFor.source_item_id ? 'repair' : 'return')) === 'repair' ? 'repair_pickup' : 'return_pickup') : 'technician_visit'}
-          ticketId={tk.id}
-          ticketItemId={damageFor?.id}
-          customerId={tk.customer_id}
-        />
-        {hasPermission('support_tickets', 'edit') && <TicketActions data={t} techs={techs} reload={load} />}
-        <Section title="Contact and address">
-          <KeyValue cols={2} items={[
-            { label: 'Phone', value: tk.display_phone },
-            { label: 'Alternate', value: tk.ticket_alt_phone },
-            { label: 'Email', value: tk.ticket_email },
-            { label: 'Address', value: tk.ticket_address },
-            { label: 'Note', value: tk.top_level_remarks },
-          ]}
-          />
-        </Section>
-        <Section title="History">
-          {history.length === 0 ? <EmptyState title="Nothing yet" /> : (
-            <DataTable
-              columns={[
-                { key: 'w', header: 'When', render: (h) => <DateTime value={h.created_at} /> },
-                { key: 'a', header: 'What', render: (h) => (h.action === 'status_changed' && h.detail ? `${STEP_LABEL[h.detail.from] || h.detail.from} → ${STEP_LABEL[h.detail.to] || h.detail.to}` : String(h.action).replace(/_/g, ' ')) },
-                { key: 'u', header: 'Who', render: (h) => h.user_name || h.actor_name || '—' },
+
+          <aside className="c-stack min-w-0">
+            {sla?.sla && (
+              <Section title="SLA">
+                <div className="c-stack" style={{ gap: '12px' }}>
+                  <Clock label="Technician visit" c={sla.sla.visit} />
+                  <Clock label="Resolved" c={sla.sla.resolve} />
+                  <div className="text-ink-3" style={{ fontSize: '12px' }}>Targets ({sla.sla.priority}): visit {Math.round((sla.targets?.[sla.sla.priority]?.visit || 0) / 60)} business h · resolve {Math.round((sla.targets?.[sla.sla.priority]?.resolve || 0) / 600)} business day(s)</div>
+                </div>
+              </Section>
+            )}
+            <Section title="Contact and address">
+              <KeyValue cols={1} items={[
+                { label: 'Phone', value: tk.display_phone },
+                { label: 'Alternate', value: tk.ticket_alt_phone },
+                { label: 'Email', value: tk.ticket_email },
+                { label: 'Address', value: tk.ticket_address },
+                { label: 'Note', value: tk.top_level_remarks },
               ]}
-              rows={history}
-              rowKey={(h, idx) => h.id || idx}
-            />
-          )}
-        </Section>
+              />
+            </Section>
+          </aside>
+        </div>
       </div>
 
       <Drawer open={Boolean(assignFor)} onClose={() => setAssignFor(null)} title={`Assign ${assignFor?.ttspl_id || ''}`}>
@@ -297,6 +262,16 @@ export default function TicketRecordPage() {
         <p style={{ marginBottom: '8px' }}>Only when the ticket was raised by mistake or the customer withdrew it. Open parts must be settled first.</p>
         <Field label="Why" required><Textarea rows={3} value={cancelNote} onChange={(e) => setCancelNote(e.target.value)} /></Field>
       </Drawer>
+      <DamageReportDrawer
+        open={Boolean(damageFor)}
+        onClose={() => setDamageFor(null)}
+        onDone={() => setDamageFor(null)}
+        laptop={damageFor ? { asset_code: damageFor.ttspl_id || damageFor.unique_serial_number || damageFor.serial_number } : null}
+        source={damageFor?.item_type === 'pickup' ? ((damageFor.pickup_type || (damageFor.source_item_id ? 'repair' : 'return')) === 'repair' ? 'repair_pickup' : 'return_pickup') : 'technician_visit'}
+        ticketId={tk.id}
+        ticketItemId={damageFor?.id}
+        customerId={tk.customer_id}
+      />
       <ConfirmDialog
         open={!!wfhFor}
         onClose={() => setWfhFor(null)}

@@ -156,7 +156,7 @@ export default function ReturnChallanRecordPage() {
           {isSuper && d.status !== 'cancelled' && !i.warehouse_received_at && (
             <Button variant="quiet" onClick={() => setEditFor({ item: i, form: initialEditConfig(i) })}>Edit serial / config</Button>
           )}
-          {canDamage && <Button variant="quiet" onClick={() => setDamageFor(i)}>Record damage</Button>}
+          {canDamage && d.status !== 'cancelled' && <Button variant="quiet" onClick={() => setDamageFor(i)}>Record damage</Button>}
         </div>
       ),
     },
