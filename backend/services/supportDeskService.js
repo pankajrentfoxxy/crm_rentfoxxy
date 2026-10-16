@@ -74,9 +74,8 @@ async function deskQueue({ allowedCustomerTypes = null } = {}) {
       })),
     };
   });
-  const rank = { breached: 0, at_risk: 1, on_track: 2, paused: 3, met: 4, 'n/a': 5 };
-  rows.sort((a, b) => (rank[a.sla?.resolve?.state] ?? 9) - (rank[b.sla?.resolve?.state] ?? 9)
-    || new Date(a.created_at) - new Date(b.created_at));
+  // Newest first (16 Oct: the lead reads the queue by date, today at the top).
+  rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at) || b.id - a.id);
   const lanes = { ready_to_return: 0, lead_turn: 0, needs_technician: 0, in_progress: 0 };
   for (const r of rows) lanes[r.lane] += 1;
   const requests = (await pool.query(`SELECT COUNT(*)::int AS n FROM support_requests WHERE status = 'pending'`)).rows[0].n;

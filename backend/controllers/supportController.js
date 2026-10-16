@@ -1120,7 +1120,7 @@ const getTicketWithItems = async (ticketId, user) => {
     `;
     const params = [ticketId];
     if (techView && !leadView) {
-        itemsSql += ' AND i.assigned_to = $2';
+        itemsSql += ' AND (i.assigned_to = $2 OR i.pickup_assigned_to = $2)';
         params.push(user.user_id);
     }
     itemsSql += ' ORDER BY i.id ASC';
@@ -1384,7 +1384,8 @@ exports.getCustomerAssets = async (req, res) => {
                     vsn.extra->>'storage' AS storage,
                     vsn.extra->>'gpu' AS gpu,
                     vsn.extra->>'screen_size' AS screen_size,
-                    vsn.inventory_status AS asset_bucket
+                    vsn.inventory_status AS asset_bucket,
+                    vsn.delivered_at
              FROM vendor_serial_numbers vsn
              WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL
                AND vsn.inventory_status = ANY($2::text[])
@@ -1396,7 +1397,7 @@ exports.getCustomerAssets = async (req, res) => {
                     AND COALESCE(dcl.status, '') IN ('pending', 'processing', 'shipped', 'in_transit', 'reached')
                     AND dcl.serial_number::text ILIKE '%' || COALESCE(vsn.inventory_asset_code, vsn.serial_number) || '%'
                )
-             ORDER BY vsn.inventory_asset_code`,
+             ORDER BY vsn.delivered_at DESC NULLS LAST, vsn.inventory_asset_code`,
             [customerId, SUPPORT_TICKET_ELIGIBLE_STATUSES]
         );
         const assets = rows;
@@ -1559,6 +1560,21 @@ exports.getNavBadges = async (req, res) => {
     }
 };
 
+/**
+ * The ticket's customer name: what the caller sent, else the customer record's
+ * company name. The Carret New ticket screen sends only customer_id, so seven
+ * QA tickets (#3639 … #3780) were saved with a blank customer name.
+ */
+async function resolveTicketCustomerName(client, customerId, sent) {
+    const name = String(sent ?? '').trim();
+    if (name) return name;
+    const { rows } = await client.query(
+        `SELECT COALESCE(NULLIF(TRIM(company_name), ''), name) AS n FROM customers WHERE customer_id = $1`,
+        [customerId]
+    );
+    return rows[0]?.n || null;
+}
+
 /** Name of the person who raised the ticket (not the company). */
 function cleanContactName(value) {
     const name = String(value ?? '').trim().replace(/\s+/g, ' ');
@@ -1632,6 +1648,7 @@ exports.createTicket = async (req, res) => {
 
         const hasUnassigned = items.some((item) => !item.assigned_to);
         const initialStatus = hasUnassigned ? TICKET_OPEN : TICKET_IN_PROGRESS;
+        const ticketCustomerName = await resolveTicketCustomerName(client, customer_id, customer_name);
         const ticketRes = await client.query(
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
@@ -1641,7 +1658,7 @@ exports.createTicket = async (req, res) => {
             ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
             [
                 customer_id,
-                customer_name || null,
+                ticketCustomerName,
                 phones.customer_phone || null,
                 initialStatus,
                 req.user.user_id,
@@ -1973,7 +1990,7 @@ exports.addComment = async (req, res) => {
     }
 
     const itemRes = await pool.query(
-        'SELECT ticket_id, assigned_to FROM support_ticket_items WHERE id = $1',
+        'SELECT ticket_id, assigned_to, pickup_assigned_to FROM support_ticket_items WHERE id = $1',
         [itemId]
     );
     if (itemRes.rows.length === 0) {
@@ -1985,7 +2002,8 @@ exports.addComment = async (req, res) => {
     } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
     }
-    if (isSupportTechnician(req.user) && !canManageAsTicketLead(req.user) && item.assigned_to !== req.user.user_id) {
+    if (isSupportTechnician(req.user) && !canManageAsTicketLead(req.user) && item.assigned_to !== req.user.user_id
+        && item.pickup_assigned_to !== req.user.user_id) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -3468,6 +3486,7 @@ exports.createPickupTicket = async (req, res) => {
 
         const firstMachine = machinesList[0];
         const ttspl = firstMachine.unique_serial_number || firstMachine.ttspl_id || null;
+        const ticketCustomerName = await resolveTicketCustomerName(client, customer_id, customer_name);
         const ticketRes = await client.query(
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
@@ -3477,7 +3496,7 @@ exports.createPickupTicket = async (req, res) => {
                       'pickup',$11,$12,'pickup',$13)
             RETURNING *`,
             [
-                customer_id, customer_name || null, customer_phone || null,
+                customer_id, ticketCustomerName, customer_phone || null,
                 req.user.user_id,
                 ['normal', 'high', 'urgent'].includes(priority) ? priority : 'normal',
                 top_level_remarks || null,

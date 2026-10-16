@@ -12,7 +12,7 @@ import { LANES, SLA_TONE, STEP_LABEL, errMsg, slaText, when } from './serveShare
 /**
  * Serve → Queue (the support lead's desk, claude/carret-support.md step 4).
  *
- * Every open ticket in one of four lanes — who acts next — worst SLA first.
+ * Every open ticket in one of four lanes — who acts next — newest first.
  * A row opens the ticket record, where assign, appointment, hold, WFH charge
  * and the rest live. Customer requests from the QR page / portal are counted
  * on top and open their existing screen.
@@ -68,7 +68,7 @@ export default function QueuePage() {
     <DeskShell
       title="Support queue"
       breadcrumb="Support"
-      subtitle="Every open ticket, by who acts next — the latest first to go late at the top."
+      subtitle="Every open ticket, by who acts next — newest first."
       actions={hasPermission('support_tickets', 'create') && <Button variant="primary" onClick={() => navigate('/carret/serve/tickets/new')}>New ticket</Button>}
     >
       <div className="c-stack">

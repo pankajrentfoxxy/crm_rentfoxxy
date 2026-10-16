@@ -21,6 +21,7 @@ export const verifyPickupOtp = (id, otp) => api.post(item(id, '/verify-pickup-ot
 /** The customer keeps this laptop: it moves to a new Return DC with its own OTP. */
 export const collectLater = (id, body) => api.post(item(id, '/collect-later'), body);
 export const fetchMyParts = (params) => api.get('/support-parts/bucket', { params });
+export const addItemComment = (id, body) => api.post(item(id, '/comments'), { body });
 export const markPartFitted = (reqId, body) => api.patch(`/support-parts/requests/${reqId}/mark-used`, body);
 
 /* ---- Lead desk ---- */

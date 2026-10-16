@@ -19,6 +19,7 @@ import DamageReportDrawer from './DamageReportDrawer';
 import TicketNextStep from './TicketNextStep';
 import TicketReturnDcsPanel from './TicketReturnDcsPanel';
 import TicketLoanPanel from './loan/TicketLoanPanel';
+import ItemComments from './ItemComments';
 import { SLA_TONE, STEP_LABEL, errMsg, when } from './serveShared';
 
 /**
@@ -186,6 +187,16 @@ export default function TicketRecordPage() {
         )}
         <Section title={`Laptops · ${items.length}`}>
           <DataTable columns={itemCols} rows={items} rowKey={(i) => i.id} />
+        </Section>
+        <Section title={`Comments · ${items.reduce((n, i) => n + (i.comments || []).length, 0)}`}>
+          <div className="c-stack">
+            {items.map((i) => (
+              <div key={i.id} className="c-stack" style={{ gap: '6px' }}>
+                {items.length > 1 && <strong className="font-mono">{i.ttspl_id || i.unique_serial_number || i.serial_number}</strong>}
+                <ItemComments item={i} canWrite={!closed && !['cancelled'].includes(i.status)} onAdded={load} />
+              </div>
+            ))}
+          </div>
         </Section>
         <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
         <TicketLoanPanel ticketId={tk.id} refreshKey={items.map((i) => `${i.id}:${i.status}`).join(',')} />

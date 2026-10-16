@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Field, FormGrid, Select, Textarea } from '../../../components/carret';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Field, FormGrid, SearchSelect, Select, Textarea } from '../../../components/carret';
 import { fetchIssueCatalog } from './serveApi';
 
 /**
@@ -34,12 +34,44 @@ export function issueComplete(v) {
   return Boolean(v?.type_id && v?.subtype_id && v?.issue_id);
 }
 
+/**
+ * Every Type › Subtype › Issue as one searchable option. Typing "hardware"
+ * lists all hardware issues, "hardware display" narrows to that subtype;
+ * picking one fills all three dropdowns.
+ */
+function issueOptions(types) {
+  const out = [];
+  for (const t of types) {
+    for (const s of t.subtypes || []) {
+      for (const i of s.issues || []) {
+        out.push({ value: `${t.id}:${s.id}:${i.id}`, label: `${t.name} › ${s.name} › ${i.name}` });
+      }
+    }
+  }
+  return out;
+}
+
 export function IssuePicker({ catalog, value, onChange, label = 'Issue', required = true, cols = 3, idPrefix = 'issue' }) {
   const types = catalog?.types || [];
   const type = types.find((t) => String(t.id) === String(value.type_id));
   const sub = type?.subtypes.find((s) => String(s.id) === String(value.subtype_id));
+  const options = useMemo(() => issueOptions(catalog?.types || []), [catalog]);
+  const combined = issueComplete(value) ? `${value.type_id}:${value.subtype_id}:${value.issue_id}` : '';
   return (
     <FormGrid cols={cols}>
+      <Field label={`Search ${label.toLowerCase()}`} span={cols} hint="Type a word — e.g. hardware, display, battery — and pick; it fills type, subtype and issue.">
+        <SearchSelect
+          id={`${idPrefix}-search`}
+          value={combined}
+          onChange={(e) => {
+            const [type_id, subtype_id, issue_id] = String(e.target.value).split(':');
+            if (issue_id) onChange({ type_id, subtype_id, issue_id });
+          }}
+          placeholder={catalog ? 'Search type, subtype or issue…' : 'Loading…'}
+          options={options}
+          disabled={!catalog}
+        />
+      </Field>
       <Field label={`${label} — type`} required={required}>
         <Select
           id={`${idPrefix}-type`}

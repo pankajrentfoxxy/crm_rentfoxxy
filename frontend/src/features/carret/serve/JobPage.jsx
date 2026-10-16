@@ -14,6 +14,7 @@ import {
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
 import DamageReportDrawer from './DamageReportDrawer';
 import CollectLaterDrawer from './CollectLaterDrawer';
+import ItemComments from './ItemComments';
 import { FindingFields, emptyFinding, findingBody, findingError, useIssueCatalog } from './IssueFields';
 
 /**
@@ -76,9 +77,14 @@ export default function JobPage() {
   }, [itemId]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (job && !finding) setFinding(emptyFinding(job.reported)); }, [job, finding]);
+  // The ticket feeds the part request form and the comment thread with the lead.
+  const loadTicket = useCallback((ticketId) => {
+    fetchTicket(ticketId).then(({ data }) => setTicket(data)).catch(() => {});
+  }, []);
   useEffect(() => {
-    if (result === 'parts' && job && !ticket) fetchTicket(job.ticket_id).then(({ data }) => setTicket(data)).catch(() => {});
-  }, [result, job, ticket]);
+    if (job?.ticket_id && !ticket) loadTicket(job.ticket_id);
+  }, [job, ticket, loadTicket]);
+  const ticketItem = (ticket?.items || ticket?.ticket?.items || []).find((i) => String(i.id) === String(job?.item_id));
 
   const run = async (fn, ok) => {
     setBusy(true);
@@ -262,6 +268,11 @@ export default function JobPage() {
             Hand the laptop in at the gate with Return DC <strong className="font-mono">{job.return_dc_number || '—'}</strong>. The guard scans it in and the job leaves your list.
           </Notice>
         )}
+
+        <div className="c-card" style={{ padding: '16px' }}>
+          <strong style={{ display: 'block', marginBottom: '8px' }}>Comments with your lead</strong>
+          {ticketItem ? <ItemComments item={ticketItem} onAdded={() => loadTicket(job.ticket_id)} /> : <div className="text-ink-3">Loading…</div>}
+        </div>
 
         {/* DM1: damage found at the visit / pickup — part, issue and photo; the warehouse prices it. */}
         <Button variant="quiet" onClick={() => setDamageOpen(true)} style={{ width: '100%', marginTop: '12px' }}>Report damage on this laptop</Button>

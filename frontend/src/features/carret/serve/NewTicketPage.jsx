@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
@@ -18,6 +18,8 @@ import TermsBadge from './TermsBadge';
  * (Type › Subtype › Issue, required) per laptop → priority, visit slot, contact → a complaint ticket. Pickup, replacement
  * and Service DC are then run from the ticket record (TicketActions).
  */
+const LAPTOPS_PAGE = 5;
+
 export default function NewTicketPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
@@ -29,6 +31,9 @@ export default function NewTicketPage() {
   const [picked, setPicked] = useState({}); // id -> { issue: {type_id, subtype_id, issue_id}, remarks }
   const [f, setF] = useState({ priority: 'normal', visit: '', contact: '', phone: '', alt: '', email: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
+  // A customer can have hundreds of laptops: show the 5 delivered last, a search, and "Show more".
+  const [laptopQ, setLaptopQ] = useState('');
+  const [laptopShown, setLaptopShown] = useState(LAPTOPS_PAGE);
 
   useEffect(() => {
     if (customer || q.trim().length < 2) { setCustomers([]); return undefined; }
@@ -40,6 +45,8 @@ export default function NewTicketPage() {
   useEffect(() => {
     if (!customer) { setLaptops(null); return; }
     setLaptops(null);
+    setLaptopQ('');
+    setLaptopShown(LAPTOPS_PAGE);
     fetchCustomerLaptops(customer.customer_id)
       .then(({ data }) => { setLaptops(data.assets || []); if (data.wfh_charge) setWfhCharge(data.wfh_charge); })
       .catch((e) => { setLaptops([]); toast.error(errMsg(e, 'Could not load the laptops')); });
@@ -54,6 +61,18 @@ export default function NewTicketPage() {
   const setPick = (id, k, v) => setPicked((p) => ({ ...p, [id]: { ...p[id], [k]: v } }));
   const chosen = (laptops || []).filter((a) => picked[a.id]);
   const wfhChosen = chosen.filter((a) => a.is_wfh);
+  const matching = useMemo(() => {
+    const term = laptopQ.trim().toLowerCase();
+    if (!term) return laptops || [];
+    return (laptops || []).filter((a) => [a.unique_serial_number, a.serial_number, a.model_name, a.processor, a.ram, a.storage]
+      .some((v) => String(v || '').toLowerCase().includes(term)));
+  }, [laptops, laptopQ]);
+  // Picked laptops stay on screen even when the search or the 5-row limit would hide them.
+  const visibleLaptops = useMemo(() => {
+    const shown = matching.slice(0, laptopShown);
+    const ids = new Set(shown.map((a) => a.id));
+    return [...chosen.filter((a) => !ids.has(a.id)), ...shown];
+  }, [matching, laptopShown, chosen]);
 
   const save = async () => {
     if (!customer) { toast.error('Choose the customer'); return; }
@@ -140,7 +159,39 @@ export default function NewTicketPage() {
         {customer && (
           <Section title={`2 · Which laptop(s)${chosen.length ? ` · ${chosen.length} picked` : ''}`}>
             {laptops === null ? <EmptyState title="Loading…" /> : (
-              <DataTable columns={cols} rows={laptops} rowKey={(a) => a.id} onRowClick={toggle} empty={<EmptyState title="No laptops with this customer" />} />
+              <>
+                {laptops.length > LAPTOPS_PAGE && (
+                  <div className="flex items-center" style={{ gap: '12px', marginBottom: '8px' }}>
+                    <Input
+                      type="search"
+                      placeholder="Search TTSPL, serial, model or spec"
+                      value={laptopQ}
+                      onChange={(e) => { setLaptopQ(e.target.value); setLaptopShown(LAPTOPS_PAGE); }}
+                      style={{ maxWidth: '22rem' }}
+                      aria-label="Search laptops"
+                    />
+                    <span className="text-ink-3">
+                      {laptopQ.trim() ? `${matching.length} of ${laptops.length} match` : `${laptops.length} laptops · latest delivered first`}
+                    </span>
+                  </div>
+                )}
+                <DataTable
+                  columns={cols}
+                  rows={visibleLaptops}
+                  rowKey={(a) => a.id}
+                  onRowClick={toggle}
+                  empty={<EmptyState title={laptopQ.trim() ? 'No laptop matches the search' : 'No laptops with this customer'} />}
+                />
+                {matching.length > laptopShown && (
+                  <div className="flex items-center" style={{ gap: '8px', marginTop: '8px' }}>
+                    <Button variant="quiet" onClick={() => setLaptopShown((n) => n + 10)}>Show more ({matching.length - laptopShown} more)</Button>
+                    <Button variant="quiet" onClick={() => setLaptopShown(matching.length)}>Show all</Button>
+                  </div>
+                )}
+                {laptopShown > LAPTOPS_PAGE && matching.length > LAPTOPS_PAGE && (
+                  <Button variant="quiet" onClick={() => setLaptopShown(LAPTOPS_PAGE)} style={{ marginTop: '4px' }}>Show fewer</Button>
+                )}
+              </>
             )}
             {chosen.some((a) => a.lock_in_active) && (
               <Notice tone="warn" title="In lock-in">
