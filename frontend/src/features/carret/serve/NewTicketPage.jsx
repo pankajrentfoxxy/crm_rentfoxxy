@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
@@ -9,6 +9,7 @@ import { createTicket, fetchCustomerLaptops, searchCustomers } from './serveApi'
 import { IssuePicker, emptyIssue, issueComplete, useIssueCatalog } from './IssueFields';
 import { errMsg } from './serveShared';
 import TermsBadge from './TermsBadge';
+import { lookupPincode, sanitizePincode } from '../../../utils/pincodeLookup';
 
 /**
  * Serve → New ticket (support lead, claude/carret-support.md step 4).
@@ -19,6 +20,37 @@ import TermsBadge from './TermsBadge';
  * and Service DC are then run from the ticket record (TicketActions).
  */
 const LAPTOPS_PAGE = 5;
+const code = (a) => a.unique_serial_number || a.serial_number;
+const PIN_RE = /\b\d{6}\b/;
+
+/** A DC / customer shipping address → the form's visit fields. The pincode is
+ *  taken out of the street text (it has its own field) and found there when the
+ *  pincode field was left empty. */
+function visitFromShipTo(s) {
+  if (!s) return null;
+  const raw = String(s.address || '').replace(/\s*\n+\s*/g, ', ').replace(/\s{2,}/g, ' ').trim();
+  // The pincode typed into the address beats an old DC's zip_code, which is often wrong.
+  const pin = sanitizePincode(s.pincode) || (raw.match(PIN_RE) || [''])[0] || sanitizePincode(s.zip_code);
+  const street = raw.replace(new RegExp(PIN_RE.source, 'g'), '').replace(/\(\s*\)/g, '')
+    .replace(/\s*-\s*(?=,|$)/g, '').replace(/(\s*,\s*)+/g, ', ')
+    .replace(/[\s,-]+$/, '').replace(/^[\s,]+/, '');
+  return {
+    contact: String(s.name || '').trim(),
+    phone: String(s.phone || '').replace(/\D/g, '').slice(-10),
+    address: street,
+    pincode: pin.length === 6 ? pin : '',
+    city: String(s.city || '').trim(),
+    state: String(s.state || '').trim(),
+  };
+}
+
+/** One line for the ticket: street, then city / state unless the street already says them, then the pincode. */
+function formatVisitAddress({ address, city, state, pincode }) {
+  const street = String(address || '').trim();
+  const low = street.toLowerCase();
+  const tail = [city, state].map((v) => String(v || '').trim()).filter((v) => v && !low.includes(v.toLowerCase()));
+  return `${[street, ...tail].filter(Boolean).join(', ')}${pincode ? ` - ${pincode}` : ''}`;
+}
 
 export default function NewTicketPage() {
   const navigate = useNavigate();
@@ -29,7 +61,14 @@ export default function NewTicketPage() {
   const [wfhCharge, setWfhCharge] = useState(799);
   const catalog = useIssueCatalog();
   const [picked, setPicked] = useState({}); // id -> { issue: {type_id, subtype_id, issue_id}, remarks }
-  const [f, setF] = useState({ priority: 'normal', visit: '', contact: '', phone: '', alt: '', email: '', address: '', note: '' });
+  const [f, setF] = useState({
+    priority: 'normal', visit: '', contact: '', phone: '', alt: '', email: '', address: '', pincode: '', city: '', state: '', note: '',
+  });
+  const [customerShipTo, setCustomerShipTo] = useState(null);
+  const [pinLooking, setPinLooking] = useState(false);
+  // Fields Support has typed into are not overwritten by the laptop's shipping details.
+  const touched = useRef(new Set());
+  const prefilledFrom = useRef(null);
   const [busy, setBusy] = useState(false);
   // A customer can have hundreds of laptops: show the 5 delivered last, a search, and "Show more".
   const [laptopQ, setLaptopQ] = useState('');
@@ -47,20 +86,71 @@ export default function NewTicketPage() {
     setLaptops(null);
     setLaptopQ('');
     setLaptopShown(LAPTOPS_PAGE);
+    setCustomerShipTo(null);
     fetchCustomerLaptops(customer.customer_id)
-      .then(({ data }) => { setLaptops(data.assets || []); if (data.wfh_charge) setWfhCharge(data.wfh_charge); })
+      .then(({ data }) => {
+        setLaptops(data.assets || []);
+        setCustomerShipTo(data.customer_ship_to || null);
+        if (data.wfh_charge) setWfhCharge(data.wfh_charge);
+      })
       .catch((e) => { setLaptops([]); toast.error(errMsg(e, 'Could not load the laptops')); });
-    setF((x) => ({ ...x, contact: '', phone: customer.customer_number || customer.contact_person_number || '' }));
+    touched.current = new Set();
+    prefilledFrom.current = null;
+    setF((x) => ({
+      ...x, contact: '', phone: customer.customer_number || customer.contact_person_number || '', address: '', pincode: '', city: '', state: '',
+    }));
   }, [customer]);
 
-  const toggle = (a) => setPicked((p) => {
-    const n = { ...p };
-    if (n[a.id]) delete n[a.id]; else n[a.id] = { issue: emptyIssue(), remarks: '' };
-    return n;
-  });
+  // City and state follow the pincode.
+  const fillFromPincode = async (pin) => {
+    if (pin.length !== 6) return;
+    setPinLooking(true);
+    try {
+      const info = await lookupPincode(pin);
+      if (!info) { toast.error(`No city / state found for pincode ${pin} — type them in`); return; }
+      setF((x) => (x.pincode !== pin ? x : { ...x, city: info.city || x.city, state: info.state || x.state }));
+    } finally {
+      setPinLooking(false);
+    }
+  };
+
+  const toggle = (a) => {
+    if (a.open_ticket && !picked[a.id]) {
+      toast.error(`${code(a)} already has an open ticket #${a.open_ticket.id} — work on that ticket instead`);
+      return;
+    }
+    setPicked((p) => {
+      const n = { ...p };
+      if (n[a.id]) delete n[a.id]; else n[a.id] = { issue: emptyIssue(), remarks: '' };
+      return n;
+    });
+  };
+  const setField = (k, v) => { touched.current.add(k); setF((x) => ({ ...x, [k]: v })); };
   const setPick = (id, k, v) => setPicked((p) => ({ ...p, [id]: { ...p[id], [k]: v } }));
   const chosen = (laptops || []).filter((a) => picked[a.id]);
   const wfhChosen = chosen.filter((a) => a.is_wfh);
+  const firstChosen = chosen[0] || null;
+  // Picked laptops delivered to different places: the form holds one visit address.
+  const shipPlaces = new Set(chosen.map((a) => visitFromShipTo(a.ship_to)?.address.toLowerCase()).filter(Boolean));
+
+  // Visit address, name and phone default to where the first picked laptop was shipped
+  // (its DC), else the customer's shipping address. Support can change them before raising.
+  useEffect(() => {
+    if (!firstChosen || prefilledFrom.current === firstChosen.id) return;
+    prefilledFrom.current = firstChosen.id;
+    const v = visitFromShipTo(firstChosen.ship_to) || visitFromShipTo(customerShipTo);
+    if (!v) return;
+    setF((x) => {
+      const n = { ...x };
+      for (const k of ['contact', 'phone', 'address', 'pincode', 'city', 'state']) {
+        if (!touched.current.has(k) && v[k]) n[k] = v[k];
+      }
+      return n;
+    });
+    // Pincode lookup gives the full city / state names (DCs often say "HR" or leave the city blank).
+    if (!touched.current.has('pincode') && v.pincode) fillFromPincode(v.pincode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstChosen, customerShipTo]);
   const matching = useMemo(() => {
     const term = laptopQ.trim().toLowerCase();
     if (!term) return laptops || [];
@@ -81,7 +171,13 @@ export default function NewTicketPage() {
       if (!issueComplete(picked[a.id].issue)) { toast.error(`Choose type, subtype and issue for ${a.unique_serial_number || a.serial_number}`); return; }
       if (picked[a.id].remarks.trim().length < 3) { toast.error(`Describe the problem on ${a.unique_serial_number || a.serial_number}`); return; }
     }
+    const blocked = chosen.find((a) => a.open_ticket);
+    if (blocked) { toast.error(`${code(blocked)} already has an open ticket #${blocked.open_ticket.id}`); return; }
     if (!f.contact.trim()) { toast.error('Enter the name of the person who raised this ticket'); return; }
+    if (f.phone && f.phone.length !== 10) { toast.error('Phone for the technician must be 10 digits'); return; }
+    if (f.address.trim().length < 5) { toast.error('Enter the visit address'); return; }
+    if (f.pincode.length !== 6) { toast.error('Enter the 6-digit pincode of the visit address'); return; }
+    if (!f.city.trim() || !f.state.trim()) { toast.error('Enter the city and state of the visit address'); return; }
     setBusy(true);
     try {
       const { data } = await createTicket({
@@ -91,7 +187,7 @@ export default function NewTicketPage() {
         ticket_contact_name: f.contact.trim(),
         ticket_alt_phone: f.alt || undefined,
         ticket_email: f.email || undefined,
-        ticket_address: f.address || undefined,
+        ticket_address: formatVisitAddress(f),
         top_level_remarks: f.note || undefined,
         priority: f.priority,
         ticket_category: 'complaint',
@@ -118,17 +214,52 @@ export default function NewTicketPage() {
       navigate(`/carret/serve/tickets/${data.ticket.id}`);
     } catch (e) {
       toast.error(errMsg(e, 'Could not raise the ticket'));
+      // Someone else opened a ticket for the laptop meanwhile: mark it like the list does.
+      const dup = e?.response?.data?.duplicate;
+      if (dup?.id) {
+        const m = String(e.response.data.message || '').match(/Machine (\S+) already/);
+        setLaptops((ls) => (ls || []).map((a) => (m && code(a) === m[1] ? { ...a, open_ticket: dup } : a)));
+      }
       setBusy(false);
     }
   };
 
   const cols = [
-    { key: 'x', header: '', width: '2.5rem', render: (a) => <input type="checkbox" aria-label={`Pick ${a.unique_serial_number}`} checked={Boolean(picked[a.id])} onChange={() => toggle(a)} onClick={(e) => e.stopPropagation()} /> },
+    {
+      key: 'x',
+      header: '',
+      width: '2.5rem',
+      render: (a) => (
+        <input
+          type="checkbox"
+          aria-label={`Pick ${a.unique_serial_number}`}
+          checked={Boolean(picked[a.id])}
+          disabled={Boolean(a.open_ticket) && !picked[a.id]}
+          title={a.open_ticket ? `Open ticket #${a.open_ticket.id}` : undefined}
+          onChange={() => toggle(a)}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ),
+    },
     { key: 't', header: 'Laptop', render: (a) => <DocNumber value={a.unique_serial_number || a.serial_number} />, sub: (a) => a.model_name },
     { key: 's', header: 'Specs', render: (a) => [a.processor, a.ram, a.storage].filter(Boolean).join(' · ') || '—' },
     { key: 'l', header: 'Lock-in / warranty', render: (a) => <TermsBadge laptop={a} /> },
     { key: 'w', header: '', render: (a) => (a.is_wfh ? <span style={{ color: 'var(--alert-warn)', fontWeight: 600 }}>Work from home</span> : null) },
+    {
+      key: 'o',
+      header: 'Open ticket',
+      render: (a) => (a.open_ticket ? (
+        <Button
+          variant="quiet"
+          onClick={(e) => { e.stopPropagation(); navigate(`/carret/serve/tickets/${a.open_ticket.id}`); }}
+          title="This laptop already has an open ticket — a new one cannot be raised"
+        >
+          Ticket #{a.open_ticket.id} · {String(a.open_ticket.status || '').replace(/_/g, ' ')} →
+        </Button>
+      ) : null),
+    },
   ];
+  const blockedChosen = chosen.filter((a) => a.open_ticket);
 
   return (
     <DeskShell title="New support ticket" breadcrumb="Support / Queue">
@@ -193,6 +324,12 @@ export default function NewTicketPage() {
                 )}
               </>
             )}
+            {blockedChosen.length > 0 && (
+              <Notice tone="crit" title="Already has an open ticket">
+                {blockedChosen.map((a) => `${code(a)} (ticket #${a.open_ticket.id})`).join(', ')} — untick {blockedChosen.length === 1 ? 'it' : 'them'} and
+                work on the open ticket instead; a second ticket cannot be raised for the same laptop.
+              </Notice>
+            )}
             {chosen.some((a) => a.lock_in_active) && (
               <Notice tone="warn" title="In lock-in">
                 {chosen.filter((a) => a.lock_in_active).map((a) => a.unique_serial_number).join(', ')} cannot be returned before the lock-in ends
@@ -238,11 +375,39 @@ export default function NewTicketPage() {
                 <Select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} options={[{ value: 'normal', label: 'Normal' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} />
               </Field>
               <Field label="Visit slot agreed (optional)"><Input type="datetime-local" value={f.visit} onChange={(e) => setF({ ...f, visit: e.target.value })} /></Field>
-              <Field label="Raised by (person)" required span={3}><Input value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} maxLength={150} placeholder="Name of the person who raised the complaint" /></Field>
-              <Field label="Phone for the technician"><Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })} inputMode="numeric" /></Field>
+              <Field label="Raised by (person)" required span={3} hint="Filled from the shipping contact on the laptop's challan — change it if someone else raised it">
+                <Input value={f.contact} onChange={(e) => setField('contact', e.target.value)} maxLength={150} placeholder="Name of the person who raised the complaint" />
+              </Field>
+              <Field label="Phone for the technician" hint="Shipping phone by default"><Input value={f.phone} onChange={(e) => setField('phone', e.target.value.replace(/\D/g, '').slice(0, 10))} inputMode="numeric" /></Field>
               <Field label="Alternate phone"><Input value={f.alt} onChange={(e) => setF({ ...f, alt: e.target.value.replace(/\D/g, '').slice(0, 10) })} inputMode="numeric" /></Field>
               <Field label="Email (feedback link goes here)"><Input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-              <Field label="Visit address" span={3}><Textarea rows={2} value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="Where the technician should go" /></Field>
+              <Field
+                label="Visit address"
+                required
+                span={3}
+                hint={shipPlaces.size > 1 ? 'The picked laptops were shipped to different addresses — this is the first one; check it' : 'Where the laptop was shipped — change it if the technician should go elsewhere'}
+              >
+                <Textarea rows={2} value={f.address} onChange={(e) => setField('address', e.target.value)} placeholder="Building, street, area" />
+              </Field>
+              <Field label="Pincode" required error={f.pincode && f.pincode.length !== 6 ? 'Pincode must be 6 digits' : undefined} hint={!f.pincode ? 'Missing — enter it; city and state fill in by themselves' : (pinLooking ? 'Looking up city and state…' : undefined)}>
+                <Input
+                  value={f.pincode}
+                  inputMode="numeric"
+                  maxLength={6}
+                  onChange={(e) => {
+                    const pin = sanitizePincode(e.target.value);
+                    setField('pincode', pin);
+                    if (pin.length === 6) fillFromPincode(pin);
+                  }}
+                />
+              </Field>
+              <Field label="City" required><Input value={f.city} onChange={(e) => setField('city', e.target.value)} maxLength={120} /></Field>
+              <Field label="State" required><Input value={f.state} onChange={(e) => setField('state', e.target.value)} maxLength={120} /></Field>
+              {f.address.trim() && (
+                <Field label="The technician sees" span={3}>
+                  <div className="text-ink-2">{formatVisitAddress(f)}</div>
+                </Field>
+              )}
               <Field label="Note for the technician" span={3}><Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></Field>
             </FormGrid>
             <div className="flex justify-end" style={{ marginTop: '12px' }}>

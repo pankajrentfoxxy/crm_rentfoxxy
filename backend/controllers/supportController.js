@@ -646,9 +646,11 @@ const machineKey = (item) => {
 
 /** Open item on any non-closed ticket for this customer/machine. */
 const findOpenTicketForMachine = async (client, customerId, item, excludeTicketId = null) => {
-    const serial = (item.ttspl_id || item.unique_serial_number || item.serial_number || '').trim();
+    // Any of the laptop's codes (TTSPL or serial) matches any code stored on an open item.
+    const codes = [...new Set([item.ttspl_id, item.unique_serial_number, item.serial_number]
+        .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
     const invId = item.customer_inventory_id ? parseInt(item.customer_inventory_id, 10) : null;
-    if (!invId && !serial) return null;
+    if (!invId && !codes.length) return null;
 
     const params = [customerId];
     let sql = `
@@ -666,8 +668,10 @@ const findOpenTicketForMachine = async (client, customerId, item, excludeTicketI
         params.push(invId);
         sql += ` AND i.customer_inventory_id = $${params.length}`;
     } else {
-        params.push(serial);
-        sql += ` AND (i.serial_number = $${params.length} OR i.unique_serial_number = $${params.length} OR i.ttspl_id = $${params.length})`;
+        params.push(codes);
+        sql += ` AND (UPPER(TRIM(i.serial_number)) = ANY($${params.length}::text[])
+                   OR UPPER(TRIM(i.unique_serial_number)) = ANY($${params.length}::text[])
+                   OR UPPER(TRIM(i.ttspl_id)) = ANY($${params.length}::text[]))`;
     }
     sql += ' LIMIT 1';
     const { rows } = await client.query(sql, params);
@@ -1385,8 +1389,18 @@ exports.getCustomerAssets = async (req, res) => {
                     vsn.extra->>'gpu' AS gpu,
                     vsn.extra->>'screen_size' AS screen_size,
                     vsn.inventory_status AS asset_bucket,
-                    vsn.delivered_at
+                    vsn.delivered_at,
+                    ship.ship_to
              FROM vendor_serial_numbers vsn
+             -- Where it was delivered (name, phone, address, city, state, pincode on its DC):
+             -- the default visit address and contact for a new ticket.
+             LEFT JOIN LATERAL (
+                SELECT dcl.customer_shipping_address AS ship_to
+                  FROM delivery_challan_lines dcl
+                 WHERE dcl.dc_number = vsn.current_dc_number
+                   AND jsonb_typeof(dcl.customer_shipping_address) = 'object'
+                 ORDER BY dcl.id DESC LIMIT 1
+             ) ship ON TRUE
              WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL
                AND vsn.inventory_status = ANY($2::text[])
                AND vsn.delivered_at IS NOT NULL
@@ -1408,6 +1422,28 @@ exports.getCustomerAssets = async (req, res) => {
         // pickup or a replacement delivery to that laptop is chargeable.
         const codes = [...new Set((assets || []).flatMap((a) => [a.ttspl_id, a.unique_serial_number, a.serial_number])
             .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
+        // A laptop with an open ticket cannot get a second one (createTicket refuses it):
+        // show that ticket instead of letting Support pick the laptop.
+        if (codes.length) {
+            const open = await pool.query(
+                `SELECT DISTINCT ON (k) k, ticket_id, ticket_status FROM (
+                   SELECT UPPER(TRIM(c)) AS k, t.id AS ticket_id, t.status AS ticket_status
+                     FROM support_tickets t
+                     JOIN support_ticket_items i ON i.ticket_id = t.id
+                     CROSS JOIN LATERAL unnest(ARRAY[i.serial_number, i.unique_serial_number, i.ttspl_id]) c
+                    WHERE t.customer_id = $1 AND t.status NOT IN ('closed', 'cancelled')
+                      AND i.status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')
+                      AND UPPER(TRIM(c)) = ANY($2::text[])
+                 ) x ORDER BY k, ticket_id DESC`,
+                [customerId, codes]
+            );
+            const byCode = new Map(open.rows.map((r) => [r.k, { id: r.ticket_id, status: r.ticket_status }]));
+            for (const a of assets) {
+                const hit = [a.unique_serial_number, a.serial_number]
+                    .map((c) => byCode.get(String(c || '').trim().toUpperCase())).find(Boolean);
+                a.open_ticket = hit || null;
+            }
+        }
         if (codes.length) {
             const wfh = await pool.query(
                 `SELECT DISTINCT ON (k) k, is_wfh FROM (
@@ -1427,7 +1463,20 @@ exports.getCustomerAssets = async (req, res) => {
                     .some((c) => byCode.get(String(c || '').trim().toUpperCase()) === true);
             }
         }
-        res.json({ success: true, assets, wfh_charge: require('../services/supportChargesService').WFH_CHARGE });
+        // Fallback visit address when a laptop's DC has none.
+        const cust = (await pool.query(
+            `SELECT COALESCE(c.company_name, c.name) AS name, c.phone,
+                    COALESCE(NULLIF(TRIM(c.shipping_address), ''), c.address) AS address,
+                    c.shipping_city AS city, c.shipping_state AS state, c.shipping_pincode AS pincode
+               FROM customers c WHERE c.customer_id = $1`,
+            [customerId]
+        )).rows[0] || null;
+        res.json({
+            success: true,
+            assets,
+            customer_ship_to: cust,
+            wfh_charge: require('../services/supportChargesService').WFH_CHARGE,
+        });
     } catch (e) {
         console.error('support getCustomerAssets', e);
         res.status(500).json({ success: false, message: 'Failed to load assets' });
