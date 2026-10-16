@@ -110,9 +110,9 @@ function openTasks(j) {
   });
 }
 
-function Task({ i, tech, wfh, locked, actions }) {
+function Task({ i, tech, wfh, locked, actions, note }) {
   return (
-    <div className="c-jtask">
+    <div className="c-jtask" id={`task-${i.id}`}>
       <div className="min-w-0">
         <div className="c-jtask-t">{TYPE_LABEL(i)}<span>{stepText(i)}</span></div>
         <div className="c-jtask-s">
@@ -124,13 +124,14 @@ function Task({ i, tech, wfh, locked, actions }) {
             wfh?.is_wfh ? (wfh.charged ? `WFH charged ₹${Number(wfh.amount).toLocaleString('en-IN')}` : 'Work from home') : null,
           ].filter(Boolean).join(' · ')}
         </div>
+        {note && <div className="c-jtask-n">{note}</div>}
       </div>
       {!locked && <div className="c-jtask-a">{actions}</div>}
     </div>
   );
 }
 
-export default function TicketJourneys({ items, techs, wfh, locked, canDamage, onAssign, onSlot, onWfh, onDamage, onCommented }) {
+export default function TicketJourneys({ items, techs, wfh, locked, canDamage, onAssign, onSlot, onWfh, onDamage, onCommented, taskActions }) {
   const journeys = useMemo(() => buildJourneys(items), [items]);
   const [threadFor, setThreadFor] = useState(null);
   const thread = journeys.find((j) => j.key === threadFor) || null;
@@ -164,26 +165,39 @@ export default function TicketJourneys({ items, techs, wfh, locked, canDamage, o
               <FlowSteps steps={steps} className="c-flow-sm" />
               {tasks.length > 0 && (
                 <div className="c-journey-tasks">
-                  {tasks.map((i) => (
-                    <Task
-                      key={i.id}
-                      i={i}
-                      tech={techOf(i)}
-                      wfh={wfh[i.id]}
-                      locked={locked}
-                      actions={i.item_type === 'complaint' && i.outcome === 'replacement_required' ? (
-                        <Button variant="primary" onClick={() => document.getElementById('ticket-replacement')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Decide</Button>
-                      ) : (
-                        <>
-                          {i.item_type !== 'replacement' && <Button onClick={() => onAssign(i)}>{i.assigned_to || i.pickup_assigned_to ? 'Reassign' : 'Assign'}</Button>}
-                          {i.item_type !== 'replacement' && <Button variant="quiet" onClick={() => onSlot(i)}>{i.visit_scheduled_at ? 'Change slot' : 'Set slot'}</Button>}
-                          {wfh[i.id]?.is_wfh && !wfh[i.id]?.charged && (i.item_type === 'replacement' || (i.item_type === 'pickup' && i.return_dc_number)) && (
-                            <Button variant="quiet" onClick={() => onWfh(i)}>Charge WFH ₹799</Button>
-                          )}
-                        </>
-                      )}
-                    />
-                  ))}
+                  {tasks.map((i) => {
+                    // Pickup / replacement / Service DC buttons come from TicketActions.
+                    const extra = taskActions?.(i) || null;
+                    // A slot is for a visit / collection still to happen.
+                    const slotOk = i.item_type !== 'replacement'
+                      && !(i.visited_at || i.picked_up_at || i.customer_otp_verified_at || i.gate_inward_at || i.warehouse_received_at);
+                    const own = extra?.replaceDefault ? null : (
+                      <>
+                        {i.item_type !== 'replacement' && <Button onClick={() => onAssign(i)}>{i.assigned_to || i.pickup_assigned_to ? 'Reassign' : 'Assign'}</Button>}
+                        {slotOk && <Button variant="quiet" onClick={() => onSlot(i)}>{i.visit_scheduled_at ? 'Change slot' : 'Set slot'}</Button>}
+                      </>
+                    );
+                    return (
+                      <Task
+                        key={i.id}
+                        i={i}
+                        tech={techOf(i)}
+                        wfh={wfh[i.id]}
+                        locked={locked}
+                        note={extra?.note}
+                        actions={(
+                          <>
+                            {extra?.buttons}
+                            {own}
+                            {slotOk && i.item_type === 'pickup' && extra?.replaceDefault && <Button variant="quiet" onClick={() => onSlot(i)}>{i.visit_scheduled_at ? 'Change slot' : 'Set slot'}</Button>}
+                            {wfh[i.id]?.is_wfh && !wfh[i.id]?.charged && (i.item_type === 'replacement' || (i.item_type === 'pickup' && i.return_dc_number)) && (
+                              <Button variant="quiet" onClick={() => onWfh(i)}>Charge WFH ₹799</Button>
+                            )}
+                          </>
+                        )}
+                      />
+                    );
+                  })}
                 </div>
               )}
               {!locked && !j.cancelled && canDamage && j.code && !j.code.startsWith('#') && (

@@ -23,20 +23,20 @@ export function nextStepOf(data) {
   const hasPickupFor = (c) => items.some((p) => p.item_type === 'pickup' && Number(p.source_item_id) === Number(c.id) && p.status !== 'cancelled');
 
   const replace = complaints.find((i) => i.outcome === 'replacement_required' && !orders.some((o) => [o.item_id, o.complaint_item_id, o.source_item_id].map(Number).includes(Number(i.id))));
-  if (replace) return { tone: 'warn', text: `The technician says ${code(replace)} needs a pickup or a replacement. Decide: schedule a repair pickup, or start the replacement.`, action: 'replacement' };
+  if (replace) return { tone: 'warn', text: `The technician says ${code(replace)} needs a pickup or a replacement. Decide: schedule a repair pickup, or start the replacement.`, action: 'replacement', item: replace };
 
   const ready = pickups.find((p) => p.repair_ready_at && !p.service_dc_number);
   if (ready) {
     const src = items.find((c) => Number(c.id) === Number(ready.source_item_id));
     if (src && src.reported_issue_id && !src.found_issue_id) return { tone: 'good', text: `${code(ready)} is repaired. Record what was wrong and what fixed it, then raise the Service DC.`, action: 'finding' };
-    return { tone: 'good', text: `${code(ready)} is repaired and ready to go back. Raise the Service DC.`, action: 'sdc' };
+    return { tone: 'good', text: `${code(ready)} is repaired and ready to go back. Raise the Service DC.`, action: 'sdc', item: ready };
   }
 
   const unassigned = complaints.find((i) => !i.assigned_to && !hasPickupFor(i));
   if (unassigned) return { tone: 'warn', text: `${code(unassigned)} has no technician yet.`, action: 'assign', item: unassigned };
 
   const pickupToAssign = pickups.find((p) => p.effective_current_step === 'pending_dispatch' && !p.assigned_to && !p.pickup_assigned_to);
-  if (pickupToAssign) return { tone: 'warn', text: `Pickup ${tk.return_dc_number || ''} is not assigned — choose who collects it.`, action: 'pickup' };
+  if (pickupToAssign) return { tone: 'warn', text: `Pickup ${tk.return_dc_number || ''} is not assigned — choose who collects it.`, action: 'pickup', item: pickupToAssign };
 
   const open = items.filter((i) => !DONE.includes(i.status));
   if (!open.length) {
@@ -54,11 +54,12 @@ export default function TicketNextStep({ data, onAssign, onClose, canLead }) {
   const n = nextStepOf(data);
   if (!n) return null;
   const btn = {
-    replacement: <Button variant="primary" onClick={() => scrollTo('ticket-replacement')}>Go to replacement</Button>,
-    sdc: <Button variant="primary" onClick={() => scrollTo('ticket-sdc')}>Go to Service DC</Button>,
+    // Pickup, replacement and Service DC are on the laptop's card (task-<item id>).
+    replacement: <Button variant="primary" onClick={() => scrollTo(`task-${n.item?.id}`)}>Go to the laptop</Button>,
+    sdc: <Button variant="primary" onClick={() => scrollTo(`task-${n.item?.id}`)}>Go to the laptop</Button>,
     finding: <Button variant="primary" onClick={() => scrollTo('ticket-issue')}>Go to the issue</Button>,
     assign: <Button variant="primary" onClick={() => onAssign(n.item)}>Assign a technician</Button>,
-    pickup: <Button variant="primary" onClick={() => scrollTo('ticket-pickup')}>Go to pickup</Button>,
+    pickup: <Button variant="primary" onClick={() => scrollTo(`task-${n.item?.id}`)}>Go to the pickup</Button>,
     close: <Button variant="primary" onClick={onClose}>Close the ticket</Button>,
   }[n.action];
   return (

@@ -130,26 +130,36 @@ export default function TicketRecordPage() {
         <TicketNextStep data={t} canLead={canLead} onAssign={(i) => setAssignFor(i)} onClose={() => setCloseOpen(true)} />
         {onHold && <Notice tone="warn" title="On hold — waiting on the customer">{onHold.note} (since <DateTime value={onHold.from_at} />). The SLA clock is paused.</Notice>}
         {!closed && items.some((i) => i.repair_ready_at && !i.service_dc_number) && (
-          <Notice tone="good" title="Repaired — ready to go back">Raise the Service DC below to send it back to the customer.</Notice>
+          <Notice tone="good" title="Repaired — ready to go back">Raise the Service DC on its laptop card to send it back.</Notice>
         )}
 
         <div className="c-split">
           <div className="c-stack min-w-0">
-            <Section title={`Laptops · ${new Set(items.map((i) => i.ttspl_id || i.unique_serial_number || i.serial_number || i.id)).size}`}>
-              <TicketJourneys
-                items={items}
-                techs={techs}
-                wfh={wfh}
-                locked={closed}
-                canDamage={canDamage}
-                onAssign={(i) => setAssignFor(i)}
-                onSlot={openAppt}
-                onWfh={(i) => setWfhFor(i)}
-                onDamage={(i) => setDamageFor(i)}
-                onCommented={load}
-              />
-            </Section>
-            {hasPermission('support_tickets', 'edit') && tk.status !== 'cancelled' && <TicketActions data={t} techs={techs} reload={load} />}
+            {/* Pickup, replacement and Service DC buttons sit on each laptop's card;
+                TicketActions owns their drawers and hands the buttons over. */}
+            <TicketActions
+              data={t}
+              techs={techs}
+              reload={load}
+              enabled={hasPermission('support_tickets', 'edit')}
+              renderLaptops={({ taskActions, headerActions }) => (
+                <Section title={`Laptops · ${new Set(items.map((i) => i.ttspl_id || i.unique_serial_number || i.serial_number || i.id)).size}`} actions={headerActions}>
+                  <TicketJourneys
+                    items={items}
+                    techs={techs}
+                    wfh={wfh}
+                    locked={closed}
+                    canDamage={canDamage}
+                    taskActions={taskActions}
+                    onAssign={(i) => setAssignFor(i)}
+                    onSlot={openAppt}
+                    onWfh={(i) => setWfhFor(i)}
+                    onDamage={(i) => setDamageFor(i)}
+                    onCommented={load}
+                  />
+                </Section>
+              )}
+            />
             <TicketReturnDcsPanel data={t} techs={techs} canLead={canLead} closed={closed} reload={load} />
             <IssuePanel data={t} canLead={canLead && !closed} reload={load} />
             <TicketPartsPanel ticketId={tk.id} canLead={canLead && !closed} />

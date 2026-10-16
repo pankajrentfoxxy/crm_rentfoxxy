@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Button, Checkbox, ConfirmDialog, DataTable, DateTime, DocNumber, Drawer, EmptyState, Field, Input, Money, Notice, Section, Select, Textarea,
+  Button, Checkbox, ConfirmDialog, DataTable, DocNumber, Drawer, Field, Input, Money, Notice, Section, Select, Textarea,
 } from '../../../components/carret';
 import { fileUrl } from '../procure/procureShared';
 import DispatchFields, { dispatchBody, dispatchError, emptyDispatch } from './DispatchFields';
@@ -36,7 +36,7 @@ function pickupStarted(i) {
   return Boolean(i.visited_at || i.customer_otp_verified_at || i.warehouse_received_at || i.technician_esign_at || i.picked_up_at);
 }
 
-export default function TicketActions({ data, techs, reload }) {
+export default function TicketActions({ data, techs, reload, enabled = true, renderLaptops }) {
   const tk = data.ticket;
   const items = data.items || [];
   const cancelledTicket = tk.status === 'cancelled';
@@ -148,10 +148,11 @@ export default function TicketActions({ data, techs, reload }) {
   /* ---------------- early return (lock-in) ---------------- */
   const [earlyReturns, setEarlyReturns] = useState([]);
   const loadEarlyReturns = React.useCallback(() => {
+    if (!enabled) return;
     fetchEarlyReturns({ customer_id: tk.customer_id })
       .then(({ data: d }) => setEarlyReturns((d.data || []).filter((r) => Number(r.support_ticket_id) === Number(tk.id))))
       .catch(() => setEarlyReturns([]));
-  }, [tk.customer_id, tk.id]);
+  }, [tk.customer_id, tk.id, enabled]);
   useEffect(() => { loadEarlyReturns(); }, [loadEarlyReturns]);
   const [er, setEr] = useState(null);
   const openEarlyReturn = (laptops) => {
@@ -183,10 +184,12 @@ export default function TicketActions({ data, techs, reload }) {
 
   /* ---------------- replacement ---------------- */
   const [rep, setRep] = useState(null);
-  const openReplacement = async () => {
+  const openReplacement = async (onlyId = null) => {
     try {
       const { data: c } = await fetchReplacementContext(tk.id);
-      const ids = Object.fromEntries((c.eligible_items || []).map((i) => [i.id, true]));
+      const elig = c.eligible_items || [];
+      const pick = onlyId && elig.some((i) => Number(i.id) === Number(onlyId)) ? elig.filter((i) => Number(i.id) === Number(onlyId)) : elig;
+      const ids = Object.fromEntries(pick.map((i) => [i.id, true]));
       setRep({ ctx: c, ids, reason: '', rdc_action: c.open_return_dc ? 'reuse' : '', dispatch: { ...emptyDispatch(addrFrom(c.delivery_defaults)) } });
       setOpen('replacement');
     } catch (e) { toast.error(errMsg(e)); }
@@ -208,15 +211,16 @@ export default function TicketActions({ data, techs, reload }) {
   };
   // Complaint being moved to replacement, with the optional reason: { item, reason }.
   const [moveRep, setMoveRep] = useState(null);
-  const eligibleForMove = complaints.find((i) => !['resolved', 'closed', 'cancelled'].includes(i.status) && i.outcome !== 'replacement_required' && !i.replacement_flag_reason);
 
   /* ---------------- swap from repair / another laptop / resend ---------------- */
   const [swap, setSwap] = useState(null); // {kind, ctx, ids, reason, address}
-  const openSwap = async (kind) => {
+  const openSwap = async (kind, onlyPickupId = null) => {
     try {
       const { data: c } = kind === 'swap' ? await fetchSwapContext(tk.id) : await fetchRedeliveryContext(tk.id);
       if ((kind === 'swap' && !c.can_swap) || (kind === 'redelivery' && !c.can_create)) { toast.error(c.block_reason || 'Not possible now'); return; }
-      setSwap({ kind, ctx: c, ids: Object.fromEntries((c.eligible_items || []).map((i) => [i.pickup_item_id, true])), reason: '', dispatch: emptyDispatch(addrFrom(c.delivery_defaults)) });
+      const elig = c.eligible_items || [];
+      const pick = onlyPickupId && elig.some((i) => Number(i.pickup_item_id) === Number(onlyPickupId)) ? elig.filter((i) => Number(i.pickup_item_id) === Number(onlyPickupId)) : elig;
+      setSwap({ kind, ctx: c, ids: Object.fromEntries(pick.map((i) => [i.pickup_item_id, true])), reason: '', dispatch: emptyDispatch(addrFrom(c.delivery_defaults)) });
       setOpen('swap');
     } catch (e) { toast.error(errMsg(e)); }
   };
@@ -244,12 +248,14 @@ export default function TicketActions({ data, techs, reload }) {
   const showSdc = !activeOrder && repairReceived.length > 0;
   const [sdc, setSdc] = useState(null);
   useEffect(() => {
-    if (!showSdc) { setSdc(null); return; }
+    if (!showSdc || !enabled) { setSdc(null); return; }
     fetchServiceDcEligibility(tk.id).then(({ data: d }) => setSdc(d)).catch(() => setSdc(null));
-  }, [showSdc, tk.id, data]);
+  }, [showSdc, tk.id, data, enabled]);
   const [sdcForm, setSdcForm] = useState(null);
-  const openSdc = () => {
-    const ids = Object.fromEntries((sdc.eligible_items || []).filter((i) => i.eligible).map((i) => [i.id, true]));
+  const openSdc = (onlyId = null) => {
+    const elig = (sdc.eligible_items || []).filter((i) => i.eligible);
+    const pick = onlyId && elig.some((i) => Number(i.id) === Number(onlyId)) ? elig.filter((i) => Number(i.id) === Number(onlyId)) : elig;
+    const ids = Object.fromEntries(pick.map((i) => [i.id, true]));
     setSdcForm({ ids, remarks: '', dispatch: emptyDispatch(addrFrom(sdc.delivery_defaults)) });
     setOpen('sdc');
   };
@@ -264,32 +270,73 @@ export default function TicketActions({ data, techs, reload }) {
   };
   const [sdcTech, setSdcTech] = useState(null);
 
-  if (cancelledTicket) return null;
   const canSchedulePickup = !closedTicket && !tk.return_dc_number && !livePickups.some((i) => !CLOSED.includes(i.status));
+  const act = enabled && !cancelledTicket;
+
+  /*
+   * The buttons for one task on a laptop's card (16 Oct 2026: pickup,
+   * replacement and Service DC live on the laptop they are for).
+   *   buttons — what to show; replaceDefault — the card's own Assign / slot
+   *   buttons do not apply (a pickup is dispatched as a whole Return DC);
+   *   note — one extra line under the task.
+   */
+  const scrollTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  const taskActions = (i) => {
+    if (!act) return null;
+    const out = [];
+    let replaceDefault = false;
+    let note = null;
+    if (i.item_type === 'complaint') {
+      const ordered = orders.some((o) => forItem(o, i) && o.status !== 'cancelled');
+      if (i.outcome === 'replacement_required' && !ordered) {
+        replaceDefault = true;
+        out.push(<Button key="rep" variant="primary" onClick={() => openReplacement(i.id)}>{activeOrder && tk.return_dc_number ? 'Add to replacement' : 'Start replacement'}</Button>);
+        if (canSchedulePickup) out.push(<Button key="rp" onClick={() => openPickup(i)}>Repair pickup</Button>);
+        note = i.replacement_flag_reason ? `Technician: ${i.replacement_flag_reason}` : 'The technician could not fix it on site — choose replacement or repair pickup.';
+      } else if (!CLOSED.includes(i.status)) {
+        if (canSchedulePickup) out.push(<Button key="rp" variant="quiet" onClick={() => openPickup(i)}>Repair pickup</Button>);
+        if (!i.replacement_flag_reason && i.outcome !== 'replacement_required') {
+          out.push(<Button key="mv" variant="quiet" onClick={() => { setMoveRep({ item: i, reason: '' }); setOpen('moveReplacement'); }}>Replace instead</Button>);
+        }
+      }
+    } else if (i.item_type === 'pickup') {
+      const onThisRdc = tk.return_dc_number && i.return_dc_number === tk.return_dc_number;
+      if (onThisRdc) {
+        replaceDefault = true;
+        if (pendingDispatch && Number(pendingDispatch.id) === Number(i.id)) out.push(<Button key="as" variant="primary" onClick={() => openAssign(false)}>Assign pickup</Button>);
+        else if (editable && Number(editable.id) === Number(i.id)) out.push(<Button key="ch" onClick={() => openAssign(true)}>Change who collects</Button>);
+        if (courierItem && Number(courierItem.id) === Number(i.id)) out.push(<Button key="cr" variant="quiet" onClick={() => { setCourier({ courier_name: courierItem.pickup_courier_name || '', awb_number: courierItem.pickup_awb || '' }); setOpen('courier'); }}>Courier details</Button>);
+        if (cancellable) out.push(<Button key="cx" variant="quiet" onClick={() => { setCancelReason(''); setOpen('cancelPickup'); }}>Cancel pickup</Button>);
+        if (onRdc.length > 1) note = `Return DC ${tk.return_dc_number} carries ${onRdc.length} laptops — who collects applies to all.`;
+      }
+      if (i.warehouse_received_at) {
+        const isRep = (i.pickup_type || (i.source_item_id ? 'repair' : 'return')) === 'repair';
+        const sdcItem = (sdc?.eligible_items || []).find((x) => Number(x.id) === Number(i.id));
+        if (isRep && sdcItem?.eligible && sdc?.can_create) out.push(<Button key="sdc" variant="primary" onClick={() => openSdc(i.id)}>Raise Service DC</Button>);
+        if (isRep && sdcItem && !sdcItem.eligible) note = (sdcItem.reasons || []).join('; ') + (sdcItem.open_floor_ticket_id ? ` (floor ticket #${sdcItem.open_floor_ticket_id} at ${sdcItem.open_floor_ticket_stage})` : '');
+        if (isRep && !activeOrder && !i.service_dc_number) out.push(<Button key="sw" variant="quiet" onClick={() => openSwap('swap', i.id)}>Swap from repair</Button>);
+        out.push(<Button key="rd" variant="quiet" onClick={() => openSwap('redelivery', i.id)}>Send another laptop</Button>);
+      }
+    } else if (i.item_type === 'replacement') {
+      const o = orders.find((x) => forItem(x, i) && x.status !== 'cancelled') || activeOrder;
+      if (o) note = [o.sales_order_number && `Order ${o.sales_order_number}`, o.dc_number && `DC ${o.dc_number}`, o.new_machine_serial && `new ${o.new_machine_serial}`].filter(Boolean).join(' · ') || null;
+      if (warehouseReceived.length > 0 && tk.sales_order_number) out.push(<Button key="rs" variant="quiet" onClick={openResend}>Resend on the same order</Button>);
+    }
+    return { buttons: out.length ? out : null, replaceDefault, note };
+  };
+
+  const headerActions = act && canSchedulePickup ? <Button onClick={() => openPickup()}>Schedule pickup</Button> : null;
+  const sdcs = sdc?.service_dcs || [];
 
   return (
     <>
-      {/* Pickup */}
-      <div id="ticket-pickup" />
-      <Section
-        title="Pickup"
-        actions={(
-          <>
-            {canSchedulePickup && <Button variant="primary" onClick={() => openPickup()}>Schedule pickup</Button>}
-            {pendingDispatch && <Button variant="primary" onClick={() => openAssign(false)}>Assign pickup</Button>}
-            {editable && <Button onClick={() => openAssign(true)}>Change who collects</Button>}
-            {courierItem && <Button variant="quiet" onClick={() => { setCourier({ courier_name: courierItem.pickup_courier_name || '', awb_number: courierItem.pickup_awb || '' }); setOpen('courier'); }}>Courier details</Button>}
-            {cancellable && <Button variant="quiet" onClick={() => { setCancelReason(''); setOpen('cancelPickup'); }}>Cancel pickup</Button>}
-          </>
-        )}
-      >
-        {tk.return_dc_number ? (
-          <p>Return DC <DocNumber value={tk.return_dc_number} /> · {onRdc.length} laptop(s) · {onRdc.map((i) => i.pickup_method || 'not dispatched').filter((v, x, a) => a.indexOf(v) === x).join(', ')}</p>
-        ) : <p className="text-ink-3">No pickup on this ticket.</p>}
-        {earlyReturns.length > 0 && (
+      {renderLaptops?.({ taskActions, headerActions, scrollTop })}
+
+      {act && earlyReturns.length > 0 && (
+        <Section title="Early returns (lock-in)">
           <DataTable
             columns={[
-              { key: 'l', header: 'Early return', render: (r) => <DocNumber value={r.asset_code} />, sub: (r) => `Lock-in till ${fmtDay(r.lock_in_end_date)} · ${r.remaining_days} days` },
+              { key: 'l', header: 'Laptop', render: (r) => <DocNumber value={r.asset_code} />, sub: (r) => `Lock-in till ${fmtDay(r.lock_in_end_date)} · ${r.remaining_days} days` },
               { key: 's', header: 'Status', render: (r) => EARLY_RETURN_LABEL[r.status] || r.status, sub: (r) => r.sales_note || r.accounts_note || r.reason },
               { key: 'a', header: 'Charge', numeric: true, render: (r) => (r.approved_amount != null ? <Money value={r.approved_amount} /> : (r.proposed_amount != null ? <Money value={r.proposed_amount} /> : <Money value={r.full_amount} />)), sub: (r) => (r.approved_amount != null ? 'approved' : r.proposed_amount != null ? 'proposed' : 'full') },
               { key: 'x', header: '', render: (r) => (['pending_sales', 'pending_accounts', 'approved'].includes(r.status) ? <Button variant="quiet" onClick={() => setWithdrawFor(r)}>Withdraw</Button> : null) },
@@ -297,73 +344,30 @@ export default function TicketActions({ data, techs, reload }) {
             rows={earlyReturns}
             rowKey={(r) => r.id}
           />
-        )}
-      </Section>
-
-      {/* Replacement */}
-      <div id="ticket-replacement" />
-      {(complaints.length > 0 || orders.length > 0 || warehouseReceived.length > 0) && !closedTicket && (
-        <Section
-          title="Replacement"
-          actions={(
-            <>
-              {complaints.some((i) => i.outcome === 'replacement_required' && !orders.some((o) => forItem(o, i) && o.status !== 'cancelled')) && (
-                <Button variant="primary" onClick={openReplacement}>{activeOrder && tk.return_dc_number ? 'Add to replacement' : 'Start replacement'}</Button>
-              )}
-              {eligibleForMove && <Button variant="quiet" onClick={() => { setMoveRep({ item: eligibleForMove, reason: '' }); setOpen('moveReplacement'); }}>Move {code(eligibleForMove)} to replacement</Button>}
-              {repairReceived.length > 0 && !activeOrder && <Button onClick={() => openSwap('swap')}>Swap from repair</Button>}
-              {warehouseReceived.length > 0 && <Button onClick={() => openSwap('redelivery')}>Send another laptop</Button>}
-              {warehouseReceived.length > 0 && orders.some((o) => o.status !== 'cancelled') && tk.sales_order_number && <Button variant="quiet" onClick={openResend}>Resend on the same order</Button>}
-            </>
-          )}
-        >
-          {orders.length === 0 ? <p className="text-ink-3">No replacement on this ticket.</p> : (
-            <DataTable
-              columns={[
-                { key: 'o', header: 'Order', render: (o) => <DocNumber value={o.sales_order_number || `#${o.id}`} />, sub: (o) => o.dc_number || null },
-                { key: 'f', header: 'Replaces', render: (o) => <span className="font-mono">{o.old_machine_serial || '—'}</span>, sub: (o) => o.old_model || null },
-                { key: 's', header: 'Status', render: (o) => String(o.status).replace(/_/g, ' ') },
-                { key: 'd', header: 'Delivered', render: (o) => (o.delivered_at ? <DateTime value={o.delivered_at} /> : '—') },
-              ]}
-              rows={orders}
-              rowKey={(o) => o.id}
-            />
-          )}
         </Section>
       )}
 
-      {/* Service DC */}
-      {showSdc && <div id="ticket-sdc" />}
-      {showSdc && (
-        <Section title="Service DC — send the repaired laptop back" actions={sdc?.can_create && <Button variant="primary" onClick={openSdc}>Raise Service DC</Button>}>
-          {!sdc ? <EmptyState title="Loading…" /> : (
-            <>
-              {(sdc.eligible_items || []).filter((i) => !i.eligible).map((i) => (
-                <p key={i.id} className="text-ink-3"><span className="font-mono">{i.ttspl_id}</span>: {(i.reasons || []).join('; ')}{i.open_floor_ticket_id ? ` (floor ticket #${i.open_floor_ticket_id} at ${i.open_floor_ticket_stage})` : ''}</p>
-              ))}
-              {(sdc.service_dcs || []).length > 0 && (
-                <DataTable
-                  columns={[
-                    { key: 'n', header: 'Service DC', render: (d) => <DocNumber value={d.dc_number} />, sub: (d) => d.current_step || d.status },
-                    { key: 'm', header: 'Travels by', render: (d) => d.dispatch_mode || '—', sub: (d) => d.delivery_person_name || d.courier_name || null },
-                    {
-                      key: 'a',
-                      header: '',
-                      render: (d) => (
-                        <div className="flex" style={{ gap: '6px' }}>
-                          {d.pdf_path ? <a className="c-btn" href={fileUrl(d.pdf_path)} target="_blank" rel="noopener noreferrer">PDF</a>
-                            : <Button variant="quiet" onClick={() => run(() => regenerateServiceDcPdf(d.dc_number), 'PDF made')}>Make PDF</Button>}
-                          {d.assignment_editable && <Button variant="quiet" onClick={() => { setSdcTech({ dc: d.dc_number, tech: '', reason: '' }); setOpen('sdcTech'); }}>Change technician</Button>}
-                        </div>
-                      ),
-                    },
-                  ]}
-                  rows={sdc.service_dcs}
-                  rowKey={(d) => d.dc_number}
-                />
-              )}
-            </>
-          )}
+      {act && sdcs.length > 0 && (
+        <Section title="Service DCs">
+          <DataTable
+            columns={[
+              { key: 'n', header: 'Service DC', render: (d) => <DocNumber value={d.dc_number} />, sub: (d) => d.current_step || d.status },
+              { key: 'm', header: 'Travels by', render: (d) => d.dispatch_mode || '—', sub: (d) => d.delivery_person_name || d.courier_name || null },
+              {
+                key: 'a',
+                header: '',
+                render: (d) => (
+                  <div className="flex" style={{ gap: '6px' }}>
+                    {d.pdf_path ? <a className="c-btn" href={fileUrl(d.pdf_path)} target="_blank" rel="noopener noreferrer">PDF</a>
+                      : <Button variant="quiet" onClick={() => run(() => regenerateServiceDcPdf(d.dc_number), 'PDF made')}>Make PDF</Button>}
+                    {d.assignment_editable && <Button variant="quiet" onClick={() => { setSdcTech({ dc: d.dc_number, tech: '', reason: '' }); setOpen('sdcTech'); }}>Change technician</Button>}
+                  </div>
+                ),
+              },
+            ]}
+            rows={sdcs}
+            rowKey={(d) => d.dc_number}
+          />
         </Section>
       )}
 
