@@ -55,7 +55,7 @@ async function supportTasks(userId) {
     if (j.kind === 'pickup' && j.next?.key === 'drop') state = 'carrying';
     out.push({
       key, kind: j.kind === 'pickup' ? 'pickup' : 'visit', state, ...base(j),
-      title: `${j.kind === 'pickup' ? 'Pickup' : (j.revisit ? 'Revisit' : 'Visit')} · ${j.laptop?.ttspl || j.laptop?.serial || `#${j.ticket_id}`}`,
+      title: `${j.kind === 'pickup' ? 'Pickup' : (j.moved ? `Visit place ${j.place_no}` : j.revisit ? 'Revisit' : 'Visit')} · ${j.laptop?.ttspl || j.laptop?.serial || `#${j.ticket_id}`}`,
       step: j.next?.label || null,
       laptops: [[j.laptop?.ttspl || j.laptop?.serial, [j.laptop?.brand, j.laptop?.model].filter(Boolean).join(' ')].filter(Boolean).join(' · ')],
       issue: j.issue || null, remarks: j.remarks || null,

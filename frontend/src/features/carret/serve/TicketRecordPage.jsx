@@ -8,7 +8,7 @@ import {
 } from '../../../components/carret';
 import {
   assignItem, cancelTicket, chargeWfh, closeTicket, fetchDamageCases, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
-  setAppointment,
+  setAppointment, updateVisitAddress,
 } from './serveApi';
 import { usePermission } from '../../../hooks/usePermission';
 import { planFieldTask } from '../field/fieldApi';
@@ -70,6 +70,9 @@ export default function TicketRecordPage() {
   const [error, setError] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [damage, setDamage] = useState([]);
+  // Where the visit happens (migration 441): move it, or — once the technician has reached — add the next place.
+  const [va, setVa] = useState(null); // { address, ids: [] }
+  const [vaSite, setVaSite] = useState(null); // the 409 TECH_AT_SITE answer
 
   const load = useCallback(() => {
     fetchTicket(ticketId).then(({ data }) => setT(data)).catch((e) => setError(errMsg(e, 'Could not load the ticket')));
@@ -92,6 +95,22 @@ export default function TicketRecordPage() {
   const tk = t.ticket;
   const items = (t.items || []).filter((i) => !['removed'].includes(i.status));
   const onHold = (sla?.holds || []).find((h) => !h.to_at);
+  const openVisits = items.filter((i) => i.item_type === 'complaint' && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(i.status) && !i.otp_verified_at);
+  const atSite = (i) => Boolean(i.visited_at) && !(i.visit_moved_at && new Date(i.visit_moved_at) > new Date(i.visited_at));
+  const placed = items.filter((i) => i.item_type === 'complaint' && i.visit_address);
+  const saveVisitAddress = async (mode) => {
+    if (!va || va.address.trim().length < 8) { toast.error('Enter the full address'); return; }
+    if (!va.ids.length) { toast.error('Choose the laptops'); return; }
+    setBusy(true);
+    try {
+      const { data } = await updateVisitAddress(tk.id, { address: va.address.trim(), item_ids: va.ids, mode });
+      toast.success(data.message || 'Saved');
+      setVa(null); setVaSite(null); load();
+    } catch (e) {
+      if (e?.response?.status === 409 && e.response.data?.code === 'TECH_AT_SITE') setVaSite(e.response.data);
+      else toast.error(errMsg(e));
+    } finally { setBusy(false); }
+  };
   const closed = ['closed', 'cancelled'].includes(tk.status);
   const canLead = hasPermission('support_tickets', 'edit');
   const canDamage = ['damage_charges', 'support_tickets', 'return_dc'].some((sec) => hasPermission(sec, 'create'));
@@ -211,12 +230,21 @@ export default function TicketRecordPage() {
                 </div>
               </Section>
             )}
-            <Section title="Contact and address">
+            <Section
+              title="Contact and address"
+              actions={openVisits.length > 0 && hasPermission('support_tickets', 'edit') ? (
+                <Button variant="quiet" onClick={() => setVa({ address: '', ids: openVisits.map((i) => i.id) })}>Change visit address</Button>
+              ) : null}
+            >
               <KeyValue cols={1} items={[
                 { label: 'Phone', value: tk.display_phone },
                 { label: 'Alternate', value: tk.ticket_alt_phone },
                 { label: 'Email', value: tk.ticket_email },
                 { label: 'Address', value: tk.ticket_address },
+                ...placed.map((i) => ({
+                  label: `${i.ttspl_id || i.serial_number || `#${i.id}`}${(i.visit_place_no || 1) > 1 ? ` · place ${i.visit_place_no}` : ''}`,
+                  value: i.visit_address,
+                })),
                 { label: 'Note', value: tk.top_level_remarks },
               ]}
               />
@@ -283,6 +311,59 @@ export default function TicketRecordPage() {
         <Field label="Date and time (IST)" hint="Shown on the technician's My work. Clear it to remove.">
           <Input type="datetime-local" value={appt} onChange={(e) => setAppt(e.target.value)} />
         </Field>
+      </Drawer>
+
+      <Drawer
+        open={Boolean(va)}
+        onClose={() => { setVa(null); setVaSite(null); }}
+        title="Change visit address"
+        width="34rem"
+        footer={vaSite ? null : <Button variant="primary" disabled={busy} onClick={() => saveVisitAddress('move')}>Save the address</Button>}
+      >
+        {va && !vaSite && (
+          <div className="c-stack">
+            <Field label="New visit address" required hint="Building, floor, street, area, city and PIN — the technician navigates to it.">
+              <Textarea rows={3} value={va.address} onChange={(e) => setVa({ ...va, address: e.target.value })} />
+            </Field>
+            <strong>Which laptops</strong>
+            <ul className="c-vp-list">
+              {openVisits.map((i) => (
+                <li key={i.id}>
+                  <label className={atSite(i) ? 'is-site' : ''}>
+                    <input
+                      type="checkbox"
+                      checked={va.ids.includes(i.id)}
+                      onChange={(e) => setVa({ ...va, ids: e.target.checked ? [...va.ids, i.id] : va.ids.filter((x) => x !== i.id) })}
+                    />
+                    <span>
+                      <b className="font-mono">{i.ttspl_id || i.serial_number}</b>
+                      {(i.visit_place_no || 1) > 1 && <> <span className="c-vp-place">Place {i.visit_place_no}</span></>}
+                      <small>{i.visit_address || tk.ticket_address || 'No address'}</small>
+                      {atSite(i)
+                        ? <small className="is-red">Technician reached here {when(i.visited_at)} — can only add a next place</small>
+                        : <small>{i.assigned_to ? 'Technician not reached yet — the address simply changes' : 'No technician yet'}</small>}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {vaSite && (
+          <div className="c-vp-warn" role="alertdialog" aria-labelledby="vp-warn-h">
+            <h3 id="vp-warn-h"><span aria-hidden="true">⚠</span>{vaSite.message}</h3>
+            {vaSite.at_site.map((x) => (
+              <p key={x.item_id}><b className="font-mono">{x.laptop}</b> — {x.technician || 'the technician'} reached {when(x.reached_at)} at {x.address || 'the current address'}.</p>
+            ))}
+            <p>Moving the visit mid-way hampers the technician’s work and his day’s record — don’t take him off it between. Let him finish here.</p>
+            <p>If the laptop really is somewhere else, add the new address as <b>place {(vaSite.at_site[0]?.place_no || 1) + 1}</b>: his stop here stays counted, and he marks “reached” again there — the distance is measured from this place.</p>
+            <div className="flex flex-wrap" style={{ gap: '8px' }}>
+              <Button variant="primary" disabled={busy} onClick={() => saveVisitAddress('place2')}>Add as place {(vaSite.at_site[0]?.place_no || 1) + 1}</Button>
+              <Button disabled={busy} onClick={() => setVaSite(null)}>Back</Button>
+              <Button variant="quiet" onClick={() => { setVa(null); setVaSite(null); }}>Keep it here</Button>
+            </div>
+          </div>
+        )}
       </Drawer>
 
       <Drawer

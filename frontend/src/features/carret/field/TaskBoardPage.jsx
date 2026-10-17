@@ -5,8 +5,8 @@ import DeskShell from '../../../shells/DeskShell';
 import { Button, EmptyState, Input, Notice, Select } from '../../../components/carret';
 import { assignItem, assignPickup } from '../serve/serveApi';
 import {
-  TASK_KIND_COLOR, TASK_KIND_LABEL, fetchFieldTasks, fetchTaskBoard, fmtDay, fmtHm, fmtKm, planFieldTask, releaseFieldTask,
-  saveFieldTaskPlan,
+  TASK_KIND_COLOR, TASK_KIND_LABEL, fetchFieldTasks, fetchTaskBoard, fmtDay, fmtHm, fmtKm, fmtTime, planFieldTask, releaseFieldTask,
+  reopenFieldDay, saveFieldTaskPlan, startFieldDayFor,
 } from './fieldApi';
 
 /**
@@ -67,7 +67,7 @@ function TechChip({ t, on, onPick }) {
       <span className="c-tb2-tech-m">
         <b>{t.name}</b>
         <span className="c-tb2-tech-s">
-          {t.active[0] ? <span className="is-live">● On a task</span> : <span>{t.checked_in ? 'Checked in' : 'Not checked in'}</span>}
+          {t.active[0] ? <span className="is-live">● On a task</span> : <span className={t.day_state === 'ended' ? 'is-out' : ''}>{t.day_state === 'on' ? 'Checked in' : t.day_state === 'ended' ? 'Checked out' : 'Not checked in'}</span>}
           {t.checked_in && <span>{fmtKm(t.km)}</span>}
         </span>
         <span className="c-tb2-load" title={`${t.today} today`}><i style={{ width: `${load * 100}%`, background: load >= 1 ? '#dc2626' : load > 0.7 ? '#d97706' : '#16a34a' }} /></span>
@@ -177,6 +177,36 @@ function TaskCard({ t, n, today, busy, open, flash, onToggle, drag, onTime, onDa
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * The technician's day, for the lead (migration 441): checked out (by mistake,
+ * or at 10 PM) → check them in again; never started → check them in at an office.
+ */
+function DayControl({ tech, places, busy, onReopen, onStart }) {
+  const [place, setPlace] = useState('');
+  useEffect(() => { setPlace(String((places || []).find((p) => p.is_default)?.place_id || places?.[0]?.place_id || '')); }, [places]);
+  if (!tech || tech.day_state === 'on') return null;
+  const ended = tech.day_state === 'ended';
+  return (
+    <div className={`c-tb2-dayc${ended ? ' is-ended' : ''}`}>
+      <span className="c-tb2-dayc-i" aria-hidden="true">{ended ? '⏾' : '○'}</span>
+      <div className="min-w-0">
+        <b>{ended ? `Checked out${tech.day_ended_at ? ` at ${fmtTime(tech.day_ended_at)}` : ''}` : 'Not checked in today'}</b>
+        <small>{ended
+          ? `${tech.day_end_label || ''} — they cannot mark “reached” now. Check them in again: their next stop is measured from their last one.`
+          : 'They cannot mark “reached” until they check in. Check them in at an office if they cannot.'}</small>
+      </div>
+      {ended ? (
+        <Button variant="primary" disabled={busy} onClick={onReopen}>Check in again</Button>
+      ) : (
+        <span className="c-tb2-dayc-a">
+          <Select value={place} onChange={(e) => setPlace(e.target.value)} aria-label="Check-in place" options={(places || []).map((p) => ({ value: String(p.place_id), label: p.name }))} />
+          <Button variant="primary" disabled={busy || !place} onClick={() => onStart(Number(place))}>Check in for them</Button>
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -350,6 +380,11 @@ export default function TaskBoardPage() {
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
+  const dayAction = async (fn, ok) => {
+    setBusy(true);
+    try { const { data } = await fn(); toast.success(data?.message || ok); loadBoard(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+
   const all = list || [];
   const buckets = {
     today: all.filter((t) => t.state !== 'waiting' && t.date === today),
@@ -424,11 +459,18 @@ export default function TaskBoardPage() {
                     <Avatar name={sel?.name || ''} on={sel?.checked_in} size={48} />
                     <div className="min-w-0">
                       <h2>{sel?.name || 'Technician'}</h2>
-                      <span>{sel?.checked_in ? `Checked in · ${fmtKm(sel.km)} today` : 'Not checked in'} · {buckets.today.length} today</span>
+                      <span>{sel?.day_state === 'on' ? `Checked in · ${fmtKm(sel.km)} today` : sel?.day_state === 'ended' ? `Checked out · ${fmtKm(sel.km)} today` : 'Not checked in'} · {buckets.today.length} today</span>
                     </div>
                     <Link className="c-btn" to={`/carret/serve/my-work?tech=${techId}`}>Their screen ›</Link>
                   </header>
 
+                  <DayControl
+                    tech={sel}
+                    places={board.places}
+                    busy={busy}
+                    onReopen={() => dayAction(() => reopenFieldDay(techId), 'Checked in again — they can work now')}
+                    onStart={(placeId) => dayAction(() => startFieldDayFor(techId, placeId), 'Checked in — they can work now')}
+                  />
                   {activeNow[0] && (
                     <div className="c-tb2-now">
                       <span className="c-tb2-pulse" aria-hidden="true" />

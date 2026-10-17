@@ -56,3 +56,8 @@ export const fmtHm = (hm) => {
   const [h, m] = hm.split(':').map(Number);
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`;
 };
+
+// Check in again after a check-out; a lead checks someone in (migration 441).
+export const resumeFieldDay = () => api.post('/field/day/resume');
+export const reopenFieldDay = (userId) => api.post('/field/day/reopen', { user_id: userId });
+export const startFieldDayFor = (userId, placeId) => api.post('/field/day/start-for', { user_id: userId, place_id: placeId || undefined });

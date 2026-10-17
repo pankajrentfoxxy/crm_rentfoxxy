@@ -196,6 +196,8 @@ router.post('/tickets', createTicket);
 router.get('/tickets/:ticketId', getTicket);
 router.patch('/tickets/:ticketId', requireTicketLead, updateTicket);
 router.patch('/tickets/:ticketId/pickup-address', requireTicketLead, updatePickupAddress);
+// Where a complaint visit happens; once the technician has reached, only as the next place (migration 441).
+router.post('/tickets/:ticketId/visit-address', requireTicketLead, require('../controllers/supportController').updateVisitAddress);
 router.post('/tickets/:ticketId/phases', requireTicketLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.get('/tickets/:ticketId/wfh', require('../controllers/supportController').getTicketWfh);

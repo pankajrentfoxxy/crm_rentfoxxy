@@ -1095,3 +1095,24 @@
   .c-tb2-tabs button small{ display:none }
   .c-tb2-tech{ flex-basis:210px }
 }
+
+/* Task board: the technician's day for the lead (migration 441) */
+.c-tb2-tech-s .is-out{ color:#b45309; font-weight:600 }
+.c-tb2-dayc{ display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; padding:12px 14px; border-radius:12px; border:1px solid var(--rule-2); background:var(--surface-2) }
+.c-tb2-dayc.is-ended{ border-color:rgba(217,119,6,.4); background:linear-gradient(90deg, rgba(217,119,6,.10), rgba(217,119,6,.02)) }
+.c-tb2-dayc > div{ flex:1 1 220px }
+.c-tb2-dayc b{ display:block; font-size:14.5px }
+.c-tb2-dayc small{ display:block; font-size:12.5px; color:var(--ink-3) }
+.c-tb2-dayc-i{ flex:none; width:34px; height:34px; border-radius:50%; display:grid; place-items:center; font-size:16px; background:var(--surface); border:1px solid var(--rule) }
+.c-tb2-dayc-a{ display:flex; flex-wrap:wrap; gap:6px }
+.c-tb2-dayc-a .c-input{ min-height:36px; max-width:16rem }
+/* Ticket: visit places + "technician is at site" (migration 441) */
+.c-vp-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px }
+.c-vp-list label{ display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--rule); border-radius:10px; cursor:pointer }
+.c-vp-list label.is-site{ border-color:rgba(220,38,38,.35); background:rgba(220,38,38,.05) }
+.c-vp-list small{ display:block; color:var(--ink-3); font-size:12.5px }
+.c-vp-list .is-red{ color:#b91c1c; font-weight:600 }
+.c-vp-warn{ display:flex; flex-direction:column; gap:10px; padding:14px; border-radius:12px; border:1px solid rgba(220,38,38,.35); background:linear-gradient(180deg, rgba(220,38,38,.08), var(--surface)) }
+.c-vp-warn h3{ margin:0; font-size:16px; color:#991b1b; display:flex; gap:8px; align-items:center }
+.c-vp-warn p{ margin:0; font-size:13.5px }
+.c-vp-place{ display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; background:#ede9fe; color:#6d28d9 }

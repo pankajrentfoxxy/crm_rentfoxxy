@@ -7547,3 +7547,96 @@ exports.pickupVisitEmail = async (req, res) => {
         res.status(500).json({ success: false, message: 'Could not send the mail' });
     }
 };
+
+// ── Visit place (migration 441, 17 Oct 2026) ───────────────────────────────
+/**
+ * POST /support/tickets/:ticketId/visit-address { address, item_ids, mode }
+ *
+ * Where the complaint visit happens, for the laptops chosen.
+ *   move   — the address changes. Refused (409 TECH_AT_SITE, with who and
+ *            since when) for a laptop whose technician has already reached:
+ *            moving him mid-way spoils his day and his record.
+ *   place2 — for a reached laptop the visit continues at the next place: the
+ *            stop at the current place stays, and he marks reached again at
+ *            the new one (measured from here). Laptops not reached just move.
+ */
+exports.updateVisitAddress = async (req, res) => {
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const address = String(req.body?.address || '').trim();
+    const mode = req.body?.mode === 'place2' ? 'place2' : 'move';
+    const ids = (Array.isArray(req.body?.item_ids) ? req.body.item_ids : []).map(Number).filter(Boolean);
+    if (address.length < 8) return res.status(400).json({ success: false, message: 'Enter the full address' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await assertTicketNotCancelled(client, ticketId);
+        const open = (await client.query(
+            `SELECT i.*, u.name AS technician_name, t.ticket_address
+               FROM support_ticket_items i
+               JOIN support_tickets t ON t.id = i.ticket_id
+               LEFT JOIN users u ON u.user_id = i.assigned_to
+              WHERE i.ticket_id = $1 AND i.item_type = 'complaint'
+                AND i.status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled', 'removed')
+                AND i.otp_verified_at IS NULL
+              FOR UPDATE OF i`,
+            [ticketId]
+        )).rows;
+        const chosen = ids.length ? open.filter((i) => ids.includes(Number(i.id))) : open;
+        if (!chosen.length) throw Object.assign(new Error('Choose the laptops to move — only open visits can move'), { status: 400 });
+        // Reached here and not yet sent on to another place.
+        const atSite = (i) => Boolean(i.visited_at) && !(i.visit_moved_at && new Date(i.visit_moved_at) > new Date(i.visited_at));
+        const reached = chosen.filter(atSite);
+        if (mode === 'move' && reached.length) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                success: false,
+                code: 'TECH_AT_SITE',
+                message: `${reached[0].technician_name || 'The technician'} is working at this place now`,
+                at_site: reached.map((i) => ({
+                    item_id: i.id,
+                    laptop: i.ttspl_id || i.unique_serial_number || i.serial_number,
+                    technician: i.technician_name,
+                    reached_at: i.visited_at,
+                    address: i.visit_address || i.ticket_address,
+                    place_no: i.visit_place_no || 1,
+                })),
+            });
+        }
+        for (const i of chosen) {
+            const old = i.visit_address || i.ticket_address;
+            if (atSite(i)) {
+                const placeNo = Number(i.visit_place_no || 1) + 1;
+                await client.query(
+                    `UPDATE support_ticket_items SET visit_address = $2, visit_place_no = $3, visit_moved_at = NOW(), visit_moved_by = $4, updated_at = NOW() WHERE id = $1`,
+                    [i.id, address, placeNo, req.user.user_id]
+                );
+                // The technician sees why the visit moved, on the job's comments.
+                await client.query(
+                    `INSERT INTO support_ticket_item_comments (item_id, user_id, author_role, body) VALUES ($1, $2, $3, $4)`,
+                    [i.id, req.user.user_id, req.user.role, `Place ${placeNo}: finish what you are doing here, then go to ${address} and tap "I have reached" there.`]
+                );
+                await logAudit(client, { itemId: i.id, ticketId, userId: req.user.user_id, action: 'visit_place_added', detail: { place_no: placeNo, from: old, to: address } });
+            } else {
+                await client.query(`UPDATE support_ticket_items SET visit_address = $2, updated_at = NOW() WHERE id = $1`, [i.id, address]);
+                await logAudit(client, { itemId: i.id, ticketId, userId: req.user.user_id, action: 'visit_address_changed', detail: { from: old, to: address } });
+            }
+        }
+        // Every open visit moved before anyone reached: the ticket's address is the new one.
+        if (!reached.length && chosen.length === open.length) {
+            await client.query('UPDATE support_tickets SET ticket_address = $2, updated_at = NOW(), last_activity_at = NOW() WHERE id = $1', [ticketId, address]);
+        }
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+        res.json({
+            success: true,
+            message: reached.length ? `Added as place ${Number(reached[0].visit_place_no || 1) + 1} — the technician goes there after this place` : 'Visit address changed',
+            ...(await getTicketWithItems(ticketId, req.user)),
+        });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        if (!e.status) console.error('updateVisitAddress:', e);
+        res.status(e.status || 500).json({ success: false, message: e.status ? e.message : 'Could not change the address' });
+    } finally {
+        client.release();
+    }
+};

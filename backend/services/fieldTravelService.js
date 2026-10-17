@@ -67,8 +67,8 @@ async function places(db) {
   return (await db.query('SELECT * FROM field_checkin_places WHERE active ORDER BY is_default DESC, name')).rows;
 }
 
-/** Check in for today at a place from the list, or at the GPS point given. */
-async function startDay(db, user, { placeId, latitude, longitude, label }) {
+/** Check in for today at a place from the list, or at the GPS point given (startedBy: a lead doing it for them). */
+async function startDay(db, user, { placeId, latitude, longitude, label, startedBy = null }) {
   if (await currentDay(db, user.user_id)) throw httpError('You have already started today', 409);
   let point;
   if (placeId) {
@@ -81,8 +81,8 @@ async function startDay(db, user, { placeId, latitude, longitude, label }) {
     point = { lat, lng, label: String(label || '').trim() || 'My location', placeId: null };
   }
   return (await db.query(
-    `INSERT INTO field_days (user_id, day, start_label, start_lat, start_lng, start_place_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [user.user_id, todayIst(), point.label, point.lat, point.lng, point.placeId]
+    `INSERT INTO field_days (user_id, day, start_label, start_lat, start_lng, start_place_id, started_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [user.user_id, todayIst(), point.label, point.lat, point.lng, point.placeId, startedBy]
   )).rows[0];
 }
 
@@ -100,7 +100,7 @@ async function recordStop(db, user, { kind, ref, label, latitude, longitude }) {
   if (!(await isFieldUser(db, user))) return null;
   const day = await currentDay(db, user.user_id);
   if (!day) throw httpError('Check in first — choose the office or your location at the top of My work', 409);
-  if (day.ended_at) throw httpError('Your day has ended — ask your lead to reopen it', 409);
+  if (day.ended_at) throw httpError('You have checked out — tap "Check in again" at the top of My work (or ask your lead), then try again.', 409);
   const lat = num(latitude); const lng = num(longitude);
   // The distance is measured to this point, so a field "reached" needs it (17 Oct 2026).
   if (!validPoint(lat, lng)) throw httpError('Your location is off — turn on location (GPS) for this site and tap again. The distance travelled is measured from it.', 400);
@@ -172,6 +172,25 @@ async function endDay(db, user, { placeId, latitude, longitude }) {
 }
 
 /**
+ * Check in again after a check-out (by mistake, or the 10 PM auto check-out),
+ * by the technician or a lead (17 Oct 2026, migration 441). Nothing to locate:
+ * the check-out leg is dropped, so the next stop is measured from the last
+ * real stop (or the morning check-in).
+ */
+async function reopenDay(db, { userId, by }) {
+  const day = (await db.query('SELECT * FROM field_days WHERE user_id = $1 AND day = $2', [userId, todayIst()])).rows[0];
+  if (!day) throw httpError('Not checked in today — check in first', 409);
+  if (!day.ended_at) throw httpError('Already on duty', 409);
+  await db.query(`DELETE FROM field_travel_legs WHERE day_id = $1 AND kind = 'end'`, [day.day_id]);
+  return (await db.query(
+    `UPDATE field_days SET ended_at = NULL, end_label = NULL, end_lat = NULL, end_lng = NULL,
+            reopened_at = NOW(), reopened_by = $2, reopen_count = reopen_count + 1
+      WHERE day_id = $1 RETURNING *`,
+    [day.day_id, by || null]
+  )).rows[0];
+}
+
+/**
  * A day nobody ended is closed at 10 PM IST at the default office (IFFCO
  * Chowk): the leg back from the last stop is added, as if they checked out
  * there (17 Oct 2026). Runs from a worker every 10 minutes and whenever days
@@ -180,8 +199,13 @@ async function endDay(db, user, { placeId, latitude, longitude }) {
 async function autoCloseDays(db = pool) {
   const istNow = new Date(Date.now() + 330 * 60000);
   const pastTen = istNow.getUTCHours() >= 22;
+  // A day started or checked in again after 10 PM stays open that night; it closes after midnight.
   const open = (await db.query(
-    `SELECT * FROM field_days WHERE ended_at IS NULL AND (day < $1 OR ($2 AND day = $1))`,
+    `SELECT * FROM field_days
+      WHERE ended_at IS NULL
+        AND (day < $1 OR ($2 AND day = $1
+             AND started_at < ($1::date + TIME '22:00') AT TIME ZONE 'Asia/Kolkata'
+             AND (reopened_at IS NULL OR reopened_at < ($1::date + TIME '22:00') AT TIME ZONE 'Asia/Kolkata')))`,
     [todayIst(), pastTen]
   )).rows;
   if (!open.length) return 0;
@@ -189,8 +213,12 @@ async function autoCloseDays(db = pool) {
   if (!place) return 0;
   for (const day of open) {
     const dayStr = day.day instanceof Date ? new Date(day.day.getTime() + 330 * 60000).toISOString().slice(0, 10) : String(day.day).slice(0, 10);
-    const at = `${dayStr}T22:00:00+05:30`;
+    let at = `${dayStr}T22:00:00+05:30`;
     const from = await lastPoint(db, day);
+    // Worked past 10 PM (started or checked in again late): closed at their last stop's time.
+    const lastAt = (await db.query('SELECT MAX(reached_at) AS t FROM field_travel_legs WHERE day_id = $1', [day.day_id])).rows[0].t;
+    const latest = [new Date(at), new Date(day.started_at), day.reopened_at && new Date(day.reopened_at), lastAt && new Date(lastAt)].filter(Boolean).sort((a, b) => b - a)[0];
+    at = latest.toISOString();
     const seq = (await db.query('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM field_travel_legs WHERE day_id = $1', [day.day_id])).rows[0].n;
     const label = `${place.name} (auto check-out, 10 PM)`;
     const leg = (await db.query(
@@ -245,4 +273,4 @@ async function daysFor(db, { userIds = null, from, to }) {
   });
 }
 
-module.exports = { stopsFor, autoCloseDays, startAutoCloseWorker, FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };
+module.exports = { reopenDay, stopsFor, autoCloseDays, startAutoCloseWorker, FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };

@@ -106,7 +106,7 @@ export default function VisitJob({ job, ticket, ticketItem, onReload, onTicketRe
   const reached = () => run(async () => {
     const p = await gps();
     await markArrived(job.item_id, p.latitude != null ? { latitude: String(p.latitude), longitude: String(p.longitude) } : {});
-  }, job.revisit ? 'Reached — fit the part, then record the result' : 'Reached — now check the laptop');
+  }, job.moved ? `Reached place ${job.place_no}` : job.revisit ? 'Reached — fit the part, then record the result' : 'Reached — now check the laptop');
   const check = () => run(async () => {
     if (!code.trim()) throw new Error('Scan or type the laptop’s TTSPL or serial');
     await verifyLaptop(job.item_id, code.trim());
@@ -143,7 +143,7 @@ export default function VisitJob({ job, ticket, ticketItem, onReload, onTicketRe
 
         <section className="c-vj-head">
           <div className="c-vj-k">
-            <span className="c-tq-chip">{job.revisit ? 'Revisit' : 'Complaint visit'}</span>
+            <span className="c-tq-chip">{job.moved ? `Place ${job.place_no}` : job.revisit ? 'Revisit' : 'Complaint visit'}</span>
             <span>Ticket #{job.ticket_id}</span>
             {job.priority !== 'normal' && <span className="c-vj-pri">{job.priority}</span>}
             {sla && <span style={{ color: SLA_TONE[sla.state], marginLeft: 'auto', fontWeight: 600 }}>{SLA_LABEL[sla.state] || sla.state}</span>}
@@ -155,7 +155,7 @@ export default function VisitJob({ job, ticket, ticketItem, onReload, onTicketRe
             {job.issue && <div><dt>Problem</dt><dd>{job.issue}</dd></div>}
             {job.remarks && <div><dt>Customer says</dt><dd>“{job.remarks}”</dd></div>}
             {job.appointment && <div><dt>Slot</dt><dd>{when(job.appointment)}</dd></div>}
-            <div><dt>Address</dt><dd>{job.address || 'No address on the ticket'}</dd></div>
+            <div><dt>{job.place_no > 1 ? `Address · place ${job.place_no}` : 'Address'}</dt><dd>{job.address || 'No address on the ticket'}</dd></div>
           </dl>
           <div className="c-vj-act">
             {job.phone && <a className="c-btn" href={`tel:${job.phone}`}>📞 Call</a>}
@@ -169,7 +169,7 @@ export default function VisitJob({ job, ticket, ticketItem, onReload, onTicketRe
 
         {at === 0 && (
           <section className="c-pvl is-accent">
-            <header className="c-pvl-h"><span className="c-pvl-n">1</span><div><b>{job.revisit ? 'Back at the customer with the part?' : 'At the customer?'}</b><small>Your location is taken — the distance from your last stop is measured.</small></div></header>
+            <header className="c-pvl-h"><span className="c-pvl-n">1</span><div><b>{job.moved ? `At place ${job.place_no}?` : job.revisit ? 'Back at the customer with the part?' : 'At the customer?'}</b><small>{job.moved ? 'Support moved this visit to the address above — the distance from the last place is measured.' : 'Your location is taken — the distance from your last stop is measured.'}</small></div></header>
             {job.revisit && job.parts?.length > 0 && (
               <ul className="c-vj-parts">{job.parts.map((p) => <li key={p.request_number}><b>{p.part || 'Part'}</b><span>{PART_STATE[p.status] || p.status}</span></li>)}</ul>
             )}

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Button, Select } from '../../../components/carret';
-import { endFieldDay, fetchFieldDay, fmtKm, fmtTime, startFieldDay, warehouseStop } from './fieldApi';
+import { endFieldDay, fetchFieldDay, fmtKm, fmtTime, resumeFieldDay, startFieldDay, warehouseStop } from './fieldApi';
 
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'That did not work.';
 const gps = () => new Promise((resolve) => {
@@ -30,7 +30,8 @@ export default function FieldDayBar({ onReady }) {
   }, []);
   useEffect(() => { load(); }, [load]);
   const started = Boolean(data?.day);
-  useEffect(() => { if (data) onReady?.(!data.is_field_user || started); }, [data, started, onReady]);
+  const onDuty = started && !data.day.ended_at;
+  useEffect(() => { if (data) onReady?.(!data.is_field_user || onDuty); }, [data, onDuty, onReady]);
   if (!data || !data.is_field_user) return null;
 
   const run = async (fn, ok) => {
@@ -75,6 +76,8 @@ export default function FieldDayBar({ onReady }) {
       </div>
       <div className="c-dayb-a">
         <Link className="c-btn" to="/carret/serve/my-report">My report</Link>
+        {/* Checked out by mistake, or at 10 PM: back on duty; the next stop is measured from the last one (migration 441). */}
+        {d.ended_at && <Button variant="primary" disabled={busy} onClick={() => run(() => resumeFieldDay(), 'Checked in again')}>Check in again</Button>}
         {/* Back at the warehouse to pick up or hand over: the distance there is counted (migration 439). */}
         {!d.ended_at && !ending && !atWh && <Button variant="quiet" onClick={() => setAtWh(true)}>📦 At the warehouse</Button>}
         {!d.ended_at && atWh && (

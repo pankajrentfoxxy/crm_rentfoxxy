@@ -163,3 +163,4 @@ export const applyUpgrade = (upgradeId) => api.post(`/support/upgrades/${upgrade
 export const cancelUpgrade = (upgradeId, reason) => api.post(`/support/upgrades/${upgradeId}/cancel`, { reason });
 // The technician signs the Return DC at the customer (before the customer OTP).
 export const signReturnDc = (id, esignData, signerName) => api.post(item(id, '/technician-esign'), { esign_data: esignData, signer_name: signerName });
+export const updateVisitAddress = (ticketId, body) => api.post(tkt(ticketId, '/visit-address'), body);

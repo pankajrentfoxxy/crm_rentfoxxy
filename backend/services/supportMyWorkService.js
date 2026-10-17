@@ -114,7 +114,15 @@ async function loadJobs(userId) {
     const partWaiting = parts.filter((p) => PART_WAITING.has(p.status));
     const partReadyAt = parts.filter((p) => PART_READY.has(p.status) && p.ready_at).map((p) => new Date(p.ready_at).getTime()).sort().pop() || null;
     let revisit = false;
-    if (r.item_type === 'complaint' && !r.outcome && ['visited', 'verify_ttspl'].includes(step)) {
+    // Support sent the visit on to the next place after he reached (migration 441):
+    // the stop here stays; he marks reached again there.
+    const moved = r.item_type === 'complaint' && r.visit_moved_at && r.visited_at
+      && new Date(r.visited_at) < new Date(r.visit_moved_at) && !r.work_done_at && !r.otp_verified_at
+      && !['replacement_required', 'repair_pickup_requested', 'repair_required', 'return_required'].includes(r.outcome);
+    if (moved) {
+      revisit = true;
+      next = { key: 'arrive', label: `Go to place ${r.visit_place_no || 2}` };
+    } else if (r.item_type === 'complaint' && !r.outcome && ['visited', 'verify_ttspl'].includes(step)) {
       if (partWaiting.length) next = { key: 'waiting', label: 'Waiting for the part' };
       else if (partReadyAt && (!r.visited_at || new Date(r.visited_at).getTime() < partReadyAt)) {
         revisit = true;
@@ -137,7 +145,9 @@ async function loadJobs(userId) {
       assignee_name: (r.item_type === 'pickup' ? (r.pickup_assignee_name || r.assignee_name) : (r.assignee_name || r.pickup_assignee_name)) || null,
       phone: r.phone,
       alt_phone: r.ticket_alt_phone || null,
-      address: addressText(r.item_type === 'pickup' ? (r.pickup_address || r.ticket_address) : (r.ticket_address || r.pickup_address)),
+      address: addressText(r.item_type === 'pickup' ? (r.pickup_address || r.ticket_address) : (r.visit_address || r.ticket_address || r.pickup_address)),
+      place_no: r.item_type === 'complaint' ? Number(r.visit_place_no || 1) : null,
+      moved: Boolean(moved),
       appointment: r.visit_scheduled_at,
       priority: r.priority || 'normal',
       laptop: { ttspl: r.ttspl_id || r.unique_serial_number, serial: r.serial_number, brand: r.brand, model: r.model },

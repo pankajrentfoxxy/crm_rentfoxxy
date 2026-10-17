@@ -44,6 +44,28 @@ router.post('/day/end', wrap(async (req, res) => {
   await travel.endDay(pool, req.user, { placeId: Number(b.place_id) || null, latitude: b.latitude, longitude: b.longitude });
   res.json({ success: true, message: 'Day ended' });
 }));
+// Check in again after a check-out (migration 441) — the technician, or a lead for them.
+router.post('/day/resume', wrap(async (req, res) => {
+  await travel.reopenDay(pool, { userId: req.user.user_id, by: req.user.user_id });
+  res.json({ success: true, message: 'Checked in again — your next stop is measured from your last one' });
+}));
+router.post('/day/reopen', wrap(async (req, res) => {
+  if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Only a lead can check someone in' });
+  const userId = Number(req.body?.user_id) || 0;
+  if (!userId) return res.status(400).json({ success: false, message: 'Choose the technician' });
+  await travel.reopenDay(pool, { userId, by: req.user.user_id });
+  res.json({ success: true, message: 'Checked in again — they can work now' });
+}));
+// A lead checks in a technician who has not started today, at an office from the list.
+router.post('/day/start-for', wrap(async (req, res) => {
+  if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Only a lead can check someone in' });
+  const target = (await pool.query('SELECT user_id, role FROM users WHERE user_id = $1', [Number(req.body?.user_id) || 0])).rows[0];
+  if (!target) return res.status(404).json({ success: false, message: 'Technician not found' });
+  let placeId = Number(req.body?.place_id) || null;
+  if (!placeId) placeId = (await travel.places(pool)).find((p) => p.is_default)?.place_id || null;
+  await travel.startDay(pool, target, { placeId, startedBy: req.user.user_id });
+  res.json({ success: true, message: 'Checked in — they can work now' });
+}));
 router.get('/my-report', wrap(async (req, res) => {
   res.json({ success: true, ...(await report.myReport(pool, req.user.user_id, range(req.query))) });
 }));
@@ -123,6 +145,10 @@ router.get('/board', wrap(async (req, res) => {
       waiting: open.filter((t) => t.state === 'waiting').length,
       active: l.active.map((t) => ({ key: t.key, title: t.title, customer: t.customer })),
       checked_in: Boolean(day && !day.ended_at),
+      // none | on | ended — the lead can check them in, or in again (migration 441).
+      day_state: !day ? 'none' : day.ended_at ? 'ended' : 'on',
+      day_ended_at: day?.ended_at || null,
+      day_end_label: day?.end_label || null,
       km: day ? day.total_km : 0,
     });
   }
@@ -166,7 +192,7 @@ router.get('/board', wrap(async (req, res) => {
       });
     }
   }
-  res.json({ success: true, today, technicians, unassigned: lanes });
+  res.json({ success: true, today, technicians, unassigned: lanes, places: await travel.places(pool) });
 }));
 
 // Back at the warehouse / office mid-day (to pick up or hand over): a travel stop.
