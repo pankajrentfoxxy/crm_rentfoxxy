@@ -138,8 +138,20 @@ describe('My Deliveries handlers (rolled back)', () => {
     assert.equal(row.serial_verified_no, 'TTSPL9001, TTSPL9002');
   });
 
+  it('one task at a time: a second challan cannot be "reached" while the pickup is in progress (migration 439)', async () => {
+    const r = await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: {}, user: OWNER });
+    assert.equal(r.code, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'TASK_ACTIVE');
+  });
+
   it('a delivery still takes one scan, but refuses a laptop that is not on it', async () => {
-    await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: {}, user: OWNER });
+    // The pickup above stays in progress for the tests below; this one sets the rule aside.
+    const tasks = require('../services/fieldTaskService');
+    const real = tasks.assertCanStart;
+    tasks.assertCanStart = async () => {};
+    try {
+      await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: {}, user: OWNER });
+    } finally { tasks.assertCanStart = real; }
     assert.equal((await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: DC }, body: { serial_number: 'TTSPL9001' }, user: OWNER })).code, 400);
     assert.equal((await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: DC }, body: { serial_number: 'SNC3' }, user: OWNER })).code, 200);
   });
@@ -184,7 +196,12 @@ describe('My Deliveries handlers (rolled back)', () => {
     }
   });
 
-  it('a repair challan is handed to the vendor once: reached → signature → delivered; a second submit is refused', async () => {
+  it('a repair challan is handed to the vendor once: reached → signature → delivered; a second submit is refused', async (t) => {
+    // Several challans are open in this fixture; the one-at-a-time rule is tested above.
+    const tasks = require('../services/fieldTaskService');
+    const realStart = tasks.assertCanStart;
+    tasks.assertCanStart = async () => {};
+    t.after(() => { tasks.assertCanStart = realStart; });
     assert.equal((await h.call(ctrl.submitDeliveryWithPod, { params: { dcNumber: VRDC }, body: { esign_data: SIGN }, user: OWNER })).code, 400, 'reached first');
     assert.equal((await h.call(ctrl.markTechReached, { params: { dcNumber: VRDC }, body: { latitude: '28.1', longitude: '77.2' }, user: OWNER })).code, 200);
     assert.equal((await h.call(ctrl.submitDeliveryWithPod, { params: { dcNumber: VRDC }, body: {}, user: OWNER })).code, 400, 'signature required');

@@ -35,3 +35,10 @@ export function periodRange(period, custom = {}) {
 
 export const fmtKm = (v) => `${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 1 })} km`;
 export const fmtTime = (ts) => (ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—');
+
+// Tasks — one at a time, in the lead's order (migration 439).
+export const fetchFieldTasks = (userId) => api.get('/field/tasks', { params: userId ? { user_id: userId } : {} });
+export const saveFieldTaskOrder = (userId, keys) => api.put('/field/tasks/order', { user_id: userId, keys });
+export const releaseFieldTask = (userId, key) => api.post('/field/tasks/release', { user_id: userId, key });
+export const warehouseStop = (body) => api.post('/field/day/warehouse', body);
+export const TASK_KIND_COLOR = { visit: '#2563eb', pickup: '#d97706', return: '#d97706', delivery: '#059669', vendor: '#0891b2' };

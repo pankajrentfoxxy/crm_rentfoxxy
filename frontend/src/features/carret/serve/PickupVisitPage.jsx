@@ -10,6 +10,7 @@ import PickupPhotos from './PickupPhotos';
 import CollectLaterDrawer from './CollectLaterDrawer';
 import { CollectChargerPanel } from '../move/challanCharger';
 import FieldDayBar from '../field/FieldDayBar';
+import { useFieldTasks } from '../field/TaskQueue';
 import { signReturnDc } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when } from './serveShared';
 import { podUrl } from '../../../components/support/utils';
@@ -45,13 +46,16 @@ export default function PickupVisitPage() {
   const [otp, setOtp] = useState('');
   const [mailTo, setMailTo] = useState('');
   const [chargerOk, setChargerOk] = useState({});
+  const ft = useFieldTasks();
 
+  const reloadTasks = ft.reload;
   const load = useCallback(() => {
+    reloadTasks();
     api.get(vpath(rdc, '/visit')).then(({ data }) => {
       setV(data);
       setMailTo((m) => m || data.mail?.to || data.email || '');
     }).catch((e) => setV({ error: errMsg(e, 'Could not load the pickup') }));
-  }, [rdc]);
+  }, [rdc, reloadTasks]);
   useEffect(() => { load(); }, [load]);
   const run = async (fn, ok) => {
     setBusy(true);
@@ -61,6 +65,14 @@ export default function PickupVisitPage() {
   if (!v) return <FieldShell title="Pickup" tabs={TECH_TABS}><EmptyState title="Loading…" /></FieldShell>;
   if (v.error) return <FieldShell title="Pickup" tabs={TECH_TABS}><EmptyState title="Not available" body={v.error} action={<Button onClick={() => navigate('/carret/serve/my-work')}>My work</Button>} /></FieldShell>;
 
+  // One task at a time (migration 439): another task's screen stays shut.
+  if (!ft.allowed(`rdc:${rdc}`)) {
+    return (
+      <FieldShell title={v.customer || 'Pickup'} tabs={TECH_TABS} onBack={() => navigate('/carret/serve/my-work')}>
+        <EmptyState title="Not yet — one task at a time" body={`Finish ${ft.data?.current?.title || 'your current task'}${ft.data?.current?.customer ? ` (${ft.data.current.customer})` : ''} first.`} action={<Button variant="primary" onClick={() => navigate(ft.data?.current?.link || '/carret/serve/my-work')}>Go to it</Button>} />
+      </FieldShell>
+    );
+  }
   const laptops = v.laptops || [];
   const open = laptops.filter((l) => !l.collected_at);
   const collected = laptops.filter((l) => l.collected_at);

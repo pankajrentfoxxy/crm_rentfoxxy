@@ -3085,8 +3085,11 @@ exports.logVisit = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
     // Day travel (migration 438): this stop, by road from the last one. A field
-    // technician who has not checked in for the day is refused.
+    // technician who has not checked in for the day is refused. One task at a
+    // time, in the lead's order (migration 439).
     try {
+        await require('../services/fieldTaskService').assertCanStart(pool, req.user,
+            item.item_type === 'pickup' && item.return_dc_number ? `rdc:${item.return_dc_number}` : `item:${item.id}`);
         const t = (await pool.query('SELECT customer_name FROM support_tickets WHERE id = $1', [item.ticket_id])).rows[0];
         await require('../services/fieldTravelService').recordStop(pool, req.user, {
             kind: item.item_type === 'pickup' ? 'pickup' : 'visit',
@@ -3095,7 +3098,7 @@ exports.logVisit = async (req, res) => {
             latitude, longitude,
         });
     } catch (travelErr) {
-        if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: 'CHECK_IN_FIRST', message: travelErr.message });
+        if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: travelErr.code || 'CHECK_IN_FIRST', message: travelErr.message });
         console.error('[support] travel stop:', travelErr.message);
     }
 
@@ -7361,7 +7364,8 @@ exports.pickupVisitArrived = async (req, res) => {
         if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
         const lat = req.body?.latitude ? String(req.body.latitude) : null;
         const lng = req.body?.longitude ? String(req.body.longitude) : null;
-        // Day travel (migration 438): a stop at this customer.
+        // One task at a time, in the lead's order (migration 439); then the travel stop (438).
+        await require('../services/fieldTaskService').assertCanStart(pool, req.user, `rdc:${rdc}`);
         await require('../services/fieldTravelService').recordStop(pool, req.user, { kind: 'pickup', ref: rdc, label: items[0].ticket_id ? `Pickup ${rdc}` : rdc, latitude: lat, longitude: lng });
         const open = items.filter((i) => !isCollected(i) && !i.visited_at);
         for (const i of open) {
@@ -7374,7 +7378,7 @@ exports.pickupVisitArrived = async (req, res) => {
         await bumpTicketActivity(pool, items[0].ticket_id);
         res.json({ success: true, message: 'Arrived — take the photos of each laptop' });
     } catch (e) {
-        if (e.status) return res.status(e.status).json({ success: false, message: e.message });
+        if (e.status) return res.status(e.status).json({ success: false, code: e.code, message: e.message });
         console.error('pickupVisitArrived:', e);
         res.status(500).json({ success: false, message: 'Could not mark arrived' });
     }

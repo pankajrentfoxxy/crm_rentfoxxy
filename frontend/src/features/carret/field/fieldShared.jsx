@@ -95,7 +95,7 @@ export function TaskList({ tasks = [] }) {
   );
 }
 
-const LEG_KIND = { visit: 'Visit', pickup: 'Pickup', delivery: 'Delivery', vendor: 'Vendor', end: 'Back' };
+const LEG_KIND = { visit: 'Visit', pickup: 'Pickup', delivery: 'Delivery', vendor: 'Vendor', warehouse: 'Warehouse', end: 'Back' };
 /** One day's route: check-in, every stop with its road km, the way back. */
 export function TravelDay({ day }) {
   return (

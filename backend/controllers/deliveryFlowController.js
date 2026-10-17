@@ -589,6 +589,29 @@ async function listHandIn(techId, userId) {
 }
 
 // GET /my-deliveries — the logged-in dispatch technician's active DCs.
+/**
+ * A technician's open challans (deliveries, Return DCs from My deliveries,
+ * vendor hand-overs) — My deliveries and the field task order share it.
+ */
+async function listFieldChallans(userId) {
+  const techId = await resolveTechnicianId(userId);
+  const params = [techId || -1, userId];
+  const where = `WHERE (
+                     (d.status IN ('in_transit','reached')
+                      AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                     OR (d.status = 'rejected' AND d.return_to_warehouse_at IS NULL
+                         AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                     OR (${PARTIAL_REFUSAL_SQL} AND d.return_to_warehouse_at IS NULL
+                         AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                   )
+                   AND NOT (d.movement_type = 'return' AND ${SUPPORT_RDC_EXISTS})`;
+  const items = await buildDcFlow(where, params, { includeOtp: false });
+  const vendorReturns = await vrtdcFlow.listBucketVendorReturns({ technicianId: techId, userId });
+  const vendorRepairs = await vrdcFlow.listBucketVendorRepairs({ technicianId: techId, userId });
+  return { techId, items: [...items, ...vendorReturns, ...vendorRepairs] };
+}
+exports.listFieldChallans = listFieldChallans;
+
 exports.getMyDeliveries = async (req, res) => {
   try {
     const techId = await resolveTechnicianId(req.user.user_id);
@@ -641,6 +664,8 @@ exports.markTechReached = async (req, res) => {
     // Day travel (migration 438): this stop, by road from the last one. A field
     // technician who has not checked in for the day is refused.
     try {
+      // One task at a time, in the lead's order (migration 439).
+      await require('../services/fieldTaskService').assertCanStart(pool, req.user, `dc:${dcNumber}`);
       const mv = kind === 'dc' ? (await pool.query('SELECT movement_type, customer_name FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1', [dcNumber])).rows[0] : null;
       await require('../services/fieldTravelService').recordStop(pool, req.user, {
         kind: kind === 'dc' ? (mv?.movement_type === 'return' ? 'pickup' : 'delivery') : 'vendor',
@@ -649,7 +674,7 @@ exports.markTechReached = async (req, res) => {
         latitude, longitude,
       });
     } catch (travelErr) {
-      if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: 'CHECK_IN_FIRST', message: travelErr.message });
+      if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: travelErr.code || 'CHECK_IN_FIRST', message: travelErr.message });
       console.error('[delivery] travel stop:', travelErr.message);
     }
     if (kind === 'vrtdc') {

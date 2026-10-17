@@ -9,6 +9,7 @@ import RaisePartRequestForm from '../../support/components/RaisePartRequestForm'
 import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
 import { CollectChargerPanel } from '../move/challanCharger';
 import PickupPhotos from './PickupPhotos';
+import { useFieldTasks } from '../field/TaskQueue';
 import {
   fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, signReturnDc, uploadPhoto, verifyLaptop, verifyPickupOtp,
   verifyVisitOtp, workDone,
@@ -68,6 +69,7 @@ export default function JobPage() {
   const [otp, setOtp] = useState('');
   const [ticket, setTicket] = useState(null);
   const [chargerOk, setChargerOk] = useState(false);
+  const ft = useFieldTasks();
   const [photos, setPhotos] = useState(null); // pickup photos taken on this screen
   const catalog = useIssueCatalog();
   const [finding, setFinding] = useState(null);
@@ -104,6 +106,15 @@ export default function JobPage() {
     );
   }
 
+  // One task at a time (migration 439): another task's screen stays shut.
+  const taskKey = job.kind === 'pickup' && job.return_dc_number ? `rdc:${job.return_dc_number}` : `item:${job.item_id}`;
+  if (!ft.allowed(taskKey)) {
+    return (
+      <FieldShell title={job.customer} tabs={TECH_TABS} onBack={() => navigate('/carret/serve/my-work')}>
+        <EmptyState title="Not yet — one task at a time" body={`Finish ${ft.data?.current?.title || 'your current task'}${ft.data?.current?.customer ? ` (${ft.data.current.customer})` : ''} first.`} action={<Button variant="primary" onClick={() => navigate(ft.data?.current?.link || '/carret/serve/my-work')}>Go to it</Button>} />
+      </FieldShell>
+    );
+  }
   const isPickup = job.kind === 'pickup';
   const k = job.next.key;
   const flow = isPickup

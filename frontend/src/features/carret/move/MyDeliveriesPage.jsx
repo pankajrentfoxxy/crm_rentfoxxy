@@ -17,6 +17,7 @@ import {
 import { HandInCard, PickupCard, VendorCard } from './MyPickupCards';
 import { TECH_TABS } from '../serve/serveShared';
 import FieldDayBar from '../field/FieldDayBar';
+import TaskQueue, { useFieldTasks } from '../field/TaskQueue';
 
 /**
  * Field → My deliveries (the delivery technician's phone; also Support →
@@ -174,11 +175,13 @@ export default function MyDeliveriesPage() {
   const [params, setParams] = useSearchParams();
   const show = SHOW.includes(params.get('show')) ? params.get('show') : 'all';
   const [state, setState] = useState({ loading: true, rows: [], handIn: [], error: null });
+  const ft = useFieldTasks();
+  const reloadTasks = ft.reload;
   const load = useCallback(() => {
     getMyDeliveries()
-      .then(({ data }) => setState({ loading: false, rows: data?.items || [], handIn: data?.hand_in || [], error: null }))
+      .then(({ data }) => { setState({ loading: false, rows: data?.items || [], handIn: data?.hand_in || [], error: null }); reloadTasks(); })
       .catch((e) => setState((s) => ({ ...s, loading: false, error: errMsg(e) || 'Could not load your deliveries.' })));
-  }, []);
+  }, [reloadTasks]);
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
   const count = (k) => state.rows.filter((dc) => kindOf(dc) === k).length;
@@ -194,6 +197,7 @@ export default function MyDeliveriesPage() {
   return (
     <FieldShell title={`My deliveries${state.rows.length ? ` · ${state.rows.length}` : ''}`} tabs={tabs}>
       <FieldDayBar />
+      <TaskQueue data={ft.data} here="deliveries" />
       <div className="c-stack" style={{ maxWidth: '40rem', margin: '0 auto' }}>
         <div style={{ overflowX: 'auto' }}>
           <Segmented label="Show" value={show} onChange={(v) => setParams(v === 'all' ? {} : { show: v }, { replace: true })} options={options} />
@@ -209,7 +213,8 @@ export default function MyDeliveriesPage() {
         {!state.loading && !state.error && !rows.length && !showHandIn && (
           <EmptyState title="Nothing here right now" body="Challans assigned to you appear once the gate lets them out; pickups once they are assigned to you." />
         )}
-        {rows.map((dc) => {
+        {/* One task at a time (migration 439): only the challan to work now is opened. */}
+        {rows.filter((dc) => ft.allowed(`dc:${dc.dc_number}`)).map((dc) => {
           const k = kindOf(dc);
           if (k === 'pickup') return <PickupCard key={dc.dc_number} dc={dc} onChanged={load} />;
           if (k === 'vendor') return <VendorCard key={dc.dc_number} dc={dc} onChanged={load} />;

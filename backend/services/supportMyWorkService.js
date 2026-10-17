@@ -53,7 +53,8 @@ async function loadJobs(userId) {
                  AND s3.item_type = 'pickup' AND s3.technician_esign_url IS NOT NULL
                  AND s3.technician_esign_by = COALESCE(i.pickup_assigned_to, i.assigned_to))) AS rdc_signed,
             -- The signed Return DC mailed to the customer (migration 437).
-            (SELECT MAX(d.customer_mail_attempted_at) FROM delivery_challan_lines d WHERE d.dc_number = i.return_dc_number) AS rdc_mail_at
+            (SELECT MAX(d.customer_mail_attempted_at) FROM delivery_challan_lines d WHERE d.dc_number = i.return_dc_number) AS rdc_mail_at,
+            (SELECT MAX(d.customer_signed_at) FROM delivery_challan_lines d WHERE d.dc_number = i.return_dc_number) AS rdc_customer_signed_at
        FROM support_ticket_items i
        JOIN support_tickets t ON t.id = i.ticket_id
        LEFT JOIN users ua ON ua.user_id = i.assigned_to
@@ -76,7 +77,8 @@ async function loadJobs(userId) {
     // and the customer's OTP has been sent — the first photo alone used to jump
     // straight to the OTP step, skipping the other photos and the charger.
     // Collected: the signed Return DC goes to the customer before the gate (required).
-    if (r.item_type === 'pickup' && r.return_dc_number && (r.customer_otp_verified_at || r.picked_up_at) && !r.rdc_mail_at
+    // Only pickups collected through the pickup visit (customer signed) — older ones had no mail step.
+    if (r.item_type === 'pickup' && r.return_dc_number && (r.customer_otp_verified_at || r.picked_up_at) && !r.rdc_mail_at && r.rdc_customer_signed_at
         && ['gate_inward', 'customer_otp'].includes(step)) {
       next = { key: 'email', label: 'Mail the signed Return DC' };
     }
@@ -162,4 +164,4 @@ async function teamWork() {
   };
 }
 
-module.exports = { myWork, teamWork };
+module.exports = { myWork, teamWork, loadJobs };

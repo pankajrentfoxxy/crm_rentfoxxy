@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Button, Select } from '../../../components/carret';
-import { endFieldDay, fetchFieldDay, fmtKm, fmtTime, startFieldDay } from './fieldApi';
+import { endFieldDay, fetchFieldDay, fmtKm, fmtTime, startFieldDay, warehouseStop } from './fieldApi';
 
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'That did not work.';
 const gps = () => new Promise((resolve) => {
@@ -21,6 +21,7 @@ export default function FieldDayBar({ onReady }) {
   const [place, setPlace] = useState('');
   const [busy, setBusy] = useState(false);
   const [ending, setEnding] = useState(false);
+  const [atWh, setAtWh] = useState(false);
   const load = useCallback(() => {
     fetchFieldDay().then(({ data: d }) => {
       setData(d);
@@ -34,7 +35,7 @@ export default function FieldDayBar({ onReady }) {
 
   const run = async (fn, ok) => {
     setBusy(true);
-    try { await fn(); toast.success(ok); setEnding(false); load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+    try { await fn(); toast.success(ok); setEnding(false); setAtWh(false); load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
   const start = (here) => run(async () => {
     if (here) {
@@ -74,7 +75,17 @@ export default function FieldDayBar({ onReady }) {
       </div>
       <div className="c-dayb-a">
         <Link className="c-btn" to="/carret/serve/my-report">My report</Link>
-        {!d.ended_at && !ending && <Button variant="quiet" onClick={() => setEnding(true)}>Check out</Button>}
+        {/* Back at the warehouse to pick up or hand over: the distance there is counted (migration 439). */}
+        {!d.ended_at && !ending && !atWh && <Button variant="quiet" onClick={() => setAtWh(true)}>📦 At the warehouse</Button>}
+        {!d.ended_at && atWh && (
+          <>
+            <Select value={place} onChange={(e) => setPlace(e.target.value)} options={options} aria-label="Which warehouse / office" />
+            <Button variant="primary" disabled={busy || !place} onClick={() => run(() => warehouseStop({ place_id: Number(place) }), 'Recorded at the warehouse')}>Here</Button>
+            <Button variant="quiet" disabled={busy} onClick={() => run(async () => { const p = await gps(); if (!p) throw new Error('Location is off — choose the place'); return warehouseStop(p); }, 'Recorded at your location')}>📍 My location</Button>
+            <Button variant="quiet" onClick={() => setAtWh(false)}>Cancel</Button>
+          </>
+        )}
+        {!d.ended_at && !ending && !atWh && <Button variant="quiet" onClick={() => setEnding(true)}>Check out</Button>}
         {!d.ended_at && ending && (
           <>
             <Select value={place} onChange={(e) => setPlace(e.target.value)} options={options} aria-label="Check out at" />

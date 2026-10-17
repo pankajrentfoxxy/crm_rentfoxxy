@@ -6,6 +6,8 @@ import { Button, EmptyState, Notice, Section } from '../../../components/carret'
 import { usePermission } from '../../../hooks/usePermission';
 import { fetchMyWork, fetchTeamWork } from './serveApi';
 import FieldDayBar from '../field/FieldDayBar';
+import TaskQueue, { useFieldTasks } from '../field/TaskQueue';
+import TaskOrderDrawer from '../field/TaskOrderDrawer';
 import { SLA_LABEL, SLA_TONE, TECH_TABS, errMsg, mapsLink, when } from './serveShared';
 
 /**
@@ -89,7 +91,7 @@ function PickupGroupCard({ group, readOnly }) {
   );
 }
 
-function JobList({ jobs, readOnly, onRefresh, emptyTitle, emptyBody }) {
+function JobList({ jobs, readOnly, onRefresh, emptyTitle, emptyBody, allowed = () => true }) {
   const late = jobs.filter((j) => j.sla?.state === 'breached').length;
   // One card per Return DC for pickups; visits (and pickups without a Return DC) as before.
   const cards = [];
@@ -105,7 +107,8 @@ function JobList({ jobs, readOnly, onRefresh, emptyTitle, emptyBody }) {
       {late > 0 && <Notice tone="warn" title={`${late} of ${jobs.length} job(s) are late`}>Late jobs come first, after any with a visit slot booked.</Notice>}
       {jobs.length === 0
         ? <EmptyState title={emptyTitle} body={emptyBody} action={<Button onClick={onRefresh}>Refresh</Button>} />
-        : cards.map((c) => (c.rdc
+        // One task at a time (migration 439): only the task to do now is opened here.
+        : cards.filter((c) => allowed(c.rdc ? `rdc:${c.rdc}` : `item:${c.job.item_id}`)).map((c) => (c.rdc
           ? <PickupGroupCard key={c.rdc} group={groups.get(c.rdc)} readOnly={readOnly} />
           : <JobCard key={c.job.item_id} job={c.job} readOnly={readOnly} />))}
       {jobs.length > 0 && <div style={{ textAlign: 'center', margin: '8px 0 24px' }}><Button variant="quiet" onClick={onRefresh}>Refresh</Button></div>}
@@ -172,6 +175,8 @@ export default function MyWorkPage() {
   const [jobs, setJobs] = useState(null);
   const [mine, setMine] = useState(null);
   const [team, setTeam] = useState(null);
+  const ft = useFieldTasks();
+  const [orderOpen, setOrderOpen] = useState(false);
 
   const load = useCallback(() => {
     if (view === 'team') {
@@ -194,19 +199,27 @@ export default function MyWorkPage() {
   return (
     <FieldShell title={title} tabs={TECH_TABS} onBack={() => (isLead && view !== 'team' ? pick(null) : window.history.back())}>
       {view === 'me' && <FieldDayBar />}
+      {view === 'me' && <TaskQueue data={ft.data} here="work" />}
       {isLead && view !== 'team' && (
-        <div style={{ marginBottom: '12px' }}><Button variant="quiet" onClick={() => pick(null)}>‹ All technicians</Button></div>
+        <div className="flex flex-wrap items-center" style={{ marginBottom: '12px', gap: '8px' }}>
+          <Button variant="quiet" onClick={() => pick(null)}>‹ All technicians</Button>
+          {view !== 'me' && <Button variant="primary" style={{ marginLeft: 'auto' }} onClick={() => setOrderOpen(true)}>Set the order</Button>}
+        </div>
       )}
       {view === 'team' ? <TeamView team={team} mine={mine} onPick={pick} /> : (
         jobs === null ? <EmptyState title="Loading…" /> : (
           <JobList
             jobs={jobs}
+            allowed={view === 'me' ? ft.allowed : undefined}
             readOnly={view !== 'me'}
             onRefresh={load}
             emptyTitle={view === 'me' ? 'Nothing assigned to you' : 'No open jobs'}
             emptyBody={view === 'me' ? 'New jobs appear here as soon as your lead assigns them.' : 'This technician has nothing open right now.'}
           />
         )
+      )}
+      {isLead && view !== 'team' && view !== 'me' && (
+        <TaskOrderDrawer userId={Number(view)} name={techName} open={orderOpen} onClose={() => { setOrderOpen(false); load(); }} />
       )}
     </FieldShell>
   );
