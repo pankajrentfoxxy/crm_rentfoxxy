@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
-import { Button, EmptyState, Input, Notice, Segmented, Select } from '../../../components/carret';
+import { Button, EmptyState, Input, Notice, Select } from '../../../components/carret';
 import { assignItem, assignPickup } from '../serve/serveApi';
 import {
   TASK_KIND_COLOR, TASK_KIND_LABEL, fetchFieldTasks, fetchTaskBoard, fmtDay, fmtHm, fmtKm, planFieldTask, releaseFieldTask,
@@ -13,18 +13,32 @@ import {
  * Support → Task board (17 Oct 2026, migration 440). The lead plans each field
  * technician's work: which task, which day, what time, in what order.
  *
- *   left    technicians — today / tomorrow / later, what is in progress
- *   middle  one technician's plan by day; drag a card (or ↑ ↓) to change the
- *           order or drop it on another day; set a time; "Do next" puts it
- *           straight after what is in progress
- *   right   support jobs nobody holds yet — assign next, at the end of today,
- *           or on a day and time
+ *   top      today in numbers; the technicians as chips (load, checked in,
+ *            what is in progress) — tap one to plan their work
+ *   plan     their tasks as a timeline, by day (Today / Tomorrow / Later /
+ *            Waiting tabs). Drag a card by its handle onto another card to
+ *            reorder, or onto a day tab to move it; ↑ ↓ and "Move to" do the
+ *            same on a phone. Tap a card for details, time, Do next, put back,
+ *            give to another technician.
+ *   side     support jobs nobody holds yet — assign next, last today, or on
+ *            a day and time
  *
  * Every change saves at once. The technician starts only today's tasks, one at
  * a time, in this order; tomorrow's and later ones show on My work, not opened.
  */
 const errMsg = (e) => e?.response?.data?.message || e?.message || 'That did not work.';
 const addDays = (ymd, n) => new Date(new Date(`${ymd}T00:00:00Z`).getTime() + n * 86400000).toISOString().slice(0, 10);
+const DAY_TARGET = 8; // a full day for the load bar
+const AVATAR = ['#2563eb', '#7c3aed', '#059669', '#d97706', '#db2777', '#0891b2', '#4f46e5', '#65a30d'];
+const avatarColor = (name = '') => AVATAR[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % AVATAR.length];
+const initials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+const KINDS = [
+  { key: 'all', label: 'All' },
+  { key: 'visit', label: 'Visits' },
+  { key: 'pickup', label: 'Pickups' },
+  { key: 'delivery', label: 'Deliveries' },
+];
+const kindGroup = (k) => (k === 'return' ? 'pickup' : k === 'vendor' ? 'delivery' : k);
 const byDate = (list) => list
   .map((t, i) => [t, i])
   .sort((a, b) => {
@@ -37,136 +51,178 @@ const byDate = (list) => list
   })
   .map(([t]) => t);
 
-function TaskCard({ t, n, today, busy, onDragStart, onDropBefore, onTime, onDay, onNext, onMove, onPutBack, onReassign, techs, techId }) {
+function Avatar({ name, on, size = 40 }) {
+  return (
+    <span className={`c-tb2-av${on ? ' is-on' : ''}`} style={{ '--av': avatarColor(name), width: size, height: size, fontSize: size * 0.38 }} aria-hidden="true">
+      {initials(name)}
+    </span>
+  );
+}
+
+function TechChip({ t, on, onPick }) {
+  const load = Math.min(1, t.today / DAY_TARGET);
+  return (
+    <button type="button" className={`c-tb2-tech${on ? ' is-on' : ''}`} onClick={onPick} aria-pressed={on}>
+      <Avatar name={t.name} on={t.checked_in} />
+      <span className="c-tb2-tech-m">
+        <b>{t.name}</b>
+        <span className="c-tb2-tech-s">
+          {t.active[0] ? <span className="is-live">● On a task</span> : <span>{t.checked_in ? 'Checked in' : 'Not checked in'}</span>}
+          {t.checked_in && <span>{fmtKm(t.km)}</span>}
+        </span>
+        <span className="c-tb2-load" title={`${t.today} today`}><i style={{ width: `${load * 100}%`, background: load >= 1 ? '#dc2626' : load > 0.7 ? '#d97706' : '#16a34a' }} /></span>
+        <span className="c-tb2-tech-c">
+          <span><b>{t.today}</b> today</span>
+          {t.tomorrow > 0 && <span><b>{t.tomorrow}</b> tmrw</span>}
+          {t.later > 0 && <span><b>{t.later}</b> later</span>}
+          {t.waiting > 0 && <span><b>{t.waiting}</b> ⚙</span>}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function TaskCard({ t, n, today, busy, open, flash, onToggle, drag, onTime, onDay, onNext, onMove, onPutBack, onReassign, techs, techId, first, last }) {
   const [over, setOver] = useState(false);
   const [giveTo, setGiveTo] = useState('');
   const fixed = t.state === 'active' || t.state === 'waiting';
+  const tomorrow = addDays(today, 1);
   return (
     <li
-      className={`c-tb-card${t.state === 'active' ? ' is-active' : ''}${t.state === 'waiting' ? ' is-wait' : ''}${over ? ' is-over' : ''}`}
+      className={`c-tb2-item is-${t.state}${over ? ' is-over' : ''}${flash ? ' is-flash' : ''}${drag.key === t.key ? ' is-drag' : ''}`}
       style={{ '--k': TASK_KIND_COLOR[t.kind] || '#64748b' }}
-      draggable={!fixed && !busy}
-      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.key); onDragStart(t.key); }}
-      onDragOver={(e) => { if (t.state !== 'active') { e.preventDefault(); setOver(true); } }}
+      onDragOver={(e) => { if (drag.key && drag.key !== t.key && t.state !== 'active' && t.state !== 'waiting') { e.preventDefault(); setOver(true); } }}
       onDragLeave={() => setOver(false)}
-      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setOver(false); onDropBefore(t); }}
+      onDrop={(e) => { e.preventDefault(); setOver(false); drag.dropBefore(t); }}
     >
-      <div className="c-tb-top">
-        <span className="c-tb-grip" aria-hidden="true">{fixed ? '' : '⋮⋮'}</span>
-        <span className="c-tb-n">{t.state === 'waiting' ? '⚙' : n}</span>
-        <span className="c-tq-chip">{TASK_KIND_LABEL[t.kind] || t.kind}</span>
-        <b className="c-tb-c">{t.customer || t.title}</b>
-        {t.state === 'active' && <span className="c-tb-badge is-red">In progress</span>}
-        {t.state === 'waiting' && <span className="c-tb-badge">Waiting for part</span>}
-        {t.overdue && t.state === 'pending' && <span className="c-tb-badge is-warn">From an earlier day</span>}
-        {t.priority && t.priority !== 'normal' && <span className="c-tb-badge is-warn">{t.priority}</span>}
-        {t.sla === 'breached' && <span className="c-tb-badge is-red">SLA late</span>}
+      <div className="c-tb2-rail">
+        <span className="c-tb2-time">{t.time ? fmtHm(t.time) : (t.state === 'active' ? 'Now' : '')}</span>
+        <span className="c-tb2-node">{t.state === 'waiting' ? '⚙' : t.state === 'active' ? '●' : n}</span>
       </div>
-      <div className="c-tb-body">
-        <div>{t.title}{t.ticket_id ? <> · <Link to={`/carret/serve/tickets/${t.ticket_id}`}>Ticket #{t.ticket_id}</Link></> : null}</div>
-        {t.laptops?.length > 0 && <div className="font-mono c-tb-lap">{t.laptops.join('  ·  ')}</div>}
-        {t.issue && <div>Problem: {t.issue}</div>}
-        <div className="text-ink-3">{t.address || 'No address'}{t.phone ? ` · ${t.phone}` : ''}</div>
-        {t.appointment && <div className="text-ink-3">Customer slot: {new Date(t.appointment).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</div>}
-        {t.step && <div className="text-ink-3">Next step: {t.step}</div>}
-      </div>
-      {t.state !== 'waiting' && (
-        <div className="c-tb-ctl">
-          <label className="c-tb-f">
-            <span>Time</span>
-            <Input type="time" value={t.time || ''} disabled={busy} onChange={(e) => onTime(t, e.target.value)} />
-          </label>
-          {t.state !== 'active' && (
-            <label className="c-tb-f">
-              <span>Day</span>
-              <Input type="date" min={today} value={t.date || today} disabled={busy} onChange={(e) => e.target.value && onDay(t, e.target.value)} />
-            </label>
-          )}
-          <span className="c-tb-btns">
-            {t.state === 'active' ? (
-              <Button variant="quiet" disabled={busy} onClick={() => onPutBack(t)} title="Reached by mistake / customer away — back to not started">Put back</Button>
-            ) : (
-              <>
-                <Button variant="quiet" disabled={busy} onClick={() => onNext(t)} title="Straight after what is in progress, today">Do next</Button>
-                <Button variant="quiet" disabled={busy} onClick={() => onMove(t, -1)} aria-label="Move up">↑</Button>
-                <Button variant="quiet" disabled={busy} onClick={() => onMove(t, 1)} aria-label="Move down">↓</Button>
-              </>
-            )}
-          </span>
+      <div className="c-tb2-card">
+        <div className="c-tb2-head">
+          <span
+            className={`c-tb2-grip${fixed ? ' is-off' : ''}`}
+            draggable={!fixed && !busy}
+            onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.key); drag.start(t.key); }}
+            onDragEnd={drag.end}
+            title={fixed ? '' : 'Drag to reorder, or onto a day'}
+            aria-hidden="true"
+          >⋮⋮</span>
+          <button type="button" className="c-tb2-main" onClick={onToggle} aria-expanded={open}>
+            <span className="c-tb2-top">
+              <span className="c-tq-chip">{TASK_KIND_LABEL[t.kind] || t.kind}</span>
+              {t.state === 'active' && <span className="c-tb2-badge is-live">In progress</span>}
+              {t.state === 'waiting' && <span className="c-tb2-badge">Waiting for part</span>}
+              {t.overdue && t.state === 'pending' && <span className="c-tb2-badge is-warn">Carried over</span>}
+              {t.priority && t.priority !== 'normal' && <span className="c-tb2-badge is-warn">{t.priority}</span>}
+              {t.sla === 'breached' && <span className="c-tb2-badge is-red">SLA late</span>}
+            </span>
+            <b className="c-tb2-cust">{t.customer || t.title}</b>
+            <span className="c-tb2-sub">{t.title}{t.address ? ` · ${t.address}` : ''}</span>
+          </button>
+          <span className="c-tb2-chev" aria-hidden="true">{open ? '▴' : '▾'}</span>
         </div>
-      )}
-      {t.state === 'pending' && t.key.startsWith('item:') && (
-        <div className="c-tb-give">
-          <Select
-            value={giveTo}
-            onChange={(e) => setGiveTo(e.target.value)}
-            aria-label="Give to another technician"
-            options={[{ value: '', label: 'Give to another technician…' }, ...techs.filter((x) => x.user_id !== techId).map((x) => ({ value: String(x.user_id), label: x.name }))]}
-          />
-          {giveTo && <Button disabled={busy} onClick={() => { onReassign(t, Number(giveTo)); setGiveTo(''); }}>Give</Button>}
+
+        {open && (
+          <div className="c-tb2-more">
+            <dl className="c-tb2-dl">
+              {t.laptops?.length > 0 && <div><dt>Laptop</dt><dd className="font-mono">{t.laptops.join('  ·  ')}</dd></div>}
+              {t.issue && <div><dt>Problem</dt><dd>{t.issue}</dd></div>}
+              {t.remarks && <div><dt>Note</dt><dd>“{t.remarks}”</dd></div>}
+              {t.appointment && <div><dt>Customer slot</dt><dd>{new Date(t.appointment).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</dd></div>}
+              {t.step && <div><dt>Next step</dt><dd>{t.step}</dd></div>}
+              {t.phone && <div><dt>Phone</dt><dd><a href={`tel:${t.phone}`}>{t.phone}</a></dd></div>}
+              {t.ticket_id && <div><dt>Ticket</dt><dd><Link to={`/carret/serve/tickets/${t.ticket_id}`}>#{t.ticket_id} ›</Link></dd></div>}
+            </dl>
+            {t.state !== 'waiting' && (
+              <div className="c-tb2-ctl">
+                <label className="c-tb2-f"><span>Time</span><Input type="time" value={t.time || ''} disabled={busy} onChange={(e) => onTime(t, e.target.value)} /></label>
+                {t.state !== 'active' && (
+                  <label className="c-tb2-f"><span>Day</span><Input type="date" min={today} value={t.date || today} disabled={busy} onChange={(e) => e.target.value && onDay(t, e.target.value)} /></label>
+                )}
+              </div>
+            )}
+            {t.state === 'pending' && (
+              <div className="c-tb2-quick">
+                {t.date !== today && <button type="button" disabled={busy} onClick={() => onDay(t, today)}>→ Today</button>}
+                {t.date !== tomorrow && <button type="button" disabled={busy} onClick={() => onDay(t, tomorrow)}>→ Tomorrow</button>}
+                <button type="button" disabled={busy} onClick={() => onNext(t)} className="is-accent">⚡ Do next</button>
+              </div>
+            )}
+            {t.state === 'active' && (
+              <div className="c-tb2-quick">
+                <button type="button" disabled={busy} onClick={() => onPutBack(t)}>↺ Put back to not started</button>
+                <small className="text-ink-3">If they reached by mistake or the customer was away. Nothing collected or delivered is undone.</small>
+              </div>
+            )}
+            {t.state === 'pending' && t.key.startsWith('item:') && techs.length > 1 && (
+              <div className="c-tb2-give">
+                <Select
+                  value={giveTo}
+                  onChange={(e) => setGiveTo(e.target.value)}
+                  aria-label="Give to another technician"
+                  options={[{ value: '', label: 'Give to another technician…' }, ...techs.filter((x) => x.user_id !== techId).map((x) => ({ value: String(x.user_id), label: `${x.name} · ${x.today} today` }))]}
+                />
+                <Button disabled={busy || !giveTo} onClick={() => { onReassign(t, Number(giveTo)); setGiveTo(''); }}>Give</Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {t.state === 'pending' && (
+        <div className="c-tb2-arrows">
+          <button type="button" disabled={busy || first} onClick={() => onMove(t, -1)} aria-label="Move up">▲</button>
+          <button type="button" disabled={busy || last} onClick={() => onMove(t, 1)} aria-label="Move down">▼</button>
         </div>
       )}
     </li>
   );
 }
 
-function DayColumn({ title, sub, date, list, startN, today, onDropEnd, ...cardProps }) {
-  const [over, setOver] = useState(false);
-  return (
-    <section
-      className={`c-tb-day${over ? ' is-over' : ''}`}
-      onDragOver={(e) => { if (date) { e.preventDefault(); setOver(true); } }}
-      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); }}
-      onDrop={(e) => { e.preventDefault(); setOver(false); if (date) onDropEnd(date); }}
-    >
-      <header className="c-tb-dayh"><b>{title}</b><span>{sub}</span><span className="c-tb-cnt">{list.length}</span></header>
-      {list.length ? (
-        <ol className="c-tb-list">
-          {list.map((t, i) => <TaskCard key={t.key} t={t} n={startN + i} today={today} {...cardProps} />)}
-        </ol>
-      ) : <div className="c-tb-empty">{date ? 'Nothing planned — drop a task here' : 'None'}</div>}
-    </section>
-  );
-}
-
 function AssignCard({ job, techs, defaultTech, today, busy, onAssign }) {
-  const [tech, setTech] = useState(String(defaultTech || ''));
+  const [tech, setTech] = useState(defaultTech ? String(defaultTech) : '');
   const [when, setWhen] = useState('next');
   const [date, setDate] = useState(addDays(today, 1));
   const [time, setTime] = useState('');
+  const [open, setOpen] = useState(false);
   useEffect(() => { if (defaultTech) setTech(String(defaultTech)); }, [defaultTech]);
   return (
-    <li className="c-tb-card is-un" style={{ '--k': TASK_KIND_COLOR[job.kind] || '#64748b' }}>
-      <div className="c-tb-top">
+    <li className="c-tb2-un-item" style={{ '--k': TASK_KIND_COLOR[job.kind] || '#64748b' }}>
+      <button type="button" className="c-tb2-un-h" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <span className="c-tq-chip">{TASK_KIND_LABEL[job.kind] || job.kind}</span>
-        <b className="c-tb-c">{job.customer}</b>
-        {job.priority && job.priority !== 'normal' && <span className="c-tb-badge is-warn">{job.priority}</span>}
-      </div>
-      <div className="c-tb-body">
-        <div>{job.title} · <Link to={`/carret/serve/tickets/${job.ticket_id}`}>Ticket #{job.ticket_id}</Link></div>
-        {job.laptops?.length > 0 && <div className="font-mono c-tb-lap">{job.laptops.join('  ·  ')}</div>}
-        {job.issue && <div>Problem: {job.issue}</div>}
-        <div className="text-ink-3">{job.address || 'No address'}</div>
-      </div>
-      <div className="c-tb-assign">
-        <Select value={tech} onChange={(e) => setTech(e.target.value)} aria-label="Technician" options={[{ value: '', label: 'Choose a technician…' }, ...techs.map((x) => ({ value: String(x.user_id), label: `${x.name} · ${x.today} today` }))]} />
-        <Segmented
-          value={when}
-          onChange={setWhen}
-          label="When"
-          options={[{ value: 'next', label: 'Do next' }, { value: 'end', label: 'Today, last' }, { value: 'day', label: 'On a day' }]}
-        />
-        {when === 'day' && (
-          <div className="flex" style={{ gap: '8px' }}>
-            <Input type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Day" />
-            <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" />
+        <b>{job.customer}</b>
+        <small>{job.title}{job.address ? ` · ${job.address}` : ''}</small>
+        {job.priority && job.priority !== 'normal' && <span className="c-tb2-badge is-warn">{job.priority}</span>}
+      </button>
+      {open && (
+        <div className="c-tb2-un-b">
+          {job.laptops?.length > 0 && <div className="font-mono c-tb2-sub">{job.laptops.join('  ·  ')}</div>}
+          {job.issue && <div className="c-tb2-sub">Problem: {job.issue}</div>}
+          <Link className="c-tb2-sub" to={`/carret/serve/tickets/${job.ticket_id}`}>Ticket #{job.ticket_id} ›</Link>
+          <div className="c-tb2-pick">
+            {techs.map((x) => (
+              <button key={x.user_id} type="button" className={String(x.user_id) === tech ? 'is-on' : ''} onClick={() => setTech(String(x.user_id))} title={`${x.today} today`}>
+                <Avatar name={x.name} on={x.checked_in} size={30} />
+                <span>{x.name.split(' ')[0]}</span>
+                <small>{x.today}</small>
+              </button>
+            ))}
           </div>
-        )}
-        {when !== 'day' && (
-          <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time (optional)" />
-        )}
-        <Button variant="primary" disabled={busy || !tech} onClick={() => onAssign(job, Number(tech), { position: when === 'next' ? 'next' : 'end', date: when === 'day' ? date : today, time: time || undefined })}>Assign</Button>
-      </div>
+          <div className="c-tb2-when" role="group" aria-label="When">
+            {[['next', '⚡ Do next'], ['end', 'Today, last'], ['day', 'On a day']].map(([v, l]) => (
+              <button key={v} type="button" className={when === v ? 'is-on' : ''} onClick={() => setWhen(v)}>{l}</button>
+            ))}
+          </div>
+          <div className="c-tb2-ctl">
+            {when === 'day' && <label className="c-tb2-f"><span>Day</span><Input type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} /></label>}
+            <label className="c-tb2-f"><span>Time (optional)</span><Input type="time" value={time} onChange={(e) => setTime(e.target.value)} /></label>
+          </div>
+          <Button variant="primary" disabled={busy || !tech} onClick={() => onAssign(job, Number(tech), { position: when === 'next' ? 'next' : 'end', date: when === 'day' ? date : today, time: time || undefined })}>
+            {tech ? `Assign to ${(techs.find((x) => String(x.user_id) === tech)?.name || '').split(' ')[0]}` : 'Choose a technician'}
+          </Button>
+        </div>
+      )}
     </li>
   );
 }
@@ -177,16 +233,23 @@ export default function TaskBoardPage() {
   const [list, setList] = useState(null);
   const [meta, setMeta] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const dragKey = useRef(null);
+  const [tab, setTab] = useState('today');
+  const [kind, setKind] = useState('all');
+  const [q, setQ] = useState('');
+  const [openKey, setOpenKey] = useState(null);
+  const [flash, setFlash] = useState(null);
+  const [dragKey, setDragKey] = useState(null);
+  const [overTab, setOverTab] = useState(null);
+  const [showUn, setShowUn] = useState(false);
+  const dragRef = useRef(null);
   const techId = Number(params.get('tech')) || null;
 
   const loadBoard = useCallback(() => {
-    fetchTaskBoard().then(({ data }) => setBoard(data)).catch((e) => { toast.error(errMsg(e)); setBoard({ technicians: [], unassigned: [] }); });
+    fetchTaskBoard().then(({ data }) => setBoard(data)).catch((e) => { toast.error(errMsg(e)); setBoard({ technicians: [], unassigned: [], failed: true }); });
   }, []);
   const take = (data) => {
     setList(byDate((data.tasks || []).filter((t) => t.state !== 'carrying')));
-    setMeta({ today: data.today, tomorrow: data.tomorrow, carrying: (data.tasks || []).filter((t) => t.state === 'carrying') });
+    setMeta({ today: data.today, carrying: (data.tasks || []).filter((t) => t.state === 'carrying') });
   };
   const loadTech = useCallback(() => {
     if (!techId) { setList(null); return; }
@@ -194,17 +257,20 @@ export default function TaskBoardPage() {
     fetchFieldTasks(techId).then(({ data }) => take(data)).catch((e) => { toast.error(errMsg(e)); setList([]); });
   }, [techId]);
   useEffect(() => { loadBoard(); }, [loadBoard]);
-  useEffect(() => { loadTech(); }, [loadTech]);
+  useEffect(() => { loadTech(); setOpenKey(null); }, [loadTech]);
   useEffect(() => {
     if (!techId && board?.technicians?.length) {
       const first = board.technicians.find((t) => t.today || t.tomorrow || t.later) || board.technicians[0];
       setParams({ tech: String(first.user_id) }, { replace: true });
     }
   }, [board, techId, setParams]);
+  useEffect(() => { if (!flash) return undefined; const t = setTimeout(() => setFlash(null), 1600); return () => clearTimeout(t); }, [flash]);
 
   const today = meta?.today || board?.today;
-  const persist = async (next, ok) => {
+  const tomorrow = today ? addDays(today, 1) : null;
+  const persist = async (next, ok, movedKey) => {
     setList(next);
+    if (movedKey) setFlash(movedKey);
     setBusy(true);
     try {
       const { data } = await saveFieldTaskPlan(techId, next.map((t) => ({ key: t.key, date: t.date, time: t.time || null })));
@@ -220,25 +286,31 @@ export default function TaskBoardPage() {
     const item = list.find((t) => t.key === key);
     if (!item || item.state === 'active' || item.state === 'waiting') return;
     const rest = list.filter((t) => t.key !== key);
-    const moved = { ...item, date: toDate };
     let idx = beforeKey ? rest.findIndex((t) => t.key === beforeKey) : -1;
     if (idx < 0) idx = rest.map((t) => t.state !== 'waiting' && t.date <= toDate).lastIndexOf(true) + 1;
-    persist(byDate([...rest.slice(0, idx), moved, ...rest.slice(idx)]), toDate === item.date ? 'Order saved' : `Moved to ${toDate === today ? 'today' : fmtDay(toDate)}`);
+    const label = toDate === today ? 'today' : toDate === tomorrow ? 'tomorrow' : fmtDay(toDate);
+    persist(byDate([...rest.slice(0, idx), { ...item, date: toDate }, ...rest.slice(idx)]), toDate === item.date ? 'Order saved' : `Moved to ${label}`, key);
+  };
+  const drag = {
+    key: dragKey,
+    start: (k) => { dragRef.current = k; setDragKey(k); },
+    end: () => { dragRef.current = null; setDragKey(null); setOverTab(null); },
+    dropBefore: (t) => { const k = dragRef.current; drag.end(); if (k && k !== t.key && t.state !== 'waiting' && t.state !== 'active') moveTo(k, t.date, t.key); },
   };
   const cardProps = {
     today,
     busy,
+    drag,
     techs: board?.technicians || [],
     techId,
-    onDragStart: (key) => { dragKey.current = key; },
-    onDropBefore: (t) => { const k = dragKey.current; dragKey.current = null; if (k && k !== t.key && t.state !== 'waiting') moveTo(k, t.date, t.key); },
-    onTime: (t, v) => persist(list.map((x) => (x.key === t.key ? { ...x, time: v || null } : x)), v ? `Time set — ${fmtHm(v)}` : 'Time cleared'),
+    onTime: (t, v) => persist(list.map((x) => (x.key === t.key ? { ...x, time: v || null } : x)), v ? `Time set — ${fmtHm(v)}` : 'Time cleared', t.key),
     onDay: (t, d) => moveTo(t.key, d < today ? today : d),
     onNext: (t) => {
       const rest = list.filter((x) => x.key !== t.key);
       const idx = rest.findIndex((x) => x.state !== 'active');
       const at = idx < 0 ? rest.length : idx;
-      persist(byDate([...rest.slice(0, at), { ...t, date: today }, ...rest.slice(at)]), 'Next — it opens as soon as the current task is done');
+      setTab('today');
+      persist(byDate([...rest.slice(0, at), { ...t, date: today }, ...rest.slice(at)]), 'Next — it opens as soon as the current task is done', t.key);
     },
     onMove: (t, d) => {
       const same = list.filter((x) => x.date === t.date && x.state === 'pending');
@@ -248,11 +320,11 @@ export default function TaskBoardPage() {
       const a = list.indexOf(same[i]); const b = list.indexOf(same[j]);
       const next = [...list];
       [next[a], next[b]] = [next[b], next[a]];
-      persist(next, 'Order saved');
+      persist(next, 'Order saved', t.key);
     },
     onPutBack: async (t) => {
       setBusy(true);
-      try { const { data } = await releaseFieldTask(techId, t.key); take(data); toast.success('Put back to not started'); loadBoard(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+      try { const { data } = await releaseFieldTask(techId, t.key); take(data); setFlash(t.key); toast.success('Put back to not started'); loadBoard(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
     },
     onReassign: async (t, to) => {
       setBusy(true);
@@ -271,92 +343,166 @@ export default function TaskBoardPage() {
       else await assignPickup(job.ticket_id, { dispatch_mode: 'technician', technician_user_id: to, return_dc_number: job.return_dc_number });
       await planFieldTask({ user_id: to, key: job.key, ...plan });
       toast.success(plan.position === 'next' ? 'Assigned — next after the current task' : 'Assigned and planned');
+      setFlash(job.key);
+      setTab(plan.date && plan.date !== today ? (plan.date === tomorrow ? 'tomorrow' : 'later') : 'today');
       loadBoard();
       if (to === techId) loadTech(); else setParams({ tech: String(to) });
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
-  const groups = useMemo(() => {
-    if (!list || !today) return [];
-    const tomorrow = addDays(today, 1);
-    const open = list.filter((t) => t.state !== 'waiting');
-    const dates = [...new Set([today, tomorrow, ...open.map((t) => t.date)])].sort();
-    let n = 1;
-    return dates.map((d) => {
-      const l = open.filter((t) => t.date === d);
-      const g = { date: d, list: l, startN: n, title: d === today ? 'Today' : d === tomorrow ? 'Tomorrow' : fmtDay(d), sub: d === today || d === tomorrow ? fmtDay(d) : '' };
-      n += l.length;
-      return g;
-    });
-  }, [list, today]);
-  const waiting = (list || []).filter((t) => t.state === 'waiting');
-  const techs = (board?.technicians || []).filter((t) => filter === 'all' || t.today || t.tomorrow || t.later || t.active.length);
-  const sel = (board?.technicians || []).find((t) => t.user_id === techId);
-  const totals = (board?.technicians || []).reduce((s, t) => ({ today: s.today + t.today, active: s.active + t.active.length, on: s.on + (t.checked_in ? 1 : 0) }), { today: 0, active: 0, on: 0 });
+  const all = list || [];
+  const buckets = {
+    today: all.filter((t) => t.state !== 'waiting' && t.date === today),
+    tomorrow: all.filter((t) => t.state !== 'waiting' && t.date === tomorrow),
+    later: all.filter((t) => t.state !== 'waiting' && today && t.date > tomorrow),
+    waiting: all.filter((t) => t.state === 'waiting'),
+  };
+  const match = (t) => (kind === 'all' || kindGroup(t.kind) === kind)
+    && (!q.trim() || [t.customer, t.title, t.address, ...(t.laptops || [])].filter(Boolean).join(' ').toLowerCase().includes(q.trim().toLowerCase()));
+  const shown = buckets[tab].filter(match);
+  const laterDays = useMemo(() => [...new Set(buckets.later.map((t) => t.date))].sort(), [buckets.later]);
+  const tabDate = { today, tomorrow, later: today ? addDays(today, 2) : null };
+  const dropOnTab = (key) => {
+    const k = dragRef.current;
+    drag.end();
+    if (!k || !tabDate[key]) return;
+    const item = all.find((t) => t.key === k);
+    const target = key === 'later' && item?.date > tomorrow ? item.date : tabDate[key];
+    moveTo(k, target);
+  };
+
+  const techs = board?.technicians || [];
+  const sel = techs.find((t) => t.user_id === techId);
+  const totals = techs.reduce((s, t) => ({ today: s.today + t.today, active: s.active + t.active.length, on: s.on + (t.checked_in ? 1 : 0), km: s.km + Number(t.km || 0) }), { today: 0, active: 0, on: 0, km: 0 });
+  const activeNow = all.filter((t) => t.state === 'active');
+  const unassigned = board?.unassigned || [];
+
+  const renderList = (items, startN = 1) => (
+    <ol className="c-tb2-line">
+      {items.map((t, i) => {
+        const same = items.filter((x) => x.state === 'pending' && x.date === t.date);
+        const pos = same.indexOf(t);
+        return (
+          <TaskCard
+            key={t.key}
+            t={t}
+            n={startN + i}
+            open={openKey === t.key}
+            flash={flash === t.key}
+            onToggle={() => setOpenKey((k) => (k === t.key ? null : t.key))}
+            first={pos <= 0}
+            last={pos === same.length - 1}
+            {...cardProps}
+          />
+        );
+      })}
+    </ol>
+  );
 
   return (
-    <DeskShell title="Task board" breadcrumb="Support" subtitle="Plan each field technician's tasks — day, time and order. Drag to change it; every change saves at once.">
-      {!board ? <EmptyState title="Loading…" /> : (
-        <div className="c-tb">
-          <aside className="c-tb-techs">
-            <div className="c-tb-sum">
-              <div><b>{totals.today}</b><span>tasks today</span></div>
-              <div><b>{totals.active}</b><span>in progress</span></div>
-              <div><b>{totals.on}</b><span>checked in</span></div>
-            </div>
-            <Segmented value={filter} onChange={setFilter} label="Show" options={[{ value: 'all', label: 'All' }, { value: 'busy', label: 'With tasks' }]} />
-            <ul>
-              {techs.map((t) => (
-                <li key={t.user_id}>
-                  <button type="button" className={`c-tb-tech${t.user_id === techId ? ' is-on' : ''}`} onClick={() => setParams({ tech: String(t.user_id) })}>
-                    <span className="c-tb-tn"><i className={t.checked_in ? 'is-on' : ''} title={t.checked_in ? 'Checked in' : 'Not checked in'} />{t.name}</span>
-                    <span className="c-tb-tc">
-                      <span title="Today">{t.today} today</span>
-                      {t.tomorrow > 0 && <span title="Tomorrow">{t.tomorrow} tmrw</span>}
-                      {t.later > 0 && <span title="Later">{t.later} later</span>}
-                      {t.waiting > 0 && <span title="Waiting for a part">{t.waiting} ⚙</span>}
-                    </span>
-                    {t.active[0] && <span className="c-tb-ta">● {t.active[0].customer || t.active[0].title}</span>}
-                    {t.checked_in && <span className="c-tb-tk">{fmtKm(t.km)}</span>}
-                  </button>
-                </li>
-              ))}
-              {!techs.length && <li className="text-ink-3" style={{ padding: '8px' }}>No field technicians</li>}
-            </ul>
-          </aside>
+    <DeskShell title="Task board" breadcrumb="Support" subtitle="Plan every field technician's day — order, day and time. Changes save as you make them.">
+      {!board ? <EmptyState title="Loading the board…" /> : (
+        <div className="c-tb2">
+          <div className="c-tb2-kpis">
+            <div className="c-tb2-kpi"><span>Tasks today</span><b>{totals.today}</b></div>
+            <div className="c-tb2-kpi is-red"><span>In progress</span><b>{totals.active}</b></div>
+            <button type="button" className={`c-tb2-kpi is-warn${unassigned.length ? ' is-click' : ''}`} onClick={() => setShowUn(true)}><span>Not assigned</span><b>{unassigned.length}</b></button>
+            <div className="c-tb2-kpi is-good"><span>Checked in</span><b>{totals.on}<small>/{techs.length}</small></b></div>
+            <div className="c-tb2-kpi"><span>Travelled today</span><b>{fmtKm(totals.km)}</b></div>
+          </div>
 
-          <main className="c-tb-main">
-            {!techId ? <EmptyState title="Choose a technician" /> : list === null ? <EmptyState title="Loading…" /> : (
-              <>
-                <div className="c-tb-head">
-                  <div>
-                    <h2>{sel?.name || 'Technician'}</h2>
-                    <span className="text-ink-3">{sel?.checked_in ? `Checked in · ${fmtKm(sel.km)} today` : 'Not checked in today'}</span>
+          <div className="c-tb2-techs" role="list" aria-label="Technicians">
+            {techs.map((t) => <TechChip key={t.user_id} t={t} on={t.user_id === techId} onPick={() => { setParams({ tech: String(t.user_id) }); setTab('today'); }} />)}
+            {!techs.length && <div className="c-tb2-empty">No field technicians found.</div>}
+          </div>
+
+          <div className="c-tb2-grid">
+            <section className="c-tb2-plan">
+              {!techId ? <EmptyState title="Choose a technician above" /> : (
+                <>
+                  <header className="c-tb2-ph">
+                    <Avatar name={sel?.name || ''} on={sel?.checked_in} size={48} />
+                    <div className="min-w-0">
+                      <h2>{sel?.name || 'Technician'}</h2>
+                      <span>{sel?.checked_in ? `Checked in · ${fmtKm(sel.km)} today` : 'Not checked in'} · {buckets.today.length} today</span>
+                    </div>
+                    <Link className="c-btn" to={`/carret/serve/my-work?tech=${techId}`}>Their screen ›</Link>
+                  </header>
+
+                  {activeNow[0] && (
+                    <div className="c-tb2-now">
+                      <span className="c-tb2-pulse" aria-hidden="true" />
+                      <div className="min-w-0"><small>Working on now</small><b>{activeNow[0].customer || activeNow[0].title}</b><span>{activeNow[0].step}</span></div>
+                    </div>
+                  )}
+                  {activeNow.length > 1 && <Notice tone="warn" title={`${activeNow.length} tasks in progress`}>Only one should be. Open the one they are not at and put it back.</Notice>}
+
+                  <div className="c-tb2-tabs" role="tablist">
+                    {[['today', 'Today', today], ['tomorrow', 'Tomorrow', tomorrow], ['later', 'Later', null], ['waiting', 'Waiting', null]].map(([k, label, d]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === k}
+                        className={`${tab === k ? 'is-on' : ''}${overTab === k ? ' is-over' : ''}${dragKey && k !== 'waiting' ? ' is-target' : ''}`}
+                        onClick={() => setTab(k)}
+                        onDragOver={(e) => { if (dragKey && k !== 'waiting') { e.preventDefault(); setOverTab(k); } }}
+                        onDragLeave={() => setOverTab(null)}
+                        onDrop={(e) => { e.preventDefault(); dropOnTab(k); }}
+                      >
+                        <span>{label}</span>
+                        <small>{d ? fmtDay(d) : (k === 'later' ? 'After tomorrow' : 'For a part')}</small>
+                        <i>{buckets[k].length}</i>
+                      </button>
+                    ))}
                   </div>
-                  <Link className="c-btn" to={`/carret/serve/my-work?tech=${techId}`}>Their My work ›</Link>
-                </div>
-                {list.filter((t) => t.state === 'active').length > 1 && (
-                  <Notice tone="warn" title="More than one task in progress">Only one should be. Put back the one they are not at.</Notice>
-                )}
-                {groups.map((g) => (
-                  <DayColumn key={g.date} title={g.title} sub={g.sub} date={g.date} list={g.list} startN={g.startN} onDropEnd={(d) => { const k = dragKey.current; dragKey.current = null; if (k) moveTo(k, d); }} {...cardProps} />
-                ))}
-                {waiting.length > 0 && <DayColumn title="Waiting for a part" sub="Comes back when the part is with them" date={null} list={waiting} startN={1} onDropEnd={() => {}} {...cardProps} />}
-                {meta?.carrying?.length > 0 && (
-                  <Notice tone="info" title="Carrying to the warehouse gate">{meta.carrying.map((t) => t.title).join(' · ')}</Notice>
-                )}
-              </>
-            )}
-          </main>
+                  {dragKey && <div className="c-tb2-hint">Drop on a card to put it before that one, or on a day above to move it there.</div>}
 
-          <aside className="c-tb-un">
-            <header className="c-tb-dayh"><b>Not assigned</b><span>Visits and technician pickups</span><span className="c-tb-cnt">{board.unassigned.length}</span></header>
-            {board.unassigned.length ? (
-              <ol className="c-tb-list">
-                {board.unassigned.map((j) => <AssignCard key={j.key} job={j} techs={board.technicians} defaultTech={techId} today={board.today} busy={busy} onAssign={assign} />)}
-              </ol>
-            ) : <div className="c-tb-empty">Every job has a technician.</div>}
-          </aside>
+                  <div className="c-tb2-filters">
+                    <div className="c-tb2-kinds">
+                      {KINDS.map((k) => <button key={k.key} type="button" className={kind === k.key ? 'is-on' : ''} onClick={() => setKind(k.key)}>{k.label}</button>)}
+                    </div>
+                    <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customer, laptop, area…" aria-label="Search tasks" />
+                  </div>
+
+                  {list === null ? <EmptyState title="Loading…" /> : !shown.length ? (
+                    <div className="c-tb2-empty is-big">
+                      <span aria-hidden="true">{tab === 'waiting' ? '⚙' : '🗓'}</span>
+                      <b>{q || kind !== 'all' ? 'Nothing matches' : tab === 'waiting' ? 'Nothing waiting for a part' : `Nothing planned ${tab === 'today' ? 'today' : tab === 'tomorrow' ? 'tomorrow' : 'later'}`}</b>
+                      {tab !== 'waiting' && !q && kind === 'all' && <small>Assign a job from “Not assigned”, or drag a task onto this day.</small>}
+                    </div>
+                  ) : tab === 'later' ? (
+                    laterDays.map((d) => {
+                      const items = shown.filter((t) => t.date === d);
+                      return items.length ? <div key={d} className="c-tb2-dgroup"><h3>{fmtDay(d)}</h3>{renderList(items)}</div> : null;
+                    })
+                  ) : renderList(shown)}
+
+                  {meta?.carrying?.length > 0 && (
+                    <div className="c-tb2-carry"><b>🚚 Carrying to the warehouse gate</b><span>{meta.carrying.map((t) => t.title).join(' · ')}</span></div>
+                  )}
+                </>
+              )}
+            </section>
+
+            <aside className={`c-tb2-un${showUn ? ' is-open' : ''}`}>
+              <header>
+                <b>Not assigned</b>
+                <span className="c-tb2-count">{unassigned.length}</span>
+                <button type="button" className="c-tb2-x" onClick={() => setShowUn(false)} aria-label="Close">✕</button>
+              </header>
+              <p className="text-ink-3">Visits and technician pickups nobody holds yet. Tap one to assign it.</p>
+              {unassigned.length ? (
+                <ul className="c-tb2-un-l">
+                  {unassigned.map((j) => <AssignCard key={j.key} job={j} techs={techs} defaultTech={techId} today={board.today} busy={busy} onAssign={(...a) => { setShowUn(false); assign(...a); }} />)}
+                </ul>
+              ) : <div className="c-tb2-empty is-big"><span aria-hidden="true">✓</span><b>Every job has a technician</b></div>}
+            </aside>
+            {showUn && <button type="button" className="c-tb2-scrim" aria-label="Close" onClick={() => setShowUn(false)} />}
+          </div>
+          {unassigned.length > 0 && !showUn && (
+            <button type="button" className="c-tb2-fab" onClick={() => setShowUn(true)}>＋ {unassigned.length} not assigned</button>
+          )}
         </div>
       )}
     </DeskShell>

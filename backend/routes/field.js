@@ -102,7 +102,7 @@ router.get('/board', wrap(async (req, res) => {
   if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Only a lead can see the task board' });
   const people = (await pool.query(
     `SELECT u.user_id, u.name, u.role FROM users u
-      WHERE u.deleted_at IS NULL AND COALESCE(u.active, TRUE)
+      WHERE COALESCE(u.active, TRUE) AND COALESCE(u.status, 'active') <> 'inactive'
         AND (LOWER(u.role) = ANY($1::text[]) OR EXISTS (SELECT 1 FROM delivery_technicians d WHERE d.user_id = u.user_id AND d.is_active))
       ORDER BY u.name`,
     [travel.FIELD_ROLES]
