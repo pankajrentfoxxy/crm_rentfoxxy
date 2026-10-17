@@ -26,6 +26,10 @@ const PICKUP_NEXT = {
   gate_inward: { key: 'drop', label: 'Drop at the warehouse gate' },
 };
 
+// Part request states: still coming / with the technician (or at the customer).
+const PART_WAITING = new Set(['pending', 'approved', 'challan_generated', 'dispatched', 'draft', 'processing', 'reserved', 'in_transit']);
+const PART_READY = new Set(['issued', 'delivered', 'with_technician']);
+
 function addressText(a) {
   if (!a) return '';
   if (typeof a === 'string') {
@@ -69,6 +73,21 @@ async function loadJobs(userId) {
     'SELECT item_id, slot, path FROM support_item_photos WHERE item_id = ANY($1::int[])', [rows.map((r) => r.id)]
   )).rows : [];
   for (const r of rows) r.photos = photoRows.filter((p) => p.item_id === r.id);
+  // A visit that needs a part (17 Oct 2026): while the part is on its way the
+  // visit waits and does not hold up the technician's other tasks; once the
+  // part is with them (issued) or at the customer (delivered) they go back —
+  // "reached" again (a new stop), then the result.
+  const complaintIds = rows.filter((r) => r.item_type === 'complaint').map((r) => r.id);
+  const partRows = complaintIds.length ? (await pool.query(
+    `SELECT r.support_item_id AS item_id, r.request_number, r.status, COALESCE(r.delivered_at, r.issued_at) AS ready_at, p.part_name
+       FROM support_part_requests r LEFT JOIN parts p ON p.part_id = r.part_id
+      WHERE r.support_item_id = ANY($1::int[]) AND r.status NOT IN ('cancelled', 'rejected', 'returned', 'return_requested')
+      ORDER BY r.id`,
+    [complaintIds]
+  )).rows : [];
+  const stops = await require('./fieldTravelService').stopsFor(pool, rows.map((r) => (
+    r.item_type === 'pickup' && r.return_dc_number ? r.return_dc_number : `T${r.ticket_id}-${r.id}`
+  )));
   const jobs = [];
   for (const r of rows) {
     const step = deriveItemCurrentStep(r);
@@ -85,6 +104,22 @@ async function loadJobs(userId) {
     if (r.item_type === 'pickup' && step === 'pod_uploaded') {
       const techCollects = !['courier', 'porter'].includes(String(r.pickup_method || '').toLowerCase());
       if (!r.customer_otp_sent_at || (techCollects && new Set(r.photos.map((p) => p.slot)).size < 6)) next = PICKUP_NEXT.reached;
+    }
+    // "No fault found" with the work done waits for the customer's OTP — the
+    // flow step stays "working", which left the technician on the result step.
+    if (r.item_type === 'complaint' && r.outcome === 'working' && (r.work_done_at || r.status === 'awaiting_otp') && !r.otp_verified_at) {
+      next = NEXT.pod_uploaded;
+    }
+    const parts = partRows.filter((p) => p.item_id === r.id);
+    const partWaiting = parts.filter((p) => PART_WAITING.has(p.status));
+    const partReadyAt = parts.filter((p) => PART_READY.has(p.status) && p.ready_at).map((p) => new Date(p.ready_at).getTime()).sort().pop() || null;
+    let revisit = false;
+    if (r.item_type === 'complaint' && !r.outcome && ['visited', 'verify_ttspl'].includes(step)) {
+      if (partWaiting.length) next = { key: 'waiting', label: 'Waiting for the part' };
+      else if (partReadyAt && (!r.visited_at || new Date(r.visited_at).getTime() < partReadyAt)) {
+        revisit = true;
+        next = { key: 'arrive', label: 'Go back — the part is ready' };
+      }
     }
     if (!next) continue; // lead's turn (replacement, repair at the warehouse…) — not the technician's job
     const s = sla.get(r.ticket_id);
@@ -118,6 +153,12 @@ async function loadJobs(userId) {
       collected: Boolean(r.customer_otp_verified_at || r.picked_up_at),
       pickup_scheduled_at: r.pickup_scheduled_at || null,
       visited_at: r.visited_at,
+      // "Reached" is the next tap: not reached yet, or back with the part.
+      needs_arrive: next.key === 'arrive' && (!r.visited_at || revisit),
+      revisit,
+      parts: parts.map((p) => ({ request_number: p.request_number, status: p.status, part: p.part_name, ready_at: p.ready_at })),
+      // This stop on the technician's day: when, and how far by road from the last one.
+      stop: stops.get(r.item_type === 'pickup' && r.return_dc_number ? r.return_dc_number : `T${r.ticket_id}-${r.id}`) || null,
       outcome: r.outcome,
       has_photo: Boolean(r.pod_image_path || r.proof_of_completion_path),
       signed: Boolean(r.rdc_signed),

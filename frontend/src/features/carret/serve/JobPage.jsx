@@ -3,40 +3,30 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import FieldShell from '../../../shells/FieldShell';
 import {
-  Button, EmptyState, Field, FlowSteps, Input, Notice, SignaturePad, Textarea,
+  Button, EmptyState, Field, FlowSteps, Input, Notice, SignaturePad,
 } from '../../../components/carret';
-import RaisePartRequestForm from '../../support/components/RaisePartRequestForm';
 import PickupChargerScanPanel from '../../dispatch-charger/PickupChargerScanPanel';
 import { CollectChargerPanel } from '../move/challanCharger';
 import PickupPhotos from './PickupPhotos';
 import { useFieldTasks } from '../field/TaskQueue';
 import {
-  fetchMyWork, fetchTicket, markArrived, sendOtp, setOutcome, signReturnDc, uploadPhoto, verifyLaptop, verifyPickupOtp,
-  verifyVisitOtp, workDone,
+  fetchMyWork, fetchTicket, markArrived, sendOtp, signReturnDc, uploadPhoto, verifyPickupOtp,
 } from './serveApi';
 import { TECH_TABS, errMsg, mapsLink, when, withGps } from './serveShared';
 import DamageReportDrawer from './DamageReportDrawer';
 import CollectLaterDrawer from './CollectLaterDrawer';
 import ItemComments from './ItemComments';
-import { FindingFields, emptyFinding, findingBody, findingError, useIssueCatalog } from './IssueFields';
+import VisitJob from './VisitJob';
 
 /**
  * Serve → one job (claude/carret-support.md S4). The screen only ever offers
  * the next step, as one big button, over the existing support endpoints.
  *
- *   Visit   Arrived (GPS + scan the laptop) → Result (fixed / no fault: photo;
- *           needs a part; needs pickup or replacement) + what was wrong, why,
- *           what fixed it (tickets raised under the issue process) → Customer OTP
+ *   Visit   its own screen (VisitJob): reached → check laptop → result →
+ *           6 photos → customer OTP
  *   Pickup  Arrived → photo + scan laptop and charger → Customer OTP
  *           → drop at the warehouse gate with the Return DC
  */
-const RESULTS = [
-  { key: 'fixed', label: 'Fixed', hint: 'Repaired on site' },
-  { key: 'working', label: 'No fault found', hint: 'Working as it should' },
-  { key: 'parts', label: 'Needs a part', hint: 'Request it from the warehouse' },
-  { key: 'repair_pickup_requested', label: 'Needs workshop repair', hint: 'Ask your lead to approve — then you collect it now' },
-  { key: 'replacement_required', label: 'Needs a replacement', hint: 'Your lead decides next' },
-];
 
 function PhotoInput({ file, onFile }) {
   const [preview, setPreview] = useState(null);
@@ -62,27 +52,23 @@ export default function JobPage() {
   const navigate = useNavigate();
   const [job, setJob] = useState(undefined);
   const [busy, setBusy] = useState(false);
-  const [code, setCode] = useState('');
-  const [result, setResult] = useState('');
-  const [note, setNote] = useState('');
   const [photo, setPhoto] = useState(null);
   const [otp, setOtp] = useState('');
   const [ticket, setTicket] = useState(null);
   const [chargerOk, setChargerOk] = useState(false);
   const ft = useFieldTasks();
   const [photos, setPhotos] = useState(null); // pickup photos taken on this screen
-  const catalog = useIssueCatalog();
-  const [finding, setFinding] = useState(null);
   const [damageOpen, setDamageOpen] = useState(false);
   const [laterOpen, setLaterOpen] = useState(false);
 
+  const reloadTasks = ft.reload;
   const load = useCallback(() => {
+    reloadTasks();
     fetchMyWork()
       .then(({ data }) => setJob((data.jobs || []).find((j) => String(j.item_id) === String(itemId)) || null))
       .catch((e) => { setJob(null); toast.error(errMsg(e)); });
-  }, [itemId]);
+  }, [itemId, reloadTasks]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (job && !finding) setFinding(emptyFinding(job.reported)); }, [job, finding]);
   // The ticket feeds the part request form and the comment thread with the lead.
   const loadTicket = useCallback((ticketId) => {
     fetchTicket(ticketId).then(({ data }) => setTicket(data)).catch(() => {});
@@ -115,41 +101,16 @@ export default function JobPage() {
       </FieldShell>
     );
   }
-  const isPickup = job.kind === 'pickup';
+  if (job.kind === 'visit') {
+    return <VisitJob key={job.item_id} job={job} ticket={ticket} ticketItem={ticketItem} onReload={load} onTicketReload={() => loadTicket(job.ticket_id)} />;
+  }
+  const isPickup = true;
   const k = job.next.key;
-  const flow = isPickup
-    ? [['arrive', 'Arrived'], ['pickup_photo', 'Photo + scan'], ['otp', 'Customer OTP'], ['drop', 'At the gate']]
-    : [['arrive', 'Arrived'], ['result', 'Result'], ['otp', 'Customer OTP']];
+  const flow = [['arrive', 'Arrived'], ['pickup_photo', 'Photo + scan'], ['otp', 'Customer OTP'], ['drop', 'At the gate']];
   const idx = flow.findIndex(([key]) => key === k);
   const steps = flow.map(([key, label], i) => ({ key, label, state: i < idx ? 'done' : i === idx ? 'current' : 'todo' }));
 
-  const arrived = () => withGps((lat, lng) => run(() => markArrived(job.item_id, { latitude: lat, longitude: lng }), isPickup ? 'Marked arrived' : 'Marked arrived — scan the laptop'));
-  const verify = () => run(async () => {
-    if (!code.trim()) throw new Error('Scan or type the laptop’s TTSPL or serial');
-    await verifyLaptop(job.item_id, code.trim());
-  }, 'Laptop matched');
-  // The finding travels with the outcome (the server refuses one without it).
-  const withFinding = () => {
-    if (!job.needs_finding) return {};
-    const err = findingError(result, finding, catalog);
-    if (err) throw new Error(err);
-    return findingBody(result, finding, catalog);
-  };
-  const finishResult = () => run(async () => {
-    if (!result) throw new Error('Choose the result');
-    if (result === 'replacement_required' || result === 'repair_pickup_requested') {
-      if (note.trim().length < 3) throw new Error('Write what is wrong, for your lead');
-      await setOutcome(job.item_id, { outcome: result, comment: note.trim(), ...(result === 'replacement_required' ? withFinding() : {}) });
-      return;
-    }
-    if (!photo) throw new Error('Take a photo of the laptop');
-    if (!job.outcome) await setOutcome(job.item_id, { outcome: result, comment: note.trim() || undefined, ...withFinding() });
-    await uploadPhoto(job.item_id, photo);
-    await workDone(job.item_id);
-    await sendOtp(job.item_id);
-  }, ['replacement_required', 'repair_pickup_requested'].includes(result)
-    ? (result === 'repair_pickup_requested' ? 'Asked — once your lead approves, the pickup opens in My work' : 'Sent to your lead')
-    : 'Done — the customer has an OTP');
+  const arrived = () => withGps((lat, lng) => run(() => markArrived(job.item_id, { latitude: lat, longitude: lng }), 'Marked arrived'));
   const pickupPhoto = () => run(async () => {
     if (!photo) throw new Error('Take a photo of the laptop');
     await uploadPhoto(job.item_id, photo);
@@ -157,8 +118,8 @@ export default function JobPage() {
   const askOtp = () => run(() => sendOtp(job.item_id), 'OTP sent to the customer');
   const confirmOtp = () => run(async () => {
     if (!/^\d{4,8}$/.test(otp.trim())) throw new Error('Enter the OTP from the customer');
-    await (isPickup ? verifyPickupOtp(job.item_id, otp.trim()) : verifyVisitOtp(job.item_id, otp.trim()));
-  }, isPickup ? 'Collected — take it to the warehouse gate' : 'Closed ✓');
+    await verifyPickupOtp(job.item_id, otp.trim());
+  }, 'Collected — take it to the warehouse gate');
 
   return (
     <FieldShell title={job.customer} tabs={TECH_TABS} onBack={() => navigate('/carret/serve/my-work')}>
@@ -179,62 +140,7 @@ export default function JobPage() {
 
         {k === 'arrive' && (
           <div className="c-card" style={{ padding: '16px' }}>
-            {!job.visited_at ? (
-              <Button variant="primary" disabled={busy} onClick={arrived} style={{ width: '100%', minHeight: '56px' }}>I have arrived</Button>
-            ) : (
-              <>
-                <Field label="Scan or type the laptop’s TTSPL / serial" required>
-                  <Input autoFocus value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && verify()} placeholder={job.laptop.ttspl || 'TTSPL…'} />
-                </Field>
-                <Button variant="primary" disabled={busy} onClick={verify} style={{ width: '100%', minHeight: '56px', marginTop: '12px' }}>Check the laptop</Button>
-              </>
-            )}
-          </div>
-        )}
-
-        {k === 'result' && (
-          <div className="c-card" style={{ padding: '16px' }}>
-            <div className="c-stack" style={{ gap: '8px' }}>
-              {RESULTS.map((r) => (
-                <button
-                  key={r.key}
-                  type="button"
-                  onClick={() => setResult(r.key)}
-                  className="c-btn"
-                  style={{ justifyContent: 'flex-start', minHeight: '52px', textAlign: 'left', borderWidth: result === r.key ? 2 : 1, borderColor: result === r.key ? 'var(--accent)' : undefined }}
-                  disabled={Boolean(job.outcome) && job.outcome !== r.key}
-                >
-                  <span><strong>{r.label}</strong><br /><span className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>{r.hint}</span></span>
-                </button>
-              ))}
-            </div>
-            {job.needs_finding && !job.outcome && finding && ['fixed', 'working', 'replacement_required'].includes(result) && (
-              <div className="c-stack" style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--line, #e2e8f0)' }}>
-                <strong>{result === 'working' ? 'What the customer reported' : 'What you found'}</strong>
-                <FindingFields catalog={catalog} finish={result} value={finding} onChange={setFinding} idPrefix={`job-${job.item_id}`} />
-              </div>
-            )}
-            {(result === 'fixed' || result === 'working') && (
-              <div className="c-stack" style={{ marginTop: '12px' }}>
-                <PhotoInput file={photo} onFile={setPhoto} />
-                <Field label="Note (optional)"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-                <Button variant="primary" disabled={busy} onClick={finishResult} style={{ width: '100%', minHeight: '56px' }}>Done — send the customer an OTP</Button>
-              </div>
-            )}
-            {(result === 'replacement_required' || result === 'repair_pickup_requested') && (
-              <div className="c-stack" style={{ marginTop: '12px' }}>
-                <Field label={result === 'repair_pickup_requested' ? 'Why it must go to the workshop' : 'What is wrong'} required><Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-                <Button variant="primary" disabled={busy} onClick={finishResult} style={{ width: '100%', minHeight: '56px' }}>{result === 'repair_pickup_requested' ? 'Ask my lead to approve' : 'Send to my lead'}</Button>
-              </div>
-            )}
-            {result === 'parts' && (
-              <div style={{ marginTop: '12px' }}>
-                {ticket ? (
-                  <RaisePartRequestForm ticket={ticket.ticket || ticket} item={(ticket.items || ticket.ticket?.items || []).find((i) => String(i.id) === String(job.item_id)) || { id: job.item_id, ttspl_id: job.laptop.ttspl, serial_number: job.laptop.serial }} />
-                ) : <EmptyState title="Loading…" />}
-                <Notice tone="info">When the part reaches you (My parts), fit it, then come back here and record the result.</Notice>
-              </div>
-            )}
+            <Button variant="primary" disabled={busy} onClick={arrived} style={{ width: '100%', minHeight: '56px' }}>I have arrived</Button>
           </div>
         )}
 
@@ -324,7 +230,7 @@ export default function JobPage() {
           onClose={() => setDamageOpen(false)}
           onDone={() => setDamageOpen(false)}
           laptop={{ asset_code: job.laptop?.ttspl || job.laptop?.serial }}
-          source={job.kind === 'visit' ? 'technician_visit' : (job.pickup_type === 'repair' ? 'repair_pickup' : 'return_pickup')}
+          source={job.pickup_type === 'repair' ? 'repair_pickup' : 'return_pickup'}
           ticketId={job.ticket_id}
           ticketItemId={job.item_id}
           returnDcNumber={job.return_dc_number || undefined}

@@ -4,13 +4,14 @@ import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
 import {
   Button, ConfirmDialog, DataTable, DateTime, DocumentHeader, Drawer, EmptyState, Field, Input, KeyValue, Notice, Section,
-  Textarea,
+  Segmented, Textarea,
 } from '../../../components/carret';
 import {
   assignItem, cancelTicket, chargeWfh, closeTicket, fetchDamageCases, fetchTechnicians, fetchTicket, fetchTicketSla, fetchTicketWfh, holdTicket, releaseHold,
   setAppointment,
 } from './serveApi';
 import { usePermission } from '../../../hooks/usePermission';
+import { planFieldTask } from '../field/fieldApi';
 import TicketActions from './TicketActions';
 import TicketPartsPanel from './TicketPartsPanel';
 import ServiceChargesPanel from './ServiceChargesPanel';
@@ -53,6 +54,10 @@ export default function TicketRecordPage() {
   const [wfh, setWfh] = useState({});
   const [techs, setTechs] = useState([]);
   const [assignFor, setAssignFor] = useState(null);
+  // When the technician does it (migration 440): next after their current task, last today, or a day + time.
+  const [asgWhen, setAsgWhen] = useState('end');
+  const [asgDate, setAsgDate] = useState('');
+  const [asgTime, setAsgTime] = useState('');
   const [apptFor, setApptFor] = useState(null);
   const [appt, setAppt] = useState('');
   const [holdOpen, setHoldOpen] = useState(false);
@@ -221,6 +226,20 @@ export default function TicketRecordPage() {
       </div>
 
       <Drawer open={Boolean(assignFor)} onClose={() => setAssignFor(null)} title={`Assign ${assignFor?.ttspl_id || ''}`}>
+        <div className="c-stack" style={{ gap: '8px', marginBottom: '12px' }}>
+          <strong>When</strong>
+          <Segmented
+            value={asgWhen}
+            onChange={setAsgWhen}
+            label="When"
+            options={[{ value: 'next', label: 'Next — after the current task' }, { value: 'end', label: 'Today, last' }, { value: 'day', label: 'On a day' }]}
+          />
+          <div className="flex flex-wrap" style={{ gap: '8px' }}>
+            {asgWhen === 'day' && <Input type="date" value={asgDate} onChange={(e) => setAsgDate(e.target.value)} aria-label="Day" style={{ maxWidth: '12rem' }} />}
+            <Input type="time" value={asgTime} onChange={(e) => setAsgTime(e.target.value)} aria-label="Time (optional)" style={{ maxWidth: '9rem' }} />
+          </div>
+          <small className="text-ink-3">The technician works one task at a time, in the order on the Task board. “Next” opens it as soon as their current task is closed.</small>
+        </div>
         <p className="text-ink-3" style={{ marginBottom: '8px' }}>Least busy first. Open jobs count both visits and pickups.</p>
         <div className="c-stack" style={{ gap: '6px' }}>
           {byLoad.map((x) => (
@@ -230,7 +249,22 @@ export default function TicketRecordPage() {
               className="c-btn"
               disabled={busy}
               style={{ justifyContent: 'space-between' }}
-              onClick={async () => { if (await run(() => assignItem(assignFor.id, x.user_id), `Assigned to ${x.name}`)) setAssignFor(null); }}
+              onClick={async () => {
+                if (asgWhen === 'day' && !asgDate) { toast.error('Choose the day'); return; }
+                const ok = await run(async () => {
+                  const r = await assignItem(assignFor.id, x.user_id);
+                  // The plan is a nicety: a failure leaves the task at the end of their list.
+                  await planFieldTask({
+                    user_id: x.user_id,
+                    key: assignFor.item_type === 'pickup' && assignFor.return_dc_number ? `rdc:${assignFor.return_dc_number}` : `item:${assignFor.id}`,
+                    position: asgWhen === 'next' ? 'next' : 'end',
+                    date: asgWhen === 'day' ? asgDate : undefined,
+                    time: asgTime || undefined,
+                  }).catch(() => toast.error('Assigned, but the plan was not saved — set it on the Task board'));
+                  return r;
+                }, `Assigned to ${x.name}${asgWhen === 'next' ? ' — next after their current task' : ''}`);
+                if (ok) { setAssignFor(null); setAsgWhen('end'); setAsgDate(''); setAsgTime(''); }
+              }}
             >
               <span>{x.name}{x.user_id === suggested ? ' · suggested' : ''}</span>
               <span className="text-ink-3">{x.open_item_count} open · {x.today_visits || 0} today</span>

@@ -189,7 +189,7 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
   );
 }
 
-export default function RaisePartRequestForm({ ticket, item }) {
+export default function RaisePartRequestForm({ ticket, item, onRaised }) {
   const { user } = useAuth();
   const canManageReturn = ['warehouse', 'admin', 'manager', 'support_lead', 'super_admin'].includes(user?.role);
   const [open, setOpen] = useState(false);
@@ -276,6 +276,7 @@ export default function RaisePartRequestForm({ ticket, item }) {
       setQuantity(1);
       setReason('');
       loadExisting();
+      onRaised?.(data);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to raise request');
     } finally {

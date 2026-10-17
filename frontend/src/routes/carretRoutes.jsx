@@ -58,6 +58,7 @@ const ReplacementApprovalsPage = React.lazy(() => import('../features/carret/pro
 const PendingSerialsPage = React.lazy(() => import('../features/carret/procure/PendingSerialsPage'));
 const ServeMyWorkPage = React.lazy(() => import('../features/carret/serve/MyWorkPage'));
 const ServeJobPage = React.lazy(() => import('../features/carret/serve/JobPage'));
+const FieldTaskBoardPage = React.lazy(() => import('../features/carret/field/TaskBoardPage'));
 const ServePickupVisitPage = React.lazy(() => import('../features/carret/serve/PickupVisitPage'));
 const FieldMyReportPage = React.lazy(() => import('../features/carret/field/MyReportPage'));
 const FieldTeamPage = React.lazy(() => import('../features/carret/field/FieldTeamPage'));
@@ -223,6 +224,7 @@ export const carretRoutes = CARRET_ENABLED
       { path: '/carret/serve/pickup/:rdc', element: guard('support_tickets', 'view', <ServePickupVisitPage />) },
       { path: '/carret/serve/my-report', element: guardAny(['support_tickets', 'technician_bucket', 'delivery_my_deliveries'], 'view', <FieldMyReportPage />) },
       { path: '/carret/serve/field-team', element: guard('field_travel', 'view', <FieldTeamPage />) },
+      { path: '/carret/serve/task-board', element: guard('field_travel', 'view', <FieldTaskBoardPage />) },
       // Serve — the support lead's desk (step 4)
       { path: '/carret/serve/queue', element: guard('support_tickets', 'view', <ServeQueuePage />) },
       { path: '/carret/serve/tickets/new', element: guard('support_tickets', 'create', <ServeNewTicketPage />) },

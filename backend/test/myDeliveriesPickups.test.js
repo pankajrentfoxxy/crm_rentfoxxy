@@ -53,6 +53,7 @@ describe('My Deliveries handlers (rolled back)', () => {
   const VRDC = `VRDC/TEST/${stamp}`;
   const VRTDC = `VRTDC/TEST/${stamp}`;
   const SIGN = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const HERE = { latitude: '28.4595', longitude: '77.0266' }; // a field "reached" needs GPS (17 Oct 2026)
   const written = [];
 
   before(async () => {
@@ -120,13 +121,19 @@ describe('My Deliveries handlers (rolled back)', () => {
     assert.ok(Array.isArray(r.body.hand_in));
   });
 
+  it('"reached" without a location is refused for a field technician (the distance is measured from it)', async () => {
+    const r = await h.call(ctrl.markTechReached, { params: { dcNumber: RDC }, body: {}, user: OWNER });
+    assert.equal(r.code, 400, JSON.stringify(r.body));
+    assert.match(r.body.message, /location/i);
+  });
+
   it('the laptop cannot be scanned before "reached"', async () => {
     const r = await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: RDC }, body: { serial_numbers: ['TTSPL9001', 'TTSPL9002'] }, user: OWNER });
     assert.equal(r.code, 409);
   });
 
   it('a pickup must scan every laptop, and nothing that is not on it', async () => {
-    assert.equal((await h.call(ctrl.markTechReached, { params: { dcNumber: RDC }, body: {}, user: OWNER })).code, 200);
+    assert.equal((await h.call(ctrl.markTechReached, { params: { dcNumber: RDC }, body: HERE, user: OWNER })).code, 200);
     const one = await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: RDC }, body: { serial_numbers: ['TTSPL9001'] }, user: OWNER });
     assert.equal(one.code, 400);
     assert.equal(one.body.code, 'SCAN_INCOMPLETE');
@@ -139,7 +146,7 @@ describe('My Deliveries handlers (rolled back)', () => {
   });
 
   it('one task at a time: a second challan cannot be "reached" while the pickup is in progress (migration 439)', async () => {
-    const r = await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: {}, user: OWNER });
+    const r = await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: HERE, user: OWNER });
     assert.equal(r.code, 409, JSON.stringify(r.body));
     assert.equal(r.body.code, 'TASK_ACTIVE');
   });
@@ -150,7 +157,7 @@ describe('My Deliveries handlers (rolled back)', () => {
     const real = tasks.assertCanStart;
     tasks.assertCanStart = async () => {};
     try {
-      await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: {}, user: OWNER });
+      await h.call(ctrl.markTechReached, { params: { dcNumber: DC }, body: HERE, user: OWNER });
     } finally { tasks.assertCanStart = real; }
     assert.equal((await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: DC }, body: { serial_number: 'TTSPL9001' }, user: OWNER })).code, 400);
     assert.equal((await h.call(ctrl.verifySerialAndGenerateOtp, { params: { dcNumber: DC }, body: { serial_number: 'SNC3' }, user: OWNER })).code, 200);

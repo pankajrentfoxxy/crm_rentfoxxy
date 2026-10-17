@@ -42,3 +42,17 @@ export const saveFieldTaskOrder = (userId, keys) => api.put('/field/tasks/order'
 export const releaseFieldTask = (userId, key) => api.post('/field/tasks/release', { user_id: userId, key });
 export const warehouseStop = (body) => api.post('/field/day/warehouse', body);
 export const TASK_KIND_COLOR = { visit: '#2563eb', pickup: '#d97706', return: '#d97706', delivery: '#059669', vendor: '#0891b2' };
+
+// Task board (migration 440): the plan — order, day and time — per technician.
+export const fetchTaskBoard = () => api.get('/field/board');
+export const saveFieldTaskPlan = (userId, items) => api.put('/field/tasks/plan', { user_id: userId, items });
+export const planFieldTask = (body) => api.post('/field/tasks/plan-one', body);
+export const TASK_KIND_LABEL = { visit: 'Visit', pickup: 'Pickup', return: 'Return pickup', delivery: 'Delivery', vendor: 'Vendor' };
+/** "Sat 18 Oct" for an IST yyyy-mm-dd. */
+export const fmtDay = (ymd) => (ymd ? new Date(`${ymd}T00:00:00+05:30`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }) : '');
+/** "2:30 pm" for "14:30". */
+export const fmtHm = (hm) => {
+  if (!hm) return '';
+  const [h, m] = hm.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`;
+};

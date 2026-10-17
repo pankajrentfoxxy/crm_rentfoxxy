@@ -7,7 +7,6 @@ import { usePermission } from '../../../hooks/usePermission';
 import { fetchMyWork, fetchTeamWork } from './serveApi';
 import FieldDayBar from '../field/FieldDayBar';
 import TaskQueue, { useFieldTasks } from '../field/TaskQueue';
-import TaskOrderDrawer from '../field/TaskOrderDrawer';
 import { SLA_LABEL, SLA_TONE, TECH_TABS, errMsg, mapsLink, when } from './serveShared';
 
 /**
@@ -121,6 +120,9 @@ function TeamView({ team, mine, onPick }) {
   const num = { fontSize: '22px', fontWeight: 600, lineHeight: 1.1 };
   return (
     <div className="c-stack">
+      <Notice tone="info" title="Plan each technician's day" action={<Link className="c-btn c-btn--primary" to="/carret/serve/task-board">Open the task board</Link>}>
+        Order, day and time of every task — drag to change it; assign a new task to go next.
+      </Notice>
       <div className="grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
         <div className="c-card" style={{ padding: '12px' }}><div style={num}>{team.total}</div><div className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>open jobs with technicians</div></div>
         <div className="c-card" style={{ padding: '12px' }}><div style={{ ...num, color: team.late ? 'var(--alert-crit)' : undefined }}>{team.late}</div><div className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>late</div></div>
@@ -176,7 +178,7 @@ export default function MyWorkPage() {
   const [mine, setMine] = useState(null);
   const [team, setTeam] = useState(null);
   const ft = useFieldTasks();
-  const [orderOpen, setOrderOpen] = useState(false);
+  const navigate = useNavigate();
 
   const load = useCallback(() => {
     if (view === 'team') {
@@ -203,7 +205,7 @@ export default function MyWorkPage() {
       {isLead && view !== 'team' && (
         <div className="flex flex-wrap items-center" style={{ marginBottom: '12px', gap: '8px' }}>
           <Button variant="quiet" onClick={() => pick(null)}>‹ All technicians</Button>
-          {view !== 'me' && <Button variant="primary" style={{ marginLeft: 'auto' }} onClick={() => setOrderOpen(true)}>Set the order</Button>}
+          {view !== 'me' && <Button variant="primary" style={{ marginLeft: 'auto' }} onClick={() => navigate(`/carret/serve/task-board?tech=${view}`)}>Plan on the task board</Button>}
         </div>
       )}
       {view === 'team' ? <TeamView team={team} mine={mine} onPick={pick} /> : (
@@ -217,9 +219,6 @@ export default function MyWorkPage() {
             emptyBody={view === 'me' ? 'New jobs appear here as soon as your lead assigns them.' : 'This technician has nothing open right now.'}
           />
         )
-      )}
-      {isLead && view !== 'team' && view !== 'me' && (
-        <TaskOrderDrawer userId={Number(view)} name={techName} open={orderOpen} onClose={() => { setOrderOpen(false); load(); }} />
       )}
     </FieldShell>
   );

@@ -151,6 +151,7 @@ export const SECTIONS = [
       { group: 'Support desk', to: '/carret/serve/issues', label: 'Issue insights', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/insights', label: 'SLA & feedback', section: 'support_tickets', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/settings', label: 'Support settings', sections: ['support_settings', 'support_tickets'], section: 'support_settings', action: 'view' },
+      { group: 'Support desk', to: '/carret/serve/task-board', label: 'Task board', section: 'field_travel', action: 'view' },
       { group: 'Support desk', to: '/carret/serve/field-team', label: 'Field technicians', section: 'field_travel', action: 'view' },
       { group: 'Technician', to: '/carret/serve/my-work', label: 'My work', section: 'support_tickets', action: 'view' },
       { group: 'Technician', to: '/carret/serve/my-report', label: 'My report', sections: ['support_tickets', 'technician_bucket'], section: 'support_tickets', action: 'view' },

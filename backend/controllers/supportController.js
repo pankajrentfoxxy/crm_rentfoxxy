@@ -2120,6 +2120,14 @@ exports.markWorkDone = async (req, res) => {
         if (item.item_type === 'complaint' && item.outcome === 'fixed' && !item.pod_image_path) {
             return res.status(400).json({ success: false, message: 'Upload proof of delivery before marking work done' });
         }
+        // A visit finishes with the six laptop photos (17 Oct 2026). A visit that
+        // already has its single older photo and none of the six is let through.
+        if (item.item_type === 'complaint' && ['fixed', 'working'].includes(item.outcome)) {
+            const have = (await client.query('SELECT COUNT(DISTINCT slot)::int AS n FROM support_item_photos WHERE item_id = $1', [itemId])).rows[0].n;
+            if (have < PHOTO_SLOTS.length && !(item.pod_image_path && have === 0)) {
+                return res.status(400).json({ success: false, message: `Take all ${PHOTO_SLOTS.length} photos of the laptop first (${have} done)` });
+            }
+        }
 
         await client.query('BEGIN');
         await client.query(
@@ -7204,7 +7212,9 @@ exports.uploadItemPhotos = async (req, res) => {
     try {
         const it = (await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId])).rows[0];
         if (!it) { drop(); return res.status(404).json({ success: false, message: 'Item not found' }); }
-        if (it.item_type !== 'pickup') { drop(); return res.status(400).json({ success: false, message: 'Photos are for a pickup' }); }
+        // Pickups, and complaint visits once reached (fixed / no fault: 6 photos, 17 Oct 2026).
+        if (it.item_type !== 'pickup' && it.item_type !== 'complaint') { drop(); return res.status(400).json({ success: false, message: 'Photos are for a visit or a pickup' }); }
+        if (it.item_type === 'complaint' && !it.visited_at) { drop(); return res.status(400).json({ success: false, message: 'Mark reached first' }); }
         if (it.assigned_to !== req.user.user_id && it.pickup_assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, it.ticket_id))) {
             drop(); return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
         }

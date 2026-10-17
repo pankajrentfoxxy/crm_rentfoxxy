@@ -81,6 +81,94 @@ router.post('/tasks/release', wrap(async (req, res) => {
   if (!n) return res.status(409).json({ success: false, message: 'Nothing to put back — it is already finished, or something was collected / delivered' });
   res.json({ success: true, message: 'Put back to not started', ...(await tasks.listTasks(pool, userId)) });
 }));
+// Lead: the whole plan — order, day and time per task (Task board, migration 440).
+router.put('/tasks/plan', wrap(async (req, res) => {
+  if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Your lead plans the tasks' });
+  const userId = await forUser(req);
+  const n = await tasks.savePlan(pool, { userId, items: req.body?.items, setBy: req.user.user_id });
+  res.json({ success: true, message: `Plan saved — ${n} task${n === 1 ? '' : 's'}`, ...(await tasks.listTasks(pool, userId)) });
+}));
+// Lead: one task — next (after what is in progress) or at the end of a day, at a time.
+router.post('/tasks/plan-one', wrap(async (req, res) => {
+  if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Your lead plans the tasks' });
+  const userId = await forUser(req);
+  const b = req.body || {};
+  await tasks.planTask(pool, { userId, key: String(b.key || ''), date: b.date, time: b.time, position: b.position === 'next' ? 'next' : 'end', setBy: req.user.user_id });
+  res.json({ success: true, message: b.position === 'next' ? 'Planned next — it opens as soon as the current task is done' : 'Planned', ...(await tasks.listTasks(pool, userId)) });
+}));
+// Lead: every field technician with today / tomorrow / later counts and the task in progress,
+// plus support jobs nobody holds yet (Task board).
+router.get('/board', wrap(async (req, res) => {
+  if (!(await isFieldLead(req.user))) return res.status(403).json({ success: false, message: 'Only a lead can see the task board' });
+  const people = (await pool.query(
+    `SELECT u.user_id, u.name, u.role FROM users u
+      WHERE u.deleted_at IS NULL AND COALESCE(u.active, TRUE)
+        AND (LOWER(u.role) = ANY($1::text[]) OR EXISTS (SELECT 1 FROM delivery_technicians d WHERE d.user_id = u.user_id AND d.is_active))
+      ORDER BY u.name`,
+    [travel.FIELD_ROLES]
+  )).rows;
+  const today = travel.todayIst();
+  const days = await travel.daysFor(pool, { userIds: people.map((p) => p.user_id), from: today, to: today }).catch(() => []);
+  const technicians = [];
+  for (const p of people) {
+    // eslint-disable-next-line no-await-in-loop
+    const l = await tasks.listTasks(pool, p.user_id);
+    const open = l.tasks.filter((t) => t.state !== 'carrying');
+    const day = days.find((d) => d.user_id === p.user_id);
+    technicians.push({
+      ...p,
+      today: open.filter((t) => t.bucket === 'today' && t.state !== 'waiting').length,
+      tomorrow: open.filter((t) => t.bucket === 'tomorrow').length,
+      later: open.filter((t) => t.bucket === 'later').length,
+      waiting: open.filter((t) => t.state === 'waiting').length,
+      active: l.active.map((t) => ({ key: t.key, title: t.title, customer: t.customer })),
+      checked_in: Boolean(day && !day.ended_at),
+      km: day ? day.total_km : 0,
+    });
+  }
+  // Not with anyone yet: complaint visits, and technician pickups (one per Return DC).
+  const unassigned = (await pool.query(
+    `SELECT i.id AS item_id, i.ticket_id, i.item_type, i.return_dc_number, i.pickup_type, i.source_item_id,
+            i.ttspl_id, i.serial_number, i.brand, i.model, i.issue_category_label, i.visit_scheduled_at, i.pickup_scheduled_at,
+            t.customer_name, t.priority, t.ticket_address, t.pickup_address
+       FROM support_ticket_items i JOIN support_tickets t ON t.id = i.ticket_id
+      WHERE t.status NOT IN ('closed', 'cancelled')
+        AND i.status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled', 'removed', 'delivered', 'picked_up', 'awaiting_service_return')
+        AND ((i.item_type = 'complaint' AND i.assigned_to IS NULL AND i.outcome IS NULL)
+          OR (i.item_type = 'pickup' AND i.return_dc_number IS NOT NULL AND i.pickup_assigned_to IS NULL AND i.assigned_to IS NULL
+              AND COALESCE(i.pickup_method, 'inhouse') NOT IN ('courier', 'porter')
+              AND i.customer_otp_verified_at IS NULL AND i.picked_up_at IS NULL))
+      ORDER BY i.ticket_id, i.id`
+  )).rows;
+  const addr = (a) => {
+    if (!a) return '';
+    if (typeof a === 'string') { try { return addr(JSON.parse(a)); } catch { return a; } }
+    return [a.address || a.line1, a.city, a.state, a.pincode].filter(Boolean).join(', ');
+  };
+  const lanes = [];
+  const byRdc = new Map();
+  for (const r of unassigned) {
+    const laptop = [r.ttspl_id || r.serial_number, [r.brand, r.model].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+    if (r.item_type === 'pickup') {
+      if (byRdc.has(r.return_dc_number)) { byRdc.get(r.return_dc_number).laptops.push(laptop); continue; }
+      const card = {
+        key: `rdc:${r.return_dc_number}`, kind: 'pickup', item_id: r.item_id, ticket_id: r.ticket_id, return_dc_number: r.return_dc_number,
+        title: `${(r.pickup_type || (r.source_item_id ? 'repair' : 'return')) === 'repair' ? 'Repair pickup' : 'Pickup'} · ${r.return_dc_number}`,
+        customer: r.customer_name, address: addr(r.pickup_address || r.ticket_address), appointment: r.pickup_scheduled_at, priority: r.priority, laptops: [laptop],
+      };
+      byRdc.set(r.return_dc_number, card);
+      lanes.push(card);
+    } else {
+      lanes.push({
+        key: `item:${r.item_id}`, kind: 'visit', item_id: r.item_id, ticket_id: r.ticket_id, title: `Visit · ${r.ttspl_id || r.serial_number || `#${r.ticket_id}`}`,
+        customer: r.customer_name, address: addr(r.ticket_address || r.pickup_address), appointment: r.visit_scheduled_at, priority: r.priority,
+        laptops: [laptop], issue: r.issue_category_label || null,
+      });
+    }
+  }
+  res.json({ success: true, today, technicians, unassigned: lanes });
+}));
+
 // Back at the warehouse / office mid-day (to pick up or hand over): a travel stop.
 router.post('/day/warehouse', wrap(async (req, res) => {
   const b = req.body || {};

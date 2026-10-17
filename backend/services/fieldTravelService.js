@@ -102,7 +102,8 @@ async function recordStop(db, user, { kind, ref, label, latitude, longitude }) {
   if (!day) throw httpError('Check in first — choose the office or your location at the top of My work', 409);
   if (day.ended_at) throw httpError('Your day has ended — ask your lead to reopen it', 409);
   const lat = num(latitude); const lng = num(longitude);
-  if (!validPoint(lat, lng)) return null;
+  // The distance is measured to this point, so a field "reached" needs it (17 Oct 2026).
+  if (!validPoint(lat, lng)) throw httpError('Your location is off — turn on location (GPS) for this site and tap again. The distance travelled is measured from it.', 400);
   const from = await lastPoint(db, day);
   const seq = (await db.query('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM field_travel_legs WHERE day_id = $1', [day.day_id])).rows[0].n;
   const leg = (await db.query(
@@ -112,6 +113,36 @@ async function recordStop(db, user, { kind, ref, label, latitude, longitude }) {
   )).rows[0];
   setImmediate(() => { measureLeg(pool, leg).catch(() => {}); });
   return leg;
+}
+
+/**
+ * The latest stop for each ref (a support item "T<ticket>-<item>", a Return DC,
+ * a challan): when it was reached and the road distance from the stop before.
+ */
+async function stopsFor(db, refs) {
+  const out = new Map();
+  const list = [...new Set((refs || []).filter(Boolean).map(String))];
+  if (!list.length) return out;
+  const r = await db.query(
+    `SELECT DISTINCT ON (l.ref) l.ref, l.reached_at, l.road_km, l.road_min, l.status, l.label,
+            COALESCE(prev.label, d.start_label) AS from_label
+       FROM field_travel_legs l
+       JOIN field_days d ON d.day_id = l.day_id
+       LEFT JOIN field_travel_legs prev ON prev.day_id = l.day_id AND prev.seq = l.seq - 1
+      WHERE l.ref = ANY($1::text[])
+      ORDER BY l.ref, l.leg_id DESC`,
+    [list]
+  ).catch(() => ({ rows: [] }));
+  for (const row of r.rows) {
+    out.set(row.ref, {
+      reached_at: row.reached_at,
+      km: row.road_km == null ? null : Number(row.road_km),
+      minutes: row.road_min == null ? null : Number(row.road_min),
+      measuring: row.status !== 'ok',
+      from: row.from_label,
+    });
+  }
+  return out;
 }
 
 /** End the day: the leg back to an office (or where they are). */
@@ -214,4 +245,4 @@ async function daysFor(db, { userIds = null, from, to }) {
   });
 }
 
-module.exports = { autoCloseDays, startAutoCloseWorker, FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };
+module.exports = { stopsFor, autoCloseDays, startAutoCloseWorker, FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };
