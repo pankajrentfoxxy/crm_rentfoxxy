@@ -201,6 +201,10 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
         ),
         warehouse_at: whItem.warehouse_esign_at || whItem.warehouse_received_at || null,
         customer_otp_verified: allOtpVerified || !!primary.customer_otp_verified_at,
+        // The customer's signature at the pickup (migration 437).
+        customer_url: dcl.customer_esign_url || null,
+        customer_name: dcl.customer_signer_name || null,
+        customer_at: dcl.customer_signed_at || null,
       },
     });
 

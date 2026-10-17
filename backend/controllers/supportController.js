@@ -3084,6 +3084,20 @@ exports.logVisit = async (req, res) => {
     if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
+    // Day travel (migration 438): this stop, by road from the last one. A field
+    // technician who has not checked in for the day is refused.
+    try {
+        const t = (await pool.query('SELECT customer_name FROM support_tickets WHERE id = $1', [item.ticket_id])).rows[0];
+        await require('../services/fieldTravelService').recordStop(pool, req.user, {
+            kind: item.item_type === 'pickup' ? 'pickup' : 'visit',
+            ref: item.item_type === 'pickup' && item.return_dc_number ? item.return_dc_number : `T${item.ticket_id}-${item.id}`,
+            label: [t?.customer_name, `ticket #${item.ticket_id}`].filter(Boolean).join(' · '),
+            latitude, longitude,
+        });
+    } catch (travelErr) {
+        if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: 'CHECK_IN_FIRST', message: travelErr.message });
+        console.error('[support] travel stop:', travelErr.message);
+    }
 
     const client = await pool.connect();
     try {
@@ -3714,6 +3728,60 @@ exports.technicianSignPickup = async (req, res) => {
 
 // Technician confirms the laptop handover by entering the customer's OTP. POD
 // photo must be uploaded first.
+/**
+ * Mark one pickup laptop collected (customer OTP verified) and move it off the
+ * customer — the single collect and the Return DC batch collect share this.
+ * One laptop per call: the old DC-wide update marked laptops still on the
+ * customer's desk as collected.
+ */
+async function collectPickupItemTx(client, it, user) {
+    // One OTP verifies one laptop. This previously also picked up every other
+    // pickup item sharing the return DC, so collecting 1 of 12 marked all 12
+    // collected: 11 machines left the customer's books and stopped generating
+    // rent while still on their desks. The customer supplies an OTP per unit.
+    await client.query(
+        `UPDATE support_ticket_items SET
+            customer_otp_verified_at = CURRENT_TIMESTAMP,
+            status = 'picked_up',
+            picked_up_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [it.id]
+    );
+
+    // Only the item just verified. The old DC-wide predicate also re-selected
+    // items verified on earlier calls, re-running the inventory transition
+    // below for units that had already been processed.
+    const affectedRes = await client.query(
+        `SELECT * FROM support_ticket_items WHERE id = $1`,
+        [it.id]
+    );
+    for (const pickupItem of affectedRes.rows) {
+        if (isRepairPickupItem(pickupItem)) {
+            const invResult = await removeRepairPickupFromCustomer(client, pickupItem, user);
+            await logAudit(client, {
+                itemId: pickupItem.id,
+                ticketId: pickupItem.ticket_id,
+                userId: user.user_id,
+                action: 'repair_pickup_customer_removed',
+                detail: invResult,
+            });
+            continue;
+        }
+        const invResult = await markReturnPickupInTransit(client, pickupItem, user);
+        if (invResult.ok) {
+            await logAudit(client, {
+                itemId: pickupItem.id,
+                ticketId: pickupItem.ticket_id,
+                userId: user.user_id,
+                action: 'return_pickup_in_transit',
+                detail: invResult,
+            });
+        }
+    }
+
+}
+
 exports.verifyPickupCustomerOtp = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { otp } = req.body || {};
@@ -3779,51 +3847,7 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // One OTP verifies one laptop. This previously also picked up every other
-        // pickup item sharing the return DC, so collecting 1 of 12 marked all 12
-        // collected: 11 machines left the customer's books and stopped generating
-        // rent while still on their desks. The customer supplies an OTP per unit.
-        await client.query(
-            `UPDATE support_ticket_items SET
-                customer_otp_verified_at = CURRENT_TIMESTAMP,
-                status = 'picked_up',
-                picked_up_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [itemId]
-        );
-
-        // Only the item just verified. The old DC-wide predicate also re-selected
-        // items verified on earlier calls, re-running the inventory transition
-        // below for units that had already been processed.
-        const affectedRes = await client.query(
-            `SELECT * FROM support_ticket_items WHERE id = $1`,
-            [itemId]
-        );
-        for (const pickupItem of affectedRes.rows) {
-            if (isRepairPickupItem(pickupItem)) {
-                const invResult = await removeRepairPickupFromCustomer(client, pickupItem, req.user);
-                await logAudit(client, {
-                    itemId: pickupItem.id,
-                    ticketId: pickupItem.ticket_id,
-                    userId: req.user.user_id,
-                    action: 'repair_pickup_customer_removed',
-                    detail: invResult,
-                });
-                continue;
-            }
-            const invResult = await markReturnPickupInTransit(client, pickupItem, req.user);
-            if (invResult.ok) {
-                await logAudit(client, {
-                    itemId: pickupItem.id,
-                    ticketId: pickupItem.ticket_id,
-                    userId: req.user.user_id,
-                    action: 'return_pickup_in_transit',
-                    detail: invResult,
-                });
-            }
-        }
-
+        await collectPickupItemTx(client, it, req.user);
         await logAudit(client, {
             itemId, ticketId: it.ticket_id, userId: req.user.user_id,
             action: 'pickup_otp_verified', detail: null
@@ -7241,3 +7265,271 @@ exports.cancelUpgrade = upgradeTx(async (db, req) => {
     await upgradeService.cancelUpgrade(db, { upgradeId: parseInt(req.params.upgradeId, 10), reason: String(req.body?.reason || '').trim() });
     return { ticket_id: u?.ticket_id };
 }, 'Upgrade cancelled');
+
+// ── Pickup visit: every laptop on a Return DC at once (17 Oct 2026) ────────
+//
+// The technician arrives once, takes the 6 photos of each laptop and records
+// its charger, marks any laptop the customer keeps ("Collect later", with a
+// date and time), signs, takes the customer's signature, and collects all the
+// rest with ONE customer OTP. The signed Return DC is then mailed to the
+// customer (required). Each laptop is still collected individually in the
+// database (collectPickupItemTx) — only the laptops chosen, never the whole RDC.
+
+async function rdcLiveItems(db, rdc) {
+    return (await db.query(
+        `SELECT * FROM support_ticket_items
+          WHERE return_dc_number = $1 AND item_type = 'pickup' AND COALESCE(status, '') NOT IN ('cancelled', 'removed')
+          ORDER BY id`,
+        [rdc]
+    )).rows;
+}
+
+async function rdcVisitRefusal(user, items) {
+    if (!items.length) return { status: 404, message: 'No laptops on this Return DC' };
+    const mine = items.some((i) => Number(i.pickup_assigned_to) === Number(user.user_id) || Number(i.assigned_to) === Number(user.user_id));
+    if (mine || await canLeadThisTicket(user, items[0].ticket_id)) return null;
+    return { status: 403, message: 'This pickup is assigned to someone else' };
+}
+
+const isCollected = (i) => Boolean(i.customer_otp_verified_at || i.picked_up_at);
+
+/** GET /support/return-dc/:rdc/visit */
+exports.getPickupVisit = async (req, res) => {
+    try {
+        const rdc = String(req.params.rdc || '').trim();
+        const items = await rdcLiveItems(pool, rdc);
+        const refusal = await rdcVisitRefusal(req.user, items);
+        if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
+        const t = (await pool.query(
+            `SELECT st.id, st.customer_id, st.customer_name, COALESCE(NULLIF(st.ticket_phone_override, ''), st.customer_phone) AS phone,
+                    st.ticket_email, st.ticket_address, st.pickup_address, c.email AS customer_email
+               FROM support_tickets st LEFT JOIN customers c ON c.customer_id = st.customer_id WHERE st.id = $1`,
+            [items[0].ticket_id]
+        )).rows[0] || {};
+        const dcl = (await pool.query(
+            `SELECT status, customer_esign_url, customer_signer_name, customer_signed_at, customer_mail_to,
+                    customer_mail_sent_at, customer_mail_attempted_at, customer_mail_error, pdf_path
+               FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`, [rdc]
+        )).rows[0] || {};
+        const photos = await loadItemPhotos(pool, items.map((i) => Number(i.id)));
+        const chg = await require('../services/challanChargerService').getChallanChargers(pool, rdc).catch(() => null);
+        const techSign = items.find((i) => i.technician_esign_url);
+        const otpView = await canViewSupportOtp(req.user);
+        res.json({
+            success: true,
+            return_dc_number: rdc,
+            ticket_id: t.id,
+            customer: t.customer_name,
+            phone: t.phone,
+            email: t.ticket_email || t.customer_email || null,
+            address: typeof t.pickup_address === 'object' && t.pickup_address ? [t.pickup_address.address, t.pickup_address.city, t.pickup_address.pincode].filter(Boolean).join(', ') : (t.ticket_address || ''),
+            arrived_at: items.map((i) => i.visited_at).filter(Boolean).sort()[0] || null,
+            otp_sent_at: items.map((i) => i.customer_otp_sent_at).filter(Boolean).sort().pop() || null,
+            otp: otpView ? (items[0].customer_otp_code || items[0].otp_code || null) : undefined,
+            technician_sign: techSign ? { url: techSign.technician_esign_url, at: techSign.technician_esign_at, name: techSign.technician_esign_name } : null,
+            customer_sign: dcl.customer_esign_url ? { url: dcl.customer_esign_url, at: dcl.customer_signed_at, name: dcl.customer_signer_name } : null,
+            mail: { to: dcl.customer_mail_to, sent_at: dcl.customer_mail_sent_at, attempted_at: dcl.customer_mail_attempted_at, error: dcl.customer_mail_error },
+            laptops: items.map((i) => {
+                const cu = (chg?.units || []).find((u) => u.item_id && Number(u.item_id) === Number(i.id));
+                return {
+                    item_id: i.id,
+                    ttspl_id: i.ttspl_id || i.unique_serial_number || null,
+                    serial_number: i.serial_number,
+                    model: [i.brand, i.model].filter(Boolean).join(' '),
+                    config: [i.processor, i.generation, i.ram, i.storage].filter(Boolean).join(' · '),
+                    pickup_type: i.pickup_type || (i.source_item_id ? 'repair' : 'return'),
+                    pickup_method: i.pickup_method,
+                    collected_at: i.customer_otp_verified_at || i.picked_up_at || null,
+                    photos: photos[i.id] || [],
+                    charger_sent: cu?.sent || null,
+                    charger_collected: cu?.collected || null,
+                };
+            }),
+        });
+    } catch (e) {
+        console.error('getPickupVisit:', e);
+        res.status(500).json({ success: false, message: 'Could not load the pickup' });
+    }
+};
+
+/** POST /support/return-dc/:rdc/arrived { latitude, longitude } — reached the customer, for every laptop. */
+exports.pickupVisitArrived = async (req, res) => {
+    try {
+        const rdc = String(req.params.rdc || '').trim();
+        const items = await rdcLiveItems(pool, rdc);
+        const refusal = await rdcVisitRefusal(req.user, items);
+        if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
+        const lat = req.body?.latitude ? String(req.body.latitude) : null;
+        const lng = req.body?.longitude ? String(req.body.longitude) : null;
+        // Day travel (migration 438): a stop at this customer.
+        await require('../services/fieldTravelService').recordStop(pool, req.user, { kind: 'pickup', ref: rdc, label: items[0].ticket_id ? `Pickup ${rdc}` : rdc, latitude: lat, longitude: lng });
+        const open = items.filter((i) => !isCollected(i) && !i.visited_at);
+        for (const i of open) {
+            await pool.query(
+                `UPDATE support_ticket_items SET visited_at = NOW(), status = 'visited', visited_lat = $2, visited_lng = $3, updated_at = NOW() WHERE id = $1`,
+                [i.id, lat, lng]
+            );
+            await logAudit(pool, { itemId: i.id, ticketId: i.ticket_id, userId: req.user.user_id, action: 'tech_reached', detail: { latitude: lat, longitude: lng, return_dc_number: rdc } });
+        }
+        await bumpTicketActivity(pool, items[0].ticket_id);
+        res.json({ success: true, message: 'Arrived — take the photos of each laptop' });
+    } catch (e) {
+        if (e.status) return res.status(e.status).json({ success: false, message: e.message });
+        console.error('pickupVisitArrived:', e);
+        res.status(500).json({ success: false, message: 'Could not mark arrived' });
+    }
+};
+
+/** POST /support/return-dc/:rdc/send-otp { item_ids } — one OTP for every laptop being collected. */
+exports.pickupVisitSendOtp = async (req, res) => {
+    try {
+        const rdc = String(req.params.rdc || '').trim();
+        const items = await rdcLiveItems(pool, rdc);
+        const refusal = await rdcVisitRefusal(req.user, items);
+        if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
+        const ids = (Array.isArray(req.body?.item_ids) ? req.body.item_ids : []).map(Number);
+        const chosen = items.filter((i) => ids.includes(Number(i.id)) && !isCollected(i));
+        if (!chosen.length) return res.status(400).json({ success: false, message: 'Choose the laptops being collected' });
+        const otp = chosen.map((i) => i.customer_otp_code || i.otp_code).find(Boolean) || generateOtp();
+        await pool.query(
+            `UPDATE support_ticket_items SET customer_otp_code = $2, customer_otp_sent_at = NOW(), updated_at = NOW() WHERE id = ANY($1::int[])`,
+            [chosen.map((i) => i.id), otp]
+        );
+        fireSupportWa(() => supportWa.notifySupportOtpAsync({ itemId: chosen[0].id, otp }));
+        res.json({
+            success: true,
+            message: `OTP sent to the customer for ${chosen.length} laptop${chosen.length > 1 ? 's' : ''}`,
+            otp_visible: (await canViewSupportOtp(req.user)) ? otp : undefined,
+        });
+    } catch (e) {
+        console.error('pickupVisitSendOtp:', e);
+        res.status(500).json({ success: false, message: 'Could not send the OTP' });
+    }
+};
+
+/**
+ * POST /support/return-dc/:rdc/collect { item_ids, otp, customer_esign_data, customer_signer_name }
+ * Every laptop still on the Return DC must be chosen — one the customer keeps
+ * is moved to a later pickup first ("Collect later").
+ */
+exports.pickupVisitCollect = async (req, res) => {
+    const rdc = String(req.params.rdc || '').trim();
+    const body = req.body || {};
+    const items = await rdcLiveItems(pool, rdc);
+    const refusal = await rdcVisitRefusal(req.user, items);
+    if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
+    const open = items.filter((i) => !isCollected(i));
+    const ids = (Array.isArray(body.item_ids) ? body.item_ids : []).map(Number);
+    const chosen = open.filter((i) => ids.includes(Number(i.id)));
+    const fail = (status, message) => res.status(status).json({ success: false, message });
+    if (!chosen.length) return fail(400, 'Choose the laptops being collected');
+    const left = open.filter((i) => !ids.includes(Number(i.id)));
+    if (left.length) return fail(409, `${left.map((i) => i.ttspl_id || i.serial_number).join(', ')} — collect it too, or mark "Customer keeps it" (collect later)`);
+    const code = (i) => i.ttspl_id || i.unique_serial_number || i.serial_number;
+    for (const i of chosen) {
+        if (!['courier', 'porter'].includes(String(i.pickup_method || '').toLowerCase())) {
+            const n = (await pool.query('SELECT COUNT(DISTINCT slot)::int AS n FROM support_item_photos WHERE item_id = $1', [i.id])).rows[0].n;
+            if (n < PHOTO_SLOTS.length) return fail(400, `Take all ${PHOTO_SLOTS.length} photos of ${code(i)} (${n}/${PHOTO_SLOTS.length})`);
+        }
+        const mark = (await pool.query(
+            `SELECT 1 FROM challan_charger_marks WHERE dc_number = $1 AND stage = 'collected' AND asset_code = UPPER($2)`, [rdc, code(i)]
+        )).rows[0];
+        if (!mark) return fail(400, `Record the charger for ${code(i)} — with or without`);
+    }
+    const sign = items.find((i) => i.technician_esign_url);
+    if (!sign) return fail(400, 'Sign the Return DC first');
+    if (!body.customer_esign_data || !String(body.customer_esign_data).startsWith('data:image')) return fail(400, 'Take the customer’s signature');
+    const stored = chosen[0].customer_otp_code || chosen[0].otp_code;
+    if (!otpMatches(stored, body.otp)) return fail(400, 'Invalid OTP. Ask the customer for the code they received.');
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const dir = path.join(__dirname, '..', 'uploads', 'support-pickups');
+        fs.mkdirSync(dir, { recursive: true });
+        const fname = `cust_esign_${rdc.replace(/[^\w-]+/g, '_')}_${Date.now()}.png`;
+        fs.writeFileSync(path.join(dir, fname), Buffer.from(String(body.customer_esign_data).replace(/^data:image\/\w+;base64,/, ''), 'base64'));
+        await client.query(
+            `UPDATE delivery_challan_lines SET customer_esign_url = $2, customer_signer_name = $3, customer_signed_at = NOW(), updated_at = NOW()
+              WHERE dc_number = $1`,
+            [rdc, `uploads/support-pickups/${fname}`, String(body.customer_signer_name || '').trim() || null]
+        );
+        for (const i of chosen) {
+            if (!i.technician_esign_url) {
+                await client.query(
+                    `UPDATE support_ticket_items SET technician_esign_url = $2, technician_esign_at = $3, technician_esign_by = $4, technician_esign_name = $5 WHERE id = $1`,
+                    [i.id, sign.technician_esign_url, sign.technician_esign_at, sign.technician_esign_by, sign.technician_esign_name]
+                );
+            }
+            await collectPickupItemTx(client, i, req.user);
+        }
+        await logAudit(client, {
+            itemId: chosen[0].id, ticketId: chosen[0].ticket_id, userId: req.user.user_id,
+            action: 'pickup_otp_verified', detail: { return_dc_number: rdc, item_ids: chosen.map((i) => i.id), batch: true },
+        });
+        await bumpTicketActivity(client, chosen[0].ticket_id);
+        await recomputeTicketStatus(client, chosen[0].ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('pickupVisitCollect:', e);
+        return fail(500, 'Could not collect the laptops');
+    } finally {
+        client.release();
+    }
+    try { await regenerateReturnDcPdfByRdc(pool, rdc); } catch (pdfErr) { console.error('[support] return DC pdf (batch collect):', pdfErr.message); }
+    res.json({ success: true, message: `${chosen.length} laptop${chosen.length > 1 ? 's' : ''} collected — now mail the signed Return DC to the customer` });
+};
+
+/** POST /support/return-dc/:rdc/email-customer { to } — the signed Return DC to the customer (required). */
+exports.pickupVisitEmail = async (req, res) => {
+    const rdc = String(req.params.rdc || '').trim();
+    const to = String(req.body?.to || '').trim();
+    try {
+        const items = await rdcLiveItems(pool, rdc);
+        const refusal = await rdcVisitRefusal(req.user, items);
+        if (refusal) return res.status(refusal.status).json({ success: false, message: refusal.message });
+        if (!items.some(isCollected)) return res.status(409).json({ success: false, message: 'Collect the laptops first' });
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ success: false, message: 'Enter the customer’s email address' });
+        const pdfRel = await regenerateReturnDcPdfByRdc(pool, rdc).then((r) => (typeof r === 'string' ? r : r?.pdf_path)).catch(() => null)
+            || (await pool.query('SELECT pdf_path FROM delivery_challan_lines WHERE dc_number = $1 AND pdf_path IS NOT NULL LIMIT 1', [rdc])).rows[0]?.pdf_path;
+        const t = (await pool.query('SELECT customer_name FROM support_tickets WHERE id = $1', [items[0].ticket_id])).rows[0] || {};
+        const collected = items.filter(isCollected);
+        let sentAt = null;
+        let error = null;
+        try {
+            const mailTransport = require('../services/mailTransport');
+            const { USER_TRIGGERED } = require('../services/outboundMessagingGuard');
+            const transporter = mailTransport.getTransport('default');
+            const from = mailTransport.getFromAddress('default');
+            if (!transporter || !from) throw new Error('Email is not configured');
+            const rows = collected.map((i) => `<tr><td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace">${i.ttspl_id || i.unique_serial_number || ''}</td><td style="padding:6px 10px;border:1px solid #e2e8f0">${[i.brand, i.model].filter(Boolean).join(' ')}</td><td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace">${i.serial_number || ''}</td></tr>`).join('');
+            const mail = {
+                from, to,
+                subject: `Return Delivery Challan ${rdc} — ${collected.length} laptop${collected.length > 1 ? 's' : ''} collected`,
+                html: `<p>Dear ${t.customer_name || 'Customer'},</p>
+<p>Our technician has collected the laptop${collected.length > 1 ? 's' : ''} below from you today. The signed Return Delivery Challan <b>${rdc}</b> is attached for your records.</p>
+<table style="border-collapse:collapse;font-size:13px"><tr style="background:#f1f5f9"><th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left">Asset ID</th><th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left">Laptop</th><th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left">Serial</th></tr>${rows}</table>
+<p>If anything on the challan is not right, reply to this email.</p><p>Regards,<br/>Rentfoxxy Support</p>`,
+                attachments: pdfRel ? [{ filename: `${rdc}.pdf`, path: path.join(__dirname, '..', String(pdfRel).replace(/^\//, '')) }] : [],
+            };
+            mail[USER_TRIGGERED] = true;
+            await transporter.sendMail(mail);
+            sentAt = new Date();
+        } catch (mailErr) {
+            // Mail turned off on this server (or a send failure): the attempt is recorded, the pickup carries on.
+            error = mailErr.message;
+        }
+        await pool.query(
+            `UPDATE delivery_challan_lines SET customer_mail_to = $2, customer_mail_attempted_at = NOW(),
+                    customer_mail_sent_at = COALESCE($3, customer_mail_sent_at), customer_mail_error = $4, updated_at = NOW()
+              WHERE dc_number = $1`,
+            [rdc, to, sentAt, error]
+        );
+        await logAudit(pool, { itemId: collected[0]?.id || items[0].id, ticketId: items[0].ticket_id, userId: req.user.user_id, action: 'rdc_mailed_to_customer', detail: { to, sent: Boolean(sentAt), error } });
+        res.json({ success: true, sent: Boolean(sentAt), message: sentAt ? `Mailed to ${to}` : `Recorded — the mail did not go out (${error})` });
+    } catch (e) {
+        console.error('pickupVisitEmail:', e);
+        res.status(500).json({ success: false, message: 'Could not send the mail' });
+    }
+};

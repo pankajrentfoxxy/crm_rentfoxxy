@@ -163,6 +163,7 @@ app.use('/api/rdc-capture', publicCaptureLimiter, verifyOnly, require('./routes/
 app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/dispatch-chargers', require('./routes/dispatchCharger'));
 app.use('/api/challan-chargers', require('./routes/challanCharger'));
+app.use('/api/field', require('./routes/field'));
 app.use('/api/grn-access-public', publicCaptureLimiter, require('./routes/grnAccessPublic'));
 app.use('/api/support-public', require('./routes/supportRequestPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));

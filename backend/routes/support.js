@@ -278,6 +278,12 @@ router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
 // Customer keeps one laptop: move it to a new Return DC on the same ticket (own OTP).
 router.post('/items/:itemId/collect-later', require('../controllers/supportController').collectLaterPickup);
 router.post('/items/:itemId/send-otp', sendSupportOtp);
+// Pickup visit — every laptop on a Return DC at once (17 Oct 2026).
+router.get('/return-dc/:rdc/visit', require('../controllers/supportController').getPickupVisit);
+router.post('/return-dc/:rdc/arrived', require('../controllers/supportController').pickupVisitArrived);
+router.post('/return-dc/:rdc/send-otp', require('../controllers/supportController').pickupVisitSendOtp);
+router.post('/return-dc/:rdc/collect', require('../controllers/supportController').pickupVisitCollect);
+router.post('/return-dc/:rdc/email-customer', require('../controllers/supportController').pickupVisitEmail);
 router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 
 router.patch('/replacement-orders/:orderId', requireTicketLead, updateReplacementOrder);

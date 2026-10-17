@@ -932,23 +932,27 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     // Signature blocks (technician sign-out + warehouse receipt)
     if (y > 640) { doc.addPage(); y = 40; }
     const half = (W - 12) / 2;
+    // Three signatures (17 Oct 2026): technician and customer at the pickup, warehouse on receipt.
+    const third = (W - 24) / 3;
     const signBox = (x, title, signAbs, name, at, note) => {
       const h = 110;
-      doc.roundedRect(x, y, half, h, 6).strokeColor(C.line).lineWidth(1).stroke();
-      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(title, x + 10, y + 8, { width: half - 20 });
+      doc.roundedRect(x, y, third, h, 6).strokeColor(C.line).lineWidth(1).stroke();
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(title, x + 8, y + 8, { width: third - 16 });
       if (signAbs) {
-        try { doc.image(signAbs, x + 12, y + 24, { fit: [half - 24, 44] }); } catch (_) { /* ignore */ }
+        try { doc.image(signAbs, x + 10, y + 26, { fit: [third - 20, 42] }); } catch (_) { /* ignore */ }
       } else {
-        doc.font('Helvetica').fontSize(8).fillColor(C.sub).text('Signature: ______________________', x + 10, y + 50);
+        doc.font('Helvetica').fontSize(8).fillColor(C.sub).text('Signature: ________________', x + 8, y + 50);
       }
       doc.font('Helvetica').fontSize(8).fillColor(C.ink)
-        .text(`Name: ${name || '____________________'}`, x + 10, y + 76);
+        .text(`Name: ${name || '________________'}`, x + 8, y + 76, { width: third - 16 });
       doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
-        .text(at ? formatPdfDateTimeLabel('Signed at: ', at) : (note || ''), x + 10, y + 90, { width: half - 20 });
+        .text(at ? formatPdfDateTimeLabel('Signed at: ', at) : (note || ''), x + 8, y + 90, { width: third - 16 });
     };
-    signBox(L, 'Technician (Sign-out at customer site)', techSign, esign.technician_name, esign.technician_at,
+    signBox(L, 'Technician (at the customer)', techSign, esign.technician_name, esign.technician_at,
       esign.customer_otp_verified ? 'Customer OTP verified at handover' : 'Pending customer OTP');
-    signBox(L + half + 12, 'Warehouse (Received)', whSign, esign.warehouse_name, esign.warehouse_at,
+    signBox(L + third + 12, 'Customer (handed over)', resolveSign(esign.customer_url), esign.customer_name, esign.customer_at,
+      esign.customer_otp_verified ? 'Handed over with the customer OTP' : 'Pending');
+    signBox(L + (third + 12) * 2, 'Warehouse (received)', whSign, esign.warehouse_name, esign.warehouse_at,
       whSign ? '' : 'Pending warehouse confirmation');
     y += 124;
 

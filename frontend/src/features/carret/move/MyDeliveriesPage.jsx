@@ -16,6 +16,7 @@ import {
 } from './fieldDeliveryShared';
 import { HandInCard, PickupCard, VendorCard } from './MyPickupCards';
 import { TECH_TABS } from '../serve/serveShared';
+import FieldDayBar from '../field/FieldDayBar';
 
 /**
  * Field → My deliveries (the delivery technician's phone; also Support →
@@ -192,6 +193,7 @@ export default function MyDeliveriesPage() {
 
   return (
     <FieldShell title={`My deliveries${state.rows.length ? ` · ${state.rows.length}` : ''}`} tabs={tabs}>
+      <FieldDayBar />
       <div className="c-stack" style={{ maxWidth: '40rem', margin: '0 auto' }}>
         <div style={{ overflowX: 'auto' }}>
           <Segmented label="Show" value={show} onChange={(v) => setParams(v === 'all' ? {} : { show: v }, { replace: true })} options={options} />

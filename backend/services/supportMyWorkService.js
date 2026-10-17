@@ -51,7 +51,9 @@ async function loadJobs(userId) {
               SELECT 1 FROM support_ticket_items s3
                WHERE i.return_dc_number IS NOT NULL AND s3.return_dc_number = i.return_dc_number
                  AND s3.item_type = 'pickup' AND s3.technician_esign_url IS NOT NULL
-                 AND s3.technician_esign_by = COALESCE(i.pickup_assigned_to, i.assigned_to))) AS rdc_signed
+                 AND s3.technician_esign_by = COALESCE(i.pickup_assigned_to, i.assigned_to))) AS rdc_signed,
+            -- The signed Return DC mailed to the customer (migration 437).
+            (SELECT MAX(d.customer_mail_attempted_at) FROM delivery_challan_lines d WHERE d.dc_number = i.return_dc_number) AS rdc_mail_at
        FROM support_ticket_items i
        JOIN support_tickets t ON t.id = i.ticket_id
        LEFT JOIN users ua ON ua.user_id = i.assigned_to
@@ -73,6 +75,11 @@ async function loadJobs(userId) {
     // A pickup stays on "photos + charger" until all 6 photos are in (migration 433)
     // and the customer's OTP has been sent — the first photo alone used to jump
     // straight to the OTP step, skipping the other photos and the charger.
+    // Collected: the signed Return DC goes to the customer before the gate (required).
+    if (r.item_type === 'pickup' && r.return_dc_number && (r.customer_otp_verified_at || r.picked_up_at) && !r.rdc_mail_at
+        && ['gate_inward', 'customer_otp'].includes(step)) {
+      next = { key: 'email', label: 'Mail the signed Return DC' };
+    }
     if (r.item_type === 'pickup' && step === 'pod_uploaded') {
       const techCollects = !['courier', 'porter'].includes(String(r.pickup_method || '').toLowerCase());
       if (!r.customer_otp_sent_at || (techCollects && new Set(r.photos.map((p) => p.slot)).size < 6)) next = PICKUP_NEXT.reached;

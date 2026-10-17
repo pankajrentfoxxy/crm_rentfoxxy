@@ -3,6 +3,7 @@ export const TECH_TABS = [
   { to: '/carret/serve/my-work', label: 'My work' },
   { to: '/carret/move/my-deliveries', label: 'Deliveries' },
   { to: '/carret/serve/my-parts', label: 'My parts' },
+  { to: '/carret/serve/my-report', label: 'My report' },
 ];
 
 export const errMsg = (e, fallback = 'That did not work.') => e?.response?.data?.message || e?.message || fallback;

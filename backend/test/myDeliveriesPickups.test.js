@@ -70,6 +70,9 @@ describe('My Deliveries handlers (rolled back)', () => {
     assert.equal(techs.length, 2, 'QA needs two support_tech users');
     OWNER.user_id = techs[0].user_id;
     OTHER.user_id = techs[1].user_id;
+    // A field technician checks in before any "reached" (migration 438).
+    await db.query('DELETE FROM field_days WHERE user_id = ANY($1::int[]) AND day = (NOW() AT TIME ZONE \'Asia/Kolkata\')::date', [[OWNER.user_id, OTHER.user_id]]);
+    for (const u of [OWNER, OTHER]) await require('../services/fieldTravelService').startDay(db, u, { placeId: (await db.query('SELECT place_id FROM field_checkin_places WHERE is_default LIMIT 1')).rows[0].place_id });
     await db.query(
       `INSERT INTO delivery_challan_lines (dc_number, customer_name, status, movement_type, dc_purpose, delivery_person_id, serial_number)
        VALUES ($1, 'Pickup test', 'in_transit', 'return', 'standard', $2, $3::jsonb)`,

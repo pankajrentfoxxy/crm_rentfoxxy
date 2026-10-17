@@ -638,6 +638,20 @@ exports.markTechReached = async (req, res) => {
       const supportRefusal = await supportRdcRefusal(dcNumber);
       if (supportRefusal) return refuse(res, supportRefusal);
     }
+    // Day travel (migration 438): this stop, by road from the last one. A field
+    // technician who has not checked in for the day is refused.
+    try {
+      const mv = kind === 'dc' ? (await pool.query('SELECT movement_type, customer_name FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1', [dcNumber])).rows[0] : null;
+      await require('../services/fieldTravelService').recordStop(pool, req.user, {
+        kind: kind === 'dc' ? (mv?.movement_type === 'return' ? 'pickup' : 'delivery') : 'vendor',
+        ref: dcNumber,
+        label: mv?.customer_name ? `${mv.customer_name} · ${dcNumber}` : dcNumber,
+        latitude, longitude,
+      });
+    } catch (travelErr) {
+      if (travelErr.status) return res.status(travelErr.status).json({ success: false, code: 'CHECK_IN_FIRST', message: travelErr.message });
+      console.error('[delivery] travel stop:', travelErr.message);
+    }
     if (kind === 'vrtdc') {
       await vrtdcFlow.markReached(dcNumber, { latitude, longitude });
       return res.json({ success: true, otp_generated: false });

@@ -21,11 +21,12 @@ export default function CollectLaterDrawer({
 }) {
   const [reason, setReason] = useState('');
   const [date, setDate] = useState(tomorrowIst());
+  const [time, setTime] = useState('10:00'); // the time the customer asked for (17 Oct 2026)
   const [who, setWho] = useState('same');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) { setReason(''); setDate(tomorrowIst()); setWho('same'); }
+    if (open) { setReason(''); setDate(tomorrowIst()); setTime('10:00'); setWho('same'); }
   }, [open]);
 
   const submit = async () => {
@@ -33,7 +34,7 @@ export default function CollectLaterDrawer({
     if (!date) { toast.error('Choose the new pickup date'); return; }
     setBusy(true);
     try {
-      const body = { reason: reason.trim(), pickup_date: date };
+      const body = { reason: reason.trim(), pickup_date: /^\d{2}:\d{2}$/.test(time) ? `${date}T${time}:00+05:30` : date };
       if (asLead && who === 'none') body.unassigned = true;
       else if (asLead && who !== 'same') body.technician_user_id = Number(who);
       const { data } = await collectLater(item.id, body);
@@ -69,9 +70,14 @@ export default function CollectLaterDrawer({
         <Field label="Why did the customer keep it" required>
           <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. still copying data, back tomorrow" />
         </Field>
-        <Field label="New pickup date" required>
-          <Input type="date" min={todayIst()} value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <div className="c-form-grid" style={{ '--c-cols': 2 }}>
+          <Field label="New pickup date" required>
+            <Input type="date" min={todayIst()} value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          <Field label="Time" hint="When the customer wants it collected">
+            <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </Field>
+        </div>
         {asLead && (
           <Field label="Who collects it">
             <Select value={who} onChange={(e) => setWho(e.target.value)} options={techOptions} />

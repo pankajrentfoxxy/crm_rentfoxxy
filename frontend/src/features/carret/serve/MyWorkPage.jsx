@@ -5,6 +5,7 @@ import FieldShell from '../../../shells/FieldShell';
 import { Button, EmptyState, Notice, Section } from '../../../components/carret';
 import { usePermission } from '../../../hooks/usePermission';
 import { fetchMyWork, fetchTeamWork } from './serveApi';
+import FieldDayBar from '../field/FieldDayBar';
 import { SLA_LABEL, SLA_TONE, TECH_TABS, errMsg, mapsLink, when } from './serveShared';
 
 /**
@@ -61,14 +62,52 @@ function JobCard({ job, readOnly }) {
   );
 }
 
+/**
+ * Pickups on the same Return DC are one stop (17 Oct 2026): one card that
+ * opens the pickup visit (every laptop, one OTP).
+ */
+function PickupGroupCard({ group, readOnly }) {
+  const navigate = useNavigate();
+  const j = group[0];
+  return (
+    <div className="c-card c-jobpick" style={{ padding: '14px 16px', marginBottom: '12px' }}>
+      <div className="text-ink-3" style={{ fontSize: 'var(--d-sm)' }}>
+        {j.pickup_type === 'repair' ? 'Repair pickup' : 'Return pickup'} · {j.return_dc_number} · {group.length} laptop{group.length > 1 ? 's' : ''}
+      </div>
+      <div className="text-ink" style={{ fontWeight: 600, fontSize: 'var(--d-lg)' }}>{j.customer}</div>
+      <div className="c-jobpick-l">{group.map((g) => <span key={g.item_id} className="font-mono">{g.laptop.ttspl || g.laptop.serial}</span>)}</div>
+      {j.pickup_scheduled_at && <div style={{ marginTop: '4px' }}>🗓 {when(j.pickup_scheduled_at)}</div>}
+      <div className="text-ink-2" style={{ marginTop: '4px' }}>{j.address || 'No address on the ticket'}</div>
+      <div className="flex flex-wrap items-center" style={{ gap: '8px', marginTop: '12px' }}>
+        {j.phone && <a className="c-btn" href={`tel:${j.phone}`}>Call</a>}
+        {j.address && <a className="c-btn" href={mapsLink(j.address, j.customer)} target="_blank" rel="noopener noreferrer">Map</a>}
+        {readOnly
+          ? <Button style={{ marginLeft: 'auto' }} onClick={() => navigate(`/carret/serve/tickets/${j.ticket_id}`)}>Open ticket ›</Button>
+          : <Button variant="primary" style={{ marginLeft: 'auto' }} onClick={() => navigate(`/carret/serve/pickup/${encodeURIComponent(j.return_dc_number)}`)}>{j.next.label} ›</Button>}
+      </div>
+    </div>
+  );
+}
+
 function JobList({ jobs, readOnly, onRefresh, emptyTitle, emptyBody }) {
   const late = jobs.filter((j) => j.sla?.state === 'breached').length;
+  // One card per Return DC for pickups; visits (and pickups without a Return DC) as before.
+  const cards = [];
+  const groups = new Map();
+  for (const j of jobs) {
+    if (j.kind === 'pickup' && j.return_dc_number) {
+      if (!groups.has(j.return_dc_number)) { groups.set(j.return_dc_number, []); cards.push({ rdc: j.return_dc_number }); }
+      groups.get(j.return_dc_number).push(j);
+    } else cards.push({ job: j });
+  }
   return (
     <>
       {late > 0 && <Notice tone="warn" title={`${late} of ${jobs.length} job(s) are late`}>Late jobs come first, after any with a visit slot booked.</Notice>}
       {jobs.length === 0
         ? <EmptyState title={emptyTitle} body={emptyBody} action={<Button onClick={onRefresh}>Refresh</Button>} />
-        : jobs.map((j) => <JobCard key={j.item_id} job={j} readOnly={readOnly} />)}
+        : cards.map((c) => (c.rdc
+          ? <PickupGroupCard key={c.rdc} group={groups.get(c.rdc)} readOnly={readOnly} />
+          : <JobCard key={c.job.item_id} job={c.job} readOnly={readOnly} />))}
       {jobs.length > 0 && <div style={{ textAlign: 'center', margin: '8px 0 24px' }}><Button variant="quiet" onClick={onRefresh}>Refresh</Button></div>}
     </>
   );
@@ -154,6 +193,7 @@ export default function MyWorkPage() {
 
   return (
     <FieldShell title={title} tabs={TECH_TABS} onBack={() => (isLead && view !== 'team' ? pick(null) : window.history.back())}>
+      {view === 'me' && <FieldDayBar />}
       {isLead && view !== 'team' && (
         <div style={{ marginBottom: '12px' }}><Button variant="quiet" onClick={() => pick(null)}>‹ All technicians</Button></div>
       )}

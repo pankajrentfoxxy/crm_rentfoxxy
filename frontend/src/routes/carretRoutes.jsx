@@ -58,6 +58,9 @@ const ReplacementApprovalsPage = React.lazy(() => import('../features/carret/pro
 const PendingSerialsPage = React.lazy(() => import('../features/carret/procure/PendingSerialsPage'));
 const ServeMyWorkPage = React.lazy(() => import('../features/carret/serve/MyWorkPage'));
 const ServeJobPage = React.lazy(() => import('../features/carret/serve/JobPage'));
+const ServePickupVisitPage = React.lazy(() => import('../features/carret/serve/PickupVisitPage'));
+const FieldMyReportPage = React.lazy(() => import('../features/carret/field/MyReportPage'));
+const FieldTeamPage = React.lazy(() => import('../features/carret/field/FieldTeamPage'));
 const ServeMyPartsPage = React.lazy(() => import('../features/carret/serve/MyPartsPage'));
 const ServeQueuePage = React.lazy(() => import('../features/carret/serve/QueuePage'));
 const ServeTicketRecordPage = React.lazy(() => import('../features/carret/serve/TicketRecordPage'));
@@ -216,6 +219,10 @@ export const carretRoutes = CARRET_ENABLED
       // Serve — the support technician's phone (claude/carret-support.md step 3)
       { path: '/carret/serve/my-work', element: guard('support_tickets', 'view', <ServeMyWorkPage />) },
       { path: '/carret/serve/job/:itemId', element: guard('support_tickets', 'view', <ServeJobPage />) },
+      // Pickup visit (every laptop on a Return DC), My report and the field board (17 Oct 2026).
+      { path: '/carret/serve/pickup/:rdc', element: guard('support_tickets', 'view', <ServePickupVisitPage />) },
+      { path: '/carret/serve/my-report', element: guardAny(['support_tickets', 'technician_bucket', 'delivery_my_deliveries'], 'view', <FieldMyReportPage />) },
+      { path: '/carret/serve/field-team', element: guard('field_travel', 'view', <FieldTeamPage />) },
       // Serve — the support lead's desk (step 4)
       { path: '/carret/serve/queue', element: guard('support_tickets', 'view', <ServeQueuePage />) },
       { path: '/carret/serve/tickets/new', element: guard('support_tickets', 'create', <ServeNewTicketPage />) },
