@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import DeskShell from '../../../shells/DeskShell';
-import { Button, EmptyState, Section } from '../../../components/carret';
+import { Button, EmptyState, Section, Segmented } from '../../../components/carret';
+import { usePermission } from '../../../hooks/usePermission';
+import CheckinPlaces from './CheckinPlaces';
 import { TASK_KINDS, fetchFieldTeam, fmtKm, periodRange } from './fieldApi';
 import { DayChart, KindLegend, KindTiles, PeriodPicker, TaskList, TravelDay } from './fieldShared';
 
@@ -16,6 +18,8 @@ export default function FieldTeamPage() {
   const [custom, setCustom] = useState({});
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(null);
+  const [view, setView] = useState('team'); // 'team' | 'places'
+  const { hasPermission } = usePermission();
   const { from, to } = periodRange(period, custom);
   useEffect(() => {
     setData(null);
@@ -33,6 +37,8 @@ export default function FieldTeamPage() {
   return (
     <DeskShell title="Field technicians" breadcrumb="Support" subtitle="Tasks done and km travelled by road, per technician.">
       <div className="c-stack">
+        <Segmented value={view} onChange={setView} label="View" options={[{ value: 'team', label: 'Technicians' }, { value: 'places', label: 'Check-in places' }]} />
+        {view === 'places' ? <CheckinPlaces canEdit={hasPermission('field_travel', 'edit')} /> : (<>
         <PeriodPicker period={period} onPeriod={setPeriod} custom={custom} onCustom={setCustom} />
         {!data ? <EmptyState title="Loading…" /> : (
           <>
@@ -68,6 +74,7 @@ export default function FieldTeamPage() {
             )}
           </>
         )}
+        </>)}
       </div>
     </DeskShell>
   );

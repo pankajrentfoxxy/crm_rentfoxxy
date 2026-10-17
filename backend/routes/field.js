@@ -58,6 +58,21 @@ router.post('/places', checkSectionPermission('field_travel', 'edit'), wrap(asyn
   await pool.query('INSERT INTO field_checkin_places (name, latitude, longitude) VALUES ($1, $2, $3)', [String(b.name).trim(), lat, lng]);
   res.json({ success: true, places: await travel.places(pool) });
 }));
+router.patch('/places/:id', checkSectionPermission('field_travel', 'edit'), wrap(async (req, res) => {
+  const b = req.body || {};
+  const lat = Number(b.latitude); const lng = Number(b.longitude);
+  if (!String(b.name || '').trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Name, latitude and longitude are required' });
+  await pool.query('UPDATE field_checkin_places SET name = $2, latitude = $3, longitude = $4 WHERE place_id = $1', [Number(req.params.id), String(b.name).trim(), lat, lng]);
+  res.json({ success: true, places: await travel.places(pool) });
+}));
+// The default place: preselected at check-in and where an unended day closes at 10 PM.
+router.post('/places/:id/default', checkSectionPermission('field_travel', 'edit'), wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const p = (await pool.query('SELECT 1 FROM field_checkin_places WHERE place_id = $1 AND active', [id])).rows[0];
+  if (!p) return res.status(404).json({ success: false, message: 'Place not found' });
+  await pool.query('UPDATE field_checkin_places SET is_default = (place_id = $1)', [id]);
+  res.json({ success: true, places: await travel.places(pool) });
+}));
 router.delete('/places/:id', checkSectionPermission('field_travel', 'edit'), wrap(async (req, res) => {
   await pool.query('UPDATE field_checkin_places SET active = FALSE WHERE place_id = $1 AND NOT is_default', [Number(req.params.id)]);
   res.json({ success: true, places: await travel.places(pool) });

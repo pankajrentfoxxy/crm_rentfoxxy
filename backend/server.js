@@ -300,6 +300,8 @@ server.listen(PORT, () => {
 
     const { startWhatsAppCampaignWorker } = require('./services/whatsappCampaignWorker');
     startWhatsAppCampaignWorker();
+    // Field days nobody ended close at 10 PM at the default office (17 Oct 2026).
+    require('./services/fieldTravelService').startAutoCloseWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }

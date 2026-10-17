@@ -42,24 +42,24 @@ export default function FieldDayBar({ onReady }) {
       if (!p) throw new Error('Location is off — allow it, or start at the office');
       await startFieldDay({ ...p, label: 'My location' });
     } else await startFieldDay({ place_id: Number(place) });
-  }, 'Day started — have a safe day');
+  }, 'Checked in — have a safe day');
   const end = (here) => run(async () => {
     if (here) {
       const p = await gps();
       if (!p) throw new Error('Location is off — choose the office');
       await endFieldDay(p);
     } else await endFieldDay({ place_id: Number(place) });
-  }, 'Day ended');
+  }, 'Checked out');
   const options = (data.places || []).map((p) => ({ value: String(p.place_id), label: p.name }));
 
   if (!started) {
     return (
       <div className="c-dayb is-start">
-        <div className="c-dayb-t"><b>Start your day</b><span>Check in before your first task — your travel is measured from here.</span></div>
+        <div className="c-dayb-t"><b>Check in to start your day</b><span>Before your first task — your travel is measured from where you check in.</span></div>
         <div className="c-dayb-a">
           <Select value={place} onChange={(e) => setPlace(e.target.value)} options={options} aria-label="Check-in place" />
-          <Button variant="primary" disabled={busy || !place} onClick={() => start(false)}>Start at the office</Button>
-          <Button variant="quiet" disabled={busy} onClick={() => start(true)}>Start here (GPS)</Button>
+          <Button variant="primary" disabled={busy || !place} onClick={() => start(false)}>Check in here</Button>
+          <Button variant="quiet" disabled={busy} onClick={() => start(true)}>📍 Check in at my location</Button>
         </div>
       </div>
     );
@@ -68,17 +68,19 @@ export default function FieldDayBar({ onReady }) {
   return (
     <div className={`c-dayb${d.ended_at ? ' is-ended' : ''}`}>
       <div className="c-dayb-t">
-        <b>{d.ended_at ? 'Day ended' : 'On duty'} · {fmtKm(d.total_km)}</b>
-        <span>From {d.start_label} at {fmtTime(d.started_at)} · {d.stops} stop{d.stops === 1 ? '' : 's'}{d.unmeasured ? ` · ${d.unmeasured} being measured` : ''}{d.ended_at ? ` · back ${fmtTime(d.ended_at)}` : ''}</span>
+        <b>{d.ended_at ? 'Checked out' : 'On duty'} · {fmtKm(d.total_km)}</b>
+        <span>From {d.start_label} at {fmtTime(d.started_at)} · {d.stops} stop{d.stops === 1 ? '' : 's'}{d.unmeasured ? ` · ${d.unmeasured} being measured` : ''}{d.ended_at ? ` · checked out ${fmtTime(d.ended_at)} at ${d.end_label || '—'}` : ''}</span>
+        {!d.ended_at && <span>Not checked out by 10 PM? You are checked out at {(data.places || []).find((p) => p.is_default)?.name || 'the office'} automatically.</span>}
       </div>
       <div className="c-dayb-a">
         <Link className="c-btn" to="/carret/serve/my-report">My report</Link>
-        {!d.ended_at && !ending && <Button variant="quiet" onClick={() => setEnding(true)}>End my day</Button>}
+        {!d.ended_at && !ending && <Button variant="quiet" onClick={() => setEnding(true)}>Check out</Button>}
         {!d.ended_at && ending && (
           <>
-            <Select value={place} onChange={(e) => setPlace(e.target.value)} options={options} aria-label="End at" />
-            <Button variant="primary" disabled={busy || !place} onClick={() => end(false)}>Back at the office</Button>
-            <Button variant="quiet" disabled={busy} onClick={() => end(true)}>End here (GPS)</Button>
+            <Select value={place} onChange={(e) => setPlace(e.target.value)} options={options} aria-label="Check out at" />
+            <Button variant="primary" disabled={busy || !place} onClick={() => end(false)}>Check out here</Button>
+            <Button variant="quiet" disabled={busy} onClick={() => end(true)}>📍 Check out at my location</Button>
+            <Button variant="quiet" onClick={() => setEnding(false)}>Cancel</Button>
           </>
         )}
       </div>

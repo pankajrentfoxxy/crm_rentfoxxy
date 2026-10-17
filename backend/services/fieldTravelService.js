@@ -59,6 +59,7 @@ async function isFieldUser(db, user) {
 }
 
 async function currentDay(db, userId) {
+  await autoCloseDays(db).catch(() => {});
   return (await db.query('SELECT * FROM field_days WHERE user_id = $1 AND day = $2', [userId, todayIst()])).rows[0] || null;
 }
 
@@ -98,7 +99,7 @@ async function lastPoint(db, day) {
 async function recordStop(db, user, { kind, ref, label, latitude, longitude }) {
   if (!(await isFieldUser(db, user))) return null;
   const day = await currentDay(db, user.user_id);
-  if (!day) throw httpError('Start your day first — check in at the office (My work → Start my day)', 409);
+  if (!day) throw httpError('Check in first — choose the office or your location at the top of My work', 409);
   if (day.ended_at) throw httpError('Your day has ended — ask your lead to reopen it', 409);
   const lat = num(latitude); const lng = num(longitude);
   if (!validPoint(lat, lng)) return null;
@@ -139,8 +140,54 @@ async function endDay(db, user, { placeId, latitude, longitude }) {
   await measureLeg(db, leg);
 }
 
+/**
+ * A day nobody ended is closed at 10 PM IST at the default office (IFFCO
+ * Chowk): the leg back from the last stop is added, as if they checked out
+ * there (17 Oct 2026). Runs from a worker every 10 minutes and whenever days
+ * are read, so a missed run never leaves a day open.
+ */
+async function autoCloseDays(db = pool) {
+  const istNow = new Date(Date.now() + 330 * 60000);
+  const pastTen = istNow.getUTCHours() >= 22;
+  const open = (await db.query(
+    `SELECT * FROM field_days WHERE ended_at IS NULL AND (day < $1 OR ($2 AND day = $1))`,
+    [todayIst(), pastTen]
+  )).rows;
+  if (!open.length) return 0;
+  const place = (await db.query('SELECT * FROM field_checkin_places WHERE active ORDER BY is_default DESC, place_id LIMIT 1')).rows[0];
+  if (!place) return 0;
+  for (const day of open) {
+    const dayStr = day.day instanceof Date ? new Date(day.day.getTime() + 330 * 60000).toISOString().slice(0, 10) : String(day.day).slice(0, 10);
+    const at = `${dayStr}T22:00:00+05:30`;
+    const from = await lastPoint(db, day);
+    const seq = (await db.query('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM field_travel_legs WHERE day_id = $1', [day.day_id])).rows[0].n;
+    const label = `${place.name} (auto check-out, 10 PM)`;
+    const leg = (await db.query(
+      `INSERT INTO field_travel_legs (day_id, user_id, seq, kind, label, from_lat, from_lng, to_lat, to_lng, reached_at)
+       VALUES ($1, $2, $3, 'end', $4, $5, $6, $7, $8, $9) ON CONFLICT (day_id, seq) DO NOTHING RETURNING *`,
+      [day.day_id, day.user_id, seq, label, from.lat, from.lng, place.latitude, place.longitude, at]
+    )).rows[0];
+    const upd = await db.query(
+      `UPDATE field_days SET end_label = $2, end_lat = $3, end_lng = $4, ended_at = $5 WHERE day_id = $1 AND ended_at IS NULL`,
+      [day.day_id, label, place.latitude, place.longitude, at]
+    );
+    if (leg && upd.rowCount) await measureLeg(db, leg);
+  }
+  return open.length;
+}
+
+let autoCloseTimer = null;
+function startAutoCloseWorker() {
+  if (autoCloseTimer) return;
+  const tick = () => autoCloseDays(pool).catch((e) => console.error('[field] auto check-out:', e.message));
+  tick();
+  autoCloseTimer = setInterval(tick, 10 * 60 * 1000);
+  if (autoCloseTimer.unref) autoCloseTimer.unref();
+}
+
 /** Days with their legs for users in a date range; failed / pending legs are measured again. */
 async function daysFor(db, { userIds = null, from, to }) {
+  await autoCloseDays(db).catch(() => {});
   const days = (await db.query(
     `SELECT d.*, u.name AS user_name FROM field_days d JOIN users u ON u.user_id = d.user_id
       WHERE d.day BETWEEN $1 AND $2 AND ($3::int[] IS NULL OR d.user_id = ANY($3::int[]))
@@ -167,4 +214,4 @@ async function daysFor(db, { userIds = null, from, to }) {
   });
 }
 
-module.exports = { FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };
+module.exports = { autoCloseDays, startAutoCloseWorker, FIELD_ROLES, roadDistance, isFieldUser, currentDay, places, startDay, recordStop, endDay, daysFor, todayIst };
